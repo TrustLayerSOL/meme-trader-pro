@@ -1,0 +1,16 @@
+.env
+trading_env/
+__pycache__/
+*.pyc
+paper_trades.json
+.DS_Store
+
+# Runtime state and generated reports
+logs/
+live_state.json
+latest_report.txt
+
+# Local trading data/state
+data/*.db
+data/*.json
+!data/__init__.py
