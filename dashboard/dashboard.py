@@ -1920,6 +1920,18 @@ else:
             ]
             st.dataframe(detail_rows, hide_index=True, width="stretch")
 
+            prepared_exit = item.get("prepared_exit") or {}
+            if prepared_exit:
+                st.subheader("Prepared Simulation Exit")
+                e1, e2, e3, e4 = st.columns(4)
+                e1.metric("Action", table_value(prepared_exit.get("action")))
+                e2.metric("Urgency", table_value(prepared_exit.get("urgency")))
+                e3.metric("Suggested Sell", fmt_pct(prepared_exit.get("suggested_sell_pct")))
+                e4.metric("Quote", table_value(prepared_exit.get("quote_status")))
+                st.caption(prepared_exit.get("safety_note", "Simulation only. No live sell is executed."))
+                if prepared_exit.get("reasons"):
+                    st.write("**Prepared-exit reasons:** " + "; ".join(prepared_exit.get("reasons", [])))
+
             if item.get("url"):
                 st.link_button("Open Market", item.get("url"), key=f"market_{i}")
 

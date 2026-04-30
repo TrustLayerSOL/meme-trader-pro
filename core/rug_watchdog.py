@@ -7,6 +7,7 @@ from pathlib import Path
 
 from core.env_loader import load_env
 from infra.market_checker import MarketChecker
+from core.protection_exit import ProtectionExitPlanner
 from core.runtime_status import increment_component, update_component
 from core.storage import EventStore
 from core.token_inspector import TokenInspector
@@ -184,6 +185,7 @@ async def fetch_mint_account_info(checker, mint):
 async def check_once():
     checker = MarketChecker()
     inspector = TokenInspector()
+    exit_planner = ProtectionExitPlanner()
     watchlist = load_watchlist()
     update_component(
         "watchdog",
@@ -233,6 +235,24 @@ async def check_once():
                         "alert_level": "emergency",
                         "reason": token.get("reason", "") + "; " + "; ".join(inspection.get("reasons", [])),
                     })
+
+            prepared_exit = exit_planner.plan(token)
+            token["prepared_exit"] = prepared_exit
+
+            if prepared_exit.get("suggested_sell_pct", 0) > 0:
+                try:
+                    EventStore().insert_event({
+                        "time": time.time(),
+                        "type": "protection_exit_intent",
+                        "mint": mint,
+                        "wallet": token.get("wallet"),
+                        "status": token.get("status"),
+                        "risk_level": token.get("risk_level"),
+                        "alert_level": token.get("alert_level"),
+                        "prepared_exit": prepared_exit,
+                    })
+                except Exception:
+                    pass
 
             increment_component(
                 "watchdog",

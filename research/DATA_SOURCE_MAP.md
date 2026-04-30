@@ -61,7 +61,7 @@ Dashboard file: `dashboard/dashboard.py`
 | Execution Safety | env/config/safety state | `core/execution_safety.py` |
 | Data Store | `data/memetrader.db`, state files freshness | `core/storage.py`, `core/data_freshness.py` |
 | Strategy Settings | `data/bot_settings.json` | `core/settings_manager.py` |
-| Manual Trade Protection | `data/manual_watchlist.json` | dashboard helpers, `core/rug_watchdog.py` |
+| Manual Trade Protection | `data/manual_watchlist.json`, SQLite `events` for prepared exit intents | dashboard helpers, `core/rug_watchdog.py`, `core/protection_exit.py` |
 | Open/Closed/Failed Trades | `data/paper_trades.json` | dashboard trade rendering helpers |
 | Alerts | `live_state.json` | dashboard rendering |
 | Raw Debug Expanders | JSON state files | dashboard rendering |
@@ -76,7 +76,8 @@ Dashboard file: `dashboard/dashboard.py`
 | Dev reputation | developer wallet metadata, bonded/migrated token count, known bad/suspicious flags | `core/dev_analyzer.py`, `dev_reputation.json` |
 | Paper entry | candidate score, risk result, quote result, settings, position sizing | `paper_trader.py`, scanner/runtime |
 | Paper exit | trade state, partial profit rules, stops, exit advisor | `paper_trader.py`, `core/exit_advisor.py` |
-| Protected mint status | current price/liquidity, peak/baseline drawdown, token mechanics | `core/rug_watchdog.py` |
+| Protected mint status | current price/liquidity, peak/baseline drawdown, token mechanics, prepared simulation exit intent | `core/rug_watchdog.py`, `core/protection_exit.py` |
+| Holder concentration risk | already-fetched holder rows/account balances | `core/holder_concentration.py` |
 | Live execution permission | environment, safety flags, wallet/config, explicit arming | `core/execution_safety.py`, `execution/*` |
 
 ## Freshness And Reliability Notes

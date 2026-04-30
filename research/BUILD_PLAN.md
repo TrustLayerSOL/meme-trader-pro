@@ -223,8 +223,8 @@ Deliverables:
 - [x] Protected mints have explicit alert levels: info, warning, danger, emergency.
 - [x] Dashboard protected-position cards show alert counts, last-check age, mechanics risk, extensions, auto-sell lock state, and metrics.
 - [~] Real watchdog loop with visible status and last-check timestamps.
-- [ ] Exit advisor for protected positions.
-- [ ] Prepared sell intent in paper/simulation mode.
+- [~] Exit advisor for protected positions.
+- [x] Prepared sell intent in paper/simulation mode.
 - [ ] Auto-sell remains disabled until live execution gates are passed.
 
 Acceptance criteria:
@@ -236,7 +236,7 @@ Acceptance criteria:
 
 Next actions:
 
-- Add prepared paper/simulation exits for protected manual positions before any live sell wiring.
+- Add quote/sell-route feasibility to prepared protection exits before any live sell wiring.
 - Harden the continuous watchdog process and make its lifecycle easier to start/stop from the launcher.
 
 ## Phase 7 - Operator Review, Postmortems, And Replay
@@ -376,7 +376,7 @@ Next actions:
 - [x] Data source map for dashboard and bot state.
 - [x] Runtime health and per-source freshness indicators.
 - [~] Manual protection watchdog status and alert levels.
-- [ ] Prepared paper/simulation exits for protected manual positions.
+- [x] Prepared paper/simulation exits for protected manual positions.
 - [ ] Holder concentration and linked-cluster checks.
 - [ ] Token performance snapshots for entries, skips, exits, and watchdog checks.
 - [ ] Paper trade field completeness and dashboard rendering.
@@ -399,3 +399,4 @@ Next actions:
 - [x] Reviewed related open-source Solana meme trading repos and saved integration recommendations in `research/OPEN_SOURCE_REPO_REVIEW.md`.
 - [x] Expanded open-source search; identified Chainstack pump.fun bot, transaction parsers, Shyft gRPC examples, and copy-trading stop logic as useful references.
 - [x] Added highlighted Current Working Section for Phase 6 focus.
+- [x] Added simulation-only prepared exit intents for protected manual positions.
