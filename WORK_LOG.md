@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 ## Current Work
 
@@ -68,6 +68,31 @@ Why this matters:
 4. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-09 - Repo Sync And Header Metric Text Fix
+
+Changed files:
+
+- `.gitignore`
+- `desktop_gui/assets/styles.css`
+- `apps/desktop/src/styles.css`
+- `WORK_LOG.md`
+
+What changed:
+
+- Committed and pushed the current local project snapshot to `origin/phase6-protection-exits` so GitHub has the current working branch.
+- Tightened ignore rules so local runtime files, live-state temp files, database side files, and archive state are not accidentally staged.
+- Fixed token-header metric text overflow so Liquidity, Risk, and other metric values cannot overlap in the served desktop GUI or the React/Tauri GUI.
+
+Verification:
+
+- Secret scan checked for committed API/private key material in project files.
+- `git diff --check`
+- `node --check desktop_gui/assets/render.js && node --check desktop_gui/assets/app.js && node --check desktop_gui/assets/format.js`
+
+Remaining:
+
+- Continue the broader chart-rendering and GUI cleanup pass after confirming the header no longer overlaps in the running app.
 
 ### 2026-05-08 - Trade-Stream Candle Foundation
 

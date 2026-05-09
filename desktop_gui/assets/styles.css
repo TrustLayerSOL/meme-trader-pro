@@ -129,12 +129,13 @@ nav button:hover {
 .token-strip {
   min-width: 0;
   display: grid;
-  grid-template-columns: 42px minmax(220px, 1fr) repeat(4, minmax(110px, 145px));
+  grid-template-columns: 42px minmax(240px, 1fr) repeat(4, minmax(132px, 156px));
   gap: 14px;
   align-items: center;
   padding: 15px 18px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
+  overflow-x: auto;
 }
 
 .token-avatar {
@@ -147,6 +148,9 @@ nav button:hover {
 .token-title h1 {
   font-size: 18px;
   margin: 0 0 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .token-title p,
@@ -156,17 +160,24 @@ nav button:hover {
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metric {
+  min-width: 0;
   border-left: 1px solid var(--line);
   padding-left: 13px;
+  overflow: hidden;
 }
 
 .metric strong {
   display: block;
   margin-top: 4px;
   font-size: 15px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-row,
@@ -943,7 +954,7 @@ nav button:hover {
   }
 
   .token-strip {
-    grid-template-columns: 42px minmax(220px, 1fr) repeat(2, minmax(110px, 145px));
+    grid-template-columns: 42px minmax(220px, 1fr) repeat(2, minmax(132px, 156px));
   }
 
   .intel-grid {
