@@ -101,21 +101,21 @@ Verification:
 - `PRAGMA integrity_check` returns `ok`.
 - Desktop API `/api/readiness` reports SQLite store OK.
 - Desktop API `/api/decisions` is available.
-- Runtime components are fresh except quote heartbeat, which is currently WARN/stale.
+- Runtime readiness reports OK after forcing one wallet-discovery cycle.
 - Rebuilt SQLite counts after restart:
-  - events: 570,
-  - alerts: 36,
+  - events: 1249,
+  - alerts: 42,
   - trades: 13,
   - watchlist: 1,
-  - token snapshots: 74,
-  - swap ticks: 228,
-  - decision records: 4.
+  - token snapshots: 285,
+  - swap ticks: 774,
+  - decision records: 10.
 
 Remaining:
 
 - The old SQLite file was not readable, so historical token snapshots, swap ticks, and decision records inside that old file were not recovered.
 - The decision ledger will repopulate from new scanner decisions going forward.
-- Quote heartbeat remains the only runtime warning to inspect if it does not refresh naturally.
+- Wallet discovery runs on a 300-second interval, so it can briefly look stale between scheduled cycles if the freshness threshold is tighter than the scheduler interval.
 
 ### 2026-05-09 - Decision Ledger Filters And Detail
 
