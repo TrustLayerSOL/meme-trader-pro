@@ -490,7 +490,7 @@ Next actions:
 - [~] Canonical decision ledger: every candidate gets one structured decision record.
 - [~] Scanner skip/main-entry/exploration-entry writes route through the ledger.
 - [~] Paper trade open/failed/exit records link back to `decision_id`.
-- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed.
+- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed. Static desktop Replay tab now has first-pass filters and selected-decision detail; richer drilldown remains.
 - [ ] Fast open-position monitor boundary separated from deep watchdog inspection.
 - [ ] Holder concentration / linked-cluster risk wired into candidate decision records.
 - [ ] Lane-separated paper reports from decision records: main vs exploration vs protected/manual.

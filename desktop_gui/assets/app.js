@@ -24,6 +24,8 @@ const state = {
   readiness: null,
   winnerPatterns: null,
   decisions: null,
+  decisionFilter: "all",
+  selectedDecisionId: "",
   selectedDetail: null,
   loadingToken: false,
   chartMetric: "market_cap",

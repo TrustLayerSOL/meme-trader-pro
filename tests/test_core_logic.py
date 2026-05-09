@@ -55,6 +55,22 @@ from infra.rpc_client import SolanaRPC
 from social.social_signal import SocialSignalEngine
 
 
+_MODULE_CWD = Path.cwd()
+_MODULE_TMPDIR = None
+
+
+def setUpModule():
+    global _MODULE_TMPDIR
+    _MODULE_TMPDIR = tempfile.TemporaryDirectory()
+    os.chdir(_MODULE_TMPDIR.name)
+
+
+def tearDownModule():
+    os.chdir(_MODULE_CWD)
+    if _MODULE_TMPDIR is not None:
+        _MODULE_TMPDIR.cleanup()
+
+
 class NoopStore:
     def upsert_trade(self, trade):
         return None

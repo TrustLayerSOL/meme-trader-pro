@@ -785,6 +785,12 @@ function renderReplayPanel(state) {
   const decisions = state.decisions || {};
   const decisionRows = decisions.items || [];
   if (decisionRows.length) {
+    const filter = state.decisionFilter || "all";
+    const filteredRows = decisionRows.filter((decision) => decisionMatchesFilter(decision, filter));
+    if (!state.selectedDecisionId || !filteredRows.some((decision) => decision.decision_id === state.selectedDecisionId)) {
+      state.selectedDecisionId = filteredRows[0]?.decision_id || "";
+    }
+    const selected = filteredRows.find((decision) => decision.decision_id === state.selectedDecisionId) || filteredRows[0] || null;
     $("intel-grid").innerHTML = `
       <div class="intel-card trade-detail-section">
         <div class="trade-detail-title">
@@ -794,11 +800,35 @@ function renderReplayPanel(state) {
           </span>
           <b>LOCKED</b>
         </div>
+        <div class="decision-filter-row">
+          ${decisionFilterButton("all", "All", filter)}
+          ${decisionFilterButton("bought", "Bought", filter)}
+          ${decisionFilterButton("skipped", "Skipped", filter)}
+          ${decisionFilterButton("exploration", "Exploration", filter)}
+          ${decisionFilterButton("quote_failed", "Quote Failed", filter)}
+          ${decisionFilterButton("hard_risk", "Hard Risk", filter)}
+          ${decisionFilterButton("social", "Social", filter)}
+          ${decisionFilterButton("wallet", "Wallet", filter)}
+        </div>
+        ${decisionDetailSection(selected)}
         <div class="ledger-list">
-          ${decisionRows.slice(0, 30).map(decisionRow).join("")}
+          ${filteredRows.slice(0, 30).map((decision) => decisionRow(decision, state.selectedDecisionId)).join("") || `<div class="ledger-empty">No decisions match this filter.</div>`}
         </div>
       </div>
     `;
+    $("intel-grid").querySelectorAll("[data-decision-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.decisionFilter = button.dataset.decisionFilter || "all";
+        state.selectedDecisionId = "";
+        renderReplayPanel(state);
+      });
+    });
+    $("intel-grid").querySelectorAll("[data-decision-id]").forEach((row) => {
+      row.addEventListener("click", () => {
+        state.selectedDecisionId = row.dataset.decisionId || "";
+        renderReplayPanel(state);
+      });
+    });
     return;
   }
   const trades = state.trades || {};
@@ -814,9 +844,29 @@ function renderReplayPanel(state) {
   `).join("") || `<div class="intel-card"><strong>No replay records</strong><p>Closed or failed paper trades will appear here.</p></div>`;
 }
 
-function decisionRow(decision) {
+function decisionFilterButton(value, label, activeFilter) {
+  return `<button type="button" data-decision-filter="${escapeHtml(value)}" class="${activeFilter === value ? "active" : ""}">${escapeHtml(label)}</button>`;
+}
+
+function decisionMatchesFilter(decision, filter) {
+  if (!filter || filter === "all") return true;
+  const action = String(decision.final_action || "").toLowerCase();
+  const payload = decision.payload || {};
+  const inputs = payload.inputs || {};
+  const ruleOutcomes = payload.rule_outcomes || {};
+  if (filter === "bought") return action.includes("opened") || action.includes("open_attempt");
+  if (filter === "skipped") return action.includes("skip") || action.includes("blocked") || action === "runtime_skip";
+  if (filter === "exploration") return decision.paper_lane === "exploration";
+  if (filter === "quote_failed") return decision.buy_quote_pass === false || decision.sell_quote_pass === false;
+  if (filter === "hard_risk") return Boolean(ruleOutcomes.risk?.hard_block || decision.risk_label === "DANGER" || decision.risk_label === "EMERGENCY");
+  if (filter === "social") return Boolean(inputs.social_match?.matched || payload.social_matched);
+  if (filter === "wallet") return (inputs.wallets || []).length > 0 || Number(decision.payload?.inputs?.wallet_count || decision.wallet_count || 0) > 0;
+  return true;
+}
+
+function decisionRow(decision, selectedDecisionId = "") {
   return `
-    <div class="ledger-row decision-row">
+    <button type="button" class="ledger-row decision-row ${decision.decision_id === selectedDecisionId ? "active" : ""}" data-decision-id="${escapeHtml(decision.decision_id || "")}">
       <span>
         <strong>${escapeHtml(shortMint(decision.mint))}</strong>
         <small>${escapeHtml(decision.signal_type || "-")} | ${escapeHtml(decision.paper_lane || "-")}</small>
@@ -826,7 +876,7 @@ function decisionRow(decision) {
       <span><small>Risk</small><strong>${escapeHtml(decision.risk_label || "-")}</strong></span>
       <span><small>Quotes</small><strong>${quotePair(decision)}</strong></span>
       <span><small>Reason</small><strong>${escapeHtml(decision.action_reason || "-")}</strong></span>
-    </div>
+    </button>
   `;
 }
 
@@ -834,6 +884,46 @@ function quotePair(decision) {
   const buy = decision.buy_quote_pass === true ? "B+" : decision.buy_quote_pass === false ? "B-" : "B?";
   const sell = decision.sell_quote_pass === true ? "S+" : decision.sell_quote_pass === false ? "S-" : "S?";
   return `${buy}/${sell}`;
+}
+
+function decisionDetailSection(decision) {
+  if (!decision) {
+    return `<div class="decision-detail"><strong>Decision Detail</strong><p>No decision selected.</p></div>`;
+  }
+  const payload = decision.payload || {};
+  const inputs = payload.inputs || {};
+  const ruleOutcomes = payload.rule_outcomes || {};
+  const quotes = payload.quotes || {};
+  const wallets = (inputs.wallets || []).filter(Boolean).map(shortMint).join(", ") || "-";
+  const social = inputs.social_match?.reason || (inputs.social_match?.matched ? "matched" : "-");
+  const risks = (ruleOutcomes.risk?.warnings || []).slice(0, 4).join("; ") || ruleOutcomes.risk?.hard_block_reason || "-";
+  const scoreReasons = (ruleOutcomes.scoring?.reasons || []).slice(0, 4).join("; ") || "-";
+  return `
+    <div class="decision-detail">
+      <div class="trade-detail-title">
+        <span>
+          <strong>Decision Detail</strong>
+          <small>${escapeHtml(decision.mint || "-")} | ${escapeHtml(decision.decision_id || "-")}</small>
+        </span>
+        <b>${escapeHtml(decision.final_action || "-")}</b>
+      </div>
+      <div class="trade-detail-grid">
+        ${detailMetric("Lane", escapeHtml(decision.paper_lane || "-"))}
+        ${detailMetric("Score", escapeHtml(decision.total_score ?? "-"))}
+        ${detailMetric("Threshold", escapeHtml(decision.threshold ?? "-"))}
+        ${detailMetric("Risk", escapeHtml(decision.risk_label || "-"))}
+        ${detailMetric("Buy Quote", escapeHtml(quotes.buy?.reason || String(decision.buy_quote_pass ?? "-")))}
+        ${detailMetric("Sell Quote", escapeHtml(quotes.sell?.reason || String(decision.sell_quote_pass ?? "-")))}
+      </div>
+      <div class="trade-detail-notes">
+        ${detailNote("Reason", decision.action_reason || "-")}
+        ${detailNote("Wallets", wallets)}
+        ${detailNote("Social", social)}
+        ${detailNote("Risk Notes", risks)}
+        ${detailNote("Score Notes", scoreReasons)}
+      </div>
+    </div>
+  `;
 }
 
 function renderPositionsPanel(state) {

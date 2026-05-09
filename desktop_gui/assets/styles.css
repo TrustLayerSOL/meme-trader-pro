@@ -485,7 +485,40 @@ nav button:hover {
 }
 
 .decision-row {
-  cursor: default;
+  cursor: pointer;
+}
+
+.decision-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 12px 0;
+}
+
+.decision-filter-row button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #080c12;
+  color: var(--muted);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.decision-filter-row button.active,
+.decision-filter-row button:hover {
+  color: var(--text);
+  background: #182131;
+  border-color: #334466;
+}
+
+.decision-detail {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b1018;
+  padding: 12px;
+  margin-bottom: 12px;
 }
 
 .ledger-row span,

@@ -22,6 +22,10 @@ class FakeElement {
     this.onwheel = null;
   }
 
+  querySelectorAll() {
+    return [];
+  }
+
   getBoundingClientRect() {
     return { left: 0, top: 0, width: 1000, height: 390 };
   }
@@ -33,6 +37,9 @@ globalThis.document = {
   getElementById(id) {
     if (!elements.has(id)) elements.set(id, new FakeElement());
     return elements.get(id);
+  },
+  querySelectorAll() {
+    return [];
   },
 };
 
@@ -79,7 +86,7 @@ globalThis.LightweightCharts = {
   },
 };
 
-const { renderCandles, shouldKeepActiveFormStable } = await import("../desktop_gui/assets/render.js");
+const { renderCandles, renderIntelPanel, shouldKeepActiveFormStable } = await import("../desktop_gui/assets/render.js");
 
 renderCandles({
   metric: "market_cap",
@@ -179,3 +186,75 @@ assert.equal(
   false,
   "non-form panels should keep rendering normally",
 );
+
+renderIntelPanel({
+  activePanel: "replay",
+  decisionFilter: "quote_failed",
+  selectedDecisionId: "dec_failed_quote",
+  decisions: {
+    count: 3,
+    items: [
+      {
+        decision_id: "dec_bought",
+        mint: "BoughtMint111111111111",
+        signal_type: "cluster",
+        final_action: "paper_opened",
+        action_reason: "cluster confirmed",
+        paper_lane: "main",
+        total_score: 81,
+        risk_label: "LOW",
+        buy_quote_pass: true,
+        sell_quote_pass: true,
+        payload: {
+          inputs: { wallets: ["WalletA", "WalletB"] },
+          rule_outcomes: { risk: { warnings: [] } },
+        },
+      },
+      {
+        decision_id: "dec_failed_quote",
+        mint: "QuoteFailMint222222",
+        signal_type: "cluster",
+        final_action: "skip",
+        action_reason: "EXIT LIQUIDITY BLOCK",
+        paper_lane: "main",
+        total_score: 74,
+        risk_label: "WARNING",
+        buy_quote_pass: true,
+        sell_quote_pass: false,
+        payload: {
+          inputs: { wallets: ["WalletC"], social_match: { matched: true, reason: "ticker match" } },
+          rule_outcomes: {
+            risk: { warnings: ["sell route degraded"] },
+            scoring: { reasons: ["score ok"] },
+          },
+          quotes: {
+            buy: { reason: "quote_ok" },
+            sell: { reason: "price_impact_too_high" },
+          },
+        },
+      },
+      {
+        decision_id: "dec_explore",
+        mint: "ExploreMint3333333",
+        signal_type: "cluster",
+        final_action: "paper_opened",
+        action_reason: "near miss",
+        paper_lane: "exploration",
+        total_score: 64,
+        risk_label: "LOW",
+        buy_quote_pass: true,
+        sell_quote_pass: true,
+      },
+    ],
+  },
+});
+
+const decisionMarkup = elements.get("intel-grid").innerHTML;
+assert.match(decisionMarkup, /Decision Ledger/);
+assert.match(decisionMarkup, /data-decision-filter="quote_failed" class="active"/);
+assert.match(decisionMarkup, /QuoteFailMint222222/);
+assert.ok(!decisionMarkup.includes("BoughtMint111111111111"), "quote-failed filter should hide bought decisions");
+assert.ok(!decisionMarkup.includes("ExploreMint3333333"), "quote-failed filter should hide exploration decisions");
+assert.match(decisionMarkup, /Decision Detail/);
+assert.match(decisionMarkup, /price_impact_too_high/);
+assert.match(decisionMarkup, /WalletC/);

@@ -1276,8 +1276,38 @@ def fetch_decision_rows(limit=80, mint=None):
     return decisions
 
 
-def build_decisions_payload(limit=80, mint=None):
+def decision_matches_filter(decision, filter_name=None, lane=None):
+    if lane and decision.get("paper_lane") != lane:
+        return False
+    filter_name = str(filter_name or "all")
+    if filter_name in ("", "all"):
+        return True
+    action = str(decision.get("final_action") or "").lower()
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    rule_outcomes = payload.get("rule_outcomes") if isinstance(payload.get("rule_outcomes"), dict) else {}
+    risk = rule_outcomes.get("risk") if isinstance(rule_outcomes.get("risk"), dict) else {}
+    if filter_name == "bought":
+        return "opened" in action or "open_attempt" in action
+    if filter_name == "skipped":
+        return "skip" in action or "blocked" in action or action == "runtime_skip"
+    if filter_name == "exploration":
+        return decision.get("paper_lane") == "exploration"
+    if filter_name == "quote_failed":
+        return decision.get("buy_quote_pass") is False or decision.get("sell_quote_pass") is False
+    if filter_name == "hard_risk":
+        return bool(risk.get("hard_block") or decision.get("risk_label") in ("DANGER", "EMERGENCY"))
+    if filter_name == "social":
+        social = inputs.get("social_match") if isinstance(inputs.get("social_match"), dict) else {}
+        return bool(social.get("matched"))
+    if filter_name == "wallet":
+        return bool(inputs.get("wallets"))
+    return True
+
+
+def build_decisions_payload(limit=80, mint=None, filter_name=None, lane=None):
     items = fetch_decision_rows(limit=limit, mint=mint)
+    items = [item for item in items if decision_matches_filter(item, filter_name=filter_name, lane=lane)]
     counts = {}
     for item in items:
         key = item.get("final_action") or "unknown"
@@ -1286,6 +1316,8 @@ def build_decisions_payload(limit=80, mint=None):
         "generated_at": time.time(),
         "source": "decision_records",
         "live_execution_locked": True,
+        "filter": filter_name or "all",
+        "lane": lane or "all",
         "count": len(items),
         "counts": counts,
         "items": items,
@@ -2494,7 +2526,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/decisions":
         limit = parse_int_query(query, "limit", 80, 1, 250)
         mint = path_param((query.get("mint") or [""])[0]) or None
-        return json_response(build_decisions_payload(limit=limit, mint=mint))
+        filter_name = path_param((query.get("filter") or ["all"])[0]) or "all"
+        lane = path_param((query.get("lane") or [""])[0]) or None
+        return json_response(build_decisions_payload(limit=limit, mint=mint, filter_name=filter_name, lane=lane))
     if path == "/api/events":
         limit = parse_int_query(query, "limit", 120, 1, 500)
         return json_response(build_event_feed_payload(limit=limit))

@@ -398,6 +398,43 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["final_action"], "skip")
         self.assertEqual(payload["items"][0]["action_reason"], "below threshold")
 
+    def test_decisions_route_filters_quote_failed_and_lane(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.upsert_decision(build_decision_record({
+                "decision_id": "dec_quote_failed",
+                "timestamp": 123,
+                "mint": "MintQuoteFail",
+                "type": "cluster",
+                "paper_lane": "main",
+                "should_trade": False,
+                "buy_quote_pass": True,
+                "sell_quote_pass": False,
+                "score_reasons": ["exit liquidity blocked"],
+            }))
+            store.upsert_decision(build_decision_record({
+                "decision_id": "dec_exploration",
+                "timestamp": 124,
+                "mint": "MintExplore",
+                "type": "cluster",
+                "paper_lane": "exploration",
+                "should_trade": True,
+                "buy_quote_pass": True,
+                "sell_quote_pass": True,
+                "score_reasons": ["near miss"],
+            }))
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                status, _, body = desktop_api.route_request("GET", "/api/decisions?filter=quote_failed&lane=main")
+
+        payload = json.loads(body)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["filter"], "quote_failed")
+        self.assertEqual(payload["lane"], "main")
+        self.assertEqual(payload["items"][0]["decision_id"], "dec_quote_failed")
+
     def test_cors_only_allows_local_desktop_origins(self):
         self.assertIsNone(desktop_api.allowed_cors_origin("http://127.0.0.1:5173"))
         self.assertIsNone(desktop_api.allowed_cors_origin("http://localhost:8765"))

@@ -65,15 +65,56 @@ Why this matters:
 
 ## Next Actions
 
-1. Implement the first canonical decision-ledger foundation.
-2. Link scanner skip/main-entry/exploration-entry records to decision ids.
-3. Link paper open/failed/exit records back to decision ids.
-4. Add a read-only decision feed to the API/GUI after the write path is stable.
+1. Bring the React/Tauri Replay view up to the same Decision Ledger filter/detail standard as the static desktop view.
+2. Add richer Decision Ledger drill-downs for quote snapshots, route feasibility, holder/risk checks, and eventual paper outcome.
+3. Add or repair canonical read paths so trades, wallet stats, alerts, and decisions do not disagree across JSON and SQLite panels.
+4. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
 5. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
 6. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
 7. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-09 - Decision Ledger Filters And Detail
+
+Changed files:
+
+- `desktop_api.py`
+- `desktop_gui/assets/app.js`
+- `desktop_gui/assets/render.js`
+- `desktop_gui/assets/styles.css`
+- `tests/test_desktop_api.py`
+- `tests/test_core_logic.py`
+- `tests/test_desktop_gui_chart.mjs`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added read-only API filtering for `/api/decisions`, including quote-failed and lane filters.
+- Added first-pass Decision Ledger filters in the static desktop Replay tab: all, bought, skipped, exploration, quote failed, hard risk, social, and wallet.
+- Added selected-decision detail showing lane, score, threshold, risk, buy/sell quote reason, action reason, wallets, social match, risk notes, and score notes.
+- Decision rows are now clickable and keep the selected decision highlighted.
+- Isolated core logic tests from the developer-machine runtime database so local data corruption or non-SQLite runtime files do not break unit tests.
+
+Verification:
+
+- Added failing UI/API tests first for decision filters and selected detail, then implemented the behavior.
+- Targeted desktop API decision-filter tests passed.
+- Static desktop GUI test passed.
+- Full Python suite passed from the repo root with 162 tests.
+- JavaScript static syntax/chart tests passed.
+- React/Tauri type check passed.
+
+Operational note:
+
+- The local runtime file `data/memetrader.db` is not currently a readable SQLite database. I did not delete or overwrite it. Tests are now isolated from that runtime file, and the runtime DB should be backed up/renamed/rebuilt deliberately before relying on SQLite panels against that local file.
+
+Remaining:
+
+- Add richer decision detail to the React/Tauri shell.
+- Add backfill for older scanner snapshots and paper trades if we want historical decisions visible immediately.
 
 ### 2026-05-09 - Canonical Decision Ledger Foundation
 
