@@ -7,6 +7,7 @@ PROCESS_PATTERNS = {
     "dashboard": ["streamlit", "dashboard/dashboard.py"],
     "bot": ["main.py"],
     "watchdog": ["core.rug_watchdog"],
+    "wallet_discovery": ["utils/run_wallet_discovery_scheduler.py"],
 }
 
 
@@ -36,7 +37,7 @@ class ProcessGuard:
 
     def status_rows(self):
         rows = []
-        for name in ["dashboard", "bot", "watchdog"]:
+        for name in ["dashboard", "bot", "watchdog", "wallet_discovery"]:
             pids = self.pids_for(name)
             rows.append({
                 "component": name,

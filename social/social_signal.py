@@ -1,7 +1,10 @@
+import hashlib
 import json
 import os
 import re
 import time
+
+from core.json_store import atomic_write_json, locked_update_json
 
 
 SOCIAL_STATE_FILE = "data/social_state.json"
@@ -29,22 +32,23 @@ STOP_WORDS = {
 
 
 class SocialSignalEngine:
-    def __init__(self):
+    def __init__(self, state_file=SOCIAL_STATE_FILE):
+        self.state_file = state_file
         self.state = self.load_state()
 
     def load_state(self):
-        if not os.path.exists(SOCIAL_STATE_FILE):
+        if not os.path.exists(self.state_file):
             return {"signals": []}
 
         try:
-            with open(SOCIAL_STATE_FILE, "r") as f:
+            with open(self.state_file, "r") as f:
                 return json.load(f)
         except Exception:
             return {"signals": []}
 
     def save_state(self):
-        with open(SOCIAL_STATE_FILE, "w") as f:
-            json.dump(self.state, f, indent=2)
+        self.state["last_updated"] = time.time()
+        atomic_write_json(self.state_file, self.state)
 
     def clean_text(self, text):
         text = str(text or "")
@@ -102,42 +106,225 @@ class SocialSignalEngine:
         account = str(account or "").lower().replace("@", "")
         return HIGH_IMPACT_ACCOUNTS.get(account, 8)
 
-    def add_signal(self, account, text, url=None):
+    def infer_account_category(self, account):
+        account = str(account or "").lower().replace("@", "")
+        if account in HIGH_IMPACT_ACCOUNTS:
+            return "high_impact"
+        if account in ["cz", "aeyakovenko", "solana", "pumpdotfun"]:
+            return "crypto_kol"
+        return "watchlist"
+
+    def score_sentiment(self, text):
+        text = str(text or "").lower()
+        bullish = [
+            "buy", "bought", "send", "sending", "moon", "based", "breakout",
+            "runner", "cult", "cto", "backed", "partnership", "launch",
+        ]
+        bearish = [
+            "rug", "scam", "drain", "sell", "dump", "avoid", "fake",
+            "honeypot", "exploit", "warning", "danger",
+        ]
+        score = 0
+        score += sum(1 for word in bullish if word in text)
+        score -= sum(1 for word in bearish if word in text)
+        if score > 0:
+            return "bullish"
+        if score < 0:
+            return "bearish"
+        return "neutral"
+
+    def extract_tickers(self, text):
+        tickers = []
+        for match in re.findall(r"\$([A-Za-z][A-Za-z0-9_]{1,12})", str(text or "")):
+            value = match.lower()
+            if value not in tickers:
+                tickers.append(value)
+        return tickers[:12]
+
+    def extract_mints(self, text):
+        mints = []
+        for match in re.findall(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", str(text or "")):
+            if match not in mints:
+                mints.append(match)
+        return mints[:12]
+
+    def social_event_id(self, account, text, timestamp):
+        cleaned = self.clean_text(text).lower()
+        account_key = str(account or "").lower().replace("@", "")
+        digest = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
+        return f"{account_key}:{int(float(timestamp or 0))}:{digest}"
+
+    def build_signal(
+        self,
+        account,
+        text,
+        url=None,
+        source_platform="x",
+        timestamp=None,
+        engagement=None,
+        raw=None,
+        expires_hours=6,
+    ):
         account = str(account or "").lower().replace("@", "")
         now = time.time()
+        event_time = float(timestamp or now)
 
-        keywords = self.extract_keywords(text)
-        weight = self.account_weight(account)
-
-        signal = {
+        return {
+            "event_id": self.social_event_id(account, text, event_time),
+            "source_platform": source_platform,
             "account": account,
+            "account_category": self.infer_account_category(account),
             "text": text,
-            "keywords": keywords,
-            "weight": weight,
+            "keywords": self.extract_keywords(text),
+            "tickers": self.extract_tickers(text),
+            "mints": self.extract_mints(text),
+            "sentiment": self.score_sentiment(text),
+            "weight": self.account_weight(account),
             "url": url,
-            "timestamp": now,
-            "expires_at": now + (6 * 60 * 60),
+            "timestamp": event_time,
+            "discovered_at": now,
+            "expires_at": now + (float(expires_hours or 6) * 60 * 60),
+            "engagement": engagement or {},
+            "raw": raw or {},
         }
+
+    def add_signal(
+        self,
+        account,
+        text,
+        url=None,
+        source_platform="x",
+        timestamp=None,
+        engagement=None,
+        raw=None,
+        expires_hours=6,
+    ):
+        signal = self.build_signal(
+            account=account,
+            text=text,
+            url=url,
+            source_platform=source_platform,
+            timestamp=timestamp,
+            engagement=engagement,
+            raw=raw,
+            expires_hours=expires_hours,
+        )
 
         self.state.setdefault("signals", [])
         self.state["signals"].insert(0, signal)
 
-        # Keep recent 200 social signals only
-        self.state["signals"] = self.state["signals"][:200]
+        # Keep recent 500 social signals only
+        self.state["signals"] = self.dedupe_signals(self.state["signals"])[:500]
 
         self.save_state()
 
         return signal
 
+    def dedupe_signals(self, signals):
+        seen = set()
+        cleaned = []
+        for signal in signals or []:
+            if not isinstance(signal, dict):
+                continue
+            key = signal.get("event_id") or (
+                signal.get("account"),
+                signal.get("timestamp"),
+                self.clean_text(signal.get("text", "")).lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(signal)
+        return cleaned
+
+    def import_text_block(self, text, default_account="manual", source_platform="x"):
+        imported = []
+        for line in str(text or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            account = default_account
+            body = line
+            url = None
+
+            if "|" in line:
+                parts = [part.strip() for part in line.split("|")]
+                if len(parts) >= 2:
+                    account = parts[0].replace("@", "") or default_account
+                    body = parts[1]
+                    if len(parts) >= 3:
+                        url = parts[2] or None
+            elif line.startswith("@") and ":" in line:
+                left, right = line.split(":", 1)
+                account = left.replace("@", "").strip() or default_account
+                body = right.strip()
+
+            imported.append(self.build_signal(
+                account=account,
+                text=body,
+                url=url,
+                source_platform=source_platform,
+            ))
+
+        if imported:
+            def updater(state):
+                if not isinstance(state, dict):
+                    state = {"signals": []}
+                signals = state.get("signals", [])
+                if not isinstance(signals, list):
+                    signals = []
+                state["signals"] = self.dedupe_signals(imported + signals)[:500]
+                state["last_updated"] = time.time()
+                return state
+
+            self.state = locked_update_json(self.state_file, {"signals": []}, updater)
+
+        return imported
+
+    def safe_float(self, value, default=0):
+        try:
+            if value in [None, ""]:
+                return default
+            return float(value)
+        except Exception:
+            return default
+
     def get_active_signals(self):
         now = time.time()
 
-        signals = [
-            s for s in self.state.get("signals", [])
-            if float(s.get("expires_at", 0) or 0) > now
-        ]
+        signals = []
+        for signal in self.state.get("signals", []):
+            if not isinstance(signal, dict):
+                continue
+            if self.safe_float(signal.get("expires_at"), 0) > now:
+                signals.append(signal)
 
         return signals
+
+    def signal_summary(self):
+        signals = [s for s in self.state.get("signals", []) if isinstance(s, dict)]
+        active = self.get_active_signals()
+        accounts = {}
+        sentiments = {"bullish": 0, "bearish": 0, "neutral": 0}
+        keywords = {}
+
+        for signal in signals:
+            account = signal.get("account") or "unknown"
+            accounts[account] = accounts.get(account, 0) + 1
+            sentiment = signal.get("sentiment") or "neutral"
+            sentiments[sentiment] = sentiments.get(sentiment, 0) + 1
+            for keyword in signal.get("keywords", []):
+                keywords[keyword] = keywords.get(keyword, 0) + 1
+
+        return {
+            "total": len(signals),
+            "active": len(active),
+            "accounts": accounts,
+            "sentiments": sentiments,
+            "keywords": keywords,
+            "last_updated": self.state.get("last_updated"),
+        }
 
     def normalize_token_text(self, value):
         value = str(value or "").lower()
@@ -152,6 +339,19 @@ class SocialSignalEngine:
         token_symbol = self.normalize_token_text(market_info.get("symbol", ""))
 
         searchable = f"{token_name} {token_symbol}".strip()
+        active = self.get_active_signals()
+        token_mint = str(mint or "")
+
+        for signal in active:
+            if token_mint and token_mint in signal.get("mints", []):
+                return {
+                    "matched": True,
+                    "score_bonus": min(35, self.safe_float(signal.get("weight"), 8) + 15),
+                    "matched_keywords": [token_mint],
+                    "matched_account": signal.get("account"),
+                    "matched_signal": signal,
+                    "reason": "social_exact_mint_match",
+                }
 
         if not searchable:
             return {
@@ -172,11 +372,13 @@ class SocialSignalEngine:
             "reason": "no_social_match",
         }
 
-        active = self.get_active_signals()
-
         for signal in active:
-            keywords = signal.get("keywords", [])
+            keywords = list(signal.get("keywords", [])) + list(signal.get("tickers", []))
             matched_keywords = []
+            token_mint = str(mint or "")
+
+            if token_mint and token_mint in signal.get("mints", []):
+                matched_keywords.append(token_mint)
 
             for keyword in keywords:
                 keyword = self.normalize_token_text(keyword)

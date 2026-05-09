@@ -11,10 +11,16 @@ from tkinter import messagebox, ttk
 
 from core.process_guard import ProcessGuard
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None
+
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / "trading_env" / "bin" / "python"
 LOG_DIR = ROOT / "logs"
+LOCK_DIR = ROOT / "data" / "process_locks"
 DASHBOARD_URL = "http://127.0.0.1:8501"
 
 
@@ -27,24 +33,30 @@ class ManagedProcess:
         self.guard = ProcessGuard()
         self.process = None
         self.log_handle = None
+        self.lock_file = LOCK_DIR / f"{self.process_key}.lock"
 
     def start(self):
-        if self.is_running():
-            return False
-        if self.external_pids():
-            return False
+        LOCK_DIR.mkdir(parents=True, exist_ok=True)
+        with open(self.lock_file, "a+") as lock_handle:
+            if fcntl:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
 
-        LOG_DIR.mkdir(exist_ok=True)
-        self.log_handle = open(self.log_file, "a", buffering=1)
-        self.log_handle.write(f"\n\n--- {self.name} start {time.ctime()} ---\n")
+            if self.is_running():
+                return False
+            if self.external_pids():
+                return False
 
-        self.process = subprocess.Popen(
-            self.command,
-            cwd=ROOT,
-            stdout=self.log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+            LOG_DIR.mkdir(exist_ok=True)
+            self.log_handle = open(self.log_file, "a", buffering=1)
+            self.log_handle.write(f"\n\n--- {self.name} start {time.ctime()} ---\n")
+
+            self.process = subprocess.Popen(
+                self.command,
+                cwd=ROOT,
+                stdout=self.log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
 
         return True
 
@@ -133,6 +145,13 @@ class MemeTraderLauncher(tk.Tk):
             process_key="watchdog",
         )
 
+        self.wallet_discovery = ManagedProcess(
+            name="Wallet Discovery",
+            command=[python_bin, "utils/run_wallet_discovery_scheduler.py"],
+            log_file=LOG_DIR / "wallet_discovery.log",
+            process_key="wallet_discovery",
+        )
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.build_ui()
         self.refresh_status()
@@ -162,11 +181,12 @@ class MemeTraderLauncher(tk.Tk):
         ttk.Button(controls, text="Open Dashboard", command=self.open_dashboard).grid(row=0, column=2, padx=8)
         ttk.Button(controls, text="Start Bot", command=self.start_bot).grid(row=0, column=3, padx=8)
         ttk.Button(controls, text="Start Watchdog", command=self.start_watchdog).grid(row=0, column=4, padx=8)
-        ttk.Button(controls, text="Preflight", command=self.run_preflight).grid(row=0, column=5, padx=8)
-        ttk.Button(controls, text="Protection Check", command=self.run_protection_check).grid(row=0, column=6, padx=8)
-        ttk.Button(controls, text="Sync DB", command=self.sync_database).grid(row=0, column=7, padx=8)
-        ttk.Button(controls, text="Open Logs", command=self.open_logs).grid(row=0, column=8, padx=8)
-        ttk.Button(controls, text="Stop All", command=self.stop_all).grid(row=0, column=9, padx=8)
+        ttk.Button(controls, text="Start Wallet Discovery", command=self.start_wallet_discovery).grid(row=0, column=5, padx=8)
+        ttk.Button(controls, text="Preflight", command=self.run_preflight).grid(row=0, column=6, padx=8)
+        ttk.Button(controls, text="Protection Check", command=self.run_protection_check).grid(row=0, column=7, padx=8)
+        ttk.Button(controls, text="Sync DB", command=self.sync_database).grid(row=0, column=8, padx=8)
+        ttk.Button(controls, text="Open Logs", command=self.open_logs).grid(row=0, column=9, padx=8)
+        ttk.Button(controls, text="Stop All", command=self.stop_all).grid(row=0, column=10, padx=8)
 
         body = ttk.Frame(self, padding=(18, 8, 18, 18))
         body.grid(row=2, column=0, sticky="nsew")
@@ -189,6 +209,10 @@ class MemeTraderLauncher(tk.Tk):
         self.watchdog_status = ttk.Label(status_frame, text="Stopped")
         self.watchdog_status.grid(row=2, column=1, sticky="w", pady=(8, 0))
 
+        ttk.Label(status_frame, text="Wallet Discovery").grid(row=3, column=0, sticky="w", padx=(0, 14), pady=(8, 0))
+        self.wallet_discovery_status = ttk.Label(status_frame, text="Stopped")
+        self.wallet_discovery_status.grid(row=3, column=1, sticky="w", pady=(8, 0))
+
         notes = ttk.LabelFrame(body, text="Logs", padding=12)
         notes.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
         notes.columnconfigure(0, weight=1)
@@ -197,6 +221,7 @@ class MemeTraderLauncher(tk.Tk):
             f"Dashboard log: {LOG_DIR / 'dashboard.log'}\n"
             f"Bot log: {LOG_DIR / 'bot.log'}\n\n"
             f"Watchdog log: {LOG_DIR / 'watchdog.log'}\n\n"
+            f"Wallet discovery log: {LOG_DIR / 'wallet_discovery.log'}\n\n"
             "Keep this window open while the bot is running. Closing it will stop child processes cleanly."
         )
 
@@ -237,9 +262,17 @@ class MemeTraderLauncher(tk.Tk):
             messagebox.showerror("Watchdog failed", str(exc))
         self.refresh_status()
 
+    def start_wallet_discovery(self):
+        try:
+            self.wallet_discovery.start()
+        except Exception as exc:
+            messagebox.showerror("Wallet discovery failed", str(exc))
+        self.refresh_status()
+
     def start_system(self):
         self.start_dashboard()
         self.start_watchdog()
+        self.start_wallet_discovery()
         self.start_bot()
 
     def run_preflight(self):
@@ -280,6 +313,7 @@ class MemeTraderLauncher(tk.Tk):
         self.preflight_output.insert(tk.END, output)
 
     def stop_all(self):
+        self.wallet_discovery.stop()
         self.watchdog.stop()
         self.bot.stop()
         self.dashboard.stop()
@@ -289,10 +323,11 @@ class MemeTraderLauncher(tk.Tk):
         self.dashboard_status.configure(text=self.dashboard.status_text())
         self.bot_status.configure(text=self.bot.status_text())
         self.watchdog_status.configure(text=self.watchdog.status_text())
+        self.wallet_discovery_status.configure(text=self.wallet_discovery.status_text())
         self.after(1000, self.refresh_status)
 
     def on_close(self):
-        if self.bot.is_running() or self.dashboard.is_running() or self.watchdog.is_running():
+        if self.bot.is_running() or self.dashboard.is_running() or self.watchdog.is_running() or self.wallet_discovery.is_running():
             should_close = messagebox.askyesno(
                 "Stop MemeTraderPro?",
                 "Closing this window will stop the bot and dashboard. Continue?",

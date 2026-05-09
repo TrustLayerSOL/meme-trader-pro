@@ -296,3 +296,571 @@ The user is not barking up the wrong tree. Open source is useful here, but the e
 - clean local operator UX.
 
 The best immediate reference is Chainstack's Apache-2.0 Python pump.fun bot. The best near-term ideas from the broader search are holder concentration, token performance snapshots, job/progress monitoring, direct listener comparisons, and prepared simulated exits.
+
+## Rohun Vora Repo Review
+
+User prompt:
+
+- Review `https://github.com/rohunvora` from the perspective of MemeTraderPro.
+- Look for pieces worth adapting into our safety-first local Solana meme trading cockpit.
+
+Reviewed locally in `/tmp/rohunvora-mtp-review` for research only. No external repo code was copied into MemeTraderPro.
+
+### Licensing / Reuse Boundary
+
+User update:
+
+- Diane checked with Rohun Vora directly.
+- Rohun said to use anything needed and that the work is completely open source.
+
+Reuse call after permission:
+
+- Rohun Vora repos may be used as implementation references or source material for MemeTraderPro where useful.
+- Keep attribution in notes/commit messages when adapting meaningful pieces.
+- Prefer adapting only the relevant pieces instead of importing whole unrelated apps.
+- Preserve any existing license notices where license files exist.
+- Still keep secrets, API keys, and generated/runtime files out of the repo.
+
+Repos with explicit or visible MIT-style reuse signals:
+
+- `rohunvora/paste-trade` - MIT license.
+- `rohunvora/walletdoctor` - MIT license.
+- `rohunvora/traderfm` - MIT license, lower relevance.
+- `rohunvora/x-research-skill` - permission confirmed by user; public repo does not show a root license in the quick clone.
+- `rohunvora/twitter-feedback` - README mentions MIT; permission confirmed by user.
+
+Repos now allowed by direct permission, but still best adapted selectively:
+
+- `rohunvora/tweet-price-charts` - high-value social/price analytics reference.
+- `rohunvora/why-pump` - no obvious license file; README says abandoned learning project.
+- `rohunvora/my-cmc` - no obvious license file.
+- `rohunvora/chart-ai` - README says private/all rights reserved, but direct permission from Rohun overrides for Diane's project use. Still use selectively.
+
+Decision: use what is needed, but do it intentionally. The best path remains adapting the strongest pieces into MemeTraderPro's Python/local safety-first architecture rather than wholesale app merges.
+
+### Highest-Value Candidate: paste-trade
+
+Repo: `https://github.com/rohunvora/paste-trade`
+
+License: MIT.
+
+What it is:
+
+- Agent workflow for turning a source into trade theses, routing those theses to instruments, locking prices, and tracking P&L.
+- Accepts sources such as tweets, videos, articles, PDFs, screenshots, or typed hunches.
+- Uses a thesis lifecycle: saved, routing, routed/dropped, posted.
+- Separates author/source price from posted/platform price.
+
+Why it matters for MemeTraderPro:
+
+- This maps well to our desired candidate lifecycle:
+  - source/social/on-chain trigger,
+  - thesis/catalyst card,
+  - candidate token/instrument,
+  - entry price snapshot,
+  - paper outcome tracking,
+  - postmortem.
+- Its "author price vs posted price" distinction should become our "signal time price vs operator/action time price" distinction.
+
+Clean-room additions to consider:
+
+1. Add a local `signal_thesis` or `candidate_card` schema:
+   - source type,
+   - source timestamp,
+   - discovered timestamp,
+   - token mint,
+   - thesis,
+   - evidence links,
+   - route/status,
+   - signal price,
+   - observed/action price,
+   - invalidation/kill conditions.
+2. Add P&L lenses:
+   - signal P&L from first source/signal time,
+   - platform/operator P&L from when MemeTraderPro surfaced or paper-entered it.
+3. Add candidate state machine:
+   - `detected -> enriched -> scored -> paper_entered | skipped -> monitored -> closed/postmortem`.
+
+Priority: high. Best near-term product/data-model reference.
+
+### Highest-Value Candidate: walletdoctor
+
+Repo: `https://github.com/rohunvora/walletdoctor`
+
+License: MIT.
+
+What it is:
+
+- High-performance Solana wallet analytics using Helius RPC and batch fetching.
+- Uses paged `getSignaturesForAddress`, batch transaction parsing, concurrency controls, price caching, and parse metrics.
+- README targets sub-20-second analysis for wallets with thousands of trades.
+
+Why it matters for MemeTraderPro:
+
+- Our wallet intelligence is one of the likely edges.
+- We already track wallet quality/performance locally, but need stronger backfill, parse-rate metrics, and evidence about whether a wallet is actually good.
+
+Clean-room additions to consider:
+
+1. Add wallet analytics backfill jobs:
+   - signatures fetched,
+   - signatures parsed,
+   - trades parsed,
+   - parse rate,
+   - errors,
+   - elapsed seconds.
+2. Add concurrency/rate-limit discipline for Helius batch calls.
+3. Add per-wallet evidence fields:
+   - unique tokens traded,
+   - realized/paper P&L,
+   - average hold time,
+   - median drawdown,
+   - rapid dump exposure,
+   - entry market cap where available.
+4. Add progress status to the dashboard for long wallet backfills.
+
+Priority: high. Strong technical reference for wallet intelligence.
+
+### Highest-Value Candidate: tweet-price-charts
+
+Repo: `https://github.com/rohunvora/tweet-price-charts`
+
+License: no obvious license file in quick clone. Direct project use approved by Rohun via Diane.
+
+Permission update: Diane confirmed Rohun approved using anything needed.
+
+What it is:
+
+- Analytics platform correlating founder/adopter tweets with token price action.
+- Tracks multiple crypto assets, including Solana meme assets.
+- Has asset configs, multi-source price fetching, tweet alignment, outlier warnings, statistics, chart markers, and automated updates.
+
+Why it matters for MemeTraderPro:
+
+- This is directly relevant to social-signal scoring.
+- Its most useful concept is not "tweets make price go up"; it is careful alignment of tweet timestamps, price candles, baselines, and outlier handling.
+
+Clean-room additions to consider:
+
+1. Add curated account/token watchlists:
+   - token mint,
+   - primary ticker/keyword filter,
+   - founder/KOL/adopter account,
+   - launch date,
+   - price source,
+   - notes.
+2. Add social-event-to-price alignment:
+   - price at post,
+   - 5m/15m/1h/4h follow-up returns,
+   - volume/liquidity change,
+   - whether the move beat no-post baseline.
+3. Add outlier warnings for sniper candles instead of silently removing them.
+4. Add "quiet period" and "burst period" social features as evidence, not trade triggers.
+
+Priority: high as a reference. Direct reuse is allowed by permission, but clean adaptation is still preferred.
+
+### Useful Candidate: x-research-skill
+
+Repo: `https://github.com/rohunvora/x-research-skill`
+
+License: no obvious license file in quick clone. Direct project use approved by Rohun via Diane.
+
+Permission update: Diane confirmed Rohun approved using anything needed.
+
+What it is:
+
+- X/Twitter research CLI for search, profile pulls, threads, watchlists, caching, engagement filters, quick mode, JSON/Markdown output, and cost display.
+
+Why it matters for MemeTraderPro:
+
+- We need cheap pulse checks and watchlist monitoring for meme narratives.
+- The cost-aware quick mode and caching are the key ideas.
+
+Clean-room additions to consider:
+
+1. Add an X watchlist config for KOLs/founders/adopters.
+2. Add quick pulse checks with:
+   - one-page limit,
+   - no-retweet/no-reply filters,
+   - engagement threshold,
+   - one-hour cache.
+3. Save research outputs to local JSON/Markdown artifacts for later audit.
+4. Surface estimated API cost per run before making high-volume queries.
+
+Priority: medium-high. Operationally useful, but license unclear.
+
+### Useful Candidate: why-pump
+
+Repo: `https://github.com/rohunvora/why-pump`
+
+License: no obvious license file in quick clone. Direct project use approved by Rohun via Diane.
+
+Permission update: Diane confirmed Rohun approved using anything needed.
+
+What it is:
+
+- "Catalyst card" system for explaining why Solana tokens pump/dump.
+- Attempts to correlate on-chain events, social activity, and market data.
+- README itself notes data-quality, cost, and hallucination risks.
+
+Why it matters for MemeTraderPro:
+
+- Catalyst cards are a strong UI/data primitive for explainable candidates and skipped trades.
+- The cautionary notes are as useful as the feature idea: do not let AI hallucinate causal explanations.
+
+Clean-room additions to consider:
+
+1. Add catalyst cards with strict evidence requirements:
+   - type,
+   - direction,
+   - severity,
+   - confidence,
+   - time horizon,
+   - evidence links,
+   - source timestamps,
+   - what would invalidate it.
+2. Separate observed facts from AI narrative.
+3. Require at least one non-AI source for high-severity cards.
+
+Priority: medium-high. Good product concept; implement defensively.
+
+### Useful Candidate: twitter-feedback
+
+Repo: `https://github.com/rohunvora/twitter-feedback`
+
+License: README mentions MIT, and direct project use was approved by Rohun via Diane.
+License: README mentions MIT, and Diane confirmed Rohun approved using anything needed.
+
+What it is:
+
+- Fetches replies/quotes for a tweet, stores them locally, and produces dashboards/AI insights.
+
+Potential MemeTraderPro use:
+
+- Measure community reaction to a token/KOL post.
+- Track whether replies are bullish, skeptical, bot-like, or asking for contract/liquidity details.
+- Use incremental watermarks and local SQLite for crash-safe social ingestion.
+
+Priority: medium.
+
+### Lower-Priority Candidates
+
+`rohunvora/my-cmc`
+
+- Useful as a fundamentals-style dashboard reference for protocol revenue/buyback context.
+- Less relevant for very early meme tokens, more useful for listed protocols such as PUMP, HYPE, RAY, etc.
+- Direct project use approved by Rohun via Diane; still lower priority than the social/wallet/catalyst work.
+
+`rohunvora/chart-ai`
+
+- Interesting structured chart-analysis product: regime, support/resistance, scenarios, invalidation.
+- README says private/all rights reserved, but Diane confirmed Rohun approved using anything needed. Use selectively and keep attribution.
+- Could inspire a future "chart read" panel, but not a priority until our data and paper evidence are stronger.
+
+`rohunvora/traderfm`
+
+- MIT and useful for community/trader profile ideas.
+- Low immediate relevance to local trading cockpit.
+
+## Recommended Rohun-Inspired Integration Plan
+
+1. Add candidate/catalyst card schema and lifecycle.
+   - Inspired by `paste-trade` and `why-pump`.
+   - Store every candidate's source, evidence, status, signal price, action price, P&L lenses, invalidation, and final outcome.
+
+2. Upgrade wallet analytics backfills.
+   - Inspired by `walletdoctor`.
+   - Add batch progress, parse metrics, error counts, and wallet evidence fields before promoting wallets.
+
+3. Add social signal alignment.
+   - Inspired by `tweet-price-charts`.
+   - Align X/KOL/founder events to token price/volume/liquidity windows and compare against baselines.
+
+4. Add X watchlist pulse checks.
+   - Inspired by `x-research-skill`.
+   - Keep it cached, cost-aware, and audit-friendly.
+
+5. Add explainable catalyst cards to the dashboard.
+   - Use strict evidence links and separate observed facts from AI-generated narrative.
+
+## Rohun Review Bottom Line
+
+There is real signal here. The best pieces to adapt are product/data-model patterns, not wholesale code:
+
+- `paste-trade` for signal-to-thesis-to-P&L lifecycle,
+- `walletdoctor` for Solana wallet analytics/backfill discipline,
+- `tweet-price-charts` for social-to-price alignment,
+- `x-research-skill` for cheap social pulse checks,
+- `why-pump` for explainable catalyst cards.
+
+Immediate next build recommendation:
+
+- Add a `candidate/catalyst card` ledger and use it as the central bridge between social signals, wallet signals, risk checks, paper entries, skips, and postmortems.
+
+## Rohun Vora Full Repo Sweep - Additional Findings
+
+Date: 2026-04-29
+
+Source:
+
+- GitHub profile: `https://github.com/rohunvora?tab=repositories`
+- GitHub API inventory and local read-only clones under `/tmp/rohunvora-full-review`
+
+Scope:
+
+- Reviewed the broader repo list, not only the first five high-signal projects.
+- No code was copied into MemeTraderPro.
+- User says Rohun gave direct permission to use anything needed. Still prefer selective adaptation with attribution.
+
+### Additional High-Value Ideas
+
+#### `twitter-feedback`
+
+Repo: `https://github.com/rohunvora/twitter-feedback`
+
+What it adds beyond `tweet-price-charts`:
+
+- Reply/quote analysis for a specific X post.
+- Incremental watermarks and local SQLite storage.
+- Basic analysis plus optional AI insight reports.
+
+MemeTraderPro adaptation:
+
+- Add a community-reaction layer for KOL/founder posts:
+  - bullish support,
+  - skeptical replies,
+  - bot-like replies,
+  - contract-address requests,
+  - rug/insider warnings,
+  - notable smart-account replies.
+- Use this as evidence on catalyst cards, not as an automatic buy trigger.
+- Save reply/quote snapshots locally so we can later compare reaction quality against paper outcomes.
+
+Priority: high for social edge after the catalyst-card ledger exists.
+
+#### `chart-ai`
+
+Repo: `https://github.com/rohunvora/chart-ai`
+
+What it adds:
+
+- Structured chart analysis output:
+  - regime,
+  - support/resistance zones,
+  - bullish/bearish scenarios,
+  - invalidation rules,
+  - follow-up chat/context.
+
+MemeTraderPro adaptation:
+
+- Add a future "Chart Read" panel for tokens already being watched.
+- Keep output deterministic and evidence-labeled:
+  - current regime,
+  - support zone,
+  - breakdown invalidation,
+  - take-profit / stop-zone suggestions.
+- Avoid AI-only trade authority. The chart read should support operator judgment and paper-trade postmortems.
+
+Priority: medium-high for the pro GUI, lower than watchdog/quote feasibility.
+
+#### `rrcalc`
+
+Repo: `https://github.com/rohunvora/rrcalc`
+
+What it adds:
+
+- Fast expected-value and risk/reward calculator.
+- Inputs map well to meme trades: entry market cap, target market cap, position size, max loss, confidence.
+
+MemeTraderPro adaptation:
+
+- Add an operator sizing widget:
+  - entry market cap,
+  - target market cap,
+  - invalidation market cap or max loss,
+  - confidence,
+  - position size,
+  - expected value verdict.
+- Use this to explain why the bot suggests "paper only", "watch", "small size", or "fold".
+
+Priority: medium-high. Very useful for disciplined manual confirmation mode.
+
+#### `my-cmc`
+
+Repo: `https://github.com/rohunvora/my-cmc`
+
+What it adds:
+
+- Revenue/buyback leaderboard and protocol fundamentals dashboard.
+- Curated verification of buyback mechanics.
+
+MemeTraderPro adaptation:
+
+- Not useful for fresh pump launches.
+- Useful for mid/large listed Solana ecosystem tokens and context around protocols like PUMP/RAY.
+- Reuse the curation mindset: verified mechanism, not marketing claims.
+
+Priority: medium-low for meme launch bot, useful later for broader Solana cockpit.
+
+### GUI / Product Quality References
+
+#### `anti-slop-library`
+
+Repo: `https://github.com/rohunvora/anti-slop-library`
+
+What it adds:
+
+- Detects generic AI-generated UI patterns.
+- Provides concrete design alternatives.
+
+MemeTraderPro adaptation:
+
+- Use as a quality gate when we build the pro GUI:
+  - avoid generic purple-gradient SaaS look,
+  - keep trading UI dense, legible, and operator-focused,
+  - flag vague marketing copy and repetitive card grids.
+
+Priority: medium for the GUI phase.
+
+#### `taste-library`
+
+Repo: `https://github.com/rohunvora/taste-library`
+
+What it adds:
+
+- Visual reference ingestion, tagging, and searchable design libraries.
+
+MemeTraderPro adaptation:
+
+- Use the idea, not necessarily the tooling, for a local design reference folder:
+  - trading dashboards,
+  - risk consoles,
+  - execution panels,
+  - alert timelines,
+  - mobile confirmation flows.
+
+Priority: medium for GUI/marketing polish.
+
+### Agent / Workflow References
+
+#### `github-tndr`
+
+Repo: `https://github.com/rohunvora/github-tndr`
+
+What it adds:
+
+- Telegram bot framework with pluggable tools, skills, progress tracking, and dependency injection.
+
+MemeTraderPro adaptation:
+
+- Useful architectural inspiration if we later add mobile/Telegram alerts:
+  - narrow tools,
+  - testable skills layer,
+  - progress callbacks,
+  - multi-provider AI.
+
+Priority: low-medium. Good future alerting pattern, not core trading edge today.
+
+#### `cool-claude-skills`
+
+Repo: `https://github.com/rohunvora/cool-claude-skills`
+
+What it adds:
+
+- Reusable skill patterns, especially `incremental-fetch`, `quick-view`, `table-filters`, and `html-style`.
+
+MemeTraderPro adaptation:
+
+- The most relevant idea is resilient API ingestion:
+  - save after each page,
+  - track cursor/watermark,
+  - resume interrupted fetches,
+  - avoid duplicate downloads.
+- This overlaps with the social tracker and wallet backfill work.
+
+Priority: medium as implementation discipline.
+
+#### `cursor-habits` / `cursor-maxxing`
+
+What they add:
+
+- Turning chat history and repeated instructions into persistent workflow rules.
+- Sharing full prompt/build history for reproducibility.
+
+MemeTraderPro adaptation:
+
+- Useful for our own agent workflow, not bot features:
+  - keep `AGENT_WORKFLOW.md` and `WORK_LOG.md` current,
+  - extract recurring decisions into permanent repo rules,
+  - reduce drift between sessions.
+
+Priority: low-medium. Helps development quality.
+
+#### `openclaw`
+
+Repo: `https://github.com/rohunvora/openclaw`
+
+What it adds:
+
+- Large local-first assistant/control-plane architecture.
+- Strong ideas around channels, pairing, security defaults, local gateway, and tool routing.
+
+MemeTraderPro adaptation:
+
+- Do not merge this into MemeTraderPro.
+- Borrow selectively later if building:
+  - local desktop app control plane,
+  - mobile alerts,
+  - permissioned operator commands,
+  - paired-device controls.
+
+Priority: low for current trading edge; medium for long-term desktop/mobile product architecture.
+
+### Low Immediate Relevance
+
+These are not worth near-term integration:
+
+- `just-fucking-cancel` - popular, but unrelated to trading except general agent workflow patterns.
+- `twitch-to-youtube`, `video-to-claude`, `physics-vid`, `course-ai`, `courseai` - media/course workflows, not trading.
+- `meme-gem` - meme generation, marketing-only at best.
+- old school/project repos and calculators unrelated to Solana/social/wallet risk.
+- `pnl-scraping-test` - cloned repo appeared empty except `.git` metadata in this sweep, so no useful pattern found.
+
+### Updated Rohun-Inspired Build Order
+
+1. Keep Phase 6 safety work first:
+   - quote/sell-route feasibility,
+   - watchdog timeout hardening,
+   - holder/risk snapshots.
+2. Add local candidate/catalyst card ledger.
+3. Add social event ingestion:
+   - manual/import first,
+   - X watchlist pulse later,
+   - reply/quote reaction layer after basic catalyst cards.
+4. Add price/social alignment:
+   - signal price,
+   - action/paper-entry price,
+   - 5m/15m/1h returns,
+   - volume/liquidity changes,
+   - sniper/outlier warnings.
+5. Add wallet analytics backfill from tracked wallets.
+6. Add dashboard views:
+   - catalyst cards,
+   - social reaction quality,
+   - wallet confirmation,
+   - risk flags,
+   - postmortem outcome.
+7. Add EV/risk sizing widget for confirmation-mode trades.
+8. Use `anti-slop-library` / `taste-library` ideas when replacing Streamlit with the pro GUI.
+
+### Practical Takeaway
+
+The biggest edge from Rohun's repo ecosystem is not a single bot script. It is a product architecture:
+
+- every candidate needs a source,
+- every source becomes a thesis,
+- every thesis gets evidence,
+- every entry/skip locks the market state at that moment,
+- every outcome feeds back into wallet/social/risk scoring.
+
+That should become the core data model behind MemeTraderPro's competitive advantage.

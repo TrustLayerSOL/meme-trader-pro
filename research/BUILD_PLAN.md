@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-04-29
+Last updated: 2026-05-08
 
 ## Legend
 
@@ -10,9 +10,9 @@ Last updated: 2026-04-29
 
 ## Current Working Section
 
-<mark>Active roadmap area: Phase 6 - Manual Protection And Watchdog.</mark>
+<mark>Active roadmap area: Phase 9 - Pro Double-Click GUI.</mark>
 
-<mark>Current focus: prepared paper/simulation exits for protected manual positions. Next: holder concentration and token risk/performance snapshots.</mark>
+<mark>Current focus: Pro GUI cleanup pass - finish the trade-stream candle pipeline, stabilize desktop launch/session ownership, remove dead prototype controls, and make Social / Tweet import usable from the desktop app.</mark>
 
 ## Product Goal
 
@@ -43,7 +43,10 @@ The project already has the core shape of a local trading cockpit:
 - [~] Manual protection/watchlist has alert levels and richer status cards, but paper exits, continuous lifecycle, and live auto-sell gates remain.
 - [~] Wallet intelligence exists in pieces, but needs stronger scoring, labeling, and review workflows.
 - [~] Live execution modules exist behind safety gates, but the product should remain paper-first until acceptance criteria are met.
-- [ ] Pro GUI is still future work.
+- [~] Pro double-click GUI target is defined; Streamlit has the first Position Cockpit prototype, and a separate execution-locked desktop GUI foundation now exists with selected-token charting, protection detail, raw scanner tape, live scanner candidate feed, and local social import.
+- [x] Native/static desktop Portfolio view surfaces total paper PnL plus readable open, closed, and failed trade ledgers with clickable trade detail cards.
+- [x] Native/static desktop Portfolio view includes Winner Pattern Review for comparing big winners against losers.
+- [~] Native GUI/API hardening has started: arbitrary localhost browser origins are blocked, unsafe token image URLs are rejected, desktop metadata POSTs require the session token when active, double-click now opens the packaged Tauri app when available, and the desktop shell now verifies the saved session token belongs to the currently running API process.
 
 ## Operating Principles
 
@@ -85,8 +88,9 @@ Deliverables:
 
 - [x] Double-click launcher command.
 - [x] Streamlit dashboard entry point.
-- [~] Preflight checks for env, required files, Python environment, and ports.
+- [~] Preflight checks for env, required files, Python environment, ports, private-file permissions, and desktop API session ownership.
 - [x] Runtime health view for bot/dashboard/watchdog state and source freshness.
+- [x] Per-component launcher start locks to reduce duplicate service spawn races.
 - [ ] Single command that starts backend, dashboard, and watchdog with clear logging.
 - [ ] Graceful stop/restart controls.
 
@@ -99,6 +103,7 @@ Acceptance criteria:
 Next actions:
 
 - Harden launcher preflight and status reporting.
+- Add supervisor ownership for backend bot, scanner, watchdog, and wallet-discovery loops so the native app can start/stop the full paper system cleanly.
 - Add process health checks for backend loop, dashboard, quote API, wallet feed, and watchdog.
 
 ## Phase 2 - Data Store And Event Memory
@@ -111,6 +116,9 @@ Deliverables:
 - [x] SQLite database exists.
 - [~] Storage utilities and sync/backfill scripts.
 - [x] Data freshness indicators per source.
+- [x] Owner-only permission enforcement for `.env` and SQLite DB/WAL/SHM files.
+- [~] Lock-backed JSON writes for key runtime state; paper trades, wallet performance, settings, candidate ledger, social imports, runtime status, and watchlist now use locked/atomic paths.
+- [x] Open paper trades dedupe by active mint during locked state merges to reduce duplicate bot-instance opens.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -139,7 +147,10 @@ Deliverables:
 - [~] Entry explanation and attribution to wallet signals.
 - [~] Realistic slippage, fees, delay, failed fills, and quote degradation modeling.
 - [ ] Confirmation window strategy tuned around roughly 30-180 seconds after launch.
-- [ ] Paper engine records skipped candidates and reasons, not only entered trades.
+- [~] Paper engine records skipped candidates and reasons, not only entered trades; native GUI now surfaces recent raw tracked-wallet events and scanner candidates from snapshots.
+- [x] Native paper profitability review panel with readiness gaps, reason breakdowns, and wallet-label exposure.
+- [x] Paper-only Exploration Lane for safe near-miss candidates with smaller simulated size and separate review metrics.
+- [x] Exploration Lane is blocked from overriding confirmation, strategy guard, hard-risk, market-sanity, or quote gates and is explicitly marked non-live eligible.
 
 Acceptance criteria:
 
@@ -149,8 +160,12 @@ Acceptance criteria:
 
 Next actions:
 
-- Audit paper trade fields and ensure the dashboard can render entry/current values, PnL, reason, and raw trade data.
-- Add skipped-candidate ledger if not already complete.
+- Let main paper mode collect at least 50 closed trades, with 100 preferred, before judging profitability.
+- Let Exploration Lane collect 50 closed trades for a first signal and 100-150 closed trades for useful wallet-discovery tuning.
+- Use lane-specific readiness only; do not let exploration volume make the main strategy look validated.
+- Harden native candidate filters for scanner skip/entry and paper lifecycle snapshot contexts.
+- Split desktop API routing/projectors into smaller modules before adding more mutation surfaces.
+- Build the candidate/catalyst-card ledger from signal, social, wallet, risk, quote, and paper-result records.
 - Backtest confirmation rules from `research/STRATEGY_RESEARCH.md`.
 
 ## Phase 4 - Wallet Intelligence
@@ -163,11 +178,26 @@ Deliverables:
 - [x] Wallet performance file and backfill utility.
 - [x] Wallet quality scoring foundations.
 - [x] Wallet labeler foundation.
+- [x] Watch-only candidate wallet discovery file and utility.
+- [x] Native candidate-wallet review panel.
+- [x] Candidate wallet review-only promotion/demotion policy.
 - [~] Elite/bad wallet lists.
 - [~] Paper-copy performance tracking.
-- [ ] Rolling 7d/30d wallet stats.
-- [ ] Wallet behavior labels: early buyer, late buyer, rug-exit-fast, late-exit, copy-bait, dev-adjacent, paper-profitable, high-fee churner, follower trap.
-- [ ] Wallet detail page in GUI/dashboard.
+- [x] Wallet promotion/demotion thresholds.
+- [x] Paper-watch wallet lane.
+- [x] Controlled wallet-list apply tool with backup/audit.
+- [x] Wallet-list apply now requires promotion candidates to have paper-watch evidence and a promotion lifecycle recommendation.
+- [x] Manual candidate-wallet review decisions.
+- [x] Native guarded dry-run/apply view for approved wallet list changes.
+- [x] Always-on wallet discovery scheduler.
+- [x] Live paper-watch subscription reload.
+- [x] Rolling 7d/30d wallet stats.
+- [~] Wallet behavior labels: early buyer, late buyer, rug-exit-fast, late-exit, copy-bait, paper-profitable, high-fee churner, follower trap. Dev-adjacent still needs safer attribution.
+- [x] Per-wallet postmortem rollups from paper trades.
+- [x] Selected-token wallet confidence surfaced in native Details tab.
+- [x] Cockpit wallet-confidence summary surfaced in native Cockpit.
+- [x] Fresh wallet evidence can now be expanded through the paper-only Exploration Lane while keeping main strategy stats separate.
+- [~] Wallet detail page in GUI/dashboard. Native Wallets tab shows selected wallet outcomes and postmortem summaries; deeper drilldown can still improve.
 
 Acceptance criteria:
 
@@ -177,9 +207,8 @@ Acceptance criteria:
 
 Next actions:
 
-- Define wallet promotion/demotion thresholds.
-- Add per-wallet postmortem rollups from paper trades.
-- Surface wallet labels and confidence in Token Console and Operator Brief.
+- Use wallet confidence/postmortem context to tune confirmation-mode paper entry thresholds.
+- Add dev-adjacent behavior attribution only after the data source is reliable enough to avoid false blame.
 
 ## Phase 5 - Token Risk And Mechanics Inspection
 
@@ -206,7 +235,7 @@ Acceptance criteria:
 
 Next actions:
 
-- Store full token risk/mechanics snapshot with every paper trade and skipped candidate.
+- Use token snapshots to power candidate review, postmortems, and catalyst cards.
 - Add holder/cluster checks where reliable data is available.
 
 ## Phase 6 - Manual Protection And Watchdog
@@ -222,9 +251,16 @@ Deliverables:
 - [x] Watchdog stores Token-2022/token mechanics risk snapshots for protected mints.
 - [x] Protected mints have explicit alert levels: info, warning, danger, emergency.
 - [x] Dashboard protected-position cards show alert counts, last-check age, mechanics risk, extensions, auto-sell lock state, and metrics.
-- [~] Real watchdog loop with visible status and last-check timestamps.
+- [~] Real watchdog loop with visible status, last-check timestamps, and stale-run overwrite protection.
 - [~] Exit advisor for protected positions.
 - [x] Prepared sell intent in paper/simulation mode.
+- [x] Watchdog preserves operator-owned manual protection fields during background checks.
+- [x] Watchdog rejects stale protected-token updates from slower older runs.
+- [x] Wallet no-balance lookup preserves manually entered token amounts.
+- [x] Manual protected-position amount helper validates decimal/raw amounts and marks prepared exits ready for route checks when amount is present.
+- [x] Simulated/test protected amounts are explicitly marked and surfaced separately from wallet-owned balances.
+- [x] Native Protection drilldown surfaces token amount, amount source, wallet-balance status, decimals, quote/amount reason, and exit-readiness checklist.
+- [x] Manual protection auto-sell persists as locked/off; future interest is stored only as `requested_auto_sell`.
 - [ ] Auto-sell remains disabled until live execution gates are passed.
 
 Acceptance criteria:
@@ -236,8 +272,9 @@ Acceptance criteria:
 
 Next actions:
 
-- Add quote/sell-route feasibility to prepared protection exits before any live sell wiring.
-- Harden the continuous watchdog process and make its lifecycle easier to start/stop from the launcher.
+- Continue hardening continuous watchdog lifecycle and launcher/process controls.
+- Add locked persistence for paper trade and wallet performance writes.
+- Keep auto-sell disabled until explicit live sell gates, audit records, and kill-switch behavior are complete.
 
 ## Phase 7 - Operator Review, Postmortems, And Replay
 
@@ -294,19 +331,63 @@ Next actions:
 - Define exact paper-performance thresholds required before live mode can be considered.
 - Add audit log fields now, even while trades remain paper-only.
 
-## Phase 9 - Polished Double-Click GUI
+## Phase 9 - Pro Double-Click GUI
 
-Goal: make the current Streamlit cockpit feel like a dependable desktop workstation.
+Goal: build one professional double-click desktop workstation. Streamlit is the current prototype surface, not a separate final GUI track.
 
 Deliverables:
 
 - [x] Streamlit dashboard baseline.
 - [~] Token Console, Operator Brief, paper trades, wallet performance, and manual protection panels.
-- [ ] Clear navigation around Command Center, Tokens, Wallets, Paper Trades, Protection, Replay, and Settings.
-- [ ] Consistent visual status language for healthy/warning/danger/stale states.
+- [x] Axiom-style Position Cockpit foundation for open paper trades and protected manual positions.
+- [x] Simulation-only add-position and exit-early action intents from the cockpit.
+- [x] Non-Streamlit read-only desktop API/static GUI foundation.
+- [x] Desktop GUI double-click launcher.
+- [x] Selected-token charting now uses `lightweight-charts` for static/native market-cap candles, price candles, and liquidity lines.
+- [~] Selected-token protection rail now surfaces locked exit/protection state in the desktop GUI.
+- [~] Selected-token signal rail now surfaces local catalyst and social matches in the desktop GUI.
+- [x] Native selected-token candles now use 1-second buckets with sparse-open inference for red/green candle bodies.
+- [x] Native selected-token chart preserves manual zoom/pan across 1-second refreshes and supports scroll/drag/axis scaling.
+- [~] Clear navigation around Command Center, Tokens, Wallets, Paper Trades, Protection, Replay, and Settings.
+- [x] Removed static-shell placeholder rail buttons `D/T/P/R/S` and duplicate bottom tabs.
+- [x] Clear Portfolio/PnL view showing total PnL, open PnL, closed PnL, open positions, closed trades, failed attempts, and selected-trade detail.
+- [x] Desktop Protection tab can add/update manual protected token mints for watchdog review without enabling live sells.
+- [x] Desktop Signals/Pulse tabs have Add Social Signal / Tweet forms backed by `POST /api/social/import`.
+- [ ] Desktop should expose social/catalyst refresh status and show whether a pasted tweet matched a mint, ticker, or keyword.
+- [x] Static and native selected-token chart controls support 1s, 5s, 30s, and 1m intervals.
+- [x] Static desktop shell renders market cap and price as red/green candlesticks and liquidity as a line.
+- [ ] Eliminate remaining Streamlit-only workflows or explicitly mark Streamlit as legacy/admin until migrated.
+- [~] Consistent visual status language for healthy/warning/danger/stale states.
+- [~] Read-only Ops tab now surfaces operator config, strategy thresholds, refresh timing, runtime freshness, and local log tails.
+- [x] Native System tab surfaces data freshness source status, age, path, owner, and stale/missing/broken states.
+- [x] Native Ops tab surfaces Helius provider health and active fallback provider while keeping live execution locked.
+- [x] Helius RPC read calls used by watchdog mint/balance/holder checks now prefer Gatekeeper and fall back to standard Helius mainnet.
+- [x] Public Solana RPC is available as an emergency read-only fallback after Helius Gatekeeper and standard Helius.
 - [ ] Settings editor with validation.
-- [ ] Local logs and export tools.
+- [~] Local logs are visible read-only in the native Ops tab; export tools remain future work.
 - [ ] Job/progress monitor for long-running local actions.
+- [x] Choose final app shell: Tauri + React selected for the first native shell.
+- [~] Tauri + React shell exists, builds a macOS `.app`/`.dmg`, and can start/check the local read-only desktop API.
+- [~] Native React shell now has selected-token chart, protection, signal/catalyst, and snapshot panels.
+- [x] Native selected-token chart/detail/snapshot path refreshes every 1 second with request-overlap protection.
+- [~] Native React shell now has top navigation for Cockpit, Details, Protection, Signals, Replay, and System plus readiness and paper-trade replay panels.
+- [x] Native React shell now has a Portfolio tab backed by the paper-trade ledger with total/open/closed PnL, per-trade rows, and selected-trade detail.
+- [~] Native React shell now has a Wallets tab backed by read-only wallet performance and tracked-wallet labels.
+- [x] Native Wallets tab now supports selected-wallet drilldown with matching signals and attributed paper trades.
+- [~] Native React shell now has a denser position table with token, risk, and PnL columns.
+- [~] Native React shell now has a selected-position monitor, locked action console, and paper-trade lifecycle panel.
+- [~] Native React shell now has a selected-token Details tab covering token mechanics, holder/dev risk, quote feasibility, and decision records.
+- [~] Native React shell now has a Protection drilldown tab covering protected-token list, drawdown, quote state, holder/top-10 metrics, token mechanics, exit-readiness checklist, and locked live/auto-sell state.
+- [x] Native Protection drilldown rows are selectable and update the active token inspection target.
+- [x] Native Protection tab has a controlled protected-position amount editor for local metadata only: amount, decimals, raw amount, and test/simulated marker.
+- [x] Desktop API supports scoped `POST /api/watchlist/protected-amount` metadata updates while keeping buys, sells, auto-sell, and live execution locked.
+- [x] Native shell can read the local desktop API from local/Tauri origins via restricted read-only CORS/preflight support.
+- [x] Desktop API has safe query parsing, decoded path parameters, and locked internal-error responses.
+- [x] Native cockpit refresh keeps critical overview/position panels alive when optional endpoints fail.
+- [~] Native cockpit layout has been tightened so the chart is the dominant first-screen element; remaining polish should focus on deeper per-wallet drilldowns, settings/logs, and panel ergonomics.
+- [~] Empty/loading/error states are now present across Cockpit, Replay, Ops, System, and selected-token desktop panels; broader visual polish remains.
+- [x] Replace prototype charting with a real trading chart component such as TradingView/lightweight-charts after the read-only cockpit data model is stable.
+- [~] Add real swap/tick candle pipeline. SQLite `swap_ticks` storage, `/api/candles` tick-first rendering, and scanner wallet-event tick writes are now in place. The scanner now identifies known DEX/Jupiter/Pump/Raydium/Meteora/Orca/OpenBook/Phoenix route programs and only promotes same-transaction SOL/USDC/USDT balance deltas to execution-price ticks when a route is detected. Non-route balance deltas fall back to market-enriched quote ticks. Next step is deeper route-level pool attribution and stronger non-swap filtering.
 
 Acceptance criteria:
 
@@ -317,16 +398,25 @@ Acceptance criteria:
 Next actions:
 
 - Audit current dashboard panels against actual data sources.
+- Visually inspect and iterate on the native Tauri shell against live local state.
 - Prioritize dense, operational UI over marketing-style screens.
-- Add empty/error/loading states for each data panel.
+- Continue adding empty/error/loading states for remaining data panels as they move into the native shell.
+- Run a human visual pass in the packaged app and tighten spacing/overflow issues found on real window sizes.
+- Refine the native Ops panel after real operator use.
+- Upgrade `Scanner.handle_event()` tick parsing from DEX-program route detection to exact route/instruction economics with pool attribution and stronger filtering of non-swap token balance changes.
+- Add selected-token live market snapshot sampling if paper/watchdog/scanner snapshots are too sparse for useful 1-second candle movement.
+- Continue cleaning redundant/unfinished controls in the native shell until every visible control either works or is clearly status-only.
+- Keep provider strategy focused on Helius API + Gatekeeper for now; LaserStream is out of scope due to cost.
+- Add per-wallet token outcome charts/hold-time stats after enough paper-trade timing data is structured.
+- Later upgrade selected-token polling to WebSocket/event-driven ingestion once the live feed path is ready.
+- Treat Streamlit discoveries as requirements for the final desktop GUI.
 
-## Phase 10 - Future Pro GUI
+## Phase 10 - Advanced Workstation Modules
 
-Goal: graduate from Streamlit into a more powerful local workstation UI when the core trading system is trustworthy.
+Goal: add advanced workstation modules after the core pro desktop shell is selected.
 
 Deliverables:
 
-- [ ] Decide stack: local web app, Electron/Tauri, or native wrapper.
 - [ ] Real-time event timeline.
 - [ ] Advanced wallet graph and cluster views.
 - [ ] Token lifecycle replay with snapshots.
@@ -335,14 +425,14 @@ Deliverables:
 
 Acceptance criteria:
 
-- Pro GUI preserves local-first operation.
+- Advanced workstation modules preserve local-first operation.
 - It improves speed of operator decisions without hiding risk reasoning.
 - It uses the same canonical data store as the bot and dashboard.
 
 Next actions:
 
-- Defer until data model, paper bot, watchdog, and live gates are mature.
-- Capture GUI needs from Streamlit usage before choosing a stack.
+- Defer advanced modules until data model, paper bot, watchdog, and live gates are mature.
+- Use the Phase 9 cockpit to decide exactly what the advanced modules need.
 
 ## Decisions
 
@@ -377,13 +467,24 @@ Next actions:
 - [x] Runtime health and per-source freshness indicators.
 - [~] Manual protection watchdog status and alert levels.
 - [x] Prepared paper/simulation exits for protected manual positions.
-- [ ] Holder concentration and linked-cluster checks.
-- [ ] Token performance snapshots for entries, skips, exits, and watchdog checks.
+- [x] Quote-feasibility metadata for prepared protection exits.
+- [x] Watchdog timeout hardening.
+- [x] Manual protected-token amount capture for true sell-route checks.
+- [x] Wallet-balance lookup for protected/manual positions.
+- [x] Native protected-position exit readiness checklist distinguishes wallet-owned, manual, simulated/test, quote-feasible, and locked live-action states.
+- [~] Holder concentration and linked-cluster checks.
+- [x] Token performance snapshots for entries, skips, exits, and watchdog checks.
+- [x] Data Store filters for token snapshot contexts.
 - [ ] Paper trade field completeness and dashboard rendering.
-- [ ] Skipped-candidate ledger with reasons.
+- [~] Skipped-candidate/catalyst ledger with reasons.
+- [x] Catalyst-card JSON generator from token snapshots and paper outcomes.
+- [~] Catalyst cards surfaced in review UI.
+- [x] Local/manual social signal ingestion and dashboard import UI.
 - [~] Token mechanics/risk snapshot stored with every decision.
 - [ ] Wallet promotion/demotion thresholds.
 - [ ] Paper-performance threshold for considering live execution.
+- [~] Deterministic unit-test suite for safety-critical pure logic.
+- [~] Atomic state write / persistence hardening.
 
 ## Change Log
 
@@ -400,3 +501,18 @@ Next actions:
 - [x] Expanded open-source search; identified Chainstack pump.fun bot, transaction parsers, Shyft gRPC examples, and copy-trading stop logic as useful references.
 - [x] Added highlighted Current Working Section for Phase 6 focus.
 - [x] Added simulation-only prepared exit intents for protected manual positions.
+
+### 2026-04-30
+
+- [x] Added quote-feasibility metadata to prepared protection exits. Unknown manual balances now show `amount_missing` instead of pretending the route was checked.
+- [x] Added market, mint-inspection, and quote-check timeouts to the watchdog so slow network calls do not stall the loop indefinitely.
+- [x] Added optional protected-token amount, decimals, raw amount, external-position, and exit-priority capture in the dashboard manual protection form.
+- [x] Wired holder concentration metrics into protected-token watchdog checks and dashboard cards.
+- [x] Added SQLite `token_snapshots` storage and watchdog snapshot writes for protected-token checks.
+- [x] Completed first review-remediation pass: atomic JSON helper, watchdog RPC error containment, SQLite WAL/busy timeout, wallet-aware watchlist persistence, secret redaction, stale raw-amount fix, and initial deterministic unit tests.
+- [x] Added protected wallet-balance lookup via `getTokenAccountsByOwner` so quote-feasibility checks can use wallet-derived token amounts when a protected entry has a wallet address.
+- [x] Extended SQLite `token_snapshots` to scanner skip/entry candidates and paper-trade lifecycle events: opened, failed, partial exit, and closed exit.
+- [x] Added Data Store context/source filters for token snapshots so scanner, watchdog, and paper lifecycle records can be reviewed separately.
+- [x] Added `core/catalyst_cards.py`, `data/catalyst_cards.json`, Data Store Catalyst Cards tab, freshness tracking, and unit coverage for catalyst-card generation.
+- [x] Added Token Console catalyst outcome column and per-token Catalyst detail tab.
+- [x] Added structured local social events with ticker/mint extraction, sentiment, bulk import, dashboard Social Catalyst Tracker, and unit coverage.

@@ -3,6 +3,7 @@ import os
 import time
 from datetime import datetime, timezone
 
+from core.json_store import locked_update_json
 from execution.execution_engine import ExecutionEngine
 from core.wallet_performance import WalletPerformanceTracker
 from core.exit_advisor import ExitAdvisor
@@ -43,9 +44,140 @@ class PaperTrader:
 
     def save_state(self):
         os.makedirs(os.path.dirname(PAPER_TRADES_FILE), exist_ok=True)
-        with open(PAPER_TRADES_FILE, "w") as f:
-            json.dump(self.state, f, indent=2)
+        self.state = locked_update_json(
+            PAPER_TRADES_FILE,
+            self.default_state(),
+            lambda current: self.merge_state_for_save(current, self.state),
+        )
         self.sync_trades_to_store()
+
+    def default_state(self):
+        return self.normalize_state({
+            "balance": 10000,
+            "open_trades": [],
+            "closed_trades": [],
+            "failed_trades": [],
+            "stats": {
+                "total_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "failed_trades": 0,
+                "realized_pnl": 0,
+                "total_fees": 0,
+                "win_rate": 0,
+            },
+        })
+
+    def trade_key(self, trade):
+        if not isinstance(trade, dict):
+            return None
+        return (
+            trade.get("id")
+            or trade.get("trade_id")
+            or (
+                trade.get("mint"),
+                trade.get("entry_time") or trade.get("time") or trade.get("time_iso"),
+            )
+        )
+
+    def open_trade_key(self, trade):
+        if not isinstance(trade, dict):
+            return None
+        mint = trade.get("mint") or trade.get("token_mint")
+        return ("open", mint) if mint and trade.get("status") == "open" else self.trade_key(trade)
+
+    def merge_trade_lists(self, current_list, updated_list, limit=None):
+        merged = []
+        seen = set()
+        for trade in updated_list or []:
+            key = self.trade_key(trade)
+            if key is None or key in seen:
+                continue
+            merged.append(trade)
+            seen.add(key)
+        for trade in current_list or []:
+            key = self.trade_key(trade)
+            if key is None or key in seen:
+                continue
+            merged.append(trade)
+            seen.add(key)
+        return merged[:limit] if limit else merged
+
+    def merge_open_trades(self, current_list, updated_list):
+        merged = []
+        seen = set()
+        current_by_mint = {
+            self.open_trade_key(trade): trade
+            for trade in current_list or []
+            if self.open_trade_key(trade) is not None
+        }
+        for trade in updated_list or []:
+            key = self.open_trade_key(trade)
+            if key is None or key in seen:
+                continue
+            current_trade = current_by_mint.get(key)
+            if (
+                current_trade
+                and current_trade.get("entry_time") != trade.get("entry_time")
+            ):
+                kept = dict(current_trade)
+                kept["duplicate_open_attempts"] = int(kept.get("duplicate_open_attempts", 0) or 0) + 1
+                kept["last_duplicate_open_attempt_at"] = self.iso_time()
+                kept["last_duplicate_open_attempt_reason"] = trade.get("entry_reason") or trade.get("reason")
+                merged.append(kept)
+            else:
+                merged.append(trade)
+            seen.add(key)
+
+        for trade in current_list or []:
+            key = self.open_trade_key(trade)
+            if key is None or key in seen:
+                continue
+            merged.append(trade)
+            seen.add(key)
+        return merged
+
+    def merge_state_for_save(self, current, updated):
+        if not isinstance(current, dict):
+            current = self.default_state()
+        if not isinstance(updated, dict):
+            updated = self.default_state()
+
+        merged = dict(current)
+        merged.update(updated)
+        terminal_keys = {
+            self.trade_key(trade)
+            for trade in (
+                (current.get("closed_trades", []) or [])
+                + (current.get("failed_trades", []) or [])
+                + (updated.get("closed_trades", []) or [])
+                + (updated.get("failed_trades", []) or [])
+            )
+            if self.trade_key(trade) is not None
+        }
+        current_open = [
+            trade for trade in current.get("open_trades", [])
+            if self.trade_key(trade) not in terminal_keys
+        ]
+        updated_open = [
+            trade for trade in updated.get("open_trades", [])
+            if self.trade_key(trade) not in terminal_keys
+        ]
+        merged["open_trades"] = self.merge_open_trades(
+            current_open,
+            updated_open,
+        )
+        merged["closed_trades"] = self.merge_trade_lists(
+            current.get("closed_trades", []),
+            updated.get("closed_trades", []),
+            limit=500,
+        )
+        merged["failed_trades"] = self.merge_trade_lists(
+            current.get("failed_trades", []),
+            updated.get("failed_trades", []),
+            limit=500,
+        )
+        return self.normalize_state(merged)
 
     def sync_trades_to_store(self):
         try:
@@ -77,6 +209,73 @@ class PaperTrader:
             market_info.get("marketCap"),
             market_info.get("fdv"),
         )
+
+    def record_trade_snapshot(self, trade, context, extra=None):
+        if not isinstance(trade, dict):
+            return
+
+        mint = trade.get("mint") or trade.get("token_mint")
+        if not mint:
+            return
+
+        market_info = trade.get("market_info") if isinstance(trade.get("market_info"), dict) else {}
+        signal_metadata = (
+            trade.get("signal_metadata")
+            if isinstance(trade.get("signal_metadata"), dict)
+            else {}
+        )
+        now = time.time()
+        snapshot = {
+            "time": now,
+            "timestamp": now,
+            "source": "paper_trader",
+            "context": context,
+            "mint": mint,
+            "token_mint": mint,
+            "status": trade.get("status"),
+            "price": self.first_number(
+                trade.get("current_price"),
+                trade.get("entry_price"),
+                market_info.get("price"),
+            ),
+            "liquidity": self.first_number(
+                trade.get("current_liquidity_usd"),
+                trade.get("entry_liquidity_usd"),
+                trade.get("liquidity_usd"),
+                market_info.get("liquidity"),
+            ),
+            "market_cap": self.first_number(
+                trade.get("current_market_cap"),
+                trade.get("entry_market_cap"),
+                self.market_cap_from_info(market_info),
+            ),
+            "risk_label": signal_metadata.get("risk_label"),
+            "risk_score": signal_metadata.get("risk_score"),
+            "entry_price": trade.get("entry_price"),
+            "quoted_entry_price": trade.get("quoted_entry_price"),
+            "size_usd": trade.get("size_usd"),
+            "remaining_pct": trade.get("remaining_pct"),
+            "remaining_token_amount": trade.get("remaining_token_amount"),
+            "initial_token_amount": trade.get("initial_token_amount"),
+            "total_pnl": trade.get("total_pnl"),
+            "total_pnl_pct": trade.get("total_pnl_pct"),
+            "realized_pnl": trade.get("realized_pnl"),
+            "unrealized_pnl": trade.get("unrealized_pnl"),
+            "entry_time": trade.get("entry_time"),
+            "close_time": trade.get("close_time"),
+            "entry_reason": trade.get("entry_reason") or trade.get("reason"),
+            "exit_reason": trade.get("exit_reason") or trade.get("close_reason"),
+            "wallets": trade.get("wallets", []),
+            "signal_metadata": signal_metadata,
+        }
+
+        if isinstance(extra, dict):
+            snapshot.update(extra)
+
+        try:
+            self.store.insert_token_snapshot(snapshot)
+        except Exception as exc:
+            print("⚠️ Paper trade snapshot write failed:", exc)
 
     def apply_trade_aliases(self, trade):
         if not isinstance(trade, dict):
@@ -208,6 +407,8 @@ class PaperTrader:
         wallets=None,
         market_info=None,
         signal_metadata=None,
+        paper_lane="main",
+        exploration=False,
     ):
         existing = self.find_open_trade(mint)
         if existing:
@@ -226,12 +427,16 @@ class PaperTrader:
                 "mint": mint,
                 "token_mint": mint,
                 "side": "buy",
+                "status": "failed",
                 "time": failed_time,
                 "time_iso": self.iso_time(failed_time),
                 "reason": result.get("reason", "buy_failed"),
+                "failure_reason": result.get("reason", "buy_failed"),
                 "fee_usd": result.get("fee_usd", 0),
                 "wallets": wallets or [],
                 "entry_reason": reason,
+                "paper_lane": paper_lane or "main",
+                "exploration": bool(exploration),
                 "size_usd": size_usd,
                 "entry_value": size_usd,
                 "liquidity_usd": liquidity_usd,
@@ -241,6 +446,10 @@ class PaperTrader:
 
             self.state.setdefault("failed_trades", []).insert(0, failed)
             self.update_stats()
+            self.record_trade_snapshot(failed, "paper_entry_failed", {
+                "failure_reason": failed.get("reason"),
+                "decision_stage": "paper_buy_fill",
+            })
             self.save_state()
 
             print("❌ BUY FAILED:", failed["reason"])
@@ -263,6 +472,8 @@ class PaperTrader:
             "status": "open",
             "reason": reason,
             "entry_reason": reason,
+            "paper_lane": paper_lane or "main",
+            "exploration": bool(exploration),
             "wallets": wallets or [],
             "signal_metadata": signal_metadata or {},
 
@@ -311,6 +522,9 @@ class PaperTrader:
         }
 
         self.state.setdefault("open_trades", []).append(trade)
+        self.record_trade_snapshot(trade, "paper_entry_opened", {
+            "decision_stage": "paper_entry",
+        })
         self.save_state()
 
         print("\n📄 PAPER TRADE OPENED")
@@ -349,8 +563,19 @@ class PaperTrader:
         if price > float(trade.get("highest_price_seen", trade["entry_price"])):
             trade["highest_price_seen"] = price
 
-        self.update_pnl(trade)
+        if self.update_pnl(trade) is False:
+            trade["exit_advice"] = self.exit_advisor.advise(trade)
+            self.record_trade_snapshot(trade, "paper_price_update", {
+                "decision_stage": "paper_monitor",
+                "market_info": market_info if isinstance(market_info, dict) else {},
+            })
+            self.save_state()
+            return trade
         trade["exit_advice"] = self.exit_advisor.advise(trade)
+        self.record_trade_snapshot(trade, "paper_price_update", {
+            "decision_stage": "paper_monitor",
+            "market_info": market_info if isinstance(market_info, dict) else {},
+        })
 
         entry = float(trade["entry_price"])
         multiple = price / entry if entry > 0 else 0
@@ -370,6 +595,9 @@ class PaperTrader:
         return trade
 
     def partial_sell(self, trade, sell_pct, price, liquidity_usd, reason):
+        if trade.get("status") != "open":
+            return False
+
         remaining_tokens = float(trade.get("remaining_token_amount", 0))
         if remaining_tokens <= 0:
             return False
@@ -401,7 +629,7 @@ class PaperTrader:
         trade["realized_pnl"] += pnl
         trade["total_fees_usd"] += fee
 
-        trade["sells"].append({
+        sell_event = {
             "time": time.time(),
             "reason": reason,
             "quoted_price": price,
@@ -413,7 +641,8 @@ class PaperTrader:
             "pnl": pnl,
             "remaining_pct": trade["remaining_pct"],
             "time_iso": self.iso_time(),
-        })
+        }
+        trade["sells"].append(sell_event)
 
         print("\n💰 PARTIAL SELL")
         print("MINT:", trade["mint"])
@@ -423,6 +652,11 @@ class PaperTrader:
 
         self.update_pnl(trade)
         trade["exit_advice"] = self.exit_advisor.advise(trade)
+        self.record_trade_snapshot(trade, "paper_partial_exit", {
+            "decision_stage": "paper_exit",
+            "exit_reason": reason,
+            "sell_event": sell_event,
+        })
         self.save_state()
         return True
 
@@ -488,6 +722,10 @@ class PaperTrader:
 
         self.update_pnl(trade)
         trade["exit_advice"] = self.exit_advisor.advise(trade)
+        self.record_trade_snapshot(trade, "paper_exit_closed", {
+            "decision_stage": "paper_exit",
+            "exit_reason": reason,
+        })
 
         self.state["open_trades"] = [
             t for t in self.state.get("open_trades", [])
@@ -517,21 +755,39 @@ class PaperTrader:
         entry = float(trade["entry_price"])
         current = float(trade["current_price"])
         remaining_tokens = float(trade.get("remaining_token_amount", 0))
+        initial_tokens = float(trade.get("initial_token_amount", remaining_tokens) or 0)
         size_usd = float(trade.get("size_usd", 0))
+
+        if initial_tokens > 0 and remaining_tokens > initial_tokens * 1.05:
+            trade["status"] = "invalid"
+            trade["invalid_reason"] = "paper_value_sanity_remaining_tokens_exceed_initial"
+            return False
 
         unrealized = (current - entry) * remaining_tokens
         realized = float(trade.get("realized_pnl", 0))
+        entry_fee = float(trade.get("entry_fee_usd", 0) or 0)
 
-        total = realized + unrealized
+        total = realized + unrealized - entry_fee
         total_pct = (total / size_usd) * 100 if size_usd > 0 else 0
+        current_value = current * remaining_tokens
+
+        if size_usd > 0 and abs(total_pct) > 10_000:
+            trade["status"] = "invalid"
+            trade["invalid_reason"] = "paper_value_sanity_pnl_pct_out_of_range"
+            return False
+        if size_usd > 0 and current_value > size_usd * 250:
+            trade["status"] = "invalid"
+            trade["invalid_reason"] = "paper_value_sanity_current_value_out_of_range"
+            return False
 
         trade["unrealized_pnl"] = unrealized
         trade["total_pnl"] = total
         trade["pnl"] = total
         trade["total_pnl_pct"] = total_pct
         trade["pnl_pct"] = total_pct
-        trade["current_value"] = current * remaining_tokens
+        trade["current_value"] = current_value
         trade["entry_value"] = size_usd
+        return True
 
     def update_stats(self):
         closed = self.state.get("closed_trades", [])

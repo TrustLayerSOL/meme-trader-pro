@@ -1,8 +1,7 @@
-import json
-import os
 import time
 from pathlib import Path
 
+from core.json_store import locked_update_json, read_json
 
 STATUS_FILE = Path("data/runtime_status.json")
 
@@ -14,6 +13,7 @@ DEFAULT_STATUS = {
     "market": {},
     "quotes": {},
     "watchdog": {},
+    "wallet_discovery": {},
 }
 
 
@@ -22,14 +22,7 @@ def now():
 
 
 def load_status():
-    if not STATUS_FILE.exists():
-        return DEFAULT_STATUS.copy()
-
-    try:
-        with open(STATUS_FILE, "r") as f:
-            data = json.load(f)
-    except Exception:
-        return DEFAULT_STATUS.copy()
+    data = read_json(STATUS_FILE, DEFAULT_STATUS.copy())
 
     for key, value in DEFAULT_STATUS.items():
         data.setdefault(key, value.copy())
@@ -38,29 +31,33 @@ def load_status():
 
 
 def save_status(data):
-    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = STATUS_FILE.with_suffix(".tmp")
-
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, indent=2)
-
-    os.replace(tmp_path, STATUS_FILE)
+    locked_update_json(STATUS_FILE, DEFAULT_STATUS.copy(), lambda _data: data)
 
 
 def update_component(component, **fields):
-    data = load_status()
-    item = data.setdefault(component, {})
-    item.update(fields)
-    item["updated_at"] = now()
-    save_status(data)
-    return item
+    updated = {}
+
+    def updater(data):
+        item = data.setdefault(component, {})
+        item.update(fields)
+        item["updated_at"] = now()
+        updated.update(item)
+        return data
+
+    locked_update_json(STATUS_FILE, DEFAULT_STATUS.copy(), updater)
+    return updated
 
 
 def increment_component(component, field, amount=1, **fields):
-    data = load_status()
-    item = data.setdefault(component, {})
-    item[field] = int(item.get(field, 0) or 0) + amount
-    item.update(fields)
-    item["updated_at"] = now()
-    save_status(data)
-    return item
+    updated = {}
+
+    def updater(data):
+        item = data.setdefault(component, {})
+        item[field] = int(item.get(field, 0) or 0) + amount
+        item.update(fields)
+        item["updated_at"] = now()
+        updated.update(item)
+        return data
+
+    locked_update_json(STATUS_FILE, DEFAULT_STATUS.copy(), updater)
+    return updated

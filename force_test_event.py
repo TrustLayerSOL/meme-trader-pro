@@ -1,9 +1,6 @@
+import argparse
 import asyncio
 import json
-
-from core.scanner import Scanner
-from paper_trader import PaperTrader
-from infra.market_checker import MarketChecker
 
 
 # BONK mint - used only because Dexscreener should usually have price data for it
@@ -18,6 +15,8 @@ def load_wallets():
 
 class MockRPC:
     def __init__(self):
+        from infra.market_checker import MarketChecker
+
         self.market_checker = MarketChecker()
 
     async def rpc_call(self, method, params):
@@ -37,10 +36,26 @@ class MockDevAnalyzer:
 
 
 async def main():
+    parser = argparse.ArgumentParser(description="Force a scanner cluster event for manual testing.")
+    parser.add_argument(
+        "--write-real-state",
+        action="store_true",
+        help="Allow writes to the project runtime state. Default uses temporary paper-trade state.",
+    )
+    args = parser.parse_args()
+
+    if not args.write_real_state:
+        print("Safe mode: no runtime files or live services will be touched.")
+        print("Use --write-real-state to run this manual scanner exercise.")
+        return
+
+    from core.scanner import Scanner
+    from paper_trader import PaperTrader
+
     wallets = load_wallets()
 
     if len(wallets) < 3:
-        print("❌ Need at least 3 tracked wallets for cluster test.")
+        print("Need at least 3 tracked wallets for cluster test.")
         return
 
     rpc = MockRPC()
@@ -53,7 +68,7 @@ async def main():
         scanner.cluster_threshold = 3
         scanner.cluster_window = 90
 
-        print("🧪 FORCING TEST CLUSTER")
+        print("FORCING TEST CLUSTER")
         print("TEST MINT:", TEST_MINT)
 
         test_wallets = wallets[:3]
@@ -68,8 +83,8 @@ async def main():
             await scanner.process_event(event)
             await asyncio.sleep(0.5)
 
-        print("✅ Forced test complete.")
-        print("Check paper_trades.json and dashboard.")
+        print("Forced test complete.")
+        print("Check data/paper_trades.json and dashboard.")
     finally:
         session = getattr(rpc.market_checker, "session", None)
         if session:

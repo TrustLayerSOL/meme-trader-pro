@@ -2,6 +2,7 @@ import json
 import os
 import time
 
+from core.json_store import atomic_write_json, locked_update_json
 from core.storage import EventStore
 
 
@@ -39,63 +40,65 @@ def load_state():
 
 def save_state(state):
     state["last_updated"] = time.time()
-    with open(LIVE_STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    atomic_write_json(LIVE_STATE_FILE, state)
 
 
 def add_event(event):
-    state = load_state()
-
     event["time"] = time.time()
 
-    state.setdefault("events", [])
-    state["events"].append(event)
+    def updater(state):
+        state.setdefault("events", [])
+        state["events"].append(event)
 
-    # Keep file from getting huge
-    state["events"] = state["events"][-300:]
+        # Keep file from getting huge
+        state["events"] = state["events"][-300:]
+        state["last_updated"] = time.time()
+        return state
 
-    save_state(state)
+    locked_update_json(LIVE_STATE_FILE, DEFAULT_STATE.copy(), updater)
 
     try:
         EventStore().insert_event(event)
-    except Exception:
-        pass
+    except Exception as exc:
+        print("Failed to mirror event to SQLite:", exc)
 
 
 def add_alert(alert):
-    state = load_state()
-
     alert["time"] = time.time()
 
-    state.setdefault("alerts", [])
-    state["alerts"].append(alert)
+    def updater(state):
+        state.setdefault("alerts", [])
+        state["alerts"].append(alert)
 
-    # Keep recent alerts only
-    state["alerts"] = state["alerts"][-200:]
+        # Keep recent alerts only
+        state["alerts"] = state["alerts"][-200:]
+        state["last_updated"] = time.time()
+        return state
 
-    save_state(state)
+    locked_update_json(LIVE_STATE_FILE, DEFAULT_STATE.copy(), updater)
 
     try:
         EventStore().insert_alert(alert)
-    except Exception:
-        pass
+    except Exception as exc:
+        print("Failed to mirror alert to SQLite:", exc)
 
 
 def update_token(mint, data):
-    state = load_state()
+    def updater(state):
+        state.setdefault("tokens", {})
 
-    state.setdefault("tokens", {})
+        if mint not in state["tokens"]:
+            state["tokens"][mint] = {}
 
-    if mint not in state["tokens"]:
-        state["tokens"][mint] = {}
+        state["tokens"][mint].update(data)
+        state["tokens"][mint]["last_updated"] = time.time()
 
-    state["tokens"][mint].update(data)
-    state["tokens"][mint]["last_updated"] = time.time()
+        state.setdefault("latest_tokens", {})
+        state["latest_tokens"][mint] = state["tokens"][mint]
+        state["last_updated"] = time.time()
+        return state
 
-    state.setdefault("latest_tokens", {})
-    state["latest_tokens"][mint] = state["tokens"][mint]
-
-    save_state(state)
+    locked_update_json(LIVE_STATE_FILE, DEFAULT_STATE.copy(), updater)
 
 
 def get_state():

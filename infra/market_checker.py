@@ -3,9 +3,87 @@ import asyncio
 import os
 
 from dotenv import load_dotenv
+from core.redaction import redact_secrets
 from core.runtime_status import increment_component, update_component
 
 load_dotenv()
+
+
+def first_non_empty(*values):
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def first_link(rows, link_type=None):
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if link_type and str(row.get("type") or "").lower() != link_type:
+            continue
+        url = row.get("url")
+        if url:
+            return url
+    return None
+
+
+def tx_window(pair, window="m5"):
+    txns = pair.get("txns") if isinstance(pair, dict) else {}
+    row = txns.get(window) if isinstance(txns, dict) else {}
+    return row if isinstance(row, dict) else {}
+
+
+def extract_dexscreener_pair_metadata(pair):
+    pair = pair if isinstance(pair, dict) else {}
+    info = pair.get("info") if isinstance(pair.get("info"), dict) else {}
+    m5_txns = tx_window(pair, "m5")
+    buys = int(float(m5_txns.get("buys") or 0))
+    sells = int(float(m5_txns.get("sells") or 0))
+    return {
+        "image_url": first_non_empty(info.get("imageUrl"), info.get("image_url"), pair.get("imageUrl")),
+        "website": first_link(info.get("websites")),
+        "twitter": first_link(info.get("socials"), "twitter"),
+        "telegram": first_link(info.get("socials"), "telegram"),
+        "tx_count": buys + sells,
+        "buy_count": buys,
+        "sell_count": sells,
+    }
+
+
+def needs_dexscreener_enrichment(info):
+    if not isinstance(info, dict):
+        return False
+    return any(not info.get(key) for key in ("name", "symbol", "image_url", "market_cap", "tx_count"))
+
+
+def merge_market_info(primary, enrichment):
+    if not isinstance(primary, dict):
+        return enrichment
+    if not isinstance(enrichment, dict):
+        return primary
+    merged = dict(primary)
+    for key, value in enrichment.items():
+        if key == "price" and primary.get(key) not in (None, "", 0):
+            continue
+        if merged.get(key) in (None, "", 0) and value not in (None, "", 0):
+            merged[key] = value
+    merged["source"] = "{}+{}".format(primary.get("source") or "primary", enrichment.get("source") or "enrichment")
+    return merged
+
+
+def estimate_pump_market_cap(mint, price):
+    if not str(mint or "").endswith("pump"):
+        return None
+    try:
+        price = float(price or 0)
+    except Exception:
+        return None
+    if price <= 0:
+        return None
+    return round(price * 1_000_000_000, 2)
 
 
 class MarketChecker:
@@ -15,7 +93,7 @@ class MarketChecker:
         self.dex_url = "https://api.dexscreener.com/latest/dex/tokens/"
         self.session = None
         self.cache = {}
-        self.cache_ttl = 1.0
+        self.cache_ttl = float(os.getenv("MEMETRADER_MARKET_CACHE_TTL_SECONDS", "0.8"))
 
     async def init_session(self):
         if not self.session:
@@ -102,7 +180,7 @@ class MarketChecker:
                 }
 
         except Exception as e:
-            print("❌ Jupiter price error:", e)
+            print("Jupiter price error:", redact_secrets(e))
             return None
 
     async def get_dexscreener_info(self, mint):
@@ -144,6 +222,8 @@ class MarketChecker:
                 if price <= 0:
                     return None
 
+                metadata = extract_dexscreener_pair_metadata(best_pair)
+
                 increment_component(
                     "market",
                     "dexscreener_successes",
@@ -166,13 +246,14 @@ class MarketChecker:
                     "pair_address": best_pair.get("pairAddress"),
                     "dex": best_pair.get("dexId"),
                     "url": best_pair.get("url"),
+                    **metadata,
                 }
 
         except Exception as e:
-            print("❌ Dexscreener fetch error:", e)
+            print("Dexscreener fetch error:", redact_secrets(e))
             return None
 
-    async def get_token_info(self, mint):
+    async def get_token_info(self, mint, enrich=True):
         cached = self.cached(mint)
         if cached:
             return cached
@@ -180,9 +261,18 @@ class MarketChecker:
         # Primary: Jupiter
         info = await self.get_jupiter_price(mint)
 
-        # Fallback: Dexscreener
+        # Fallback/enrichment: Dexscreener carries launch display metadata that Jupiter often omits.
         if not info:
             info = await self.get_dexscreener_info(mint)
+        elif enrich and needs_dexscreener_enrichment(info):
+            enrichment = await self.get_dexscreener_info(mint)
+            info = merge_market_info(info, enrichment)
+
+        if info and not info.get("market_cap"):
+            estimated_market_cap = estimate_pump_market_cap(mint, info.get("price"))
+            if estimated_market_cap:
+                info["market_cap"] = estimated_market_cap
+                info["market_cap_estimated"] = True
 
         if info:
             self.store_cache(mint, info)
@@ -243,7 +333,10 @@ class MarketChecker:
                     mint = trade.get("mint")
                     if mint:
                         mints.append(mint)
-                        tasks.append(self.get_token_info(mint))
+                        tasks.append(asyncio.wait_for(
+                            self.get_token_info(mint, enrich=False),
+                            timeout=max(0.8, min(2.0, float(interval) * 1.5)),
+                        ))
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 
@@ -9,8 +10,10 @@ from core.wallet_quality import WalletQualityAnalyzer
 from core.wallet_performance import WalletPerformanceTracker
 from core.position_sizer import PositionSizer
 from core.edge_analyzer import EdgeAnalyzer
+from core.paper_exploration import evaluate_paper_exploration
 from core.runtime_status import increment_component, update_component
 from core.settings_manager import load_settings
+from core.storage import EventStore
 from core.strategy_guard import StrategyGuard
 from core.token_age import TokenAgeTracker
 from core.token_inspector import TokenInspector
@@ -27,12 +30,55 @@ except Exception:
 BASE_TOKENS = {
     "So11111111111111111111111111111111111111112",
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
 }
+
+WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+USD_QUOTE_MINTS = {USDC_MINT, USDT_MINT}
+TRADE_QUOTE_MINTS = {WRAPPED_SOL_MINT, USDC_MINT, USDT_MINT}
+
+KNOWN_DEX_PROGRAMS = {
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "jupiter_v6",
+    "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB": "jupiter_v4",
+    "JUP2jxv4U8UeQ27vyWq6PZ3zKdwUTNnyN2tJ9pUcRFT": "jupiter_v2",
+    "JUP3c2Uh1gYWNU3c5DqE3vdJmpsVbQ5nCjSV5zCWFFm": "jupiter_v3",
+    "JUP5cHjnnCx2DppVsufsLrXs8EBZeEZzGtEK9Gdz6ow": "jupiter_v5",
+    "6EF8rrecthR5DkPXkqW6fBsyPVAaeWwH4wjFnXRZHYD": "pump_fun",
+    "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA": "pump_swap",
+    "675kPX9MHTjS2zt1qfr1NYa9U1mHsyYF8ykLuXKCW3d": "raydium_amm",
+    "CPMMoo8L3F4NbTegBCKVN8guJJy5cc5sXUQK4WgB3hK": "raydium_cpmm",
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUQWqKn8ZKTaHj7YpY": "raydium_clmm",
+    "whirLbMiicVdio4qvUfM5KAg6CtC8L5dbsPBk2hh7y": "orca_whirlpool",
+    "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo": "meteora_dlmm",
+    "srmqPvymJeFKQ4zJr3AEbGMBHXPP6YQZpiFinF1BYBY": "openbook_v3",
+    "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY": "phoenix",
+}
+
+KNOWN_MAJOR_SYMBOLS = {
+    "btc",
+    "eth",
+    "sol",
+    "usdc",
+    "usdt",
+    "usds",
+    "dai",
+    "wbtc",
+    "weth",
+    "wsol",
+}
+
+MAX_MEME_MARKET_CAP_USD = 10_000_000
+MAX_MEME_LIQUIDITY_USD = 2_500_000
 
 
 class Scanner:
-    def __init__(self, tracked_wallets, rpc):
+    def __init__(self, tracked_wallets, rpc, paper_watch_wallets=None):
         self.tracked_wallets = set(tracked_wallets)
+        self.paper_watch_wallets = set(paper_watch_wallets or [])
+        self.observed_wallets = self.tracked_wallets | self.paper_watch_wallets
         self.rpc = rpc
 
         self.token_buys = {}
@@ -53,11 +99,300 @@ class Scanner:
         self.token_inspector = TokenInspector()
         self.token_launch_age = TokenLaunchAgeTracker(rpc)
         self.social_signal = SocialSignalEngine()
+        self.store = EventStore()
 
         self.paper_trader = PaperTrader() if PaperTrader else None
 
         self.seen_signatures = set()
         self.seen_signals = {}
+        self.signal_locks = {}
+        self.pending_signal_reruns = set()
+        self.quote_price_cache = {}
+
+    def is_observed_wallet(self, wallet):
+        return wallet in self.observed_wallets
+
+    def add_paper_watch_wallets(self, wallets):
+        added = []
+        for wallet in wallets or []:
+            wallet = str(wallet or "").strip()
+            if not wallet or wallet in self.observed_wallets:
+                continue
+            self.paper_watch_wallets.add(wallet)
+            self.observed_wallets.add(wallet)
+            added.append(wallet)
+        if added:
+            update_component(
+                "scanner",
+                status="wallet_reload",
+                paper_watch_wallets=len(self.paper_watch_wallets),
+                observed_wallets=len(self.observed_wallets),
+                added_paper_watch_wallets=len(added),
+            )
+        return added
+
+    def wallet_source(self, wallet):
+        if wallet in self.tracked_wallets:
+            return "tracked"
+        if wallet in self.paper_watch_wallets:
+            return "paper_watch"
+        return "unobserved"
+
+    def wallet_can_drive_live(self, wallet):
+        return wallet in self.tracked_wallets
+
+    def first_number(self, *values):
+        for value in values:
+            try:
+                if value not in [None, ""]:
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def jupiter_prescore_threshold(self):
+        value = self.first_number(self.settings.get("jupiter_prescore_threshold"))
+        return value if value is not None else 40
+
+    def market_cap_from_info(self, market_info):
+        if not isinstance(market_info, dict):
+            return None
+        return self.first_number(
+            market_info.get("market_cap"),
+            market_info.get("marketCap"),
+            market_info.get("fdv"),
+        )
+
+    def transaction_signature(self, result):
+        transaction = result.get("transaction") if isinstance(result, dict) else {}
+        signatures = transaction.get("signatures") if isinstance(transaction, dict) else []
+        if isinstance(signatures, list) and signatures:
+            return signatures[0]
+        return None
+
+    def transaction_account_keys(self, result):
+        transaction = result.get("transaction") if isinstance(result, dict) else {}
+        message = transaction.get("message") if isinstance(transaction, dict) else {}
+        keys = message.get("accountKeys") if isinstance(message, dict) else []
+        normalized = []
+        for key in keys if isinstance(keys, list) else []:
+            if isinstance(key, str):
+                normalized.append(key)
+            elif isinstance(key, dict):
+                normalized.append(key.get("pubkey") or key.get("account") or "")
+            else:
+                normalized.append(str(key or ""))
+        return normalized
+
+    def collect_instruction_program_ids(self, result):
+        transaction = result.get("transaction") if isinstance(result, dict) else {}
+        message = transaction.get("message") if isinstance(transaction, dict) else {}
+        meta = result.get("meta") if isinstance(result, dict) else {}
+        programs = []
+
+        def collect(rows):
+            for instruction in rows if isinstance(rows, list) else []:
+                if not isinstance(instruction, dict):
+                    continue
+                program_id = instruction.get("programId")
+                if program_id:
+                    programs.append(str(program_id))
+                parsed = instruction.get("parsed")
+                if isinstance(parsed, dict):
+                    nested = parsed.get("info")
+                    if isinstance(nested, dict) and nested.get("programId"):
+                        programs.append(str(nested.get("programId")))
+
+        collect(message.get("instructions") if isinstance(message, dict) else [])
+        for group in meta.get("innerInstructions") if isinstance(meta, dict) and isinstance(meta.get("innerInstructions"), list) else []:
+            if isinstance(group, dict):
+                collect(group.get("instructions"))
+
+        return programs
+
+    def dex_route_metadata(self, result):
+        seen_programs = []
+        seen_labels = []
+        for program_id in self.transaction_account_keys(result) + self.collect_instruction_program_ids(result):
+            label = KNOWN_DEX_PROGRAMS.get(program_id)
+            if not label:
+                continue
+            if program_id not in seen_programs:
+                seen_programs.append(program_id)
+            if label not in seen_labels:
+                seen_labels.append(label)
+        return {
+            "detected": bool(seen_labels),
+            "programs": seen_labels,
+            "program_ids": seen_programs,
+        }
+
+    def native_delta_for_wallet(self, result, wallet):
+        meta = result.get("meta") if isinstance(result, dict) else {}
+        pre_balances = meta.get("preBalances") if isinstance(meta, dict) else []
+        post_balances = meta.get("postBalances") if isinstance(meta, dict) else []
+        keys = self.transaction_account_keys(result)
+        try:
+            index = keys.index(wallet)
+            pre = float(pre_balances[index])
+            post = float(post_balances[index])
+        except (ValueError, IndexError, TypeError):
+            return None
+        return (post - pre) / 1_000_000_000
+
+    async def market_info_for_tick(self, mint):
+        checker = getattr(self.rpc, "market_checker", None)
+        if not checker or not hasattr(checker, "get_token_info"):
+            return None
+        try:
+            return await checker.get_token_info(mint)
+        except Exception as exc:
+            update_component("scanner", status="swap_tick_market_error", last_error=str(exc))
+            return None
+
+    def estimated_market_cap_for_tick(self, mint, price, fallback):
+        fallback = self.first_number(fallback)
+        if not str(mint or "").endswith("pump"):
+            return fallback
+        price = self.first_number(price)
+        if not price or price <= 0:
+            return fallback
+        return round(price * 1_000_000_000, 2)
+
+    async def quote_token_price_usd(self, mint):
+        if mint in USD_QUOTE_MINTS:
+            return 1.0
+        if mint != WRAPPED_SOL_MINT:
+            return None
+
+        now = time.time()
+        cached = self.quote_price_cache.get(mint)
+        if cached and now - cached.get("time", 0) <= 5:
+            return cached.get("price")
+
+        info = await self.market_info_for_tick(mint)
+        price = self.first_number((info or {}).get("price"))
+        if price and price > 0:
+            self.quote_price_cache[mint] = {"time": now, "price": price}
+            return price
+        return None
+
+    async def execution_price_from_event(self, event, token_amount):
+        if not event.get("dex_route_detected"):
+            return None
+
+        quote_mint = event.get("quote_mint")
+        quote_delta = self.first_number(event.get("quote_delta"))
+        if quote_mint and quote_delta and token_amount > 0:
+            quote_price = await self.quote_token_price_usd(quote_mint)
+            if quote_price and quote_price > 0:
+                return {
+                    "price": abs(quote_delta) * quote_price / token_amount,
+                    "quote_mint": quote_mint,
+                    "quote_amount": abs(quote_delta),
+                    "quote_price_usd": quote_price,
+                    "source": "wallet_event_dex_route_delta",
+                }
+
+        native_delta = self.first_number(event.get("native_delta"))
+        if native_delta and token_amount > 0:
+            sol_price = await self.quote_token_price_usd(WRAPPED_SOL_MINT)
+            if sol_price and sol_price > 0:
+                return {
+                    "price": abs(native_delta) * sol_price / token_amount,
+                    "quote_mint": WRAPPED_SOL_MINT,
+                    "quote_amount": abs(native_delta),
+                    "quote_price_usd": sol_price,
+                    "source": "wallet_event_dex_route_native_delta",
+                }
+        return None
+
+    async def record_swap_tick_from_event(self, event, event_type):
+        signature = event.get("signature")
+        native_delta = self.first_number(event.get("native_delta"))
+        token_amount = abs(self.first_number(event.get("delta")) or 0)
+        if not signature or native_delta is None or token_amount <= 0:
+            return False
+
+        market_info = await self.market_info_for_tick(event.get("mint"))
+        execution = await self.execution_price_from_event(event, token_amount)
+        price = self.first_number((execution or {}).get("price"))
+        if not price:
+            price = self.first_number((market_info or {}).get("price"))
+        if not price or price <= 0:
+            return False
+
+        market_cap = self.estimated_market_cap_for_tick(
+            event.get("mint"),
+            price,
+            self.market_cap_from_info(market_info),
+        )
+        quote_mint = (execution or {}).get("quote_mint") or event.get("quote_mint")
+        quote_amount = self.first_number((execution or {}).get("quote_amount"))
+        tick = {
+            "time": event.get("block_time") or event.get("timestamp") or time.time(),
+            "mint": event.get("mint"),
+            "signature": signature,
+            "wallet": event.get("wallet"),
+            "side": event_type,
+            "price": price,
+            "market_cap": market_cap,
+            "liquidity": self.first_number((market_info or {}).get("liquidity")),
+            "token_amount": token_amount,
+            "sol_amount": quote_amount if quote_mint == WRAPPED_SOL_MINT else abs(native_delta),
+            "quote_amount": quote_amount,
+            "quote_mint": quote_mint,
+            "quote_price_usd": self.first_number((execution or {}).get("quote_price_usd")),
+            "source": (execution or {}).get("source") or "wallet_event_market_enriched",
+            "dex_route_detected": bool(event.get("dex_route_detected")),
+            "dex_route_programs": event.get("dex_route_programs") or [],
+            "dex_route_program_ids": event.get("dex_route_program_ids") or [],
+            "market_info": market_info if isinstance(market_info, dict) else {},
+        }
+        try:
+            inserted = self.store.insert_swap_tick(tick)
+            if inserted:
+                increment_component("scanner", "swap_ticks_written", last_swap_tick_mint=event.get("mint"))
+            return bool(inserted)
+        except Exception as exc:
+            update_component("scanner", status="swap_tick_write_error", last_error=str(exc))
+            return False
+
+    def evaluate_candidate_market_sanity(self, mint, market_info):
+        market_info = market_info if isinstance(market_info, dict) else {}
+        reasons = []
+        symbol = str(market_info.get("symbol") or "").strip().lower()
+        name = str(market_info.get("name") or "").strip().lower()
+        market_cap = self.market_cap_from_info(market_info)
+        liquidity = self.first_number(
+            market_info.get("liquidity"),
+            market_info.get("liquidity_usd"),
+        )
+
+        if mint in BASE_TOKENS:
+            reasons.append("known_major_or_stable_mint")
+        if symbol in KNOWN_MAJOR_SYMBOLS or name in KNOWN_MAJOR_SYMBOLS:
+            reasons.append("known_major_or_stable_symbol")
+        if market_cap is not None and market_cap > MAX_MEME_MARKET_CAP_USD:
+            reasons.append("market_cap_above_meme_window")
+        if liquidity is not None and liquidity > MAX_MEME_LIQUIDITY_USD:
+            reasons.append("liquidity_above_meme_window")
+
+        return {
+            "allow": not reasons,
+            "reasons": reasons,
+            "market_cap": market_cap,
+            "liquidity": liquidity,
+            "symbol": symbol,
+            "name": name,
+        }
+
+    def record_token_snapshot(self, snapshot):
+        try:
+            self.store.insert_token_snapshot(snapshot)
+        except Exception as exc:
+            print("⚠️ Token snapshot write failed:", exc)
+            update_component("scanner", status="snapshot_write_error", last_error=str(exc))
 
     async def handle_event(self, message):
         try:
@@ -121,7 +456,7 @@ class Scanner:
             mint = event["mint"]
             delta = event["delta"]
 
-            if wallet not in self.tracked_wallets:
+            if not self.is_observed_wallet(wallet):
                 return
 
             if mint in BASE_TOKENS:
@@ -129,12 +464,14 @@ class Scanner:
 
             now = time.time()
             event_type = "buy" if delta > 0 else "sell"
+            source = self.wallet_source(wallet)
             increment_component(
                 "scanner",
                 "wallet_events",
                 last_event_type=event_type,
                 last_event_mint=mint,
                 last_event_wallet=wallet,
+                last_event_wallet_source=source,
             )
 
             self.token_age.mark_seen(mint)
@@ -164,10 +501,17 @@ class Scanner:
                 "mint": mint,
                 "amount": abs(delta),
                 "timestamp": now,
+                "signature": event.get("signature"),
+                "block_time": event.get("block_time"),
+                "native_delta": event.get("native_delta"),
                 "wallet_quality_score": quality.get("score"),
                 "wallet_performance_score": performance.get("score"),
                 "combined_wallet_score": combined_wallet_score,
+                "wallet_source": source,
+                "live_trade_driver": self.wallet_can_drive_live(wallet),
             })
+
+            await self.record_swap_tick_from_event(event, event_type)
 
             print(f"{'🟢 BUY' if delta > 0 else '🔴 SELL'}")
             print("WALLET:", wallet)
@@ -194,6 +538,8 @@ class Scanner:
                 "quality_score": quality.get("score", 50),
                 "performance_score": performance.get("score", 50),
                 "combined_score": combined_wallet_score,
+                "wallet_source": source,
+                "live_trade_driver": self.wallet_can_drive_live(wallet),
             })
 
             self.token_buys[mint] = [
@@ -319,6 +665,20 @@ class Scanner:
         return decision
 
     async def evaluate_signal(self, mint):
+        lock = self.signal_locks.setdefault(mint, asyncio.Lock())
+        if lock.locked():
+            self.pending_signal_reruns.add(mint)
+            return
+
+        async with lock:
+            while True:
+                self.pending_signal_reruns.discard(mint)
+                await self._evaluate_signal_once(mint)
+                if mint not in self.pending_signal_reruns:
+                    break
+                self.seen_signals.pop(mint, None)
+
+    async def _evaluate_signal_once(self, mint):
         now = time.time()
         increment_component("scanner", "signals_evaluated", current_mint=mint)
 
@@ -375,6 +735,7 @@ class Scanner:
             mint=mint,
             market_info=market_info,
         )
+        market_sanity = self.evaluate_candidate_market_sanity(mint, market_info)
 
         rug_result = self.anti_rug.analyze(
             mint=mint,
@@ -412,6 +773,11 @@ class Scanner:
             decision["reasons"].append(f"Strong weighted wallet signal bonus: +8 ({weighted_wallet_score})")
 
         decision["should_trade"] = decision["score"] >= decision["threshold"]
+
+        if not market_sanity["allow"]:
+            decision["should_trade"] = False
+            for reason in market_sanity["reasons"]:
+                decision["reasons"].append(f"MARKET SANITY BLOCK: {reason}")
 
         decision = self.apply_social_bonus(
             decision=decision,
@@ -487,6 +853,13 @@ class Scanner:
                 f'STRATEGY GUARD SIZE CAUTION: {strategy_guard_result["reason"]}'
             )
 
+        if not market_sanity["allow"]:
+            decision["should_trade"] = False
+            for reason in market_sanity["reasons"]:
+                message = f"MARKET SANITY BLOCK: {reason}"
+                if message not in decision["reasons"]:
+                    decision["reasons"].append(message)
+
         print("⚡ PRE-SCORE:", decision["score"])
         print("🧬 EDGE:", edge_result["edge_verdict"], edge_result["edge_score"])
         print("🧯 STRATEGY GUARD:", strategy_guard_result["action"], strategy_guard_result["reason"])
@@ -511,7 +884,7 @@ class Scanner:
                 f'HARD BLOCK: {rug_result["hard_block_reason"]}'
             )
 
-        if decision["score"] < 40 and not edge_result["quote_worthy"]:
+        if decision["score"] < self.jupiter_prescore_threshold() and not edge_result["quote_worthy"]:
             decision["should_trade"] = False
             decision["reasons"].append("Pre-score and edge below Jupiter quote threshold")
 
@@ -620,6 +993,19 @@ class Scanner:
             decision["should_trade"] = False
             decision["reasons"].append("Position size resolved to 0")
 
+        exploration_result = evaluate_paper_exploration(
+            decision=decision,
+            settings=self.settings,
+            rug_result=rug_result,
+            market_sanity=market_sanity,
+            buy_quote_analysis=buy_quote_analysis,
+            sell_quote_analysis=sell_quote_analysis,
+            edge_result=edge_result,
+            position_size_usd=position_size_usd,
+        )
+        decision = exploration_result["decision"]
+        position_size_usd = exploration_result["position_size_usd"]
+
         self.print_decision(
             decision=decision,
             wallet_quality=wallet_quality,
@@ -685,11 +1071,40 @@ class Scanner:
         if not self.paper_trader:
             print("⚠️ No paper trader available.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="no_paper_trader")
+            self.record_token_snapshot({
+                "time": time.time(),
+                "timestamp": time.time(),
+                "source": "scanner",
+                "context": "scanner_runtime_skip",
+                "decision_stage": "paper_trade_precheck",
+                "mint": mint,
+                "price": (market_info or {}).get("price") if isinstance(market_info, dict) else None,
+                "liquidity": (market_info or {}).get("liquidity") if isinstance(market_info, dict) else None,
+                "market_cap": self.market_cap_from_info(market_info),
+                "risk_label": rug_result.get("risk_label"),
+                "skip_reason": "no_paper_trader",
+                "total_score": decision.get("score"),
+                "edge_score": edge_result.get("edge_score"),
+                "should_trade": decision.get("should_trade"),
+            })
             return
 
         if not market_info:
             print("⚠️ No market data, skipping trade.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="no_market_data")
+            self.record_token_snapshot({
+                "time": time.time(),
+                "timestamp": time.time(),
+                "source": "scanner",
+                "context": "scanner_runtime_skip",
+                "decision_stage": "paper_trade_precheck",
+                "mint": mint,
+                "risk_label": rug_result.get("risk_label"),
+                "skip_reason": "no_market_data",
+                "total_score": decision.get("score"),
+                "edge_score": edge_result.get("edge_score"),
+                "should_trade": decision.get("should_trade"),
+            })
             return
 
         entry_price = float(market_info.get("price") or 0)
@@ -698,6 +1113,22 @@ class Scanner:
         if entry_price <= 0:
             print("⚠️ Invalid entry price, skipping trade.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="invalid_entry_price")
+            self.record_token_snapshot({
+                "time": time.time(),
+                "timestamp": time.time(),
+                "source": "scanner",
+                "context": "scanner_runtime_skip",
+                "decision_stage": "paper_trade_precheck",
+                "mint": mint,
+                "price": entry_price,
+                "liquidity": liquidity_usd,
+                "market_cap": self.market_cap_from_info(market_info),
+                "risk_label": rug_result.get("risk_label"),
+                "skip_reason": "invalid_entry_price",
+                "total_score": decision.get("score"),
+                "edge_score": edge_result.get("edge_score"),
+                "should_trade": decision.get("should_trade"),
+            })
             return
 
         trade = self.paper_trader.open_trade(
@@ -705,11 +1136,17 @@ class Scanner:
             entry_price=entry_price,
             size_usd=position_size_usd,
             liquidity_usd=liquidity_usd,
-            reason=f'{signal_type}_{decision["mode"]}_score_{decision["score"]}_{rug_result["risk_label"]}_quote_ok',
+            reason=f'{signal_type}_{decision.get("paper_lane", "main")}_{decision["mode"]}_score_{decision["score"]}_{rug_result["risk_label"]}_quote_ok',
             wallets=wallets,
             market_info=market_info,
+            paper_lane=decision.get("paper_lane", "main"),
+            exploration=decision.get("paper_lane") == "exploration",
             signal_metadata={
                 "signal_type": signal_type,
+                "paper_lane": decision.get("paper_lane", "main"),
+                "exploration": decision.get("paper_lane") == "exploration",
+                "main_strategy_should_trade": decision.get("main_strategy_should_trade"),
+                "exploration_result": decision.get("exploration"),
                 "wallet_count": wallet_count,
                 "weighted_wallet_score": weighted_wallet_score,
                 "wallet_quality": wallet_quality,
@@ -851,6 +1288,10 @@ class Scanner:
             "score_threshold": decision["threshold"],
             "mode": decision["mode"],
             "should_trade": decision["should_trade"],
+            "paper_lane": decision.get("paper_lane", "main"),
+            "exploration": decision.get("paper_lane") == "exploration",
+            "main_strategy_should_trade": decision.get("main_strategy_should_trade"),
+            "exploration_result": decision.get("exploration"),
             "score_reasons": decision["reasons"],
             "edge_score": edge_result.get("edge_score"),
             "edge_verdict": edge_result.get("edge_verdict"),
@@ -866,6 +1307,23 @@ class Scanner:
             "strategy_guard_stats": decision.get("strategy_guard", {}).get("stats"),
             "timestamp": now,
         }
+
+        snapshot_context = (
+            "scanner_entry_candidate"
+            if decision.get("should_trade")
+            else "scanner_skip"
+        )
+        self.record_token_snapshot({
+            **payload,
+            "source": "scanner",
+            "context": snapshot_context,
+            "time": now,
+            "price": (market_info or {}).get("price") if isinstance(market_info, dict) else None,
+            "liquidity": (market_info or {}).get("liquidity") if isinstance(market_info, dict) else None,
+            "volume": (market_info or {}).get("volume") if isinstance(market_info, dict) else None,
+            "market_cap": self.market_cap_from_info(market_info),
+            "decision_stage": "signal_evaluation",
+        })
 
         add_alert(payload)
 
@@ -912,6 +1370,10 @@ class Scanner:
             "score_threshold": decision["threshold"],
             "mode": decision["mode"],
             "should_trade": decision["should_trade"],
+            "paper_lane": decision.get("paper_lane", "main"),
+            "exploration": decision.get("paper_lane") == "exploration",
+            "main_strategy_should_trade": decision.get("main_strategy_should_trade"),
+            "exploration_result": decision.get("exploration"),
             "score_reasons": decision["reasons"],
             "edge_score": edge_result.get("edge_score"),
             "edge_verdict": edge_result.get("edge_verdict"),
@@ -981,7 +1443,7 @@ class Scanner:
         except Exception:
             return []
 
-        return [w for w in self.tracked_wallets if w in accounts]
+        return [w for w in self.observed_wallets if w in accounts]
 
     def extract_token_changes(self, result, wallet_hits):
         changes = []
@@ -996,29 +1458,65 @@ class Scanner:
             post_map = self.build_token_balance_map(post)
 
             keys = set(pre_map.keys()) | set(post_map.keys())
+            owner_deltas = {}
+            for owner, mint in keys:
+                owner_deltas[(owner, mint)] = post_map.get((owner, mint), 0) - pre_map.get((owner, mint), 0)
+            route = self.dex_route_metadata(result)
 
             for owner, mint in keys:
                 if owner not in wallet_hits:
                     continue
 
-                pre_amt = pre_map.get((owner, mint), 0)
-                post_amt = post_map.get((owner, mint), 0)
-
-                delta = post_amt - pre_amt
+                delta = owner_deltas.get((owner, mint), 0)
 
                 if abs(delta) < 1e-9:
                     continue
+                if mint in TRADE_QUOTE_MINTS:
+                    continue
 
+                quote_mint, quote_delta = self.trade_quote_delta_for_owner(
+                    owner=owner,
+                    token_mint=mint,
+                    token_delta=delta,
+                    owner_deltas=owner_deltas,
+                )
                 changes.append({
                     "wallet": owner,
                     "mint": mint,
-                    "delta": delta
+                    "delta": delta,
+                    "signature": self.transaction_signature(result),
+                    "block_time": result.get("blockTime"),
+                    "native_delta": self.native_delta_for_wallet(result, owner),
+                    "quote_mint": quote_mint,
+                    "quote_delta": quote_delta,
+                    "dex_route_detected": route["detected"],
+                    "dex_route_programs": route["programs"],
+                    "dex_route_program_ids": route["program_ids"],
                 })
 
         except Exception as e:
             print("❌ Token parsing error:", e)
 
         return changes
+
+    def trade_quote_delta_for_owner(self, owner, token_mint, token_delta, owner_deltas):
+        if token_mint in TRADE_QUOTE_MINTS:
+            return None, None
+
+        candidates = []
+        for quote_mint in TRADE_QUOTE_MINTS:
+            quote_delta = owner_deltas.get((owner, quote_mint))
+            if quote_delta is None or abs(quote_delta) < 1e-12:
+                continue
+            if token_delta and quote_delta and (token_delta > 0) == (quote_delta > 0):
+                continue
+            candidates.append((quote_mint, quote_delta))
+
+        if not candidates:
+            return None, None
+
+        candidates.sort(key=lambda item: abs(item[1]), reverse=True)
+        return candidates[0]
 
     def build_token_balance_map(self, balances):
         balance_map = {}

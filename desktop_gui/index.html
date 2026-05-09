@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MemeTraderPro Desktop</title>
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace("http://127.0.0.1:8765/");
+      }
+    </script>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <strong>MemeTraderPro</strong>
+            <small>Paper-safe trading workstation</small>
+          </div>
+        </div>
+        <nav>
+          <button class="nav-active" data-nav-panel="portfolio">Portfolio</button>
+          <button data-nav-panel="trades">Cockpit</button>
+          <button data-nav-panel="signals">Social / Catalysts</button>
+          <button data-nav-panel="protection">Protection</button>
+          <button data-nav-panel="readiness">System</button>
+          <button data-nav-panel="replay">Replay</button>
+        </nav>
+        <div class="status-pill" id="runtime-pill">CONNECTING</div>
+        <button class="refresh-button" id="refresh-button">Refresh</button>
+      </header>
+
+      <main class="workspace">
+        <section class="terminal">
+          <div class="token-strip">
+            <div class="token-avatar"></div>
+            <div class="token-title">
+              <h1 id="token-name">No active position</h1>
+              <p id="token-mint">Waiting for paper trades or protected mints</p>
+            </div>
+            <div class="metric"><span>Market Cap</span><strong id="metric-mc">-</strong></div>
+            <div class="metric"><span>Price</span><strong id="metric-price">-</strong></div>
+            <div class="metric"><span>Liquidity</span><strong id="metric-liq">-</strong></div>
+            <div class="metric"><span>Risk</span><strong id="metric-risk">-</strong></div>
+          </div>
+
+          <div class="tool-row">
+            <div class="interval-modes" aria-label="Chart interval">
+              <button class="interval-mode active" data-interval="1">1s</button>
+              <button class="interval-mode" data-interval="5">5s</button>
+              <button class="interval-mode" data-interval="30">30s</button>
+              <button class="interval-mode" data-interval="60">1m</button>
+            </div>
+            <div class="chart-modes" aria-label="Chart metric">
+              <button class="chart-mode active" data-metric="market_cap">Market Cap</button>
+              <button class="chart-mode" data-metric="price">Price</button>
+              <button class="chart-mode" data-metric="liquidity">Liquidity</button>
+            </div>
+            <span>Local snapshots</span>
+            <span id="snapshot-count">0 snapshots</span>
+            <span id="chart-range">-</span>
+            <label class="auto-refresh-toggle">
+              <input type="checkbox" id="auto-refresh" checked />
+              Auto 1s
+            </label>
+            <span id="last-updated">-</span>
+            <span class="safe-copy">Paper only</span>
+          </div>
+
+          <div class="chart-panel">
+            <div class="chart-grid" id="chart"></div>
+            <div class="chart-empty" id="chart-empty">Loading local candles...</div>
+          </div>
+
+          <div class="intel-panel">
+            <div class="intel-tabs">
+              <button class="tab-active" data-panel="portfolio">Portfolio</button>
+              <button data-panel="trades">Cockpit</button>
+              <button data-panel="protection">Protection</button>
+              <button data-panel="signals">Social / Catalysts</button>
+              <button data-panel="readiness">System</button>
+              <button data-panel="replay">Replay</button>
+            </div>
+            <div class="intel-grid" id="intel-grid"></div>
+          </div>
+        </section>
+
+        <aside class="side-panel">
+          <section class="panel-block">
+            <h2>Runtime</h2>
+            <div class="runtime-list" id="runtime-list"></div>
+          </section>
+
+          <section class="panel-block">
+            <h2>Positions</h2>
+            <div class="position-list" id="position-list"></div>
+          </section>
+
+          <section class="panel-block">
+            <h2>Execution State</h2>
+            <div class="execution-state-grid">
+              <div><span>Live Trading</span><strong>LOCKED</strong></div>
+              <div><span>Buy / Add</span><strong>OFF</strong></div>
+              <div><span>Exit Button</span><strong>OFF</strong></div>
+              <div><span>Mode</span><strong>PAPER</strong></div>
+            </div>
+            <p class="safety-note">Manual actions live in Protection and Portfolio until execution gates are intentionally armed.</p>
+          </section>
+
+          <section class="panel-block">
+            <h2>Protection Rail</h2>
+            <div class="protection-rail" id="protection-rail"></div>
+          </section>
+
+          <section class="panel-block">
+            <h2>Signal Rail</h2>
+            <div class="signal-rail" id="signal-rail"></div>
+          </section>
+
+          <section class="panel-block">
+            <h2>Selected Token</h2>
+            <div class="detail-list" id="position-detail"></div>
+          </section>
+
+          <section class="panel-block">
+            <h2>Snapshot Feed</h2>
+            <div class="snapshot-feed" id="snapshot-feed"></div>
+          </section>
+
+          <section class="panel-block stat-grid" id="overview-counts"></section>
+        </aside>
+      </main>
+    </div>
+    <script src="./vendor/lightweight-charts.standalone.production.js"></script>
+    <script type="module" src="./assets/app.js"></script>
+  </body>
+</html>

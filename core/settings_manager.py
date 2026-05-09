@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from core.json_store import atomic_write_json
+
 
 SETTINGS_FILE = Path("data/bot_settings.json")
 
@@ -24,6 +26,10 @@ DEFAULT_SETTINGS = {
     "paper_base_position_usd": 30,
     "paper_strong_position_usd": 60,
     "paper_medium_position_usd": 45,
+    "paper_exploration_enabled": True,
+    "paper_exploration_score_threshold": 52,
+    "paper_exploration_min_edge_score": 55,
+    "paper_exploration_size_usd": 10,
     "strategy_guard_enabled": True,
 }
 
@@ -34,6 +40,20 @@ def load_legacy_python_settings():
         return SETTINGS if isinstance(SETTINGS, dict) else {}
     except Exception:
         return {}
+
+
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
 
 
 def flatten_json_settings(data):
@@ -85,13 +105,17 @@ def save_settings(updates):
         "confirmation_min_launch_age_seconds": int(current["confirmation_min_launch_age_seconds"]),
         "confirmation_max_launch_age_seconds": int(current["confirmation_max_launch_age_seconds"]),
         "confirmation_min_liquidity_usd": float(current["confirmation_min_liquidity_usd"]),
-        "confirmation_require_momentum": bool(current.get("confirmation_require_momentum", True)),
+        "confirmation_require_momentum": parse_bool(current.get("confirmation_require_momentum"), True),
         "confirmation_min_wallets": int(current["confirmation_min_wallets"]),
         "confirmation_min_repeated_buys": int(current["confirmation_min_repeated_buys"]),
         "paper_base_position_usd": float(current["paper_base_position_usd"]),
         "paper_medium_position_usd": float(current["paper_medium_position_usd"]),
         "paper_strong_position_usd": float(current["paper_strong_position_usd"]),
-        "strategy_guard_enabled": bool(current.get("strategy_guard_enabled", True)),
+        "paper_exploration_enabled": parse_bool(current.get("paper_exploration_enabled"), True),
+        "paper_exploration_score_threshold": float(current.get("paper_exploration_score_threshold", 52)),
+        "paper_exploration_min_edge_score": float(current.get("paper_exploration_min_edge_score", 55)),
+        "paper_exploration_size_usd": float(current.get("paper_exploration_size_usd", 10)),
+        "strategy_guard_enabled": parse_bool(current.get("strategy_guard_enabled"), True),
         "sniper": {
             "cluster_wallets": int(current["cluster_threshold"]),
             "cluster_window_seconds": int(current["cluster_window"]),
@@ -121,8 +145,6 @@ def save_settings(updates):
         },
     }
 
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(payload, f, indent=2)
+    atomic_write_json(SETTINGS_FILE, payload)
 
     return payload

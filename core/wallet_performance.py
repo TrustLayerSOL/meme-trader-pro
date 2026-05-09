@@ -2,6 +2,7 @@ import json
 import os
 import time
 
+from core.json_store import locked_update_json
 
 PERFORMANCE_FILE = "data/wallet_performance.json"
 
@@ -12,26 +13,44 @@ class WalletPerformanceTracker:
 
     def load(self):
         if not os.path.exists(PERFORMANCE_FILE):
-            return {
-                "wallets": {},
-                "signals": []
-            }
+            return self.default_state()
 
         try:
             with open(PERFORMANCE_FILE, "r") as f:
                 return json.load(f)
         except Exception:
-            return {
-                "wallets": {},
-                "signals": []
-            }
+            return self.default_state()
+
+    def default_state(self):
+        return {
+            "wallets": {},
+            "signals": []
+        }
 
     def save(self):
         try:
-            with open(PERFORMANCE_FILE, "w") as f:
-                json.dump(self.data, f, indent=2)
+            locked_update_json(PERFORMANCE_FILE, self.default_state(), lambda _current: self.data)
         except Exception as e:
-            print("⚠️ Failed to save wallet performance:", e)
+            print("Failed to save wallet performance:", e)
+
+    def ensure_wallet_in(self, data, wallet):
+        wallets = data.setdefault("wallets", {})
+
+        if wallet not in wallets:
+            wallets[wallet] = {
+                "signals": 0,
+                "paper_entries": 0,
+                "wins": 0,
+                "losses": 0,
+                "total_pnl": 0,
+                "avg_pnl": 0,
+                "best_pnl": 0,
+                "worst_pnl": 0,
+                "score": 50,
+                "last_seen": None,
+            }
+
+        return wallets[wallet]
 
     def ensure_wallet(self, wallet):
         wallets = self.data.setdefault("wallets", {})
@@ -73,52 +92,63 @@ class WalletPerformanceTracker:
             "token_age_seconds": token_age_seconds,
         }
 
-        self.data.setdefault("signals", []).insert(0, signal)
-        self.data["signals"] = self.data["signals"][:1000]
+        def updater(data):
+            if not isinstance(data, dict):
+                data = self.default_state()
+            data.setdefault("signals", []).insert(0, signal)
+            data["signals"] = data["signals"][:1000]
 
-        for wallet in wallets:
-            record = self.ensure_wallet(wallet)
-            record["signals"] += 1
-            record["last_seen"] = now
+            for wallet in wallets:
+                record = self.ensure_wallet_in(data, wallet)
+                record["signals"] += 1
+                record["last_seen"] = now
 
-        self.save()
+            return data
+
+        self.data = locked_update_json(PERFORMANCE_FILE, self.default_state(), updater)
 
     def record_trade_result(self, wallets, pnl):
         pnl = float(pnl or 0)
 
-        for wallet in wallets:
-            record = self.ensure_wallet(wallet)
+        def updater(data):
+            if not isinstance(data, dict):
+                data = self.default_state()
 
-            record["paper_entries"] += 1
-            record["total_pnl"] += pnl
+            for wallet in wallets:
+                record = self.ensure_wallet_in(data, wallet)
 
-            if pnl > 0:
-                record["wins"] += 1
-            else:
-                record["losses"] += 1
+                record["paper_entries"] += 1
+                record["total_pnl"] += pnl
 
-            entries = max(1, record["paper_entries"])
-            record["avg_pnl"] = record["total_pnl"] / entries
-            record["best_pnl"] = max(record["best_pnl"], pnl)
-            record["worst_pnl"] = min(record["worst_pnl"], pnl)
+                if pnl > 0:
+                    record["wins"] += 1
+                else:
+                    record["losses"] += 1
 
-            win_rate = record["wins"] / entries
-            avg_pnl = record["avg_pnl"]
+                entries = max(1, record["paper_entries"])
+                record["avg_pnl"] = record["total_pnl"] / entries
+                record["best_pnl"] = max(record["best_pnl"], pnl)
+                record["worst_pnl"] = min(record["worst_pnl"], pnl)
 
-            confidence = min(1, entries / 5)
-            raw_edge = 0
-            raw_edge += (win_rate - 0.5) * 40
+                win_rate = record["wins"] / entries
+                avg_pnl = record["avg_pnl"]
 
-            if avg_pnl > 0:
-                raw_edge += min(25, avg_pnl)
-            else:
-                raw_edge += max(-30, avg_pnl)
+                confidence = min(1, entries / 5)
+                raw_edge = 0
+                raw_edge += (win_rate - 0.5) * 40
 
-            score = 50 + (raw_edge * confidence)
+                if avg_pnl > 0:
+                    raw_edge += min(25, avg_pnl)
+                else:
+                    raw_edge += max(-30, avg_pnl)
 
-            record["score"] = max(0, min(100, round(score, 2)))
+                score = 50 + (raw_edge * confidence)
 
-        self.save()
+                record["score"] = max(0, min(100, round(score, 2)))
+
+            return data
+
+        self.data = locked_update_json(PERFORMANCE_FILE, self.default_state(), updater)
 
     def get_wallet_score(self, wallet):
         record = self.data.get("wallets", {}).get(wallet)

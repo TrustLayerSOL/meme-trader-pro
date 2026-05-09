@@ -3,6 +3,7 @@ import time
 import aiohttp
 
 from dotenv import load_dotenv
+from core.redaction import redact_secrets
 from core.runtime_status import increment_component, update_component
 
 load_dotenv()
@@ -202,16 +203,17 @@ class JupiterQuoteEngine:
                 return result
 
         except Exception as e:
+            error = redact_secrets(e)
             update_component(
                 "quotes",
                 status="quote_exception",
-                last_error=str(e),
+                last_error=error[:240],
                 last_input_mint=input_mint,
                 last_output_mint=output_mint,
             )
             return {
                 "ok": False,
-                "reason": f"quote_exception: {e}",
+                "reason": f"quote_exception: {error}",
                 "raw": None,
             }
 

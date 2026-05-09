@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -18,6 +19,14 @@ REQUIRED_JSON_FILES = {
     "runtime_status": Path("data/runtime_status.json"),
     "tracked_wallets": Path("data/tracked_wallets.json"),
 }
+CRITICAL_RUNTIME_COMPONENTS = {"bot", "websocket", "scanner"}
+RUNTIME_HEARTBEAT_FRESH_SECONDS = 300
+PRIVATE_PERMISSION_FILES = [
+    Path(".env"),
+    DB_FILE,
+    Path(str(DB_FILE) + "-wal"),
+    Path(str(DB_FILE) + "-shm"),
+]
 
 
 class SystemHealth:
@@ -82,6 +91,33 @@ class SystemHealth:
 
         return rows
 
+    def check_private_permissions(self):
+        rows = []
+        if os.name == "nt":
+            return rows
+
+        for path in PRIVATE_PERMISSION_FILES:
+            if not path.exists():
+                continue
+            try:
+                mode = stat.S_IMODE(path.stat().st_mode)
+            except Exception as exc:
+                rows.append({
+                    "check": f"permissions_{path.name}",
+                    "status": "WARN",
+                    "detail": f"unable to inspect {path}: {exc}",
+                })
+                continue
+
+            exposed = bool(mode & 0o077)
+            rows.append({
+                "check": f"permissions_{path.name}",
+                "status": self.status(not exposed),
+                "detail": f"{path} mode {mode:03o}; expected 600",
+            })
+
+        return rows
+
     def check_state_quality(self):
         rows = []
 
@@ -128,12 +164,14 @@ class SystemHealth:
 
         runtime, _ = self.safe_load_json("data/runtime_status.json")
         if isinstance(runtime, dict):
-            for component in ["bot", "websocket", "scanner", "market", "quotes", "watchdog"]:
+            for component in ["bot", "websocket", "scanner", "market", "quotes", "watchdog", "wallet_discovery"]:
                 item = runtime.get(component, {})
                 age = self.age_seconds(item.get("updated_at")) if isinstance(item, dict) else None
+                is_fresh = age is not None and age < RUNTIME_HEARTBEAT_FRESH_SECONDS
+                critical = component in CRITICAL_RUNTIME_COMPONENTS
                 rows.append({
                     "check": f"runtime_{component}",
-                    "status": self.status(age is not None and age < 300, warning=True),
+                    "status": self.status(is_fresh, warning=not critical),
                     "detail": "no heartbeat" if age is None else f"{age:.0f}s old",
                 })
 
@@ -198,6 +236,7 @@ class SystemHealth:
         rows = []
         rows.extend(self.check_api_keys())
         rows.extend(self.check_files())
+        rows.extend(self.check_private_permissions())
         rows.extend(self.check_state_quality())
         rows.extend(self.check_logs())
         rows.extend(self.check_database())
