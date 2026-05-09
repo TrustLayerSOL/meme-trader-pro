@@ -484,6 +484,10 @@ nav button:hover {
   background: rgba(94, 224, 165, 0.08);
 }
 
+.decision-row {
+  cursor: default;
+}
+
 .ledger-row span,
 .ledger-row strong,
 .ledger-row small {

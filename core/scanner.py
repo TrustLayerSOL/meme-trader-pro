@@ -6,6 +6,7 @@ from core.dev_analyzer import DevAnalyzer
 from core.scoring_engine import ScoringEngine
 from core.anti_rug import AntiRugAnalyzer
 from core.confirmation_filter import ConfirmationFilter
+from core.decision_ledger import build_decision_record
 from core.wallet_quality import WalletQualityAnalyzer
 from core.wallet_performance import WalletPerformanceTracker
 from core.position_sizer import PositionSizer
@@ -393,6 +394,18 @@ class Scanner:
         except Exception as exc:
             print("⚠️ Token snapshot write failed:", exc)
             update_component("scanner", status="snapshot_write_error", last_error=str(exc))
+
+    def update_decision_runtime_skip(self, decision_id, reason):
+        if not decision_id:
+            return
+        try:
+            self.store.update_decision_action(decision_id, {
+                "scanner_stage": "paper_trade_precheck",
+                "final_action": "runtime_skip",
+                "reason": reason,
+            })
+        except Exception as exc:
+            print("⚠️ Decision runtime-skip update failed:", exc)
 
     async def handle_event(self, message):
         try:
@@ -905,7 +918,7 @@ class Scanner:
                 edge_result=edge_result,
             )
 
-            self.record_signal(
+            decision_id = self.record_signal(
                 mint=mint,
                 now=now,
                 signal_type=signal_type,
@@ -1021,7 +1034,7 @@ class Scanner:
             edge_result=edge_result,
         )
 
-        self.record_signal(
+        decision_id = self.record_signal(
             mint=mint,
             now=now,
             signal_type=signal_type,
@@ -1071,6 +1084,7 @@ class Scanner:
         if not self.paper_trader:
             print("⚠️ No paper trader available.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="no_paper_trader")
+            self.update_decision_runtime_skip(decision_id, "no_paper_trader")
             self.record_token_snapshot({
                 "time": time.time(),
                 "timestamp": time.time(),
@@ -1092,6 +1106,7 @@ class Scanner:
         if not market_info:
             print("⚠️ No market data, skipping trade.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="no_market_data")
+            self.update_decision_runtime_skip(decision_id, "no_market_data")
             self.record_token_snapshot({
                 "time": time.time(),
                 "timestamp": time.time(),
@@ -1113,6 +1128,7 @@ class Scanner:
         if entry_price <= 0:
             print("⚠️ Invalid entry price, skipping trade.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="invalid_entry_price")
+            self.update_decision_runtime_skip(decision_id, "invalid_entry_price")
             self.record_token_snapshot({
                 "time": time.time(),
                 "timestamp": time.time(),
@@ -1142,6 +1158,7 @@ class Scanner:
             paper_lane=decision.get("paper_lane", "main"),
             exploration=decision.get("paper_lane") == "exploration",
             signal_metadata={
+                "decision_id": decision_id,
                 "signal_type": signal_type,
                 "paper_lane": decision.get("paper_lane", "main"),
                 "exploration": decision.get("paper_lane") == "exploration",
@@ -1308,6 +1325,14 @@ class Scanner:
             "timestamp": now,
         }
 
+        decision_id = None
+        try:
+            decision_record = build_decision_record(payload)
+            decision_id = self.store.upsert_decision(decision_record)
+            payload["decision_id"] = decision_id
+        except Exception as exc:
+            print("⚠️ Decision ledger write failed:", exc)
+
         snapshot_context = (
             "scanner_entry_candidate"
             if decision.get("should_trade")
@@ -1387,7 +1412,9 @@ class Scanner:
             "strategy_guard_action": decision.get("strategy_guard", {}).get("action"),
             "strategy_guard_reason": decision.get("strategy_guard", {}).get("reason"),
             "strategy_guard_stats": decision.get("strategy_guard", {}).get("stats"),
+            "decision_id": decision_id,
         })
+        return decision_id
 
     async def find_dev_wallet(self, mint):
         try:

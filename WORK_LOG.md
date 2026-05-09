@@ -6,18 +6,19 @@ Last updated: 2026-05-09
 
 ## Current Work
 
-<mark>Active section: Phase 9 - Pro Double-Click GUI.</mark>
+<mark>Active section: Phase 2 / Phase 7 - Canonical Decision Ledger.</mark>
 
 Current implementation target:
 
-- Finish the trade-stream candle path and stabilize the selected-token chart experience so the GUI behaves like a real operator cockpit instead of a prototype.
+- Build the canonical decision ledger so every scanned candidate has one durable record of inputs, rule outcomes, final action, and later paper result.
 
-Lead-agent active plan for 2026-05-08:
+Lead-agent active plan for 2026-05-09:
 
 1. Keep the desktop API execution-locked and session-token protected.
-2. Make double-click launch reuse a healthy local API instead of creating duplicate/stale sessions.
-3. Keep selected-token charts on the TradingView lightweight renderer, prefer `swap_ticks` when present, and clearly label sampled-quote fallback candles.
-4. Remove or repair dead prototype controls before treating the GUI as polished.
+2. Tighten roadmap/docs around measurable edge, canonical truth, and fast-vs-deep protection split.
+3. Add a SQLite-backed decision-ledger foundation with deterministic tests.
+4. Start routing scanner and paper-trade lifecycle records toward decision ids without changing live execution behavior.
+5. Keep GUI work focused on exposing canonical state clearly.
 
 Safety carryover:
 
@@ -29,8 +30,10 @@ Safety carryover:
 
 Highest-value active workstreams:
 
+- Canonical decision ledger and lane-separated paper metrics.
+- Fast open-position monitor vs slower deep watchdog architecture split.
 - Desktop app launch/session reliability and stale-state visibility.
-- Selected-token chart polish and future trade-stream candle pipeline.
+- Selected-token chart polish and trade-stream candle pipeline.
 - Wallet discovery and promotion/demotion workflow.
 - Native wallet detail and protection drill-down panels.
 - Native settings/log/status panels for daily operator use.
@@ -47,14 +50,14 @@ Helper-agent coordination note:
 Why this matters:
 
 - Manual trades can collapse faster than a human can react.
-- The system needs to prove alerting, exit advice, quote checks, audit state, and simulated sell intent before any real auto-sell is considered.
+- The system needs to prove pre-entry rejection, fast open-position monitoring, alerting, exit advice, quote checks, audit state, and simulated sell intent before any real auto-sell is considered.
 - This keeps the project aligned with paper-first safety rules.
 
 ## Current Blockers / Constraints
 
 - Live execution remains locked by design.
 - Auto-sell is not active and should not be activated yet.
-- Watchdog checks can take 40-120 seconds due to RPC/market/mint inspection latency.
+- Deep watchdog checks can take 40-120 seconds due to RPC/market/mint inspection latency. This is too slow to represent as sub-second rug rescue, so fast open-position monitoring must be separated from deep inspection before live execution.
 - Helius Gatekeeper, standard Helius mainnet, and public Solana read fallback currently report healthy.
 - Some runtime and live-state sources are stale when the backend loops are not running.
 - Holder concentration analyzer exists but is not wired into live risk snapshots yet.
@@ -62,12 +65,59 @@ Why this matters:
 
 ## Next Actions
 
-1. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
-2. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
-3. Consider paid/private non-Helius provider config before real-money live mode; public Solana RPC is now only a last-resort read fallback.
-4. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
+1. Implement the first canonical decision-ledger foundation.
+2. Link scanner skip/main-entry/exploration-entry records to decision ids.
+3. Link paper open/failed/exit records back to decision ids.
+4. Add a read-only decision feed to the API/GUI after the write path is stable.
+5. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
+6. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
+7. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-09 - Canonical Decision Ledger Foundation
+
+Changed files:
+
+- `core/decision_ledger.py`
+- `core/storage.py`
+- `core/scanner.py`
+- `paper_trader.py`
+- `desktop_api.py`
+- `desktop_gui/assets/api.js`
+- `desktop_gui/assets/app.js`
+- `desktop_gui/assets/render.js`
+- `desktop_gui/assets/styles.css`
+- `tests/test_core_logic.py`
+- `tests/test_desktop_api.py`
+- `AGENT_WORKFLOW.md`
+- `docs/OWNERS_MANUAL.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Tightened the roadmap around measurable edge, canonical state, and the fast-monitor vs deep-watchdog split.
+- Added the first SQLite-backed `decision_records` ledger for candidate decisions.
+- Added `core/decision_ledger.py` helpers for candidate decision records and paper-trade outcome updates.
+- Scanner signal evaluation now creates a decision record and passes `decision_id` into paper-trade metadata when a paper open is attempted.
+- Scanner runtime precheck skips update the decision action as `runtime_skip`.
+- Paper-trade snapshots update the linked decision result for failed opens, opened trades, monitor updates, partial exits, and closed exits.
+- Desktop API now exposes read-only `/api/decisions`.
+- Static desktop Replay tab now shows the canonical Decision Ledger when decision records exist.
+
+Verification:
+
+- Targeted storage/decision tests passed.
+- Targeted desktop API decision-route test passed.
+- `py_compile` passed for the changed Python modules.
+
+Remaining:
+
+- Add richer filters and detail drilldown for decision records.
+- Backfill existing scanner/paper history into decision records if needed.
+- Continue separating fast open-position monitoring from slower deep watchdog inspection.
 
 ### 2026-05-09 - Repo Sync And Header Metric Text Fix
 

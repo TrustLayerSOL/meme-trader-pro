@@ -232,6 +232,14 @@ Current limitation: the live reload path adds new paper-watch wallet subscriptio
 
 The protection watchdog watches manually listed tokens.
 
+Important: the watchdog is not the main defense against instant rugs.
+
+Some meme tokens can lose liquidity faster than a normal watchdog loop can inspect, quote, and react. MemeTraderPro should therefore use three separate safety layers:
+
+- Pre-entry rejection: block dangerous tokens before buying.
+- Fast open-position monitoring: lightweight price, liquidity, market cap, quote, and drawdown checks for tokens already in a paper/open position.
+- Deep watchdog inspection: slower mechanics, holder, balance, route, and protection checks for context, alerts, and postmortems.
+
 It checks:
 
 - Current price.
@@ -248,6 +256,25 @@ The watchdog can prepare a simulated exit intent, such as "watch closely," "prep
 It does not execute that exit.
 
 The current protection exit planner is simulation-only. Its own safety note says no live sell is executed.
+
+If the deep watchdog is stale, that does not mean the fast market monitor is stale, and vice versa. Future GUI work should label those states separately so the operator knows which protection layer is fresh.
+
+## Decision Ledger
+
+The next core system is the canonical decision ledger.
+
+The decision ledger is intended to record every candidate token the bot sees, not only tokens it buys in paper mode. Each record should explain:
+
+- What token was detected.
+- Which wallets, social signals, or scanner events found it.
+- Which risk checks passed, warned, or blocked it.
+- What liquidity, market cap, price, and quote data were available.
+- Whether it was skipped, entered main paper mode, entered exploration mode, or failed before entry.
+- What happened later: open result, failed buy, closed result, PnL, exit reason, and postmortem notes.
+
+This is important because edge cannot be proven from isolated wins. The system needs a full history of candidates, skips, entries, and outcomes before thresholds can be tuned responsibly.
+
+Until this ledger is complete, paper results should be treated as early evidence, not proof of live-trading edge.
 
 ## Manual Protected Tokens
 
@@ -347,7 +374,7 @@ These are the important local data files and what they mean:
 - `data/runtime_status.json`: heartbeat status for bot, scanner, quotes, watchdog, and related components.
 - `data/tracked_wallets.json`: the main tracked wallet list.
 - `data/paper_watch_wallets.json`: optional watch-only wallet list, if present.
-- `data/memetrader.db`: local SQLite history for events, alerts, trades, watchlist records, and token snapshots.
+- `data/memetrader.db`: local SQLite history for events, alerts, trades, watchlist records, token snapshots, swap ticks, and the planned/current decision ledger.
 - `logs/`: local logs for bot, dashboard, desktop API, and watchdog.
 
 Do not delete or hand-edit these files unless you know exactly why. Many screens depend on them.

@@ -5,6 +5,8 @@ from http import HTTPStatus
 from unittest import mock
 
 import desktop_api
+from core.decision_ledger import build_decision_record
+from core.storage import EventStore
 
 
 class DesktopApiTests(unittest.TestCase):
@@ -367,6 +369,34 @@ class DesktopApiTests(unittest.TestCase):
         self.assertFalse(payload["execution_mutations_enabled"])
         self.assertEqual(payload["process_id"], desktop_api.os.getpid())
         self.assertEqual(payload["session_started_at"], desktop_api.SERVER_STARTED_AT)
+
+    def test_decisions_route_reads_canonical_decision_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.upsert_decision(build_decision_record({
+                "decision_id": "dec_route_1",
+                "timestamp": 123,
+                "mint": "Mint111",
+                "type": "cluster",
+                "should_trade": False,
+                "total_score": 55,
+                "score_threshold": 68,
+                "risk_label": "WARNING",
+                "score_reasons": ["below threshold"],
+            }))
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                status, content_type, body = desktop_api.route_request("GET", "/api/decisions?limit=10")
+
+        payload = json.loads(body)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertEqual(payload["source"], "decision_records")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["items"][0]["decision_id"], "dec_route_1")
+        self.assertEqual(payload["items"][0]["final_action"], "skip")
+        self.assertEqual(payload["items"][0]["action_reason"], "below threshold")
 
     def test_cors_only_allows_local_desktop_origins(self):
         self.assertIsNone(desktop_api.allowed_cors_origin("http://127.0.0.1:5173"))

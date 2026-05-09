@@ -1,6 +1,6 @@
 # MemeTraderPro Data Source Map
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 This map explains where the dashboard and bot state comes from. Use it before changing a panel, parser, storage schema, or strategy rule.
 
@@ -44,6 +44,7 @@ Security note: `.env` and SQLite database/WAL/SHM files should remain owner-only
 | --- | --- | --- |
 | `events` | Durable feed of raw wallet/signal events. | Unique index on time, event type, wallet, mint. |
 | `alerts` | Durable alert and scoring records. | Stores score, edge verdict, should-trade, risk label, and raw payload JSON. |
+| `decision_records` | Canonical candidate decision ledger. | Foundation started. Stores scanned candidate decision records: signal inputs, rule outcomes, risk/quote checks, final action, lane, and later paper result. UI and postmortem work should keep moving toward this table instead of reconstructing decisions from scattered JSON/files. |
 | `trades` | Durable paper/live trade snapshots. | Stores summary columns plus full payload JSON. |
 | `watchlist` | Durable protected-mint snapshots. | Mirrors manual watchlist entries. |
 | `token_snapshots` | Durable token risk/performance snapshots. | Stores watchdog, scanner, and paper-trade lifecycle contexts, market data, risk label, full payload JSON, and candidate-feed display fields when captured. |
@@ -121,6 +122,7 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | `/api/positions` | `data/paper_trades.json`, `data/manual_watchlist.json` | Uses `core.position_cockpit.build_position_rows`. |
 | `/api/positions/{mint}` | positions plus SQLite `token_snapshots`, `data/social_state.json`, `data/catalyst_cards.json`, `data/wallet_performance.json`, `data/wallet_behavior.json`, `data/paper_trades.json` | Selected-position detail payload with snapshot trend metrics, read-only protection summary, local signal/catalyst matches, and wallet confidence context. |
 | `/api/candidates` | SQLite `token_snapshots` scanner contexts | Read-only live launch feed. Dedupes recent scanner candidates by mint and exposes image URL, name/symbol, market cap, liquidity, tx count, holder count, wallet score, risk, and pass/skip/block reasons when available. |
+| `/api/decisions` | SQLite `decision_records` | Read-only canonical decision feed. Exposes recent candidate decisions, action, lane, score, risk, quote pass/fail flags, paper outcome fields, and compact payload/result JSON. |
 | `/api/candidate-wallets` | `data/candidate_wallets.json` | Watch-only discovered wallets for manual review. Read-only; does not promote wallets or execute trades. |
 | `/api/wallet-lifecycle` | `data/tracked_wallets.json`, `data/paper_watch_wallets.json`, `data/candidate_wallets.json`, `data/wallet_performance.json`, `data/wallet_behavior.json` | Read-only promotion/demotion queue with trade count, win/loss record, win rate, total PnL, average PnL, score, behavior labels, rolling windows, postmortem summary, and lifecycle recommendation. |
 | `POST /api/wallet-review-decision` | `data/wallet_review_decisions.json` | Scoped local metadata update for operator wallet review decisions: approve promotion, approve demotion, hold, or reject. Does not apply changes to tracked/bad wallet lists and does not execute trades. |
@@ -144,6 +146,7 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 
 | Decision | Inputs | Modules |
 | --- | --- | --- |
+| Candidate decision ledger | mint, detected time, source event, signal wallets, social matches, risk/holder/mechanics checks, quote/liquidity checks, rule outcomes, final action, lane, later result | `core/decision_ledger.py`, `core/scanner.py`, `paper_trader.py`, `core/storage.py`, `desktop_api.py` |
 | Candidate scoring | wallet signal, market/liquidity, token age, launch age, dev reputation, token mechanics | `core/scanner.py`, `core/scoring_engine.py`, `core/confirmation_filter.py` |
 | Anti-rug decision | liquidity, token age, dev score, token mechanics, sell quote feasibility | `core/anti_rug.py`, `core/dev_analyzer.py`, `core/token_inspector.py` |
 | Token-2022 risk | mint account owner, parsed extensions, authority fields, default account state | `core/token_inspector.py` |
@@ -152,6 +155,7 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | Paper Exploration Lane | near-miss score, edge score, confirmation result, strategy guard, hard-block status, market sanity, buy quote, sell quote, configured exploration size | `core/paper_exploration.py`, `core/scanner.py`, `data/paper_trades.json`, `/api/paper-review` |
 | Paper exit | trade state, partial profit rules, stops, exit advisor | `paper_trader.py`, `core/exit_advisor.py` |
 | Protected mint status | current price/liquidity, peak/baseline drawdown, token mechanics, wallet token balance, prepared simulation exit intent | `core/rug_watchdog.py`, `core/protection_exit.py`, `core/token_balance.py` |
+| Fast open-position monitor | open paper/protected positions, lightweight market snapshots, liquidity/market-cap/price drawdown, quote degradation, exit-rule state | planned boundary; should be separate from `core/rug_watchdog.py` deep inspection |
 | Holder concentration risk | largest token accounts, supplied holder rows/account balances | `core/rug_watchdog.py`, `core/holder_concentration.py` |
 | Token snapshots | watchdog status, scanner entries/skips, paper entries/exits, market metrics, mechanics, holder concentration, prepared exit quote status | SQLite `token_snapshots`, `core/rug_watchdog.py`, `core/scanner.py`, `paper_trader.py` |
 | Trade-stream candles | parsed swap/tick rows grouped into 1s/5s/30s/1m OHLC candles; sampled snapshots only as fallback | SQLite `swap_ticks`, `desktop_api.py`, `core.position_cockpit.build_candles`, `core.scanner.Scanner.record_swap_tick_from_event`, future exact DEX instruction parser |
@@ -177,6 +181,8 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 - `core/data_freshness.py` classifies important state sources as fresh, stale, old, missing, or broken and renders those results in the Data Store panel.
 - `live_state.json` and `data/live_state.json` can diverge. Future work should pick a canonical live-state file and make the other a compatibility alias or remove it.
 - SQLite is useful for querying and persistence, but several panels still read JSON directly. Treat SQLite as durable memory, not yet the only source of truth.
+- Candidate decisions are currently reconstructed from scanner snapshots, paper trades, wallet state, social state, and catalyst cards. This should be replaced by `decision_records` as the canonical source before strategy tuning or live-readiness claims.
+- Deep watchdog state and fast open-position monitoring should be separate sources. The UI must not label slow deep-inspection freshness as real-time exit protection.
 - Any future live execution feature must write an audit record before and after every attempted order.
 
 ## When Adding A New Feature

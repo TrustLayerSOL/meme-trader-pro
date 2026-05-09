@@ -12,6 +12,7 @@ from pathlib import Path
 import paper_trader
 import main as bot_main
 from core.storage import EventStore
+from core.decision_ledger import build_decision_record, build_trade_result
 from core import settings_manager
 from core.catalyst_cards import build_catalyst_cards_from_snapshots
 from core.holder_concentration import analyze_holder_concentration
@@ -61,6 +62,12 @@ class NoopStore:
     def insert_token_snapshot(self, snapshot):
         return None
 
+    def update_decision_action(self, decision_id, action):
+        return None
+
+    def update_decision_result(self, decision_id, result):
+        return None
+
 
 class RecordingStore:
     def __init__(self):
@@ -76,6 +83,12 @@ class RecordingStore:
     def insert_swap_tick(self, tick):
         self.swap_ticks.append(tick)
         return True
+
+    def update_decision_action(self, decision_id, action):
+        return None
+
+    def update_decision_result(self, decision_id, result):
+        return None
 
 
 class NoopWalletPerformance:
@@ -1806,6 +1819,74 @@ class SocialSignalTests(unittest.TestCase):
 
 
 class PositionCockpitTests(unittest.TestCase):
+    def test_event_store_records_and_updates_decision_records(self):
+        with TemporaryDirectory() as tmp:
+            store = EventStore(Path(tmp) / "memetrader.db")
+            decision = build_decision_record({
+                "decision_id": "dec_test_1",
+                "timestamp": 1000,
+                "mint": "Mint111",
+                "type": "cluster",
+                "wallets": ["Wallet111"],
+                "wallet_count": 1,
+                "total_score": 72,
+                "score_threshold": 68,
+                "edge_score": 14,
+                "edge_verdict": "watch",
+                "risk_label": "LOW",
+                "risk_score": 8,
+                "buy_quote_pass": True,
+                "sell_quote_pass": True,
+                "position_size_usd": 25,
+                "should_trade": True,
+                "paper_lane": "main",
+                "score_reasons": ["cluster confirmed"],
+            })
+
+            decision_id = store.upsert_decision(decision)
+            store.update_decision_action(decision_id, {
+                "scanner_stage": "paper_entry",
+                "final_action": "paper_opened",
+                "reason": "paper fill succeeded",
+            })
+            store.update_decision_result(decision_id, {
+                "trade_status": "closed",
+                "entry_time": 1001,
+                "close_time": 1100,
+                "pnl": 42.5,
+                "pnl_pct": 170,
+            })
+            rows = store.recent_decisions(limit=10)
+            counts = store.counts()
+
+        self.assertEqual(decision_id, "dec_test_1")
+        self.assertEqual(counts["decision_records"], 1)
+        self.assertEqual(rows[0]["mint"], "Mint111")
+        self.assertEqual(rows[0]["final_action"], "paper_opened")
+        self.assertEqual(rows[0]["trade_status"], "closed")
+        self.assertEqual(rows[0]["pnl"], 42.5)
+        self.assertTrue(rows[0]["buy_quote_pass"])
+        self.assertEqual(rows[0]["payload"]["action"]["final_action"], "paper_opened")
+        self.assertEqual(rows[0]["result"]["pnl_pct"], 170)
+
+    def test_trade_result_preserves_decision_outcome_fields(self):
+        result = build_trade_result({
+            "mint": "Mint111",
+            "status": "closed",
+            "entry_time": 100,
+            "close_time": 200,
+            "total_pnl": 12.25,
+            "total_pnl_pct": 49,
+            "exit_reason": "trailing_stop",
+            "signal_metadata": {"decision_id": "dec_test_2"},
+        }, "paper_exit_closed")
+
+        self.assertEqual(result["context"], "paper_exit_closed")
+        self.assertEqual(result["trade_status"], "closed")
+        self.assertEqual(result["pnl"], 12.25)
+        self.assertEqual(result["pnl_pct"], 49)
+        self.assertEqual(result["exit_reason"], "trailing_stop")
+
     def test_event_store_records_swap_ticks_for_trade_stream_candles(self):
         with TemporaryDirectory() as tmp:
             store = EventStore(Path(tmp) / "memetrader.db")

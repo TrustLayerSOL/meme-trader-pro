@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 
 
@@ -109,6 +110,37 @@ class EventStore:
                     payload_json TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS decision_records (
+                    decision_id TEXT PRIMARY KEY,
+                    created_at REAL,
+                    updated_at REAL,
+                    mint TEXT,
+                    signal_type TEXT,
+                    scanner_stage TEXT,
+                    final_action TEXT,
+                    action_reason TEXT,
+                    paper_lane TEXT,
+                    should_trade INTEGER,
+                    total_score REAL,
+                    threshold REAL,
+                    edge_score REAL,
+                    edge_verdict TEXT,
+                    risk_label TEXT,
+                    risk_score REAL,
+                    buy_quote_pass INTEGER,
+                    sell_quote_pass INTEGER,
+                    position_size_usd REAL,
+                    trade_id TEXT,
+                    trade_status TEXT,
+                    entry_time REAL,
+                    close_time REAL,
+                    pnl REAL,
+                    pnl_pct REAL,
+                    payload_json TEXT,
+                    result_json TEXT
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_mint ON events(mint)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_mint ON alerts(mint)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_edge ON alerts(edge_score)")
@@ -119,6 +151,9 @@ class EventStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_swap_ticks_mint_time ON swap_ticks(mint, time)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_swap_ticks_mint_time_id_desc ON swap_ticks(mint, time DESC, id DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_swap_ticks_time ON swap_ticks(time)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_decision_records_mint ON decision_records(mint)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_decision_records_updated ON decision_records(updated_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_decision_records_action ON decision_records(final_action, paper_lane)")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_swap_ticks_signature
@@ -323,6 +358,162 @@ class EventStore:
             )
         return cursor.rowcount > 0
 
+    def upsert_decision(self, decision):
+        decision = decision if isinstance(decision, dict) else {}
+        decision_id = decision.get("decision_id") or f"dec_{uuid.uuid4().hex}"
+        now = time.time()
+        created_at = self.safe_float(decision.get("created_at")) or now
+        updated_at = self.safe_float(decision.get("updated_at")) or now
+        payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else decision
+
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO decision_records (
+                    decision_id, created_at, updated_at, mint, signal_type,
+                    scanner_stage, final_action, action_reason, paper_lane,
+                    should_trade, total_score, threshold, edge_score, edge_verdict,
+                    risk_label, risk_score, buy_quote_pass, sell_quote_pass,
+                    position_size_usd, trade_id, trade_status, entry_time,
+                    close_time, pnl, pnl_pct, payload_json, result_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(decision_id) DO UPDATE SET
+                    updated_at=excluded.updated_at,
+                    mint=excluded.mint,
+                    signal_type=excluded.signal_type,
+                    scanner_stage=excluded.scanner_stage,
+                    final_action=excluded.final_action,
+                    action_reason=excluded.action_reason,
+                    paper_lane=excluded.paper_lane,
+                    should_trade=excluded.should_trade,
+                    total_score=excluded.total_score,
+                    threshold=excluded.threshold,
+                    edge_score=excluded.edge_score,
+                    edge_verdict=excluded.edge_verdict,
+                    risk_label=excluded.risk_label,
+                    risk_score=excluded.risk_score,
+                    buy_quote_pass=excluded.buy_quote_pass,
+                    sell_quote_pass=excluded.sell_quote_pass,
+                    position_size_usd=excluded.position_size_usd,
+                    payload_json=excluded.payload_json
+                """,
+                (
+                    decision_id,
+                    created_at,
+                    updated_at,
+                    decision.get("mint"),
+                    decision.get("signal_type"),
+                    decision.get("scanner_stage"),
+                    decision.get("final_action"),
+                    decision.get("action_reason"),
+                    decision.get("paper_lane"),
+                    self.safe_bool_int(decision.get("should_trade")),
+                    self.safe_float(decision.get("total_score")),
+                    self.safe_float(decision.get("threshold")),
+                    self.safe_float(decision.get("edge_score")),
+                    decision.get("edge_verdict"),
+                    decision.get("risk_label"),
+                    self.safe_float(decision.get("risk_score")),
+                    self.safe_bool_int(decision.get("buy_quote_pass")),
+                    self.safe_bool_int(decision.get("sell_quote_pass")),
+                    self.safe_float(decision.get("position_size_usd")),
+                    decision.get("trade_id"),
+                    decision.get("trade_status"),
+                    self.safe_float(decision.get("entry_time")),
+                    self.safe_float(decision.get("close_time")),
+                    self.safe_float(decision.get("pnl")),
+                    self.safe_float(decision.get("pnl_pct")),
+                    json.dumps(payload, default=str),
+                    json.dumps(decision.get("result"), default=str) if decision.get("result") is not None else None,
+                ),
+            )
+        return decision_id
+
+    def update_decision_action(self, decision_id, action):
+        if not decision_id:
+            return False
+        action = action if isinstance(action, dict) else {}
+        now = time.time()
+        with self.connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT payload_json FROM decision_records WHERE decision_id = ?",
+                (decision_id,),
+            ).fetchone()
+            if not row:
+                return False
+            payload = self.parse_json(row["payload_json"], {})
+            payload.setdefault("action", {}).update(action)
+            cursor = conn.execute(
+                """
+                UPDATE decision_records
+                SET updated_at = ?,
+                    scanner_stage = COALESCE(?, scanner_stage),
+                    final_action = COALESCE(?, final_action),
+                    action_reason = COALESCE(?, action_reason),
+                    paper_lane = COALESCE(?, paper_lane),
+                    position_size_usd = COALESCE(?, position_size_usd),
+                    payload_json = ?
+                WHERE decision_id = ?
+                """,
+                (
+                    now,
+                    action.get("scanner_stage"),
+                    action.get("final_action"),
+                    action.get("action_reason") or action.get("reason"),
+                    action.get("paper_lane"),
+                    self.safe_float(action.get("position_size_usd")),
+                    json.dumps(payload, default=str),
+                    decision_id,
+                ),
+            )
+        return cursor.rowcount > 0
+
+    def update_decision_result(self, decision_id, result):
+        if not decision_id:
+            return False
+        result = result if isinstance(result, dict) else {}
+        now = time.time()
+        with self.connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT payload_json FROM decision_records WHERE decision_id = ?",
+                (decision_id,),
+            ).fetchone()
+            if not row:
+                return False
+            payload = self.parse_json(row["payload_json"], {})
+            payload["result"] = result
+            cursor = conn.execute(
+                """
+                UPDATE decision_records
+                SET updated_at = ?,
+                    trade_id = COALESCE(?, trade_id),
+                    trade_status = COALESCE(?, trade_status),
+                    entry_time = COALESCE(?, entry_time),
+                    close_time = COALESCE(?, close_time),
+                    pnl = COALESCE(?, pnl),
+                    pnl_pct = COALESCE(?, pnl_pct),
+                    payload_json = ?,
+                    result_json = ?
+                WHERE decision_id = ?
+                """,
+                (
+                    now,
+                    result.get("trade_id"),
+                    result.get("trade_status") or result.get("status"),
+                    self.safe_float(result.get("entry_time")),
+                    self.safe_float(result.get("close_time")),
+                    self.safe_float(result.get("pnl")),
+                    self.safe_float(result.get("pnl_pct")),
+                    json.dumps(payload, default=str),
+                    json.dumps(result, default=str),
+                    decision_id,
+                ),
+            )
+        return cursor.rowcount > 0
+
     def counts(self):
         with self.connect() as conn:
             return {
@@ -332,6 +523,7 @@ class EventStore:
                 "watchlist": conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0],
                 "token_snapshots": conn.execute("SELECT COUNT(*) FROM token_snapshots").fetchone()[0],
                 "swap_ticks": conn.execute("SELECT COUNT(*) FROM swap_ticks").fetchone()[0],
+                "decision_records": conn.execute("SELECT COUNT(*) FROM decision_records").fetchone()[0],
             }
 
     def recent_events(self, limit=25):
@@ -431,6 +623,43 @@ class EventStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def recent_decisions(self, limit=50, mint=None):
+        limit = self.safe_limit(limit, default=50, maximum=500)
+        where = ""
+        params = []
+        if mint:
+            where = "WHERE mint = ?"
+            params.append(mint)
+        params.append(limit)
+        with self.connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"""
+                SELECT decision_id, created_at, updated_at, mint, signal_type,
+                       scanner_stage, final_action, action_reason, paper_lane,
+                       should_trade, total_score, threshold, edge_score,
+                       edge_verdict, risk_label, risk_score, buy_quote_pass,
+                       sell_quote_pass, position_size_usd, trade_id,
+                       trade_status, entry_time, close_time, pnl, pnl_pct,
+                       payload_json, result_json
+                FROM decision_records
+                {where}
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        decisions = []
+        for row in rows:
+            item = dict(row)
+            item["should_trade"] = bool(item["should_trade"])
+            item["buy_quote_pass"] = self.bool_from_db(item["buy_quote_pass"])
+            item["sell_quote_pass"] = self.bool_from_db(item["sell_quote_pass"])
+            item["payload"] = self.parse_json(item.pop("payload_json"), {})
+            item["result"] = self.parse_json(item.pop("result_json"), None)
+            decisions.append(item)
+        return decisions
+
     def top_alert_mints(self, limit=15):
         limit = self.safe_limit(limit)
         with self.connect() as conn:
@@ -475,6 +704,24 @@ class EventStore:
             return float(value)
         except Exception:
             return None
+
+    def safe_bool_int(self, value):
+        if value is None:
+            return None
+        return 1 if bool(value) else 0
+
+    def bool_from_db(self, value):
+        if value is None:
+            return None
+        return bool(value)
+
+    def parse_json(self, value, default):
+        try:
+            if value in [None, ""]:
+                return default
+            return json.loads(value)
+        except Exception:
+            return default
 
     def safe_limit(self, value, default=25, maximum=250):
         try:

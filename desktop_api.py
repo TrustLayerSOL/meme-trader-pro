@@ -266,7 +266,7 @@ def build_freshness_payload():
 
 
 def safe_sqlite_counts():
-    tables = ("events", "alerts", "trades", "watchlist", "token_snapshots", "swap_ticks")
+    tables = ("events", "alerts", "trades", "watchlist", "token_snapshots", "swap_ticks", "decision_records")
     counts = {table: 0 for table in tables}
     if not DB_FILE.exists():
         return counts
@@ -1203,6 +1203,93 @@ def fetch_event_rows(limit=120):
             "payload": payload,
         })
     return parsed
+
+
+def fetch_decision_rows(limit=80, mint=None):
+    if not DB_FILE.exists():
+        return []
+    where = ""
+    params = []
+    if mint:
+        where = "WHERE mint = ?"
+        params.append(mint)
+    params.append(int(limit))
+    try:
+        conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""
+            SELECT decision_id, created_at, updated_at, mint, signal_type,
+                   scanner_stage, final_action, action_reason, paper_lane,
+                   should_trade, total_score, threshold, edge_score,
+                   edge_verdict, risk_label, risk_score, buy_quote_pass,
+                   sell_quote_pass, position_size_usd, trade_id,
+                   trade_status, entry_time, close_time, pnl, pnl_pct,
+                   payload_json, result_json
+            FROM decision_records
+            {where}
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    decisions = []
+    for row in rows:
+        decisions.append({
+            "decision_id": row["decision_id"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "age_seconds": age_seconds(row["updated_at"]),
+            "mint": row["mint"],
+            "signal_type": row["signal_type"],
+            "scanner_stage": row["scanner_stage"],
+            "final_action": row["final_action"],
+            "action_reason": row["action_reason"],
+            "paper_lane": row["paper_lane"],
+            "should_trade": bool(row["should_trade"]),
+            "total_score": row["total_score"],
+            "threshold": row["threshold"],
+            "edge_score": row["edge_score"],
+            "edge_verdict": row["edge_verdict"],
+            "risk_label": row["risk_label"],
+            "risk_score": row["risk_score"],
+            "buy_quote_pass": bool(row["buy_quote_pass"]) if row["buy_quote_pass"] is not None else None,
+            "sell_quote_pass": bool(row["sell_quote_pass"]) if row["sell_quote_pass"] is not None else None,
+            "position_size_usd": row["position_size_usd"],
+            "trade_id": row["trade_id"],
+            "trade_status": row["trade_status"],
+            "entry_time": row["entry_time"],
+            "close_time": row["close_time"],
+            "pnl": row["pnl"],
+            "pnl_pct": row["pnl_pct"],
+            "payload": parse_payload_json(row["payload_json"]),
+            "result": parse_payload_json(row["result_json"]) if row["result_json"] else None,
+        })
+    return decisions
+
+
+def build_decisions_payload(limit=80, mint=None):
+    items = fetch_decision_rows(limit=limit, mint=mint)
+    counts = {}
+    for item in items:
+        key = item.get("final_action") or "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        "generated_at": time.time(),
+        "source": "decision_records",
+        "live_execution_locked": True,
+        "count": len(items),
+        "counts": counts,
+        "items": items,
+    }
 
 
 def fetch_event_metadata(mints):
@@ -2404,6 +2491,10 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/candidates":
         limit = parse_int_query(query, "limit", 80, 1, 250)
         return json_response(build_candidate_feed_payload(limit=limit))
+    if path == "/api/decisions":
+        limit = parse_int_query(query, "limit", 80, 1, 250)
+        mint = path_param((query.get("mint") or [""])[0]) or None
+        return json_response(build_decisions_payload(limit=limit, mint=mint))
     if path == "/api/events":
         limit = parse_int_query(query, "limit", 120, 1, 500)
         return json_response(build_event_feed_payload(limit=limit))

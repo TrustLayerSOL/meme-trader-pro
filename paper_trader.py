@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 
 from core.json_store import locked_update_json
+from core.decision_ledger import build_trade_result
 from execution.execution_engine import ExecutionEngine
 from core.wallet_performance import WalletPerformanceTracker
 from core.exit_advisor import ExitAdvisor
@@ -277,6 +278,30 @@ class PaperTrader:
         except Exception as exc:
             print("⚠️ Paper trade snapshot write failed:", exc)
 
+        decision_id = signal_metadata.get("decision_id")
+        if decision_id:
+            try:
+                final_action = {
+                    "paper_entry_opened": "paper_opened",
+                    "paper_entry_failed": "paper_failed",
+                    "paper_partial_exit": "paper_partial_exit",
+                    "paper_exit_closed": "paper_closed",
+                    "paper_price_update": "paper_monitor",
+                }.get(context)
+                if final_action:
+                    self.store.update_decision_action(decision_id, {
+                        "scanner_stage": extra.get("decision_stage") if isinstance(extra, dict) else context,
+                        "final_action": final_action,
+                        "reason": trade.get("failure_reason") or trade.get("exit_reason") or trade.get("close_reason") or context,
+                        "paper_lane": trade.get("paper_lane") or signal_metadata.get("paper_lane"),
+                    })
+                self.store.update_decision_result(
+                    decision_id,
+                    build_trade_result(trade, context, extra),
+                )
+            except Exception as exc:
+                print("⚠️ Decision result update failed:", exc)
+
     def apply_trade_aliases(self, trade):
         if not isinstance(trade, dict):
             return trade
@@ -413,6 +438,17 @@ class PaperTrader:
         existing = self.find_open_trade(mint)
         if existing:
             print("⚠️ Trade already open:", mint)
+            decision_id = (signal_metadata or {}).get("decision_id")
+            if decision_id:
+                try:
+                    self.store.update_decision_action(decision_id, {
+                        "scanner_stage": "paper_trade_precheck",
+                        "final_action": "duplicate_open",
+                        "reason": "trade_already_open",
+                        "paper_lane": paper_lane or "main",
+                    })
+                except Exception as exc:
+                    print("⚠️ Decision duplicate-open update failed:", exc)
             return existing
 
         result = self.engine.simulate_buy_fill(

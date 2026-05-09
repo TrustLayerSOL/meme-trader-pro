@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 ## Legend
 
@@ -10,9 +10,9 @@ Last updated: 2026-05-08
 
 ## Current Working Section
 
-<mark>Active roadmap area: Phase 9 - Pro Double-Click GUI.</mark>
+<mark>Active roadmap area: Phase 2 / Phase 7 - Canonical Decision Ledger and measurable paper edge.</mark>
 
-<mark>Current focus: Pro GUI cleanup pass - finish the trade-stream candle pipeline, stabilize desktop launch/session ownership, remove dead prototype controls, and make Social / Tweet import usable from the desktop app.</mark>
+<mark>Current focus: Make the decision ledger the product backbone: every candidate should have one structured record covering signal inputs, risk/quote checks, final action, and later paper outcome. GUI work should expose this clearly instead of adding more disconnected panels.</mark>
 
 ## Product Goal
 
@@ -47,6 +47,11 @@ The project already has the core shape of a local trading cockpit:
 - [x] Native/static desktop Portfolio view surfaces total paper PnL plus readable open, closed, and failed trade ledgers with clickable trade detail cards.
 - [x] Native/static desktop Portfolio view includes Winner Pattern Review for comparing big winners against losers.
 - [~] Native GUI/API hardening has started: arbitrary localhost browser origins are blocked, unsafe token image URLs are rejected, desktop metadata POSTs require the session token when active, double-click now opens the packaged Tauri app when available, and the desktop shell now verifies the saved session token belongs to the currently running API process.
+
+Current strategic correction:
+
+- [~] The next leverage point is not more feature breadth. It is measurement: a canonical decision ledger that records every token candidate, why it passed/failed, whether it entered main or exploration paper mode, and what happened afterward. The first SQLite/API/static-GUI foundation is now started.
+- [ ] Live/rug protection must be split into fast pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection. The existing watchdog should not be treated as a sub-second rug-rescue system.
 
 ## Operating Principles
 
@@ -119,18 +124,21 @@ Deliverables:
 - [x] Owner-only permission enforcement for `.env` and SQLite DB/WAL/SHM files.
 - [~] Lock-backed JSON writes for key runtime state; paper trades, wallet performance, settings, candidate ledger, social imports, runtime status, and watchlist now use locked/atomic paths.
 - [x] Open paper trades dedupe by active mint during locked state merges to reduce duplicate bot-instance opens.
+- [~] Canonical decision ledger schema for every candidate: detected token, wallet/social inputs, token/holder/mechanics risk, quote/liquidity checks, rule outcomes, final action, and later paper/live-safe result.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
 Acceptance criteria:
 
 - No important decision exists only in memory.
+- Every candidate has one durable decision record with machine-readable reason codes, not only prose.
 - Dashboard and analysis tools read from known canonical sources.
 - Stale, missing, or malformed state files are surfaced in the UI.
 
 Next actions:
 
-- Keep tightening runtime/process controls after watchdog loop and backend lifecycle work.
+- Continue wiring `core/decision_ledger.py` and SQLite-backed decision records before adding more disconnected GUI panels.
+- Harden scanner skips, main paper entries, exploration entries, failed buys, exits, and postmortems around `decision_id`.
 - Choose the canonical source of truth for each data class.
 - Define minimum SQLite tables and backfill existing JSON.
 
@@ -155,6 +163,7 @@ Deliverables:
 Acceptance criteria:
 
 - Every paper trade includes entry reason, source wallets/signals, token risk result, quote result, size, simulated fill assumptions, and exit reason.
+- Every paper trade links back to the candidate decision that created it.
 - The bot can run for a meaningful sample without live execution.
 - The user can inspect why a promising candidate was rejected.
 
@@ -165,7 +174,8 @@ Next actions:
 - Use lane-specific readiness only; do not let exploration volume make the main strategy look validated.
 - Harden native candidate filters for scanner skip/entry and paper lifecycle snapshot contexts.
 - Split desktop API routing/projectors into smaller modules before adding more mutation surfaces.
-- Build the candidate/catalyst-card ledger from signal, social, wallet, risk, quote, and paper-result records.
+- Build the canonical decision ledger from signal, social, wallet, risk, quote, and paper-result records.
+- Add lane-separated paper reports from decision records: main, exploration, protected/manual.
 - Backtest confirmation rules from `research/STRATEGY_RESEARCH.md`.
 
 ## Phase 4 - Wallet Intelligence
@@ -242,6 +252,12 @@ Next actions:
 
 Goal: protect manual Axiom or external trades by watching the token after the user pastes a mint.
 
+Important architecture split:
+
+- Pre-entry rejection is the primary rug defense. Dangerous mechanics, broken sell route, hostile holder concentration, weak liquidity, and bad dev/wallet behavior should block entry before capital is exposed.
+- Fast open-position monitoring should be lightweight and focused on already-owned/paper-open tokens: price, liquidity, market cap, quote degradation, drawdown, and exit-rule state on roughly 1-second cadence when API limits permit.
+- Deep watchdog inspection can remain slower because it performs heavier mint, holder, mechanics, balance, and prepared-exit checks. It is useful for context, alerts, manual protection, and postmortems, but it should not be represented as sub-second rug rescue.
+
 Deliverables:
 
 - [x] Manual watchlist data file.
@@ -252,6 +268,7 @@ Deliverables:
 - [x] Protected mints have explicit alert levels: info, warning, danger, emergency.
 - [x] Dashboard protected-position cards show alert counts, last-check age, mechanics risk, extensions, auto-sell lock state, and metrics.
 - [~] Real watchdog loop with visible status, last-check timestamps, and stale-run overwrite protection.
+- [ ] Fast open-position monitor separated from deep watchdog inspection.
 - [~] Exit advisor for protected positions.
 - [x] Prepared sell intent in paper/simulation mode.
 - [x] Watchdog preserves operator-owned manual protection fields during background checks.
@@ -267,11 +284,13 @@ Acceptance criteria:
 
 - User can paste a token mint, see it appear in the watchlist, and see current risk/protection state.
 - Watchdog evaluates liquidity drain, dev/top-holder sells, route degradation, price impact explosion, and severe drawdown.
+- Open-position monitor handles fast lightweight price/liquidity/quote degradation checks without waiting for deep token inspection.
 - Alerts are written to durable state and visible in the dashboard.
 - Auto-sell controls are clearly gated and cannot fire accidentally.
 
 Next actions:
 
+- Define and implement the fast monitor vs deep watchdog boundary.
 - Continue hardening continuous watchdog lifecycle and launcher/process controls.
 - Add locked persistence for paper trade and wallet performance writes.
 - Keep auto-sell disabled until explicit live sell gates, audit records, and kill-switch behavior are complete.
@@ -293,12 +312,13 @@ Deliverables:
 Acceptance criteria:
 
 - User can review what the bot saw, what it did, and what happened afterward.
+- Candidate review reads from the canonical decision ledger, not scattered scanner/paper/watchdog files.
 - Postmortems include entry quality, risk flags, wallet source quality, exit quality, and missed-exit notes.
 - Replay can compare current rules against historical candidates without touching live state.
 
 Next actions:
 
-- Add candidate ledger views to dashboard.
+- Add decision-ledger views to dashboard/desktop GUI.
 - Build daily summary from alerts, trades, watchdog events, and wallet performance.
 - Define replay input/output schema.
 
@@ -320,6 +340,7 @@ Deliverables:
 Acceptance criteria before live trading:
 
 - Paper strategy has a meaningful sample with acceptable drawdown and failure analysis.
+- Paper evidence comes from lane-separated decision-ledger records, not raw trade counts alone.
 - Every live order passes execution safety, token risk, quote, slippage, price impact, and size gates.
 - Live mode requires deliberate user confirmation and visible armed/disarmed state.
 - Kill switch can stop new buys immediately.
@@ -443,6 +464,8 @@ Next actions:
 - Manual protection starts alert-only/paper-exit-first; real auto-sell is future gated work.
 - Live execution must be explicitly armed and safety-gated.
 - Open-source Solana/meme bot repos are reference material only; reimplement useful ideas cleanly instead of cloning whole repos.
+- The watchdog is not the primary defense against instant rugs. Fast rejection before entry and lightweight open-position monitoring are required before any live execution work.
+- The GUI should expose the canonical decision pipeline; it should not create separate logic or separate truth.
 
 ## Assumptions
 
@@ -456,6 +479,7 @@ Next actions:
 
 - Stale or split state can make the dashboard show misleading counts or missing trades.
 - Token collapses can happen faster than a polling watchdog can react; high-risk mechanics should be rejected before entry.
+- Slow watchdog checks can create false confidence if displayed as real-time protection. Label fast monitor state and deep watchdog state separately.
 - Wallets can be copy-bait or exit into followers; wallet promotion needs paper evidence.
 - Live execution before enough paper evidence could lose real funds quickly.
 - Overbuilding UI before canonical data is settled can create duplicated logic and confusion.
@@ -463,28 +487,18 @@ Next actions:
 
 ## Near-Term Priority Stack
 
-- [x] Data source map for dashboard and bot state.
+- [~] Canonical decision ledger: every candidate gets one structured decision record.
+- [~] Scanner skip/main-entry/exploration-entry writes route through the ledger.
+- [~] Paper trade open/failed/exit records link back to `decision_id`.
+- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed.
+- [ ] Fast open-position monitor boundary separated from deep watchdog inspection.
+- [ ] Holder concentration / linked-cluster risk wired into candidate decision records.
+- [ ] Lane-separated paper reports from decision records: main vs exploration vs protected/manual.
+- [ ] Live-readiness thresholds defined from decision-ledger metrics.
+- [ ] GUI cleanup continues only where it exposes canonical state clearly.
 - [x] Runtime health and per-source freshness indicators.
-- [~] Manual protection watchdog status and alert levels.
-- [x] Prepared paper/simulation exits for protected manual positions.
 - [x] Quote-feasibility metadata for prepared protection exits.
-- [x] Watchdog timeout hardening.
-- [x] Manual protected-token amount capture for true sell-route checks.
-- [x] Wallet-balance lookup for protected/manual positions.
 - [x] Native protected-position exit readiness checklist distinguishes wallet-owned, manual, simulated/test, quote-feasible, and locked live-action states.
-- [~] Holder concentration and linked-cluster checks.
-- [x] Token performance snapshots for entries, skips, exits, and watchdog checks.
-- [x] Data Store filters for token snapshot contexts.
-- [ ] Paper trade field completeness and dashboard rendering.
-- [~] Skipped-candidate/catalyst ledger with reasons.
-- [x] Catalyst-card JSON generator from token snapshots and paper outcomes.
-- [~] Catalyst cards surfaced in review UI.
-- [x] Local/manual social signal ingestion and dashboard import UI.
-- [~] Token mechanics/risk snapshot stored with every decision.
-- [ ] Wallet promotion/demotion thresholds.
-- [ ] Paper-performance threshold for considering live execution.
-- [~] Deterministic unit-test suite for safety-critical pure logic.
-- [~] Atomic state write / persistence hardening.
 
 ## Change Log
 

@@ -40,13 +40,14 @@ export async function loadCoreState() {
     getJson("/api/overview"),
     getJson("/api/positions"),
   ]);
-  const [trades, watchlist, social, catalysts, readiness, winnerPatterns] = await Promise.all([
+  const [trades, watchlist, social, catalysts, readiness, winnerPatterns, decisions] = await Promise.all([
     getJson("/api/trades"),
     getJson("/api/watchlist"),
     getJson("/api/social"),
     getJson("/api/catalyst-cards"),
     getJson("/api/readiness"),
     getJson("/api/winner-patterns"),
+    getJson("/api/decisions?limit=80"),
   ]);
   return {
     overview,
@@ -57,6 +58,7 @@ export async function loadCoreState() {
     catalysts,
     readiness,
     winnerPatterns,
+    decisions,
   };
 }
 

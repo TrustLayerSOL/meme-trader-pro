@@ -23,6 +23,7 @@ const state = {
   catalysts: null,
   readiness: null,
   winnerPatterns: null,
+  decisions: null,
   selectedDetail: null,
   loadingToken: false,
   chartMetric: "market_cap",

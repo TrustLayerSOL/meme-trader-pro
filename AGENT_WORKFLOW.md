@@ -10,6 +10,13 @@ MemeTraderPro is a local Solana meme coin trading cockpit. The product direction
 
 Agents should make the system safer, clearer, more reliable, and more professional. Do not chase hype features at the expense of risk controls.
 
+Current project priority:
+
+- Treat measurable decision quality as the product backbone.
+- Prefer canonical decision-ledger work over adding disconnected GUI panels.
+- Separate pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection.
+- Do not describe the slow watchdog as sub-second rug protection.
+
 ## Lead Agent Mandate
 
 The main Codex agent is the lead agent for this project only.
@@ -188,6 +195,8 @@ Use the smallest check that proves the changed area still works.
 Favor work that improves:
 
 - risk recognition,
+- canonical candidate decision records,
+- lane-separated paper evidence,
 - explainable skipped candidates,
 - paper-trade evidence,
 - wallet reputation,

@@ -782,6 +782,25 @@ function selectedTradeCards(openTrades) {
 }
 
 function renderReplayPanel(state) {
+  const decisions = state.decisions || {};
+  const decisionRows = decisions.items || [];
+  if (decisionRows.length) {
+    $("intel-grid").innerHTML = `
+      <div class="intel-card trade-detail-section">
+        <div class="trade-detail-title">
+          <span>
+            <strong>Decision Ledger</strong>
+            <small>${escapeHtml(decisions.count || decisionRows.length)} recent records | canonical candidate audit trail</small>
+          </span>
+          <b>LOCKED</b>
+        </div>
+        <div class="ledger-list">
+          ${decisionRows.slice(0, 30).map(decisionRow).join("")}
+        </div>
+      </div>
+    `;
+    return;
+  }
   const trades = state.trades || {};
   const closed = trades.closed_trades || [];
   const failed = trades.failed_trades || [];
@@ -793,6 +812,28 @@ function renderReplayPanel(state) {
       <p>PNL ${pct(trade.total_pnl_pct || trade.pnl_pct)} | ${escapeHtml(trade.exit_reason || trade.failure_reason || trade.status || "recorded")}</p>
     </div>
   `).join("") || `<div class="intel-card"><strong>No replay records</strong><p>Closed or failed paper trades will appear here.</p></div>`;
+}
+
+function decisionRow(decision) {
+  return `
+    <div class="ledger-row decision-row">
+      <span>
+        <strong>${escapeHtml(shortMint(decision.mint))}</strong>
+        <small>${escapeHtml(decision.signal_type || "-")} | ${escapeHtml(decision.paper_lane || "-")}</small>
+      </span>
+      <span><small>Action</small><strong>${escapeHtml(decision.final_action || "-")}</strong></span>
+      <span><small>Score</small><strong>${escapeHtml(decision.total_score ?? "-")}</strong></span>
+      <span><small>Risk</small><strong>${escapeHtml(decision.risk_label || "-")}</strong></span>
+      <span><small>Quotes</small><strong>${quotePair(decision)}</strong></span>
+      <span><small>Reason</small><strong>${escapeHtml(decision.action_reason || "-")}</strong></span>
+    </div>
+  `;
+}
+
+function quotePair(decision) {
+  const buy = decision.buy_quote_pass === true ? "B+" : decision.buy_quote_pass === false ? "B-" : "B?";
+  const sell = decision.sell_quote_pass === true ? "S+" : decision.sell_quote_pass === false ? "S-" : "S?";
+  return `${buy}/${sell}`;
 }
 
 function renderPositionsPanel(state) {
