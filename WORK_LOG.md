@@ -75,6 +75,48 @@ Why this matters:
 
 ## Completed Work
 
+### 2026-05-09 - Runtime SQLite Store Rebuilt
+
+Changed files:
+
+- `WORK_LOG.md`
+
+Runtime state actions:
+
+- Stopped active DB writers before touching the SQLite files:
+  - paper bot,
+  - protection watchdog,
+  - wallet discovery scheduler,
+  - desktop API.
+- Preserved the unreadable runtime SQLite files under `data/archives/runtime_db_20260509_160203/`.
+- Created a fresh `data/memetrader.db` using the current `EventStore` schema.
+- Backfilled safely recoverable JSON state into SQLite:
+  - paper trades,
+  - live events/alerts,
+  - manual watchlist.
+- Restarted the desktop API, paper bot, protection watchdog, and wallet discovery scheduler.
+
+Verification:
+
+- `PRAGMA integrity_check` returns `ok`.
+- Desktop API `/api/readiness` reports SQLite store OK.
+- Desktop API `/api/decisions` is available.
+- Runtime components are fresh except quote heartbeat, which is currently WARN/stale.
+- Rebuilt SQLite counts after restart:
+  - events: 570,
+  - alerts: 36,
+  - trades: 13,
+  - watchlist: 1,
+  - token snapshots: 74,
+  - swap ticks: 228,
+  - decision records: 4.
+
+Remaining:
+
+- The old SQLite file was not readable, so historical token snapshots, swap ticks, and decision records inside that old file were not recovered.
+- The decision ledger will repopulate from new scanner decisions going forward.
+- Quote heartbeat remains the only runtime warning to inspect if it does not refresh naturally.
+
 ### 2026-05-09 - Decision Ledger Filters And Detail
 
 Changed files:
