@@ -14,6 +14,7 @@ import main as bot_main
 from core.storage import EventStore
 from core.decision_ledger import build_decision_record, build_trade_result
 from core import settings_manager
+from core import rug_watchdog
 from core.catalyst_cards import build_catalyst_cards_from_snapshots
 from core.holder_concentration import analyze_holder_concentration
 from core.protection_exit import ProtectionExitPlanner
@@ -52,6 +53,7 @@ from core.wallet_discovery_scheduler import run_wallet_discovery_cycle
 from core.wallet_behavior import build_wallet_behavior_report
 from core.scanner import Scanner
 from infra.rpc_client import SolanaRPC
+from social.reddit_collector import collect_reddit_social, reddit_post_to_signal
 from social.social_signal import SocialSignalEngine
 
 
@@ -89,6 +91,9 @@ class RecordingStore:
     def __init__(self):
         self.snapshots = []
         self.swap_ticks = []
+        self.decisions = []
+        self.decision_actions = []
+        self.decision_results = []
 
     def upsert_trade(self, trade):
         return None
@@ -100,11 +105,17 @@ class RecordingStore:
         self.swap_ticks.append(tick)
         return True
 
+    def upsert_decision(self, decision):
+        self.decisions.append(decision)
+        return decision.get("decision_id")
+
     def update_decision_action(self, decision_id, action):
-        return None
+        self.decision_actions.append({"decision_id": decision_id, "action": action})
+        return True
 
     def update_decision_result(self, decision_id, result):
-        return None
+        self.decision_results.append({"decision_id": decision_id, "result": result})
+        return True
 
 
 class NoopWalletPerformance:
@@ -460,6 +471,268 @@ class WalletLifecycleTests(unittest.TestCase):
         self.assertEqual(rpc.scanner.wallet_source("Watch222"), "paper_watch")
         self.assertEqual(len(websocket.sent), 1)
         self.assertEqual(websocket.sent[0]["params"][0]["mentions"], ["Watch222"])
+
+
+class SolanaRpcPressureTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.update_patch = mock.patch("infra.rpc_client.update_component")
+        self.increment_patch = mock.patch("infra.rpc_client.increment_component")
+        self.update_patch.start()
+        self.increment_patch.start()
+
+    async def asyncTearDown(self):
+        self.increment_patch.stop()
+        self.update_patch.stop()
+
+    async def test_get_transaction_dedupes_concurrent_same_signature_fetches(self):
+        rpc = SolanaRPC(["Tracked111"])
+        rpc.transaction_min_interval = 0
+        calls = []
+
+        async def fake_rpc_call(method, params):
+            calls.append((method, params[0]))
+            await asyncio.sleep(0.01)
+            return {"result": {"slot": 123, "signature": params[0]}}
+
+        rpc.rpc_call = fake_rpc_call
+
+        results = await asyncio.gather(
+            rpc.get_transaction("Sig111"),
+            rpc.get_transaction("Sig111"),
+            rpc.get_transaction("Sig111"),
+        )
+
+        self.assertEqual(calls, [("getTransaction", "Sig111")])
+        self.assertEqual([result["result"]["signature"] for result in results], ["Sig111", "Sig111", "Sig111"])
+
+    async def test_get_transaction_reuses_cached_result(self):
+        rpc = SolanaRPC(["Tracked111"])
+        rpc.transaction_min_interval = 0
+        calls = []
+
+        async def fake_rpc_call(method, params):
+            calls.append((method, params[0]))
+            return {"result": {"slot": len(calls), "signature": params[0]}}
+
+        rpc.rpc_call = fake_rpc_call
+
+        first = await rpc.get_transaction("SigCached")
+        second = await rpc.get_transaction("SigCached")
+
+        self.assertEqual(first, second)
+        self.assertEqual(calls, [("getTransaction", "SigCached")])
+
+    async def test_get_transaction_paces_different_signature_fetches(self):
+        rpc = SolanaRPC(["Tracked111"])
+        rpc.transaction_min_interval = 0.02
+        starts = []
+
+        async def fake_rpc_call(method, params):
+            starts.append(asyncio.get_running_loop().time())
+            return {"result": {"signature": params[0]}}
+
+        rpc.rpc_call = fake_rpc_call
+
+        await asyncio.gather(
+            rpc.get_transaction("SigA"),
+            rpc.get_transaction("SigB"),
+        )
+
+        self.assertEqual(len(starts), 2)
+        self.assertGreaterEqual(starts[1] - starts[0], 0.015)
+
+    async def test_enqueue_or_drop_message_drops_when_backlog_is_full(self):
+        rpc = SolanaRPC(["Tracked111"])
+        rpc.max_event_backlog = 1
+        blocker = asyncio.create_task(asyncio.sleep(1))
+        rpc.active_tasks.add(blocker)
+
+        with mock.patch.object(rpc, "handle_message_fast") as handle_message:
+            task = await rpc.enqueue_or_drop_message("{}")
+
+        blocker.cancel()
+        rpc.active_tasks.discard(blocker)
+        self.assertIsNone(task)
+        handle_message.assert_not_called()
+
+    def test_subscription_ack_maps_subscription_to_wallet(self):
+        rpc = SolanaRPC(["Tracked111"])
+        rpc.pending_subscription_wallets[7] = "Tracked111"
+
+        handled = rpc.handle_subscription_ack(json.dumps({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": 42,
+        }))
+
+        self.assertTrue(handled)
+        self.assertEqual(rpc.subscription_wallets[42], "Tracked111")
+        self.assertNotIn(7, rpc.pending_subscription_wallets)
+
+    async def test_enqueue_or_drop_message_limits_one_noisy_wallet_without_blocking_others(self):
+        rpc = SolanaRPC(["Noisy111", "Quiet111"])
+        rpc.max_inflight_per_wallet = 1
+        rpc.subscription_wallets[101] = "Noisy111"
+        rpc.subscription_wallets[202] = "Quiet111"
+        blocker = asyncio.create_task(asyncio.sleep(1))
+        rpc.track_task(blocker, wallet="Noisy111")
+        noisy_message = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "logsNotification",
+            "params": {"subscription": 101, "result": {"value": {"signature": "SigNoisy"}}},
+        })
+        quiet_message = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "logsNotification",
+            "params": {"subscription": 202, "result": {"value": {"signature": "SigQuiet"}}},
+        })
+
+        with mock.patch.object(rpc, "handle_message_fast") as handle_message:
+            noisy_task = await rpc.enqueue_or_drop_message(noisy_message)
+            quiet_task = await rpc.enqueue_or_drop_message(quiet_message)
+
+        blocker.cancel()
+        rpc.active_tasks.discard(blocker)
+        self.assertIsNone(noisy_task)
+        self.assertIsNotNone(quiet_task)
+        await quiet_task
+        handle_message.assert_awaited_once_with(quiet_message)
+
+
+class WatchdogPressureTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.update_patch = mock.patch("core.rug_watchdog.update_component")
+        self.increment_patch = mock.patch("core.rug_watchdog.increment_component")
+        self.update_patch.start()
+        self.increment_patch.start()
+
+    async def asyncTearDown(self):
+        self.increment_patch.stop()
+        self.update_patch.stop()
+
+    async def test_largest_token_accounts_uses_cache_for_repeated_mint(self):
+        class FakeChecker:
+            session = object()
+
+            async def init_session(self):
+                return None
+
+        cache = rug_watchdog.WatchdogDeepRpcCache(ttl_seconds=60, cooldown_seconds=60)
+        calls = []
+
+        async def fake_post(session, payload):
+            calls.append(payload["method"])
+            return {"result": {"value": [{"address": "Holder111"}]}}, "primary"
+
+        with mock.patch("core.rug_watchdog.post_json_with_provider_failover", side_effect=fake_post):
+            first = await rug_watchdog.fetch_largest_token_accounts(FakeChecker(), "Mint111", cache=cache)
+            second = await rug_watchdog.fetch_largest_token_accounts(FakeChecker(), "Mint111", cache=cache)
+
+        self.assertEqual(first, second)
+        self.assertEqual(calls, ["getTokenLargestAccounts"])
+
+    async def test_mint_account_info_uses_cooldown_after_rate_limit(self):
+        class FakeChecker:
+            session = object()
+
+            async def init_session(self):
+                return None
+
+        cache = rug_watchdog.WatchdogDeepRpcCache(ttl_seconds=60, cooldown_seconds=60)
+        calls = []
+
+        async def fake_post(session, payload):
+            calls.append(payload["method"])
+            raise rug_watchdog.RpcProviderError([{"name": "helius", "detail": "Too Many Requests", "http_status": 429}])
+
+        with mock.patch("core.rug_watchdog.post_json_with_provider_failover", side_effect=fake_post):
+            first = await rug_watchdog.fetch_mint_account_info(FakeChecker(), "MintRate", cache=cache)
+            second = await rug_watchdog.fetch_mint_account_info(FakeChecker(), "MintRate", cache=cache)
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(calls, ["getAccountInfo"])
+
+    async def test_owner_token_balance_cache_is_scoped_by_wallet_and_mint(self):
+        class FakeChecker:
+            session = object()
+
+            async def init_session(self):
+                return None
+
+        cache = rug_watchdog.WatchdogDeepRpcCache(ttl_seconds=60, cooldown_seconds=60)
+        calls = []
+
+        async def fake_post(session, payload):
+            calls.append((payload["params"][0], payload["params"][1]["mint"]))
+            return {
+                "result": {
+                    "value": [{
+                        "account": {
+                            "data": {
+                                "parsed": {
+                                    "info": {
+                                        "tokenAmount": {
+                                            "amount": "100",
+                                            "decimals": 2,
+                                            "uiAmount": 1.0,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }]
+                }
+            }, "primary"
+
+        with mock.patch("core.rug_watchdog.post_json_with_provider_failover", side_effect=fake_post):
+            first = await rug_watchdog.fetch_owner_token_balance(FakeChecker(), "Wallet111", "Mint111", cache=cache)
+            second = await rug_watchdog.fetch_owner_token_balance(FakeChecker(), "Wallet111", "Mint111", cache=cache)
+            third = await rug_watchdog.fetch_owner_token_balance(FakeChecker(), "Wallet222", "Mint111", cache=cache)
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["amount_raw"], 100)
+        self.assertEqual(third["amount_raw"], 100)
+        self.assertEqual(calls, [("Wallet111", "Mint111"), ("Wallet222", "Mint111")])
+
+    async def test_exit_quote_feasibility_reuses_cached_quote(self):
+        class FakeQuoteEngine:
+            def __init__(self):
+                self.calls = 0
+
+            async def get_sell_quote(self, **kwargs):
+                self.calls += 1
+                return {
+                    "ok": True,
+                    "reason": "quote_ok",
+                    "route_count": 1,
+                    "out_amount": 123,
+                    "price_impact_pct": 0.1,
+                }
+
+            def analyze_quote(self, quote, max_price_impact_pct=8):
+                return {
+                    "pass": bool(quote and quote.get("ok")),
+                    "reason": quote.get("reason"),
+                    "price_impact_pct": quote.get("price_impact_pct"),
+                }
+
+        cache = rug_watchdog.WatchdogDeepRpcCache(ttl_seconds=60, cooldown_seconds=60)
+        quote_engine = FakeQuoteEngine()
+        token = {"token_mint": "Mint111", "protection_exit_slippage_bps": 2000}
+        prepared_exit = {
+            "quote_required": True,
+            "token_mint": "Mint111",
+            "token_amount_raw": 1000,
+            "suggested_sell_pct": 50,
+        }
+
+        first = await rug_watchdog.attach_exit_quote_feasibility(quote_engine, dict(prepared_exit), token, cache=cache)
+        second = await rug_watchdog.attach_exit_quote_feasibility(quote_engine, dict(prepared_exit), token, cache=cache)
+
+        self.assertEqual(quote_engine.calls, 1)
+        self.assertEqual(first["quote_status"], "feasible")
+        self.assertEqual(second["quote_status"], "feasible")
 
 
 class WalletListApplyTests(unittest.TestCase):
@@ -1142,6 +1415,38 @@ class PaperTraderPnlTests(unittest.TestCase):
             finally:
                 paper_trader.PAPER_TRADES_FILE = original_file
 
+    def test_open_trade_promotes_decision_id_to_canonical_trade_fields(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = paper_trader.PAPER_TRADES_FILE
+            paper_trader.PAPER_TRADES_FILE = str(Path(tmpdir) / "paper_trades.json")
+            try:
+                trader = paper_trader.PaperTrader()
+                store = RecordingStore()
+                trader.store = store
+                trader.wallet_performance = NoopWalletPerformance()
+                trader.engine.config["simulate_failed_fills"] = False
+
+                trade = trader.open_trade(
+                    "MintLineageOpen",
+                    entry_price=1,
+                    size_usd=10,
+                    liquidity_usd=100_000,
+                    reason="lineage_entry",
+                    signal_metadata={"decision_id": "dec_open_lineage", "paper_lane": "main"},
+                )
+
+                self.assertIsNotNone(trade)
+                self.assertEqual(trade.get("decision_id"), "dec_open_lineage")
+                self.assertEqual(trade["signal_metadata"]["decision_id"], "dec_open_lineage")
+                self.assertEqual(store.snapshots[-1]["decision_id"], "dec_open_lineage")
+                self.assertEqual(store.decision_actions[-1]["decision_id"], "dec_open_lineage")
+                self.assertEqual(store.decision_actions[-1]["action"]["final_action"], "paper_opened")
+                self.assertEqual(store.decision_results[-1]["decision_id"], "dec_open_lineage")
+                self.assertEqual(store.decision_results[-1]["result"]["decision_id"], "dec_open_lineage")
+                self.assertEqual(store.decision_results[-1]["result"]["trade_status"], "open")
+            finally:
+                paper_trader.PAPER_TRADES_FILE = original_file
+
     def test_failed_buy_records_canonical_failure_fields(self):
         with TemporaryDirectory() as tmpdir:
             original_file = paper_trader.PAPER_TRADES_FILE
@@ -1168,6 +1473,156 @@ class PaperTraderPnlTests(unittest.TestCase):
                 failed = trader.state["failed_trades"][0]
                 self.assertEqual(failed["status"], "failed")
                 self.assertEqual(failed["failure_reason"], "slippage_too_high")
+            finally:
+                paper_trader.PAPER_TRADES_FILE = original_file
+
+    def test_failed_buy_promotes_decision_id_and_updates_failure_result(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = paper_trader.PAPER_TRADES_FILE
+            paper_trader.PAPER_TRADES_FILE = str(Path(tmpdir) / "paper_trades.json")
+            try:
+                trader = paper_trader.PaperTrader()
+                store = RecordingStore()
+                trader.store = store
+                trader.wallet_performance = NoopWalletPerformance()
+
+                with mock.patch.object(
+                    trader.engine,
+                    "simulate_buy_fill",
+                    return_value={"success": False, "reason": "slippage_too_high", "fee_usd": 0.05},
+                ):
+                    trade = trader.open_trade(
+                        "MintLineageFail",
+                        entry_price=1,
+                        size_usd=10,
+                        liquidity_usd=1,
+                        reason="failed_entry",
+                        signal_metadata={"decision_id": "dec_failed_lineage", "paper_lane": "main"},
+                    )
+
+                self.assertIsNone(trade)
+                failed = trader.state["failed_trades"][0]
+                self.assertEqual(failed.get("decision_id"), "dec_failed_lineage")
+                self.assertEqual(failed["signal_metadata"]["decision_id"], "dec_failed_lineage")
+                self.assertEqual(store.snapshots[-1]["decision_id"], "dec_failed_lineage")
+                self.assertEqual(store.decision_actions[-1]["action"]["final_action"], "paper_failed")
+                self.assertEqual(store.decision_results[-1]["result"]["decision_id"], "dec_failed_lineage")
+                self.assertEqual(store.decision_results[-1]["result"]["trade_status"], "failed")
+                self.assertEqual(store.decision_results[-1]["result"]["failure_reason"], "slippage_too_high")
+            finally:
+                paper_trader.PAPER_TRADES_FILE = original_file
+
+    def test_close_sell_failure_updates_decision_lineage(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = paper_trader.PAPER_TRADES_FILE
+            paper_trader.PAPER_TRADES_FILE = str(Path(tmpdir) / "paper_trades.json")
+            try:
+                trader = paper_trader.PaperTrader()
+                store = RecordingStore()
+                trader.store = store
+                trader.wallet_performance = NoopWalletPerformance()
+                trader.engine.config["simulate_failed_fills"] = False
+                trade = trader.open_trade(
+                    "MintLineageCloseFail",
+                    entry_price=1,
+                    size_usd=10,
+                    liquidity_usd=100_000,
+                    reason="lineage_entry",
+                    signal_metadata={"decision_id": "dec_exit_failed_lineage", "paper_lane": "main"},
+                )
+                store.snapshots.clear()
+                store.decision_actions.clear()
+                store.decision_results.clear()
+
+                with mock.patch.object(
+                    trader.engine,
+                    "simulate_sell_fill",
+                    return_value={"success": False, "reason": "exit_slippage"},
+                ):
+                    closed = trader.close_trade(trade, 0.8, 1, "hard_stop_loss")
+
+                self.assertFalse(closed)
+                self.assertTrue(store.snapshots)
+                self.assertEqual(store.snapshots[-1]["context"], "paper_exit_failed")
+                self.assertEqual(store.snapshots[-1]["decision_id"], "dec_exit_failed_lineage")
+                self.assertTrue(store.decision_actions)
+                self.assertEqual(store.decision_actions[-1]["action"]["final_action"], "paper_exit_failed")
+                self.assertEqual(store.decision_results[-1]["result"]["decision_id"], "dec_exit_failed_lineage")
+                self.assertEqual(store.decision_results[-1]["result"]["failure_reason"], "exit_slippage")
+                self.assertEqual(store.decision_results[-1]["result"]["exit_reason"], "hard_stop_loss")
+            finally:
+                paper_trader.PAPER_TRADES_FILE = original_file
+
+
+class FastPositionMonitorTests(unittest.TestCase):
+    def test_fast_position_evaluation_flags_warning_without_deep_checks(self):
+        from core.fast_position_monitor import evaluate_fast_position
+
+        row = evaluate_fast_position(
+            {
+                "mint": "MintFast",
+                "entry_price": 1.0,
+                "current_price": 1.0,
+                "entry_liquidity_usd": 10_000,
+                "current_liquidity_usd": 10_000,
+            },
+            {
+                "price": 0.82,
+                "liquidity": 6_500,
+                "market_cap": 82_000,
+                "source": "jupiter+dexscreener",
+            },
+        )
+
+        self.assertEqual(row["mint"], "MintFast")
+        self.assertEqual(row["risk_level"], "WARNING")
+        self.assertEqual(row["price_from_entry_pct"], -18.0)
+        self.assertEqual(row["liquidity_from_entry_pct"], -35.0)
+        self.assertFalse(row["deep_checks_ran"])
+        self.assertIn("cheap_market_only", row["monitor_mode"])
+
+    def test_fast_monitor_cycle_updates_open_paper_trade_price(self):
+        from core.fast_position_monitor import run_fast_monitor_cycle
+
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                return {
+                    "price": 0.9,
+                    "liquidity": 80_000,
+                    "market_cap": 900_000,
+                    "source": "jupiter+dexscreener",
+                }
+
+        with TemporaryDirectory() as tmpdir:
+            original_file = paper_trader.PAPER_TRADES_FILE
+            paper_trader.PAPER_TRADES_FILE = str(Path(tmpdir) / "paper_trades.json")
+            try:
+                trader = paper_trader.PaperTrader()
+                trader.store = RecordingStore()
+                trader.wallet_performance = NoopWalletPerformance()
+                trader.engine.config["simulate_failed_fills"] = False
+                trade = trader.open_trade(
+                    "MintFastCycle",
+                    entry_price=1,
+                    size_usd=10,
+                    liquidity_usd=100_000,
+                    reason="fast_monitor_cycle",
+                    signal_metadata={"decision_id": "dec_fast_monitor"},
+                )
+                trader.store.snapshots.clear()
+
+                summary = asyncio.run(run_fast_monitor_cycle(
+                    paper_trader=trader,
+                    market_checker=FakeMarketChecker(),
+                    timeout=1,
+                ))
+
+                updated = trader.find_open_trade("MintFastCycle")
+                self.assertEqual(summary["checked_count"], 1)
+                self.assertEqual(summary["rows"][0]["mint"], "MintFastCycle")
+                self.assertEqual(updated["current_price"], 0.9)
+                self.assertEqual(updated["current_liquidity_usd"], 80_000)
+                self.assertEqual(trader.store.snapshots[-1]["context"], "paper_price_update")
             finally:
                 paper_trader.PAPER_TRADES_FILE = original_file
 
@@ -1234,6 +1689,139 @@ class ScannerCandidateFilterTests(unittest.TestCase):
         self.assertEqual(result["decision"]["paper_lane"], "main")
         self.assertEqual(result["decision"]["exploration"]["reason"], "exit_liquidity_block")
 
+    def test_paper_exploration_can_sample_strong_route_failed_observation(self):
+        result = evaluate_paper_exploration(
+            decision={"should_trade": False, "score": 92, "threshold": 68, "reasons": []},
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_route_failed_enabled": True,
+                "paper_exploration_route_failed_score_threshold": 70,
+                "paper_exploration_route_failed_min_edge_score": 65,
+                "paper_exploration_route_failed_size_usd": 5,
+            },
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+            buy_quote_analysis={"pass": True, "reason": "quote_passed"},
+            sell_quote_analysis={"pass": False, "reason": "no_exit_route"},
+            edge_result={"paper_trade_worthy": True, "edge_score": 88},
+            position_size_usd=0,
+        )
+
+        decision = result["decision"]
+        self.assertTrue(decision["should_trade"])
+        self.assertTrue(decision["paper_should_trade"])
+        self.assertFalse(decision["live_should_trade"])
+        self.assertEqual(decision["paper_lane"], "exploration")
+        self.assertEqual(decision["exploration"]["reason"], "route_failed_observation")
+        self.assertTrue(decision["exploration"]["route_observation_only"])
+        self.assertEqual(result["position_size_usd"], 5)
+        self.assertIn("ROUTE OBSERVATION", decision["reasons"][-1])
+
+    def test_paper_exploration_route_failed_observation_requires_strong_signal(self):
+        result = evaluate_paper_exploration(
+            decision={"should_trade": False, "score": 58, "threshold": 68, "reasons": []},
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_route_failed_enabled": True,
+                "paper_exploration_route_failed_score_threshold": 70,
+                "paper_exploration_route_failed_min_edge_score": 65,
+                "paper_exploration_route_failed_size_usd": 5,
+            },
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+            buy_quote_analysis={"pass": False, "reason": "no_buy_route"},
+            sell_quote_analysis={"pass": False, "reason": "no_exit_route"},
+            edge_result={"paper_trade_worthy": False, "edge_score": 52},
+            position_size_usd=0,
+        )
+
+        self.assertFalse(result["decision"]["should_trade"])
+        self.assertEqual(result["decision"]["paper_lane"], "main")
+        self.assertEqual(result["decision"]["exploration"]["reason"], "buy_quote_block")
+
+    def test_paper_exploration_does_not_sample_when_quote_was_budget_skipped(self):
+        result = evaluate_paper_exploration(
+            decision={"should_trade": False, "score": 90, "threshold": 68, "reasons": []},
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_route_failed_enabled": True,
+                "paper_exploration_route_failed_score_threshold": 70,
+                "paper_exploration_route_failed_min_edge_score": 65,
+                "paper_exploration_route_failed_size_usd": 5,
+            },
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+            buy_quote_analysis={"pass": False, "reason": "below_swap_quote_quality_gate"},
+            sell_quote_analysis={"pass": False, "reason": "sell_quote_not_checked_below_swap_quote_quality_gate"},
+            edge_result={"paper_trade_worthy": True, "edge_score": 90},
+            position_size_usd=0,
+        )
+
+        self.assertFalse(result["decision"]["should_trade"])
+        self.assertEqual(result["decision"]["paper_lane"], "main")
+        self.assertEqual(result["decision"]["exploration"]["reason"], "buy_quote_block")
+
+    def test_paper_exploration_can_sample_strong_confirmation_blocked_candidate(self):
+        result = evaluate_paper_exploration(
+            decision={
+                "should_trade": False,
+                "score": 78,
+                "threshold": 68,
+                "reasons": ["CONFIRMATION BLOCK: outside timing window"],
+                "confirmation": {"allow": False, "reasons": ["outside timing window"]},
+            },
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_confirmation_blocked_enabled": True,
+                "paper_exploration_confirmation_score_threshold": 70,
+                "paper_exploration_confirmation_min_edge_score": 60,
+                "paper_exploration_confirmation_size_usd": 5,
+            },
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+            buy_quote_analysis={"pass": True, "reason": "quote_passed"},
+            sell_quote_analysis={"pass": True, "reason": "quote_passed"},
+            edge_result={"paper_trade_worthy": False, "edge_score": 58},
+            position_size_usd=48,
+        )
+
+        decision = result["decision"]
+        self.assertTrue(decision["should_trade"])
+        self.assertTrue(decision["paper_should_trade"])
+        self.assertFalse(decision["live_should_trade"])
+        self.assertEqual(decision["paper_lane"], "exploration")
+        self.assertEqual(decision["exploration"]["reason"], "confirmation_block_observation")
+        self.assertTrue(decision["exploration"]["confirmation_observation_only"])
+        self.assertEqual(result["position_size_usd"], 5)
+
+    def test_paper_exploration_confirmation_sample_requires_quote_passes(self):
+        result = evaluate_paper_exploration(
+            decision={
+                "should_trade": False,
+                "score": 82,
+                "threshold": 68,
+                "reasons": ["CONFIRMATION BLOCK: too early"],
+                "confirmation": {"allow": False, "reasons": ["too early"]},
+            },
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_confirmation_blocked_enabled": True,
+                "paper_exploration_confirmation_score_threshold": 70,
+                "paper_exploration_confirmation_min_edge_score": 60,
+                "paper_exploration_confirmation_size_usd": 5,
+            },
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+            buy_quote_analysis={"pass": True, "reason": "quote_passed"},
+            sell_quote_analysis={"pass": False, "reason": "no_exit_route"},
+            edge_result={"paper_trade_worthy": True, "edge_score": 82},
+            position_size_usd=48,
+        )
+
+        self.assertFalse(result["decision"]["should_trade"])
+        self.assertEqual(result["decision"]["paper_lane"], "main")
+        self.assertEqual(result["decision"]["exploration"]["reason"], "confirmation_block")
+
     def test_paper_exploration_does_not_override_strategy_or_confirmation_blocks(self):
         for decision in [
             {
@@ -1286,8 +1874,161 @@ class SettingsManagerTests(unittest.TestCase):
             finally:
                 settings_manager.SETTINGS_FILE = original_file
 
+    def test_save_settings_preserves_route_failed_exploration_controls(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = settings_manager.SETTINGS_FILE
+            settings_manager.SETTINGS_FILE = Path(tmpdir) / "bot_settings.json"
+            try:
+                saved = settings_manager.save_settings({
+                    "paper_exploration_route_failed_enabled": "true",
+                    "paper_exploration_route_failed_score_threshold": 74,
+                    "paper_exploration_route_failed_min_edge_score": 69,
+                    "paper_exploration_route_failed_size_usd": 4,
+                })
+
+                self.assertTrue(saved["paper_exploration_route_failed_enabled"])
+                self.assertEqual(saved["paper_exploration_route_failed_score_threshold"], 74)
+                self.assertEqual(saved["paper_exploration_route_failed_min_edge_score"], 69)
+                self.assertEqual(saved["paper_exploration_route_failed_size_usd"], 4)
+            finally:
+                settings_manager.SETTINGS_FILE = original_file
+
+    def test_save_settings_preserves_confirmation_blocked_exploration_controls(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = settings_manager.SETTINGS_FILE
+            settings_manager.SETTINGS_FILE = Path(tmpdir) / "bot_settings.json"
+            try:
+                saved = settings_manager.save_settings({
+                    "paper_exploration_confirmation_blocked_enabled": "true",
+                    "paper_exploration_confirmation_score_threshold": 71,
+                    "paper_exploration_confirmation_min_edge_score": 61,
+                    "paper_exploration_confirmation_size_usd": 6,
+                })
+
+                self.assertTrue(saved["paper_exploration_confirmation_blocked_enabled"])
+                self.assertEqual(saved["paper_exploration_confirmation_score_threshold"], 71)
+                self.assertEqual(saved["paper_exploration_confirmation_min_edge_score"], 61)
+                self.assertEqual(saved["paper_exploration_confirmation_size_usd"], 6)
+            finally:
+                settings_manager.SETTINGS_FILE = original_file
+
+    def test_save_settings_preserves_paper_activity_evaluation_controls(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = settings_manager.SETTINGS_FILE
+            settings_manager.SETTINGS_FILE = Path(tmpdir) / "bot_settings.json"
+            try:
+                saved = settings_manager.save_settings({
+                    "paper_activity_evaluation_enabled": "true",
+                    "paper_activity_evaluation_weighted_trigger": 0.8,
+                    "paper_activity_evaluation_min_combined_wallet_score": 45,
+                })
+
+                self.assertTrue(saved["paper_activity_evaluation_enabled"])
+                self.assertEqual(saved["paper_activity_evaluation_weighted_trigger"], 0.8)
+                self.assertEqual(saved["paper_activity_evaluation_min_combined_wallet_score"], 45)
+            finally:
+                settings_manager.SETTINGS_FILE = original_file
+
+    def test_save_settings_preserves_swap_quote_budget_controls(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = settings_manager.SETTINGS_FILE
+            settings_manager.SETTINGS_FILE = Path(tmpdir) / "bot_settings.json"
+            try:
+                saved = settings_manager.save_settings({
+                    "swap_quote_budget_enabled": "true",
+                    "swap_quote_score_threshold": 70,
+                    "swap_quote_min_edge_score": 62,
+                    "swap_quote_max_requests_per_minute": 12,
+                    "swap_quote_budget_window_seconds": 45,
+                })
+
+                self.assertTrue(saved["swap_quote_budget_enabled"])
+                self.assertEqual(saved["swap_quote_score_threshold"], 70)
+                self.assertEqual(saved["swap_quote_min_edge_score"], 62)
+                self.assertEqual(saved["swap_quote_max_requests_per_minute"], 12)
+                self.assertEqual(saved["swap_quote_budget_window_seconds"], 45)
+            finally:
+                settings_manager.SETTINGS_FILE = original_file
+
 
 class ScannerRuntimeTests(unittest.TestCase):
+    def test_swap_quote_gate_skips_candidates_below_quote_quality(self):
+        scanner = Scanner(["Tracked111"], None)
+        scanner.settings.update({
+            "swap_quote_budget_enabled": True,
+            "swap_quote_score_threshold": 68,
+            "swap_quote_min_edge_score": 65,
+        })
+
+        allowed, reason = scanner.should_request_swap_quote(
+            decision={"score": 52, "strategy_guard": {"action": "ALLOW"}},
+            edge_result={"edge_score": 50, "quote_worthy": True},
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "below_swap_quote_quality_gate")
+
+    def test_swap_quote_gate_allows_candidates_near_paper_entry_quality(self):
+        scanner = Scanner(["Tracked111"], None)
+        scanner.settings.update({
+            "swap_quote_budget_enabled": True,
+            "swap_quote_score_threshold": 68,
+            "swap_quote_min_edge_score": 65,
+        })
+
+        allowed, reason = scanner.should_request_swap_quote(
+            decision={"score": 69, "strategy_guard": {"action": "ALLOW"}},
+            edge_result={"edge_score": 40, "quote_worthy": False},
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+        )
+
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "swap_quote_quality_gate_passed")
+
+    def test_swap_quote_budget_blocks_after_configured_request_count(self):
+        scanner = Scanner(["Tracked111"], None)
+        scanner.settings.update({
+            "swap_quote_budget_enabled": True,
+            "swap_quote_max_requests_per_minute": 2,
+            "swap_quote_budget_window_seconds": 60,
+        })
+
+        self.assertTrue(scanner.consume_swap_quote_budget(now=1000))
+        self.assertTrue(scanner.consume_swap_quote_budget(now=1001))
+        self.assertFalse(scanner.consume_swap_quote_budget(now=1002))
+        self.assertTrue(scanner.consume_swap_quote_budget(now=1061))
+
+    def test_paper_activity_evaluation_can_trigger_mid_quality_wallet(self):
+        scanner = Scanner(["Tracked111"], None)
+        scanner.settings.update({
+            "paper_activity_evaluation_enabled": True,
+            "paper_activity_evaluation_weighted_trigger": 0.8,
+            "paper_activity_evaluation_min_combined_wallet_score": 45,
+        })
+
+        self.assertTrue(scanner.should_evaluate_fast(
+            wallet_count=1,
+            weighted_wallet_score=0.8,
+            combined_wallet_score=51,
+        ))
+
+    def test_paper_activity_evaluation_keeps_low_quality_wallets_out(self):
+        scanner = Scanner(["Tracked111"], None)
+        scanner.settings.update({
+            "paper_activity_evaluation_enabled": True,
+            "paper_activity_evaluation_weighted_trigger": 0.8,
+            "paper_activity_evaluation_min_combined_wallet_score": 45,
+        })
+
+        self.assertFalse(scanner.should_evaluate_fast(
+            wallet_count=1,
+            weighted_wallet_score=0.3,
+            combined_wallet_score=38,
+        ))
+
     def test_scanner_token_changes_preserve_signature_time_and_sol_delta(self):
         scanner = Scanner(["Tracked111"], None)
         result = {
@@ -1541,6 +2282,225 @@ class ScannerRuntimeTests(unittest.TestCase):
 
         self.assertEqual(calls, ["MintRace", "MintRace"])
 
+    def test_runtime_skip_snapshot_keeps_decision_id(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                return {
+                    "price": 0.001,
+                    "market_cap": 100_000,
+                    "liquidity": 50_000,
+                    "source": "jupiter+dexscreener",
+                }
+
+            def liquidity_score(self, liquidity):
+                return 10
+
+            def volume_score(self, volume):
+                return 10
+
+        class FakeJupiterQuote:
+            async def get_buy_quote(self, **kwargs):
+                return {"ok": True, "out_amount": "1000", "routePlan": []}
+
+            async def get_sell_quote(self, **kwargs):
+                return {"ok": True, "routePlan": []}
+
+            def analyze_quote(self, quote, max_price_impact_pct):
+                return {"pass": True, "reason": "quote_passed", "price_impact_pct": 1.0}
+
+        class FakeRpc:
+            market_checker = FakeMarketChecker()
+            jupiter_quote = FakeJupiterQuote()
+
+        async def fake_dev_wallet(mint):
+            return "Dev111"
+
+        async def fake_token_inspection(rpc, mint):
+            return {
+                "token_standard": "spl_token",
+                "extensions": [],
+                "risk_label": "LOW",
+                "reasons": [],
+            }
+
+        async def fake_launch_info(mint):
+            return {"launch_age_seconds": 45}
+
+        async def fake_holder_risk(mint):
+            return scanner.skipped_holder_cluster_risk("test skipped")
+
+        scanner = Scanner(["Tracked111"], FakeRpc())
+        scanner.store = RecordingStore()
+        scanner.paper_trader = None
+        scanner.token_buys["MintRuntimeSkip"] = [{"wallet": "Tracked111"}]
+        scanner.cluster_threshold = 1
+        scanner.find_dev_wallet = fake_dev_wallet
+        scanner.dev_analyzer.score_dev = lambda dev_wallet: {"score": 0, "label": "Unknown", "bonded_tokens": 0}
+        scanner.token_inspector.inspect_with_rpc = fake_token_inspection
+        scanner.token_launch_age.get_launch_info = fake_launch_info
+        scanner.token_age.get_age_seconds = lambda mint: 45
+        scanner.wallet_quality.score_wallets = lambda wallets: {"avg_score": 80, "max_score": 80}
+        scanner.wallet_performance.score_wallets = lambda wallets: {"avg_score": 70, "max_score": 70}
+        scanner.wallet_performance.record_signal = lambda **kwargs: None
+        scanner.anti_rug.analyze = lambda **kwargs: {
+            "risk_label": "LOW_RISK",
+            "risk_score": 0,
+            "warnings": [],
+            "penalties": [],
+            "hard_block": False,
+            "hard_block_reason": None,
+        }
+        scanner.scoring_engine.score_token = lambda **kwargs: {
+            "score": 80,
+            "threshold": 68,
+            "mode": "CONFIRMATION",
+            "should_trade": True,
+            "reasons": ["strong wallet signal"],
+        }
+        scanner.social_signal.match_token = lambda **kwargs: {
+            "matched": False,
+            "score_bonus": 0,
+            "matched_keywords": [],
+            "matched_account": None,
+        }
+        scanner.edge_analyzer.analyze = lambda **kwargs: {
+            "edge_score": 80,
+            "edge_verdict": "watch",
+            "quote_worthy": True,
+            "paper_trade_worthy": True,
+            "positives": [],
+            "risks": [],
+        }
+        scanner.evaluate_holder_cluster_risk = fake_holder_risk
+        scanner.confirmation_filter.evaluate = lambda **kwargs: {"allow": True, "reasons": [], "warnings": []}
+        scanner.position_sizer.size_trade = lambda **kwargs: 25
+
+        with mock.patch("core.scanner.add_alert"), mock.patch("core.scanner.update_token"):
+            asyncio.run(scanner._evaluate_signal_once("MintRuntimeSkip"))
+
+        runtime_snapshot = [
+            snapshot for snapshot in scanner.store.snapshots
+            if snapshot.get("context") == "scanner_runtime_skip"
+        ][0]
+        decision_id = scanner.store.decisions[0]["decision_id"]
+        self.assertEqual(runtime_snapshot["decision_id"], decision_id)
+        self.assertEqual(scanner.store.decision_actions[-1]["decision_id"], decision_id)
+        self.assertEqual(scanner.store.decision_actions[-1]["action"]["final_action"], "runtime_skip")
+
+    def test_scanner_records_weak_candidate_without_spending_swap_quote(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                return {
+                    "price": 0.001,
+                    "market_cap": 100_000,
+                    "liquidity": 50_000,
+                    "source": "jupiter+dexscreener",
+                }
+
+            def liquidity_score(self, liquidity):
+                return 10
+
+            def volume_score(self, volume):
+                return 10
+
+        class FakeJupiterQuote:
+            def __init__(self):
+                self.buy_calls = 0
+
+            async def get_buy_quote(self, **kwargs):
+                self.buy_calls += 1
+                return {"ok": True, "out_amount": "1000", "routePlan": []}
+
+            async def get_sell_quote(self, **kwargs):
+                return {"ok": True, "routePlan": []}
+
+            def analyze_quote(self, quote, max_price_impact_pct):
+                return {"pass": True, "reason": "quote_passed", "price_impact_pct": 1.0}
+
+        class FakeRpc:
+            market_checker = FakeMarketChecker()
+
+            def __init__(self):
+                self.jupiter_quote = FakeJupiterQuote()
+
+        async def fake_dev_wallet(mint):
+            return "Dev111"
+
+        async def fake_token_inspection(rpc, mint):
+            return {
+                "token_standard": "spl_token",
+                "extensions": [],
+                "risk_label": "LOW",
+                "reasons": [],
+            }
+
+        async def fake_launch_info(mint):
+            return {"launch_age_seconds": 45}
+
+        async def fake_holder_risk(mint):
+            return scanner.skipped_holder_cluster_risk("test skipped")
+
+        rpc = FakeRpc()
+        scanner = Scanner(["Tracked111"], rpc)
+        scanner.settings.update({
+            "swap_quote_budget_enabled": True,
+            "swap_quote_score_threshold": 68,
+            "swap_quote_min_edge_score": 65,
+        })
+        scanner.store = RecordingStore()
+        scanner.paper_trader = None
+        scanner.token_buys["MintWeakQuote"] = [{"wallet": "Tracked111"}]
+        scanner.cluster_threshold = 1
+        scanner.find_dev_wallet = fake_dev_wallet
+        scanner.dev_analyzer.score_dev = lambda dev_wallet: {"score": 0, "label": "Unknown", "bonded_tokens": 0}
+        scanner.token_inspector.inspect_with_rpc = fake_token_inspection
+        scanner.token_launch_age.get_launch_info = fake_launch_info
+        scanner.token_age.get_age_seconds = lambda mint: 45
+        scanner.wallet_quality.score_wallets = lambda wallets: {"avg_score": 55, "max_score": 55}
+        scanner.wallet_performance.score_wallets = lambda wallets: {"avg_score": 55, "max_score": 55}
+        scanner.wallet_performance.record_signal = lambda **kwargs: None
+        scanner.anti_rug.analyze = lambda **kwargs: {
+            "risk_label": "LOW_RISK",
+            "risk_score": 0,
+            "warnings": [],
+            "penalties": [],
+            "hard_block": False,
+            "hard_block_reason": None,
+        }
+        scanner.scoring_engine.score_token = lambda **kwargs: {
+            "score": 55,
+            "threshold": 68,
+            "mode": "CONFIRMATION",
+            "should_trade": False,
+            "reasons": ["watchable but not entry quality"],
+        }
+        scanner.social_signal.match_token = lambda **kwargs: {
+            "matched": False,
+            "score_bonus": 0,
+            "matched_keywords": [],
+            "matched_account": None,
+        }
+        scanner.edge_analyzer.analyze = lambda **kwargs: {
+            "edge_score": 55,
+            "edge_verdict": "watch",
+            "quote_worthy": True,
+            "paper_trade_worthy": False,
+            "positives": [],
+            "risks": [],
+        }
+        scanner.evaluate_holder_cluster_risk = fake_holder_risk
+        scanner.confirmation_filter.evaluate = lambda **kwargs: {"allow": True, "reasons": [], "warnings": []}
+        scanner.position_sizer.size_trade = lambda **kwargs: 25
+
+        with mock.patch("core.scanner.add_alert"), mock.patch("core.scanner.update_token"):
+            asyncio.run(scanner._evaluate_signal_once("MintWeakQuote"))
+
+        self.assertEqual(rpc.jupiter_quote.buy_calls, 0)
+        decision_payload = scanner.store.decisions[0]["payload"]
+        buy_quote = decision_payload["quotes"]["buy"]
+        self.assertFalse(buy_quote["pass"])
+        self.assertEqual(buy_quote["reason"], "below_swap_quote_quality_gate")
+
     def test_scanner_keeps_paper_watch_wallets_in_separate_observed_lane(self):
         scanner = Scanner(["Tracked111"], None, paper_watch_wallets=["Watch111"])
 
@@ -1596,6 +2556,172 @@ class ScannerRuntimeTests(unittest.TestCase):
         )
 
         self.assertTrue(result["allow"])
+
+    def test_scanner_holder_check_analyzes_largest_token_accounts(self):
+        class FakeRpc:
+            async def rpc_call(self, method, params):
+                return {
+                    "result": {
+                        "value": [
+                            {"address": "Holder111", "uiAmount": 60},
+                            {"address": "Holder222", "uiAmount": 20},
+                            {"address": "Holder333", "uiAmount": 20},
+                        ],
+                    },
+                }
+
+        scanner = Scanner([], FakeRpc())
+        scanner.settings["scanner_holder_check_timeout_seconds"] = 1
+
+        result = asyncio.run(scanner.evaluate_holder_cluster_risk("MintHolderRisk"))
+
+        self.assertEqual(result["holder_concentration_risk"], "DANGER")
+        self.assertEqual(result["holder_concentration_metrics"]["holder_count"], 3)
+        self.assertEqual(result["holder_concentration_metrics"]["top_1_pct"], 60.0)
+
+    def test_scanner_holder_check_timeout_returns_unknown_evidence(self):
+        class SlowRpc:
+            async def rpc_call(self, method, params):
+                await asyncio.sleep(0.05)
+                return {"result": {"value": []}}
+
+        scanner = Scanner([], SlowRpc())
+        scanner.settings["scanner_holder_check_timeout_seconds"] = 0.001
+
+        result = asyncio.run(scanner.evaluate_holder_cluster_risk("MintSlow"))
+
+        self.assertEqual(result["holder_concentration_risk"], "UNKNOWN")
+        self.assertEqual(result["holder_concentration_reasons"], ["Scanner holder check timed out"])
+
+    def test_scanner_holder_check_is_gated_to_quote_worthy_candidates(self):
+        scanner = Scanner([], None)
+        scanner.settings["jupiter_prescore_threshold"] = 40
+
+        self.assertFalse(
+            scanner.holder_check_candidate_worthy(
+                {"score": 31},
+                {"quote_worthy": False, "paper_trade_worthy": False},
+            )
+        )
+        self.assertTrue(
+            scanner.holder_check_candidate_worthy(
+                {"score": 31},
+                {"quote_worthy": True, "paper_trade_worthy": False},
+            )
+        )
+        self.assertTrue(
+            scanner.holder_check_candidate_worthy(
+                {"score": 40},
+                {"quote_worthy": False, "paper_trade_worthy": False},
+            )
+        )
+
+    def test_scanner_linked_wallet_risk_does_not_infer_unavailable_graph(self):
+        scanner = Scanner(["Tracked111"], None)
+
+        result = scanner.wallet_cluster_risk_context(
+            signal_type="cluster",
+            wallets=["Tracked111", "Tracked222"],
+            wallet_count=2,
+            repeated_buys=1,
+        )
+
+        self.assertEqual(result["risk_label"], "NOT_CHECKED")
+        self.assertEqual(result["reason"], "no_linked_wallet_graph_source")
+        self.assertEqual(result["observed_wallet_cluster"]["wallet_count"], 2)
+
+    def test_holder_danger_elevates_rug_result_to_hard_block(self):
+        scanner = Scanner(["Tracked111"], None)
+        rug_result = {
+            "risk_label": "LOW_RISK",
+            "risk_score": 0,
+            "warnings": [],
+            "penalties": [],
+            "hard_block": False,
+            "hard_block_reason": None,
+        }
+
+        result = scanner.apply_holder_cluster_to_rug_result(
+            rug_result=rug_result,
+            holder_context={
+                "holder_concentration_risk": "DANGER",
+                "holder_concentration_reasons": ["Top holder controls at least 50%"],
+                "holder_concentration_metrics": {"holder_count": 3},
+            },
+            cluster_context={"risk_label": "NOT_CHECKED"},
+        )
+
+        self.assertTrue(result["hard_block"])
+        self.assertEqual(result["risk_label"], "HIGH_RISK")
+        self.assertGreaterEqual(result["risk_score"], 22)
+        self.assertIn("Holder concentration: Top holder controls at least 50%", result["warnings"])
+
+    def test_record_signal_embeds_holder_cluster_risk_from_rug_result(self):
+        scanner = Scanner(["Tracked111"], None)
+        scanner.store = RecordingStore()
+        decision = {
+            "score": 71,
+            "threshold": 68,
+            "mode": "CONFIRMATION",
+            "should_trade": False,
+            "reasons": ["Holder concentration block"],
+        }
+        rug_result = {
+            "risk_label": "HIGH_RISK",
+            "risk_score": 28,
+            "warnings": ["Holder concentration: Top holder controls at least 50%"],
+            "hard_block": True,
+            "hard_block_reason": "Holder concentration: Top holder controls at least 50%",
+            "holder_concentration_risk": "DANGER",
+            "holder_concentration_reasons": ["Top holder controls at least 50%"],
+            "holder_concentration_metrics": {
+                "holder_count": 3,
+                "top_1_pct": 60.0,
+                "top_10_pct": 100.0,
+                "top_holder_address": "Holder111",
+            },
+            "linked_wallet_risk": {
+                "risk_label": "CLUSTER_SIGNAL",
+                "cluster_wallet_count": 2,
+                "repeated_buys": 1,
+            },
+        }
+
+        scanner.record_signal(
+            mint="MintHolderRisk",
+            now=123.0,
+            signal_type="cluster",
+            wallets=["Tracked111", "Tracked222"],
+            wallet_count=2,
+            weighted_wallet_score=2.4,
+            social_match={},
+            wallet_quality={},
+            wallet_performance={},
+            dev_wallet="Dev111",
+            dev_score={"score": 10, "label": "Unknown", "bonded_tokens": 0},
+            token_inspection={},
+            liquidity_score=5,
+            volume_score=4,
+            market_info={"price": 0.001, "liquidity": 12000},
+            rug_result=rug_result,
+            buy_quote_analysis={"pass": False, "reason": "not_checked", "price_impact_pct": None},
+            sell_quote_analysis={"pass": False, "reason": "not_checked", "price_impact_pct": None},
+            buy_quote=None,
+            sell_quote=None,
+            position_size_usd=0,
+            token_age_seconds=45,
+            true_launch_age_seconds=45,
+            launch_info={},
+            decision=decision,
+            edge_result={},
+        )
+
+        payload = scanner.store.decisions[0]["payload"]
+        holder_cluster = payload["rule_outcomes"]["holder_cluster"]
+        self.assertEqual(holder_cluster["holder_risk_label"], "DANGER")
+        self.assertEqual(holder_cluster["holder_count"], 3)
+        self.assertEqual(holder_cluster["top_1_pct"], 60.0)
+        self.assertEqual(holder_cluster["linked_wallet_risk"]["risk_label"], "CLUSTER_SIGNAL")
 
     def test_duplicate_open_trade_merge_keeps_single_open_mint(self):
         with TemporaryDirectory() as tmpdir:
@@ -1833,6 +2959,23 @@ class SocialSignalTests(unittest.TestCase):
 
         self.assertEqual(len(active), 1)
 
+    def test_social_engine_matches_canonical_events_rows(self):
+        mint = "79ogrGd2bhRS455phmsJo8iHYzBusqgLeyxF9Tf5pump"
+        with TemporaryDirectory() as tmp:
+            engine = SocialSignalEngine(state_file=str(Path(tmp) / "social_state.json"))
+            event = engine.build_signal(
+                account="reddit_alpha",
+                text=f"Fresh $BONK launch {mint}",
+                source_platform="reddit",
+                timestamp=123,
+            )
+            engine.state = {"events": [event]}
+
+            result = engine.match_token(mint, market_info={})
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["reason"], "social_exact_mint_match")
+
 
 class PositionCockpitTests(unittest.TestCase):
     def test_event_store_records_and_updates_decision_records(self):
@@ -1885,6 +3028,219 @@ class PositionCockpitTests(unittest.TestCase):
         self.assertEqual(rows[0]["payload"]["action"]["final_action"], "paper_opened")
         self.assertEqual(rows[0]["result"]["pnl_pct"], 170)
 
+    def test_decision_record_preserves_extended_evidence_fields(self):
+        decision = build_decision_record({
+            "decision_id": "dec_extended_1",
+            "timestamp": 1000,
+            "mint": "MintExtended",
+            "type": "cluster",
+            "wallets": ["WalletA", "WalletB"],
+            "wallet_count": 2,
+            "weighted_wallet_score": 2.4,
+            "social_match": {
+                "matched": True,
+                "reason": "social_exact_mint_match",
+                "event_ids": ["social_1"],
+                "matched_keywords": ["launch"],
+                "matched_account": "alpha",
+                "score_bonus": 7,
+            },
+            "catalyst_card_ids": ["card_1"],
+            "catalyst_score": 82,
+            "social_match_confidence": 0.91,
+            "social_evidence_urls": ["https://example.test/post/1"],
+            "holder_concentration_risk": "WARNING",
+            "holder_concentration_reasons": ["Top 10 holders control at least 70%"],
+            "holder_concentration_metrics": {
+                "holder_count": 41,
+                "top_1_pct": 18.5,
+                "top_10_pct": 72.2,
+                "top_holder_address": "Holder111",
+            },
+            "linked_wallet_risk": {
+                "risk_label": "WATCH",
+                "cluster_wallet_count": 3,
+                "reasons": ["same funder seen twice"],
+            },
+            "buy_quote_pass": True,
+            "buy_quote_reason": "quote_passed",
+            "buy_quote_price_impact_pct": 1.2,
+            "buy_quote_route_count": 2,
+            "buy_quote_in_amount_raw": 100000000,
+            "buy_quote_out_amount": 555000,
+            "buy_quote_slippage_bps": 1500,
+            "sell_quote_pass": False,
+            "sell_quote_reason": "no_route_plan",
+            "sell_quote_price_impact_pct": None,
+            "sell_quote_route_count": 0,
+            "sell_quote_slippage_bps": 2000,
+            "broader_crypto_context": {"sol_1h_change_pct": -3.2},
+            "stablecoin_context": {"usdc_depeg_warning": False},
+            "market_risk_regime": "risk_off",
+            "should_trade": False,
+            "score_reasons": ["exit liquidity blocked"],
+        })
+
+        payload = decision["payload"]
+
+        self.assertEqual(payload["inputs"]["social_catalyst"]["event_ids"], ["social_1"])
+        self.assertEqual(payload["inputs"]["social_catalyst"]["catalyst_card_ids"], ["card_1"])
+        self.assertEqual(payload["inputs"]["social_catalyst"]["match_confidence"], 0.91)
+        self.assertEqual(payload["inputs"]["market_context"]["risk_regime"], "risk_off")
+        self.assertEqual(payload["rule_outcomes"]["holder_cluster"]["holder_risk_label"], "WARNING")
+        self.assertEqual(payload["rule_outcomes"]["holder_cluster"]["holder_count"], 41)
+        self.assertEqual(payload["rule_outcomes"]["holder_cluster"]["top_10_pct"], 72.2)
+        self.assertEqual(payload["rule_outcomes"]["holder_cluster"]["linked_wallet_risk"]["risk_label"], "WATCH")
+        self.assertEqual(payload["route_feasibility"]["buy"]["route_count"], 2)
+        self.assertEqual(payload["route_feasibility"]["buy"]["slippage_bps"], 1500)
+        self.assertFalse(payload["route_feasibility"]["sell"]["pass"])
+
+    def test_event_store_normalizes_failed_trade_rows_for_sqlite_mirror(self):
+        with TemporaryDirectory() as tmp:
+            store = EventStore(Path(tmp) / "memetrader.db")
+            store.upsert_trade({
+                "mint": "MintFailed",
+                "side": "buy",
+                "time": 123.0,
+                "failure_reason": "quote_failed",
+            })
+            with store.connect() as conn:
+                row = conn.execute("SELECT status, entry_time, reason, payload_json FROM trades").fetchone()
+
+        self.assertEqual(row[0], "failed")
+        self.assertEqual(row[1], 123.0)
+        self.assertEqual(row[2], "quote_failed")
+        self.assertIn("quote_failed", row[3])
+
+    def test_event_store_terminal_trade_removes_stale_open_mirror_row(self):
+        with TemporaryDirectory() as tmp:
+            store = EventStore(Path(tmp) / "memetrader.db")
+            store.upsert_trade({"mint": "MintClose", "status": "open", "entry_time": 100.0})
+            store.upsert_trade({
+                "mint": "MintClose",
+                "status": "closed",
+                "entry_time": 100.0,
+                "close_time": 200.0,
+                "exit_reason": "target_profit",
+            })
+            with store.connect() as conn:
+                rows = conn.execute("SELECT status FROM trades ORDER BY status").fetchall()
+
+        self.assertEqual([row[0] for row in rows], ["closed"])
+
+    def test_trade_sync_rebuilds_sqlite_trades_to_match_json_buckets(self):
+        from utils.sync_state_to_sqlite import sync_trades
+
+        trades = {
+            "open_trades": [{"mint": "MintOpen", "status": "open", "entry_time": 1}],
+            "closed_trades": [{"mint": "MintClosed", "status": "closed", "entry_time": 2, "close_time": 3}],
+            "failed_trades": [{"mint": "MintFailed", "side": "buy", "time": 4, "failure_reason": "quote_failed"}],
+        }
+        with TemporaryDirectory() as tmp:
+            store = EventStore(Path(tmp) / "memetrader.db")
+            store.upsert_trade({"mint": "StaleOpen", "status": "open", "entry_time": 9})
+            result = sync_trades(store, trades, rebuild=True)
+
+        self.assertTrue(result["parity"])
+        self.assertEqual(result["actual"], {"open_trades": 1, "closed_trades": 1, "failed_trades": 1})
+
+    def test_trade_sync_backfills_decision_results_from_paper_trade_metadata(self):
+        from utils.sync_state_to_sqlite import sync_decision_results
+
+        trades = {
+            "open_trades": [{
+                "mint": "MintOpen",
+                "status": "open",
+                "entry_time": 1,
+                "paper_lane": "main",
+                "signal_metadata": {"decision_id": "dec_open", "paper_lane": "main"},
+            }],
+            "closed_trades": [{
+                "mint": "MintClosed",
+                "status": "closed",
+                "entry_time": 2,
+                "close_time": 3,
+                "total_pnl": 12.5,
+                "total_pnl_pct": 41,
+                "exit_reason": "target_profit",
+                "paper_lane": "exploration",
+                "signal_metadata": {"decision_id": "dec_closed", "paper_lane": "exploration"},
+            }],
+            "failed_trades": [{
+                "mint": "MintFailed",
+                "status": "failed",
+                "time": 4,
+                "failure_reason": "quote_failed",
+                "signal_metadata": {"decision_id": "dec_failed", "paper_lane": "main"},
+            }],
+        }
+        with TemporaryDirectory() as tmp:
+            store = EventStore(Path(tmp) / "memetrader.db")
+            for decision_id, lane in [
+                ("dec_open", "main"),
+                ("dec_closed", "exploration"),
+                ("dec_failed", "main"),
+            ]:
+                store.upsert_decision(build_decision_record({
+                    "decision_id": decision_id,
+                    "mint": decision_id,
+                    "paper_lane": lane,
+                    "should_trade": True,
+                    "score_reasons": ["paper decision"],
+                }))
+            result = sync_decision_results(store, trades)
+            rows = {row["decision_id"]: row for row in store.recent_decisions(limit=10)}
+
+        self.assertEqual(result["updated"], 3)
+        self.assertEqual(rows["dec_open"]["final_action"], "paper_opened")
+        self.assertEqual(rows["dec_open"]["trade_status"], "open")
+        self.assertEqual(rows["dec_closed"]["final_action"], "paper_closed")
+        self.assertEqual(rows["dec_closed"]["trade_status"], "closed")
+        self.assertEqual(rows["dec_closed"]["pnl"], 12.5)
+        self.assertEqual(rows["dec_closed"]["pnl_pct"], 41)
+        self.assertEqual(rows["dec_closed"]["result"]["paper_outcome"]["paper_lane"], "exploration")
+        self.assertEqual(rows["dec_failed"]["final_action"], "paper_failed")
+        self.assertEqual(rows["dec_failed"]["trade_status"], "failed")
+
+    def test_trade_sync_creates_synthetic_decisions_for_legacy_paper_trades(self):
+        from utils.sync_state_to_sqlite import sync_decision_results
+
+        trades = {
+            "closed_trades": [{
+                "mint": "LegacyMintClosed",
+                "status": "closed",
+                "entry_time": 100,
+                "close_time": 200,
+                "total_pnl": 18.5,
+                "total_pnl_pct": 61,
+                "entry_reason": "weighted_early_signal_CONFIRMATION_score_88.0_LOW_RISK_quote_ok",
+                "close_reason": "target_profit",
+                "wallets": ["WalletA"],
+                "size_usd": 60,
+            }],
+            "failed_trades": [{
+                "mint": "LegacyMintFailed",
+                "time": 300,
+                "failure_reason": "buy_failed",
+                "entry_reason": "weighted_early_signal_CONFIRMATION_score_77.0_LOW_RISK_quote_ok",
+                "wallets": ["WalletB"],
+            }],
+        }
+        with TemporaryDirectory() as tmp:
+            store = EventStore(Path(tmp) / "memetrader.db")
+            result = sync_decision_results(store, trades, create_missing=True)
+            rows = {row["mint"]: row for row in store.recent_decisions(limit=10)}
+
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(result["missing_decision_id"], 0)
+        self.assertEqual(rows["LegacyMintClosed"]["final_action"], "paper_closed")
+        self.assertEqual(rows["LegacyMintClosed"]["trade_status"], "closed")
+        self.assertEqual(rows["LegacyMintClosed"]["pnl"], 18.5)
+        self.assertEqual(rows["LegacyMintClosed"]["pnl_pct"], 61)
+        self.assertEqual(rows["LegacyMintClosed"]["paper_lane"], "main")
+        self.assertEqual(rows["LegacyMintFailed"]["final_action"], "paper_failed")
+        self.assertEqual(rows["LegacyMintFailed"]["trade_status"], "failed")
+
     def test_trade_result_preserves_decision_outcome_fields(self):
         result = build_trade_result({
             "mint": "Mint111",
@@ -1899,9 +3255,43 @@ class PositionCockpitTests(unittest.TestCase):
 
         self.assertEqual(result["context"], "paper_exit_closed")
         self.assertEqual(result["trade_status"], "closed")
+        self.assertEqual(result.get("decision_id"), "dec_test_2")
         self.assertEqual(result["pnl"], 12.25)
         self.assertEqual(result["pnl_pct"], 49)
         self.assertEqual(result["exit_reason"], "trailing_stop")
+
+    def test_trade_result_preserves_paper_outcome_details(self):
+        result = build_trade_result({
+            "mint": "Mint111",
+            "status": "closed",
+            "entry_time": 100,
+            "close_time": 200,
+            "entry_price": 0.001,
+            "exit_price": 0.0018,
+            "entry_liquidity_usd": 15000,
+            "exit_liquidity_usd": 21000,
+            "size_usd": 25,
+            "remaining_pct": 0,
+            "fees_usd": 0.18,
+            "total_pnl": 18.5,
+            "total_pnl_pct": 74,
+            "exit_reason": "target_profit",
+            "paper_lane": "exploration",
+            "exploration": True,
+            "signal_metadata": {
+                "decision_id": "dec_test_3",
+                "paper_lane": "exploration",
+                "exploration_result": {"lane": "exploration", "reason": "near_miss"},
+            },
+        }, "paper_exit_closed")
+
+        self.assertEqual(result["paper_outcome"]["paper_lane"], "exploration")
+        self.assertTrue(result["paper_outcome"]["exploration"])
+        self.assertEqual(result["paper_outcome"]["entry_price"], 0.001)
+        self.assertEqual(result["paper_outcome"]["exit_price"], 0.0018)
+        self.assertEqual(result["paper_outcome"]["position_size_usd"], 25)
+        self.assertEqual(result["paper_outcome"]["fees_usd"], 0.18)
+        self.assertEqual(result["paper_outcome"]["exploration_result"]["reason"], "near_miss")
 
     def test_event_store_records_swap_ticks_for_trade_stream_candles(self):
         with TemporaryDirectory() as tmp:
@@ -2005,6 +3395,168 @@ class PositionCockpitTests(unittest.TestCase):
         self.assertEqual(imported[0]["account"], "elonmusk")
         self.assertEqual(imported[0]["url"], "https://x.com/example/status/1")
         self.assertIn("grok", imported[0]["keywords"])
+
+    def test_reddit_post_maps_to_social_signal(self):
+        engine = SocialSignalEngine(state_file="unused.json")
+        signal = reddit_post_to_signal(
+            {
+                "id": "abc123",
+                "author": "AlphaPoster",
+                "title": "Fresh $BONK launch",
+                "selftext": "Mint 79ogrGd2bhRS455phmsJo8iHYzBusqgLeyxF9Tf5pump looks based",
+                "created_utc": 1234,
+                "permalink": "/r/SolanaMemeCoins/comments/abc123/fresh_bonk_launch/",
+                "score": 88,
+                "num_comments": 12,
+            },
+            subreddit="SolanaMemeCoins",
+            engine=engine,
+        )
+
+        self.assertEqual(signal["source_platform"], "reddit")
+        self.assertEqual(signal["account"], "reddit_solanamemecoins_alphaposter")
+        self.assertIn("bonk", signal["tickers"])
+        self.assertIn("79ogrGd2bhRS455phmsJo8iHYzBusqgLeyxF9Tf5pump", signal["mints"])
+        self.assertEqual(signal["engagement"]["score"], 88)
+        self.assertIn("reddit.com/r/SolanaMemeCoins/comments/abc123/fresh_bonk_launch", signal["url"])
+
+    def test_reddit_collector_stores_signals_and_status_without_trade_trigger(self):
+        listing = {
+            "data": {
+                "children": [
+                    {
+                        "data": {
+                            "id": "abc123",
+                            "author": "AlphaPoster",
+                            "title": "Fresh $BONK launch",
+                            "selftext": "Mint 79ogrGd2bhRS455phmsJo8iHYzBusqgLeyxF9Tf5pump looks based",
+                            "created_utc": 1234,
+                            "permalink": "/r/SolanaMemeCoins/comments/abc123/fresh_bonk_launch/",
+                            "score": 88,
+                            "num_comments": 12,
+                        }
+                    }
+                ]
+            }
+        }
+
+        def fetcher(url, timeout, headers):
+            return listing
+
+        with TemporaryDirectory() as tmp:
+            state_file = str(Path(tmp) / "social_state.json")
+            result = collect_reddit_social(
+                subreddits=["SolanaMemeCoins"],
+                limit=10,
+                state_file=state_file,
+                fetcher=fetcher,
+            )
+            engine = SocialSignalEngine(state_file=state_file)
+
+        self.assertEqual(result["collector"], "reddit")
+        self.assertEqual(result["stored_count"], 1)
+        self.assertFalse(result["trade_triggered"])
+        self.assertEqual(engine.signal_summary()["total"], 1)
+        self.assertEqual(result["status"]["collector"], "reddit")
+        self.assertEqual(result["status"]["event_count"], 1)
+
+    def test_reddit_collector_preserves_existing_canonical_events(self):
+        listing = {
+            "data": {
+                "children": [
+                    {
+                        "data": {
+                            "id": "abc123",
+                            "author": "AlphaPoster",
+                            "title": "Fresh $BONK launch",
+                            "created_utc": 1234,
+                            "permalink": "/r/SolanaMemeCoins/comments/abc123/fresh_bonk_launch/",
+                        }
+                    }
+                ]
+            }
+        }
+
+        def fetcher(url, timeout, headers):
+            return listing
+
+        with TemporaryDirectory() as tmp:
+            state_file = str(Path(tmp) / "social_state.json")
+            SocialSignalEngine(state_file=state_file).import_text_block(
+                "manual | Manual $WIF watch | https://example.test/manual"
+            )
+            collect_reddit_social(
+                subreddits=["SolanaMemeCoins"],
+                limit=10,
+                state_file=state_file,
+                fetcher=fetcher,
+            )
+            engine = SocialSignalEngine(state_file=state_file)
+
+        self.assertEqual(engine.signal_summary()["total"], 2)
+        accounts = engine.signal_summary()["accounts"]
+        self.assertEqual(accounts["manual"], 1)
+        self.assertEqual(accounts["reddit_solanamemecoins_alphaposter"], 1)
+
+    def test_reddit_collector_filters_duplicates_and_noisy_posts(self):
+        listing = {
+            "data": {
+                "children": [
+                    {
+                        "data": {
+                            "id": "abc123",
+                            "author": "AlphaPoster",
+                            "title": "Fresh $BONK launch",
+                            "selftext": "Mint 79ogrGd2bhRS455phmsJo8iHYzBusqgLeyxF9Tf5pump looks based",
+                            "created_utc": 1234,
+                            "permalink": "/r/SolanaMemeCoins/comments/abc123/fresh_bonk_launch/",
+                            "score": 88,
+                            "num_comments": 12,
+                        }
+                    },
+                    {
+                        "data": {
+                            "id": "abc123",
+                            "author": "AlphaPoster",
+                            "title": "Fresh $BONK launch",
+                            "created_utc": 1235,
+                            "permalink": "/r/SolanaMemeCoins/comments/abc123/fresh_bonk_launch/",
+                        }
+                    },
+                    {
+                        "data": {
+                            "id": "noise1",
+                            "author": "AutoModerator",
+                            "title": "Daily discussion thread",
+                            "selftext": "What are you buying today?",
+                            "created_utc": 1236,
+                            "permalink": "/r/SolanaMemeCoins/comments/noise1/daily/",
+                        }
+                    },
+                ]
+            }
+        }
+
+        def fetcher(url, timeout, headers):
+            return listing
+
+        with TemporaryDirectory() as tmp:
+            state_file = str(Path(tmp) / "social_state.json")
+            result = collect_reddit_social(
+                subreddits=["SolanaMemeCoins"],
+                limit=10,
+                state_file=state_file,
+                fetcher=fetcher,
+            )
+            engine = SocialSignalEngine(state_file=state_file)
+
+        self.assertEqual(result["fetched_count"], 3)
+        self.assertEqual(result["stored_count"], 1)
+        self.assertEqual(result["duplicate_count"], 1)
+        self.assertEqual(result["rejected_count"], 1)
+        self.assertEqual(result["rejection_reasons"]["noisy_author"], 1)
+        self.assertEqual(engine.signal_summary()["total"], 1)
+        self.assertFalse(result["broader_source_expansion"]["allowed"])
 
 
 if __name__ == "__main__":

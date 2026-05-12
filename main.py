@@ -7,6 +7,7 @@ from infra.rpc_client import SolanaRPC
 from paper_trader import PaperTrader
 from infra.market_checker import MarketChecker
 from execution.jupiter_quote import JupiterQuoteEngine
+from core.open_position_monitor import run_open_position_monitor
 from core.runtime_status import update_component
 
 
@@ -70,6 +71,7 @@ async def heartbeat(paper_trader, interval=30):
             update_component(
                 "bot",
                 status="alive",
+                last_error=None,
                 open_trades=open_count,
                 closed_trades=closed_count,
                 failed_trades=failed_count,
@@ -113,8 +115,9 @@ async def main():
     try:
         await asyncio.gather(
             rpc.connect(),
-            market_checker.run_price_loop(
+            run_open_position_monitor(
                 paper_trader=paper_trader,
+                market_checker=market_checker,
                 interval=price_interval,
             ),
             heartbeat(paper_trader, interval=30),

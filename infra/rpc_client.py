@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import aiohttp
 import websockets
 
@@ -26,6 +27,26 @@ def require_helius_url(kind):
     return f"https://mainnet.helius-rpc.com/?api-key={api_key}"
 
 
+def env_float(name, default, minimum=None):
+    try:
+        value = float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        value = float(default)
+    if minimum is not None:
+        return max(float(minimum), value)
+    return value
+
+
+def env_int(name, default, minimum=None):
+    try:
+        value = int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        value = int(default)
+    if minimum is not None:
+        return max(int(minimum), value)
+    return value
+
+
 class SolanaRPC:
     def __init__(self, tracked_wallets, paper_watch_wallets=None, paper_watch_loader=None):
         self.tracked_wallets = tracked_wallets
@@ -33,6 +54,8 @@ class SolanaRPC:
         self.observed_wallets = list(dict.fromkeys(list(tracked_wallets) + list(self.paper_watch_wallets)))
         self.subscribed_wallets = set()
         self.next_sub_id = 1
+        self.pending_subscription_wallets = {}
+        self.subscription_wallets = {}
         self.paper_watch_loader = paper_watch_loader
         self.scanner = Scanner(tracked_wallets, self, paper_watch_wallets=self.paper_watch_wallets)
         self.session = None
@@ -40,7 +63,18 @@ class SolanaRPC:
         self.jupiter_quote = None
 
         self.event_semaphore = asyncio.Semaphore(25)
+        self.max_event_backlog = env_int("MEMETRADER_MAX_EVENT_BACKLOG", 2500, minimum=100)
+        self.max_inflight_per_wallet = env_int("MEMETRADER_MAX_INFLIGHT_PER_WALLET", 40, minimum=1)
         self.active_tasks = set()
+        self.active_tasks_by_wallet = {}
+        self.transaction_cache = {}
+        self.transaction_cache_ttl = env_float("MEMETRADER_TRANSACTION_CACHE_TTL_SECONDS", 300, minimum=0)
+        self.transaction_cache_max = env_int("MEMETRADER_TRANSACTION_CACHE_MAX", 10000, minimum=100)
+        max_rps = env_float("MEMETRADER_GET_TRANSACTION_MAX_RPS", 8, minimum=0)
+        self.transaction_min_interval = (1 / max_rps) if max_rps > 0 else 0
+        self.transaction_rate_lock = asyncio.Lock()
+        self.next_transaction_at = 0
+        self.transaction_locks = {}
         update_component(
             "scanner",
             status="initialized",
@@ -87,17 +121,170 @@ class SolanaRPC:
             )
             return None
 
+    def cached_transaction(self, signature):
+        item = self.transaction_cache.get(signature)
+        if not item:
+            return None
+        age = time.time() - item["time"]
+        if age <= self.transaction_cache_ttl:
+            return item["data"]
+        self.transaction_cache.pop(signature, None)
+        return None
+
+    def store_transaction_cache(self, signature, data):
+        if self.transaction_cache_ttl <= 0:
+            return
+        self.transaction_cache[signature] = {
+            "time": time.time(),
+            "data": data,
+        }
+        if len(self.transaction_cache) <= self.transaction_cache_max:
+            return
+        overflow = len(self.transaction_cache) - self.transaction_cache_max
+        for key, _item in sorted(self.transaction_cache.items(), key=lambda row: row[1]["time"])[:overflow]:
+            self.transaction_cache.pop(key, None)
+
+    async def wait_for_transaction_budget(self):
+        if self.transaction_min_interval <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        async with self.transaction_rate_lock:
+            now = loop.time()
+            wait_seconds = self.next_transaction_at - now
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+                now = loop.time()
+            self.next_transaction_at = max(now, self.next_transaction_at) + self.transaction_min_interval
+
     async def get_transaction(self, signature):
-        return await self.rpc_call(
-            "getTransaction",
-            [
-                signature,
-                {
-                    "encoding": "jsonParsed",
-                    "maxSupportedTransactionVersion": 0,
-                    "commitment": "confirmed",
-                },
-            ],
+        cached = self.cached_transaction(signature)
+        if cached is not None:
+            increment_component(
+                "websocket",
+                "transaction_cache_hits",
+                last_transaction_signature=signature,
+            )
+            return cached
+
+        lock = self.transaction_locks.setdefault(signature, asyncio.Lock())
+        async with lock:
+            cached = self.cached_transaction(signature)
+            if cached is not None:
+                increment_component(
+                    "websocket",
+                    "transaction_cache_hits",
+                    last_transaction_signature=signature,
+                )
+                return cached
+
+            await self.wait_for_transaction_budget()
+            result = await self.rpc_call(
+                "getTransaction",
+                [
+                    signature,
+                    {
+                        "encoding": "jsonParsed",
+                        "maxSupportedTransactionVersion": 0,
+                        "commitment": "confirmed",
+                    },
+                ],
+            )
+            self.store_transaction_cache(signature, result)
+            increment_component(
+                "websocket",
+                "transaction_rpc_fetches",
+                transaction_cache_size=len(self.transaction_cache),
+                transaction_min_interval=round(self.transaction_min_interval, 4),
+                last_transaction_signature=signature,
+            )
+            return result
+
+    def should_drop_for_backlog(self):
+        return len(self.active_tasks) >= self.max_event_backlog
+
+    def should_drop_for_wallet(self, wallet):
+        if not wallet:
+            return False
+        return int(self.active_tasks_by_wallet.get(wallet, 0) or 0) >= self.max_inflight_per_wallet
+
+    def transaction_lock_count(self):
+        return len(self.transaction_locks)
+
+    def prune_transaction_locks(self):
+        if len(self.transaction_locks) <= self.transaction_cache_max:
+            return
+        for signature in list(self.transaction_locks)[: len(self.transaction_locks) - self.transaction_cache_max]:
+            lock = self.transaction_locks.get(signature)
+            if lock and lock.locked():
+                continue
+            self.transaction_locks.pop(signature, None)
+
+    def handle_subscription_ack(self, message):
+        try:
+            data = json.loads(message)
+        except Exception:
+            return False
+        if not isinstance(data, dict) or "id" not in data or "result" not in data:
+            return False
+        wallet = self.pending_subscription_wallets.pop(data.get("id"), None)
+        if not wallet:
+            return False
+        self.subscription_wallets[data.get("result")] = wallet
+        update_component(
+            "websocket",
+            status="subscription_ack",
+            subscribed_wallets=len(self.subscribed_wallets),
+            mapped_subscriptions=len(self.subscription_wallets),
+        )
+        return True
+
+    def wallet_for_message(self, message):
+        try:
+            data = json.loads(message)
+        except Exception:
+            return None
+        params = data.get("params") if isinstance(data, dict) else {}
+        subscription_id = params.get("subscription") if isinstance(params, dict) else None
+        return self.subscription_wallets.get(subscription_id)
+
+    async def enqueue_or_drop_message(self, message):
+        if self.handle_subscription_ack(message):
+            return None
+        wallet = self.wallet_for_message(message)
+        if self.should_drop_for_wallet(wallet):
+            increment_component(
+                "websocket",
+                "messages_dropped_wallet_backlog",
+                status="wallet_backlog_drop",
+                wallet=wallet,
+                wallet_active_tasks=int(self.active_tasks_by_wallet.get(wallet, 0) or 0),
+                max_inflight_per_wallet=self.max_inflight_per_wallet,
+                active_tasks=len(self.active_tasks),
+                max_event_backlog=self.max_event_backlog,
+            )
+            return None
+        if self.should_drop_for_backlog():
+            increment_component(
+                "websocket",
+                "messages_dropped_backlog",
+                status="backlog_drop",
+                active_tasks=len(self.active_tasks),
+                max_event_backlog=self.max_event_backlog,
+            )
+            return None
+        task = asyncio.create_task(self.handle_message_fast(message))
+        self.track_task(task, wallet=wallet)
+        return task
+
+    def runtime_pressure_fields(self):
+        return dict(
+            active_tasks=len(self.active_tasks),
+            wallet_backpressure_wallets=len(self.active_tasks_by_wallet),
+            max_inflight_per_wallet=self.max_inflight_per_wallet,
+            transaction_cache_size=len(self.transaction_cache),
+            transaction_lock_count=self.transaction_lock_count(),
+            transaction_min_interval=round(self.transaction_min_interval, 4),
+            max_event_backlog=self.max_event_backlog,
         )
 
     async def subscribe_wallets(self, websocket):
@@ -134,6 +321,7 @@ class SolanaRPC:
 
         await websocket.send(json.dumps(msg))
         self.subscribed_wallets.add(wallet)
+        self.pending_subscription_wallets[sub_id] = wallet
 
         if wait_for_response:
             # Initial subscription happens before the listener starts, so it is
@@ -141,6 +329,7 @@ class SolanaRPC:
             # do not consume from the shared websocket.
             try:
                 response = await asyncio.wait_for(websocket.recv(), timeout=5)
+                self.handle_subscription_ack(response)
 
                 if sub_id <= 3:
                     print("SUB RESPONSE:", response)
@@ -207,30 +396,52 @@ class SolanaRPC:
             )
             await self.scanner.handle_event(message)
 
-    def track_task(self, task):
+    def track_task(self, task, wallet=None):
         self.active_tasks.add(task)
-        task.add_done_callback(self.active_tasks.discard)
+        if wallet:
+            self.active_tasks_by_wallet[wallet] = int(self.active_tasks_by_wallet.get(wallet, 0) or 0) + 1
+
+        def cleanup(done_task):
+            self.active_tasks.discard(done_task)
+            if wallet:
+                remaining = int(self.active_tasks_by_wallet.get(wallet, 0) or 0) - 1
+                if remaining > 0:
+                    self.active_tasks_by_wallet[wallet] = remaining
+                else:
+                    self.active_tasks_by_wallet.pop(wallet, None)
+
+        task.add_done_callback(cleanup)
 
     async def scanner_heartbeat(self, interval=30):
         while True:
             update_component(
                 "scanner",
                 status="listening",
+                last_error=None,
                 tracked_wallets=len(self.tracked_wallets),
                 paper_watch_wallets=len(self.paper_watch_wallets),
                 observed_wallets=len(self.observed_wallets),
-                active_tasks=len(self.active_tasks),
                 seen_signatures=len(self.scanner.seen_signatures),
                 seen_signals=len(self.scanner.seen_signals),
                 heartbeat_interval=interval,
+                **self.runtime_pressure_fields(),
             )
+            update_component(
+                "websocket",
+                status="subscribed" if self.subscribed_wallets else "listening",
+                subscribed_wallets=len(self.subscribed_wallets),
+                tracked_wallets=len(self.tracked_wallets),
+                paper_watch_wallets=len(self.paper_watch_wallets),
+                observed_wallets=len(self.observed_wallets),
+                **self.runtime_pressure_fields(),
+            )
+            self.prune_transaction_locks()
             await asyncio.sleep(interval)
 
     async def listen(self, websocket):
         while True:
             message = await websocket.recv()
-            task = asyncio.create_task(self.handle_message_fast(message))
-            self.track_task(task)
+            await self.enqueue_or_drop_message(message)
 
     async def connect(self):
         reconnect_delay = 1
@@ -255,6 +466,7 @@ class SolanaRPC:
                     update_component(
                         "websocket",
                         status="connected",
+                        last_error=None,
                         tracked_wallets=len(self.tracked_wallets),
                     )
                     await self.subscribe_wallets(websocket)

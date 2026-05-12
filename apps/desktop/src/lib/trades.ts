@@ -64,6 +64,12 @@ export function summarizeTrades(trades: TradesPayload | null): TradesSummary {
   };
 }
 
+export function tradeLedgerSourceLabel(trades: TradesPayload | null): string {
+  if (!trades) return "loading source";
+  const source = trades.source || "unknown";
+  return trades.source_detail ? `${source} | ${trades.source_detail}` : source;
+}
+
 function sumTradePnl(trades: TradeRecord[]): number {
   return trades.reduce((total, trade) => total + tradePnl(trade), 0);
 }

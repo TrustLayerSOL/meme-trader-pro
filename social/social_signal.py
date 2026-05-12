@@ -38,17 +38,38 @@ class SocialSignalEngine:
 
     def load_state(self):
         if not os.path.exists(self.state_file):
-            return {"signals": []}
+            return {"events": []}
 
         try:
             with open(self.state_file, "r") as f:
                 return json.load(f)
         except Exception:
-            return {"signals": []}
+            return {"events": []}
 
     def save_state(self):
         self.state["last_updated"] = time.time()
         atomic_write_json(self.state_file, self.state)
+
+    def signal_rows(self):
+        rows = []
+        seen = set()
+        for key in ("events", "signals"):
+            source_rows = self.state.get(key, [])
+            if not isinstance(source_rows, list):
+                continue
+            for signal in source_rows:
+                if not isinstance(signal, dict):
+                    continue
+                row_key = signal.get("event_id") or (
+                    signal.get("account"),
+                    signal.get("timestamp"),
+                    self.clean_text(signal.get("text", "")).lower(),
+                )
+                if row_key in seen:
+                    continue
+                seen.add(row_key)
+                rows.append(signal)
+        return rows
 
     def clean_text(self, text):
         text = str(text or "")
@@ -210,11 +231,12 @@ class SocialSignalEngine:
             expires_hours=expires_hours,
         )
 
-        self.state.setdefault("signals", [])
-        self.state["signals"].insert(0, signal)
+        self.state.setdefault("events", [])
+        self.state["events"].insert(0, signal)
 
         # Keep recent 500 social signals only
-        self.state["signals"] = self.dedupe_signals(self.state["signals"])[:500]
+        self.state["events"] = self.dedupe_signals(self.state["events"])[:500]
+        self.state.pop("signals", None)
 
         self.save_state()
 
@@ -270,15 +292,16 @@ class SocialSignalEngine:
         if imported:
             def updater(state):
                 if not isinstance(state, dict):
-                    state = {"signals": []}
-                signals = state.get("signals", [])
-                if not isinstance(signals, list):
-                    signals = []
-                state["signals"] = self.dedupe_signals(imported + signals)[:500]
+                    state = {"events": []}
+                events = state.get("events", [])
+                if not isinstance(events, list):
+                    events = state.get("signals") if isinstance(state.get("signals"), list) else []
+                state["events"] = self.dedupe_signals(imported + events)[:500]
+                state.pop("signals", None)
                 state["last_updated"] = time.time()
                 return state
 
-            self.state = locked_update_json(self.state_file, {"signals": []}, updater)
+            self.state = locked_update_json(self.state_file, {"events": []}, updater)
 
         return imported
 
@@ -294,7 +317,7 @@ class SocialSignalEngine:
         now = time.time()
 
         signals = []
-        for signal in self.state.get("signals", []):
+        for signal in self.signal_rows():
             if not isinstance(signal, dict):
                 continue
             if self.safe_float(signal.get("expires_at"), 0) > now:
@@ -303,7 +326,7 @@ class SocialSignalEngine:
         return signals
 
     def signal_summary(self):
-        signals = [s for s in self.state.get("signals", []) if isinstance(s, dict)]
+        signals = self.signal_rows()
         active = self.get_active_signals()
         accounts = {}
         sentiments = {"bullish": 0, "bearish": 0, "neutral": 0}

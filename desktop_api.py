@@ -15,6 +15,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from core.data_freshness import DataFreshness
+from core.decision_explainer import generate_decision_explanation
+from core.decision_explainer import generate_google_decision_explanation
+from core.decision_explainer import generate_groq_decision_explanation
 from core.env_loader import load_env
 from core.json_store import locked_update_json
 from core.json_store import read_json
@@ -62,6 +65,9 @@ DESKTOP_API_TOKEN = os.getenv("MTP_DESKTOP_API_TOKEN")
 SESSION_FILE = ROOT / "data" / "desktop_api_session.json"
 CHART_METRICS = ("market_cap", "price", "liquidity")
 PROVIDER_HEALTH_TTL_SECONDS = 30
+QUOTE_COOLDOWN_RECOVERY_SECONDS = 300
+SOCIAL_SOURCE_FRESH_SECONDS = 3600
+SOCIAL_COLLECTOR_FRESH_SECONDS = 1800
 PROVIDER_HEALTH_CACHE = {"updated_at": 0, "payload": None}
 STATE_CACHE_TTL_SECONDS = 0.75
 STATE_CACHE = {"updated_at": 0, "data": None}
@@ -79,6 +85,7 @@ ALLOWED_CORS_ORIGINS = {
     "http://tauri.localhost",
     "https://tauri.localhost",
 }
+ALLOWED_DEV_CORS_PORTS = {5173, 5174, 5175, 5176, 1420}
 
 
 def safe_float(value, default=0.0):
@@ -131,6 +138,13 @@ def allowed_cors_origin(origin):
     origin = str(origin).strip()
     if origin in ALLOWED_CORS_ORIGINS:
         return origin
+    parsed = urlparse(origin)
+    if (
+        parsed.scheme == "http"
+        and parsed.hostname in {"127.0.0.1", "localhost"}
+        and parsed.port in ALLOWED_DEV_CORS_PORTS
+    ):
+        return origin
     return None
 
 
@@ -182,6 +196,32 @@ def age_seconds(timestamp):
     return max(0, time.time() - value)
 
 
+def runtime_fresh_seconds(item):
+    item = item if isinstance(item, dict) else {}
+    heartbeat_interval = safe_float(item.get("heartbeat_interval"), 0)
+    if heartbeat_interval > 0:
+        return max(FRESH_SECONDS, heartbeat_interval * 2)
+    return FRESH_SECONDS
+
+
+def quote_runtime_health(item, item_age, fresh):
+    item = item if isinstance(item, dict) else {}
+    state = str(item.get("state") or item.get("status") or "").lower()
+    last_error = item.get("last_error") or item.get("last_rpc_error")
+    if state in ("cooldown_after_429", "http_429"):
+        if item_age is not None and item_age > QUOTE_COOLDOWN_RECOVERY_SECONDS:
+            return True, state, f"last quote cooldown expired {int(item_age)}s ago; idle is healthy"
+        return False, state, runtime_component_detail(item, state, False) or "quote provider cooling down"
+    if state.startswith("http_") or state in ("missing_api_key", "quote_exception") or last_error:
+        return False, state or "quote_error", runtime_component_detail(item, state, False)
+    if state == "quote_ok":
+        if fresh:
+            return True, "quote_ok", runtime_component_detail(item, state, True)
+        if item_age is not None:
+            return True, "quote_ok", f"last quote OK {int(item_age)}s ago; idle is healthy"
+    return fresh, state or "unknown", runtime_component_detail(item, state, fresh)
+
+
 def read_state_files():
     now = time.time()
     with STATE_CACHE_LOCK:
@@ -191,7 +231,7 @@ def read_state_files():
             return cached
 
     data = {
-        "paper": read_json(PAPER_TRADES_FILE, {"open_trades": [], "closed_trades": [], "failed_trades": []}),
+        "paper": load_paper_trade_state()[0],
         "watchlist": read_json(WATCHLIST_FILE, []),
         "runtime": load_status(),
         "social": read_json(SOCIAL_STATE_FILE, {"events": []}),
@@ -259,9 +299,15 @@ def build_runtime_payload(state=None):
 
 
 def build_freshness_payload():
+    state = read_state_files()
     return {
         "generated_at": time.time(),
         "freshness": DataFreshness().report(),
+        "social": build_social_freshness_payload(
+            social_state=state.get("social"),
+            catalyst_state=state.get("catalysts"),
+            collector_state=state.get("runtime"),
+        ),
     }
 
 
@@ -309,7 +355,7 @@ def build_readiness_payload(state=None):
         rows.append({
             "check": f"runtime_{component['name']}",
             "status": status,
-            "detail": "fresh" if component["fresh"] else "stale or missing",
+            "detail": component.get("detail") or ("fresh" if component["fresh"] else "stale or missing"),
         })
     counts = {
         "OK": len([row for row in rows if row["status"] == "OK"]),
@@ -331,17 +377,31 @@ def summarize_runtime(runtime):
     scanner_fresh = scanner_age is not None and scanner_age <= FRESH_SECONDS
     components = []
     stale = []
-    for name in ("bot", "websocket", "scanner", "market", "quotes", "watchdog", "wallet_discovery"):
+    for name in ("bot", "websocket", "scanner", "market", "quotes", "watchdog", "open_position_monitor", "wallet_discovery"):
         item = runtime.get(name, {}) if isinstance(runtime, dict) else {}
         item_age = age_seconds(item.get("updated_at")) if isinstance(item, dict) else None
         state = item.get("state") or item.get("status") or "unknown" if isinstance(item, dict) else "unknown"
-        fresh = item_age is not None and item_age <= FRESH_SECONDS
+        fresh_seconds = runtime_fresh_seconds(item)
+        fresh = item_age is not None and item_age <= fresh_seconds
         detail = runtime_component_detail(item, state, fresh)
+        if name == "quotes":
+            fresh, state, detail = quote_runtime_health(item, item_age, fresh)
         if name == "websocket" and not fresh and scanner_fresh and item.get("subscribed_wallets"):
             fresh = True
             state = "subscribed"
             item_age = scanner_age
             detail = "scanner heartbeat fresh; websocket subscription active"
+        if name == "scanner" and scanner_fresh:
+            feed_age = age_seconds(item.get("last_swap_tick_at"))
+            feed_fresh_seconds = safe_float(item.get("wallet_feed_fresh_seconds"), 300)
+            if feed_age is not None and feed_fresh_seconds > 0 and feed_age > feed_fresh_seconds:
+                if int(item.get("wallet_events", 0) or 0) > 0:
+                    state = "wallet_feed_quiet"
+                    detail = f"scanner events fresh; route-backed swap ticks quiet for {int(feed_age)}s"
+                else:
+                    fresh = False
+                    state = "wallet_feed_stale"
+                    detail = f"wallet feed stale; last swap tick {int(feed_age)}s old"
         row = {
             "name": name,
             "state": state,
@@ -472,6 +532,7 @@ def build_paper_review_payload(state=None):
         "recommended_closed_trades": recommended_closed,
         "metrics": metrics,
         "lane_metrics": lane_metrics,
+        "decision_lane_report": build_decision_lane_report_payload(state=state),
         "open_trades": len(open_trades),
         "readiness_gaps": readiness_gaps,
         "exit_reasons": reason_counts(closed, "exit_reason", "close_reason", "reason"),
@@ -738,9 +799,30 @@ def build_position_detail_payload(mint):
     selected_raw = next((position for position in raw_positions if position.get("mint") == mint), None)
     selected = compact_position(selected_raw) if selected_raw else None
     snapshots = fetch_snapshot_rows(mint=mint, limit=50)
+    position_source, position_source_detail = position_detail_source(selected_raw)
+    mixed_market_fields = bool(selected_raw and snapshots)
     return {
         "generated_at": time.time(),
         "mint": mint,
+        "position_source": position_source,
+        "position_source_detail": position_source_detail,
+        "snapshot_source": "sqlite_token_snapshots",
+        "snapshot_source_detail": f"{DB_FILE.relative_to(ROOT)}:token_snapshots",
+        "source_contract": {
+            "position": position_source or "paper_trades_json_or_manual_watchlist_json",
+            "snapshots": "sqlite_token_snapshots",
+            "social": "social_state_json",
+            "catalysts": "catalyst_cards_json",
+            "wallet_stats": "wallet_performance_json_and_wallet_behavior_json",
+            "wallet_context": "wallet_performance_json_and_wallet_behavior_json_and_paper_trades_json",
+        },
+        "mixed_market_fields": mixed_market_fields,
+        "mixed_market_fields_note": (
+            "position price/market/liquidity can come from JSON position state while latest_snapshot "
+            "comes from SQLite token_snapshots"
+            if mixed_market_fields else
+            "selected-position detail declares separate JSON and SQLite sources; no mixed market fields are present in this response"
+        ),
         "position": selected,
         "latest_snapshot": snapshots[-1] if snapshots else None,
         "snapshot_count": len(snapshots),
@@ -750,6 +832,15 @@ def build_position_detail_payload(mint):
         "wallet_context": build_wallet_context_for_mint(mint, state),
         "live_execution_locked": True,
     }
+
+
+def position_detail_source(position):
+    source = position.get("source") if isinstance(position, dict) else None
+    if source == "paper_trade":
+        return "paper_trades_json", str(PAPER_TRADES_FILE.relative_to(ROOT))
+    if source == "manual_watchlist":
+        return "manual_watchlist_json", str(WATCHLIST_FILE.relative_to(ROOT))
+    return None, None
 
 
 def compact_position(row):
@@ -915,10 +1006,235 @@ def summarize_social_payload(social_state, limit=100):
     rows = social_rows(social_state)
     return {
         "generated_at": time.time(),
-        "source": "social_state",
+        "source": "social_state_json",
+        "source_detail": str(SOCIAL_STATE_FILE.relative_to(ROOT)),
+        "source_contract": {
+            "social": "social_state_json",
+            "catalysts": "catalyst_cards_json",
+            "decision_social_evidence": "sqlite_decision_records_embedded_evidence",
+        },
         "count": len(rows),
         "items": rows[:limit],
+        "freshness": build_social_freshness_payload(social_state=social_state),
         "live_execution_locked": True,
+    }
+
+
+def numeric_timestamp(*values):
+    for value in values:
+        parsed = safe_float(value, None)
+        if parsed and parsed > 1000000000:
+            return parsed
+    return None
+
+
+def row_timestamp(row):
+    if not isinstance(row, dict):
+        return None
+    return numeric_timestamp(
+        row.get("last_success_at"),
+        row.get("updated_at"),
+        row.get("created_at"),
+        row.get("discovered_at"),
+        row.get("timestamp"),
+        row.get("time"),
+    )
+
+
+def latest_row_timestamp(rows):
+    timestamps = [row_timestamp(row) for row in rows if isinstance(row, dict)]
+    timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+    return max(timestamps) if timestamps else None
+
+
+def social_freshness_status(last_timestamp, fresh_seconds, empty=False, enabled=True, error=None):
+    if not enabled:
+        return "DISABLED", None
+    if error and last_timestamp is None:
+        return "ERROR", None
+    if empty or last_timestamp is None:
+        return "EMPTY", None
+    age = age_seconds(last_timestamp)
+    if age is None:
+        return "UNKNOWN", age
+    if age <= fresh_seconds:
+        return "FRESH", age
+    if age <= fresh_seconds * 3:
+        return "STALE", age
+    return "OLD", age
+
+
+def format_age_seconds(seconds):
+    if seconds is None:
+        return "N/A"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.1f}m"
+    if seconds < 86400:
+        return f"{seconds / 3600:.1f}h"
+    return f"{seconds / 86400:.1f}d"
+
+
+def social_source_row(
+    source,
+    label,
+    status,
+    age,
+    event_count=0,
+    detail="",
+    last_success_at=None,
+    collector_type="local",
+    fresh_seconds=None,
+    enabled=True,
+    last_error=None,
+):
+    return {
+        "source": source,
+        "label": label,
+        "status": status,
+        "age_seconds": age,
+        "age": format_age_seconds(age),
+        "fresh_seconds": fresh_seconds,
+        "event_count": int(event_count or 0),
+        "enabled": enabled,
+        "last_success_at": last_success_at,
+        "last_error": last_error,
+        "collector_type": collector_type,
+        "detail": detail,
+    }
+
+
+def normalize_collector_rows(collector_state):
+    if not isinstance(collector_state, dict):
+        return []
+    rows = collector_state.get("collectors")
+    if rows is None and isinstance(collector_state.get("social_collectors"), (list, dict)):
+        rows = collector_state.get("social_collectors")
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict)]
+    if isinstance(rows, dict):
+        return [{**value, "collector": key} for key, value in rows.items() if isinstance(value, dict)]
+    return []
+
+
+def build_social_freshness_payload(social_state=None, catalyst_state=None, collector_state=None):
+    social_state = social_state if isinstance(social_state, dict) else read_json(SOCIAL_STATE_FILE, {"events": []})
+    catalyst_state = catalyst_state if isinstance(catalyst_state, dict) else read_json(CATALYST_CARDS_FILE, {"cards": []})
+    collector_state = collector_state if isinstance(collector_state, dict) else load_status()
+
+    rows = []
+    social_events = social_rows(social_state)
+    social_latest = latest_row_timestamp(social_events)
+    social_status, social_age = social_freshness_status(
+        social_latest,
+        SOCIAL_SOURCE_FRESH_SECONDS,
+        empty=not bool(social_events),
+    )
+    rows.append(social_source_row(
+        "manual_social_import",
+        "Manual Social Import",
+        social_status,
+        social_age,
+        event_count=len(social_events),
+        detail="latest manual import is stale" if social_status in ("STALE", "OLD") else "local social imports",
+        last_success_at=social_latest,
+        collector_type="manual",
+        fresh_seconds=SOCIAL_SOURCE_FRESH_SECONDS,
+    ))
+
+    catalyst_cards = catalyst_rows(catalyst_state)
+    catalyst_latest = latest_row_timestamp(catalyst_cards) or numeric_timestamp(
+        catalyst_state.get("generated_at"),
+        catalyst_state.get("last_updated"),
+        catalyst_state.get("updated_at"),
+    )
+    catalyst_status, catalyst_age = social_freshness_status(
+        catalyst_latest,
+        SOCIAL_SOURCE_FRESH_SECONDS,
+        empty=not bool(catalyst_cards),
+    )
+    rows.append(social_source_row(
+        "catalyst_cards",
+        "Catalyst Cards",
+        catalyst_status,
+        catalyst_age,
+        event_count=len(catalyst_cards),
+        detail="latest catalyst cards are stale" if catalyst_status in ("STALE", "OLD") else "local catalyst cards",
+        last_success_at=catalyst_latest,
+        collector_type="derived",
+        fresh_seconds=SOCIAL_SOURCE_FRESH_SECONDS,
+    ))
+
+    collector_rows = normalize_collector_rows(collector_state)
+    if not collector_rows:
+        rows.append(social_source_row(
+            "automated_collectors",
+            "Automated Collectors",
+            "NOT_CONFIGURED",
+            None,
+            detail="no automated collector status file yet",
+            collector_type="automation",
+            enabled=False,
+        ))
+
+    for collector in collector_rows:
+        name = str(collector.get("collector") or collector.get("name") or collector.get("source") or "collector").strip() or "collector"
+        enabled = collector.get("enabled", True) is not False
+        last_success_at = numeric_timestamp(
+            collector.get("last_success_at"),
+            collector.get("last_event_at"),
+            collector.get("updated_at"),
+        )
+        last_error = str(collector.get("last_error") or "").strip()
+        fresh_seconds = bounded_int(collector.get("fresh_seconds"), SOCIAL_COLLECTOR_FRESH_SECONDS, 60, 86400)
+        status, age = social_freshness_status(
+            last_success_at,
+            fresh_seconds,
+            empty=False,
+            enabled=enabled,
+            error=last_error,
+        )
+        detail_parts = []
+        if not enabled:
+            detail_parts.append("collector disabled")
+        elif last_error:
+            detail_parts.append(last_error)
+        else:
+            detail_parts.append("collector heartbeat")
+        rows.append(social_source_row(
+            name,
+            str(collector.get("label") or f"{name.title()} Collector"),
+            status,
+            age,
+            event_count=collector.get("event_count") or collector.get("events_seen") or 0,
+            detail="; ".join(detail_parts),
+            last_success_at=last_success_at,
+            collector_type=str(collector.get("type") or "automation"),
+            fresh_seconds=fresh_seconds,
+            enabled=enabled,
+            last_error=last_error or None,
+        ))
+
+    counts = {}
+    for row in rows:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+
+    if counts.get("ERROR") or counts.get("OLD"):
+        overall = "FAIL"
+    elif counts.get("STALE") or counts.get("UNKNOWN") or counts.get("EMPTY") or counts.get("NOT_CONFIGURED"):
+        overall = "WARN"
+    else:
+        overall = "OK"
+
+    return {
+        "generated_at": time.time(),
+        "mode": "SOCIAL_FRESHNESS_READ_ONLY",
+        "live_execution_locked": True,
+        "overall": overall,
+        "counts": counts,
+        "rows": rows,
+        "detail": "Freshness only. This does not trigger trades or bypass decision gates.",
     }
 
 
@@ -1169,6 +1485,202 @@ def parse_payload_json(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
+def fetch_trade_rows(limit=5000):
+    rows = read_sqlite_rows(
+        """
+        SELECT mint, status, entry_time, close_time, pnl, pnl_pct, reason, payload_json
+        FROM trades
+        ORDER BY COALESCE(close_time, entry_time, 0) DESC, id DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    )
+    parsed = []
+    for row in rows:
+        payload = parse_payload_json(row["payload_json"])
+        if not payload:
+            payload = {
+                "mint": row["mint"],
+                "token_mint": row["mint"],
+                "status": row["status"],
+                "entry_time": row["entry_time"],
+                "close_time": row["close_time"],
+                "total_pnl": row["pnl"],
+                "total_pnl_pct": row["pnl_pct"],
+                "reason": row["reason"],
+            }
+        elif not payload.get("status") and row["status"]:
+            payload = dict(payload)
+            payload["status"] = row["status"]
+        parsed.append({
+            "mint": row["mint"],
+            "status": row["status"] or payload.get("status"),
+            "entry_time": row["entry_time"],
+            "close_time": row["close_time"],
+            "payload": payload,
+        })
+    return parsed
+
+
+def read_sqlite_rows(query, params=()):
+    if not DB_FILE.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(query, params).fetchall()
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return [dict(row) for row in rows]
+
+
+def fetch_alert_rows(limit=100):
+    rows = read_sqlite_rows(
+        """
+        SELECT time, mint, signal_type, total_score, edge_score,
+               edge_verdict, should_trade, risk_label, payload_json
+        FROM alerts
+        ORDER BY time DESC, id DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    )
+    parsed = []
+    for row in rows:
+        payload = parse_payload_json(row.get("payload_json"))
+        if not payload:
+            payload = {
+                "time": row.get("time"),
+                "mint": row.get("mint"),
+                "type": row.get("signal_type"),
+                "total_score": row.get("total_score"),
+                "edge_score": row.get("edge_score"),
+                "edge_verdict": row.get("edge_verdict"),
+                "should_trade": bool(row.get("should_trade")),
+                "risk_label": row.get("risk_label"),
+            }
+        parsed.append({
+            "time": row.get("time"),
+            "mint": row.get("mint"),
+            "payload": payload,
+        })
+    return parsed
+
+
+def paper_trade_bucket(status=None, payload=None):
+    payload = payload if isinstance(payload, dict) else {}
+    status = str(status or "").lower()
+    if (
+        "fail" in status
+        or payload.get("failure_reason")
+        or payload.get("failed_reason")
+        or payload.get("error")
+        or payload.get("buy_failed")
+    ):
+        return "failed_trades"
+    if (
+        status in ("closed", "sold", "exited")
+        or "closed" in status
+        or payload.get("close_time")
+        or payload.get("exit_time")
+        or payload.get("exit_reason")
+        or payload.get("close_reason")
+    ):
+        return "closed_trades"
+    return "open_trades"
+
+
+def paper_state_from_trade_rows(rows):
+    state = {"open_trades": [], "closed_trades": [], "failed_trades": []}
+    for row in rows or []:
+        payload = row.get("payload") if isinstance(row, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        status = row.get("status") or payload.get("status")
+        state[paper_trade_bucket(status, payload)].append(payload)
+    return state
+
+
+def paper_state_counts(state):
+    state = state if isinstance(state, dict) else {}
+    return {
+        key: len(state.get(key) if isinstance(state.get(key), list) else [])
+        for key in ("open_trades", "closed_trades", "failed_trades")
+    }
+
+
+def trade_identity(row):
+    row = row if isinstance(row, dict) else {}
+    return (
+        trade_mint(row),
+        str(first_present(row.get("entry_time"), row.get("time"), "")),
+        str(first_present(row.get("close_time"), row.get("exit_time"), "")),
+        str(first_present(row.get("failure_reason"), row.get("exit_reason"), row.get("close_reason"), row.get("reason"), "")),
+    )
+
+
+def paper_state_signature(state):
+    state = state if isinstance(state, dict) else {}
+    signature = {}
+    for key in ("open_trades", "closed_trades", "failed_trades"):
+        rows = state.get(key) if isinstance(state.get(key), list) else []
+        signature[key] = sorted(trade_identity(row) for row in rows if isinstance(row, dict))
+    return signature
+
+
+def paper_states_match(left, right):
+    return paper_state_signature(left) == paper_state_signature(right)
+
+
+def load_paper_trade_state():
+    rows = fetch_trade_rows()
+    json_data = read_json(PAPER_TRADES_FILE, {"open_trades": [], "closed_trades": [], "failed_trades": []})
+    paper = json_data if isinstance(json_data, dict) else {}
+    json_state = {
+        "open_trades": paper.get("open_trades", []) if isinstance(paper.get("open_trades"), list) else [],
+        "closed_trades": paper.get("closed_trades", []) if isinstance(paper.get("closed_trades"), list) else [],
+        "failed_trades": paper.get("failed_trades", []) if isinstance(paper.get("failed_trades"), list) else [],
+    }
+    if rows:
+        sqlite_state = paper_state_from_trade_rows(rows)
+        if paper_states_match(sqlite_state, json_state):
+            return sqlite_state, {
+                "source": "sqlite_trades",
+                "source_detail": f"{DB_FILE.relative_to(ROOT)}:trades",
+                "fallback_source": "paper_trades_json",
+                "fallback_reason": None,
+                "mirror_warning": None,
+                "sqlite_counts": paper_state_counts(sqlite_state),
+                "json_counts": paper_state_counts(json_state),
+            }
+        return json_state, {
+            "source": "paper_trades_json",
+            "source_detail": str(PAPER_TRADES_FILE.relative_to(ROOT)),
+            "fallback_source": "sqlite_trades",
+            "fallback_reason": "sqlite_trades_parity_mismatch",
+            "mirror_warning": (
+                f"sqlite_trades parity mismatch; using paper_trades_json "
+                f"(sqlite={paper_state_counts(sqlite_state)}, json={paper_state_counts(json_state)})"
+            ),
+            "sqlite_counts": paper_state_counts(sqlite_state),
+            "json_counts": paper_state_counts(json_state),
+        }
+    return json_state, {
+        "source": "paper_trades_json",
+        "source_detail": str(PAPER_TRADES_FILE.relative_to(ROOT)),
+        "fallback_source": "sqlite_trades",
+        "fallback_reason": "sqlite_trades_empty",
+        "mirror_warning": None,
+        "sqlite_counts": {"open_trades": 0, "closed_trades": 0, "failed_trades": 0},
+        "json_counts": paper_state_counts(json_state),
+    }
+
+
 def fetch_event_rows(limit=120):
     if not DB_FILE.exists():
         return []
@@ -1205,6 +1717,51 @@ def fetch_event_rows(limit=120):
     return parsed
 
 
+def decision_from_sqlite_row(row):
+    return {
+        "decision_id": row["decision_id"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "age_seconds": age_seconds(row["updated_at"]),
+        "mint": row["mint"],
+        "signal_type": row["signal_type"],
+        "scanner_stage": row["scanner_stage"],
+        "final_action": row["final_action"],
+        "action_reason": row["action_reason"],
+        "paper_lane": row["paper_lane"],
+        "should_trade": bool(row["should_trade"]),
+        "total_score": row["total_score"],
+        "threshold": row["threshold"],
+        "edge_score": row["edge_score"],
+        "edge_verdict": row["edge_verdict"],
+        "risk_label": row["risk_label"],
+        "risk_score": row["risk_score"],
+        "buy_quote_pass": bool(row["buy_quote_pass"]) if row["buy_quote_pass"] is not None else None,
+        "sell_quote_pass": bool(row["sell_quote_pass"]) if row["sell_quote_pass"] is not None else None,
+        "position_size_usd": row["position_size_usd"],
+        "trade_id": row["trade_id"],
+        "trade_status": row["trade_status"],
+        "entry_time": row["entry_time"],
+        "close_time": row["close_time"],
+        "pnl": row["pnl"],
+        "pnl_pct": row["pnl_pct"],
+        "payload": parse_payload_json(row["payload_json"]),
+        "result": parse_payload_json(row["result_json"]) if row["result_json"] else None,
+    }
+
+
+def decision_select_columns():
+    return """
+        decision_id, created_at, updated_at, mint, signal_type,
+        scanner_stage, final_action, action_reason, paper_lane,
+        should_trade, total_score, threshold, edge_score,
+        edge_verdict, risk_label, risk_score, buy_quote_pass,
+        sell_quote_pass, position_size_usd, trade_id,
+        trade_status, entry_time, close_time, pnl, pnl_pct,
+        payload_json, result_json
+    """
+
+
 def fetch_decision_rows(limit=80, mint=None):
     if not DB_FILE.exists():
         return []
@@ -1219,13 +1776,7 @@ def fetch_decision_rows(limit=80, mint=None):
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"""
-            SELECT decision_id, created_at, updated_at, mint, signal_type,
-                   scanner_stage, final_action, action_reason, paper_lane,
-                   should_trade, total_score, threshold, edge_score,
-                   edge_verdict, risk_label, risk_score, buy_quote_pass,
-                   sell_quote_pass, position_size_usd, trade_id,
-                   trade_status, entry_time, close_time, pnl, pnl_pct,
-                   payload_json, result_json
+            SELECT {decision_select_columns()}
             FROM decision_records
             {where}
             ORDER BY updated_at DESC, created_at DESC
@@ -1241,39 +1792,33 @@ def fetch_decision_rows(limit=80, mint=None):
         except Exception:
             pass
 
-    decisions = []
-    for row in rows:
-        decisions.append({
-            "decision_id": row["decision_id"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "age_seconds": age_seconds(row["updated_at"]),
-            "mint": row["mint"],
-            "signal_type": row["signal_type"],
-            "scanner_stage": row["scanner_stage"],
-            "final_action": row["final_action"],
-            "action_reason": row["action_reason"],
-            "paper_lane": row["paper_lane"],
-            "should_trade": bool(row["should_trade"]),
-            "total_score": row["total_score"],
-            "threshold": row["threshold"],
-            "edge_score": row["edge_score"],
-            "edge_verdict": row["edge_verdict"],
-            "risk_label": row["risk_label"],
-            "risk_score": row["risk_score"],
-            "buy_quote_pass": bool(row["buy_quote_pass"]) if row["buy_quote_pass"] is not None else None,
-            "sell_quote_pass": bool(row["sell_quote_pass"]) if row["sell_quote_pass"] is not None else None,
-            "position_size_usd": row["position_size_usd"],
-            "trade_id": row["trade_id"],
-            "trade_status": row["trade_status"],
-            "entry_time": row["entry_time"],
-            "close_time": row["close_time"],
-            "pnl": row["pnl"],
-            "pnl_pct": row["pnl_pct"],
-            "payload": parse_payload_json(row["payload_json"]),
-            "result": parse_payload_json(row["result_json"]) if row["result_json"] else None,
-        })
-    return decisions
+    return [decision_from_sqlite_row(row) for row in rows]
+
+
+def fetch_decision_row_by_id(decision_id):
+    decision_id = str(decision_id or "").strip()
+    if not decision_id or not DB_FILE.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            f"""
+            SELECT {decision_select_columns()}
+            FROM decision_records
+            WHERE decision_id = ?
+            LIMIT 1
+            """,
+            (decision_id,),
+        ).fetchone()
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return decision_from_sqlite_row(row) if row else None
 
 
 def decision_matches_filter(decision, filter_name=None, lane=None):
@@ -1321,6 +1866,418 @@ def build_decisions_payload(limit=80, mint=None, filter_name=None, lane=None):
         "count": len(items),
         "counts": counts,
         "items": items,
+    }
+
+
+def openai_decision_explainer_model():
+    load_desktop_env()
+    return os.getenv("OPENAI_DECISION_EXPLAINER_MODEL") or "gpt-4.1-mini"
+
+
+def google_decision_explainer_model():
+    load_desktop_env()
+    return os.getenv("GOOGLE_AI_DECISION_EXPLAINER_MODEL") or os.getenv("GEMINI_DECISION_EXPLAINER_MODEL") or "gemini-2.5-flash"
+
+
+def groq_decision_explainer_model():
+    load_desktop_env()
+    return os.getenv("GROQ_DECISION_EXPLAINER_MODEL") or "llama-3.3-70b-versatile"
+
+
+def decision_explainer_provider_configs():
+    load_desktop_env()
+    providers = []
+    google_key = os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if google_key:
+        providers.append({
+            "provider": "google_ai",
+            "source": "google_ai_decision_explainer",
+            "api_key": google_key,
+            "model": google_decision_explainer_model(),
+            "generate": generate_google_decision_explanation,
+        })
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key:
+        providers.append({
+            "provider": "groq",
+            "source": "groq_decision_explainer",
+            "api_key": groq_key,
+            "model": groq_decision_explainer_model(),
+            "generate": generate_groq_decision_explanation,
+        })
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        providers.append({
+            "provider": "openai",
+            "source": "openai_decision_explainer",
+            "api_key": openai_key,
+            "model": openai_decision_explainer_model(),
+            "generate": generate_decision_explanation,
+        })
+    return providers
+
+
+def is_provider_limit_error(exc):
+    text = str(exc or "").lower()
+    limit_terms = ("http 429", "rate limit", "rate_limit", "quota", "resource exhausted", "too many requests", "limit exceeded")
+    return any(term in text for term in limit_terms)
+
+
+def build_decision_explanation_payload(decision_id):
+    decision_id = str(decision_id or "").strip()
+    if not decision_id:
+        raise ValueError("decision_id is required.")
+    decision = fetch_decision_row_by_id(decision_id)
+    if not decision:
+        raise LookupError("decision_id not found.")
+
+    providers = decision_explainer_provider_configs()
+    provider = providers[0] if providers else {
+        "provider": "google_ai",
+        "source": "google_ai_decision_explainer",
+        "api_key": None,
+        "model": google_decision_explainer_model(),
+        "generate": None,
+    }
+    attempted_providers = []
+    base = {
+        "generated_at": time.time(),
+        "source": provider.get("source"),
+        "provider": provider.get("provider"),
+        "read_only": True,
+        "advisory_only": True,
+        "live_execution_locked": True,
+        "execution_routes_enabled": False,
+        "decision_id": decision_id,
+        "mint": decision.get("mint"),
+        "model": provider.get("model"),
+    }
+    if not providers:
+        return {
+            **base,
+            "available": False,
+            "status": "missing_api_key",
+            "advisory": None,
+            "attempted_providers": [],
+            "detail": "Set GOOGLE_AI_API_KEY in the active local .env to enable Google AI advisory explanations. Optional fallback: GROQ_API_KEY.",
+        }
+
+    last_error = None
+    primary_provider = provider.get("provider")
+    for index, provider in enumerate(providers):
+        attempted_providers.append(provider.get("provider"))
+        base = {
+            **base,
+            "source": provider.get("source"),
+            "provider": provider.get("provider"),
+            "model": provider.get("model"),
+        }
+        try:
+            generated = provider["generate"](
+                decision,
+                api_key=provider.get("api_key"),
+                model=provider.get("model"),
+                timeout=20,
+            )
+            return {
+                **base,
+                "available": True,
+                "status": "ok",
+                "advisory": generated.get("text") or "",
+                "model": generated.get("model") or provider.get("model"),
+                "response_id": generated.get("response_id"),
+                "attempted_providers": attempted_providers,
+                "fallback_from": primary_provider if index > 0 else None,
+            }
+        except Exception as exc:
+            last_error = exc
+            if not is_provider_limit_error(exc):
+                break
+
+    return {
+        **base,
+        "available": False,
+        "status": "error",
+        "advisory": None,
+        "attempted_providers": attempted_providers,
+        "detail": redact_secrets(last_error),
+    }
+
+
+def decision_report_lane(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+    result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
+    paper_outcome = result.get("paper_outcome") if isinstance(result.get("paper_outcome"), dict) else {}
+    lane_values = [
+        paper_outcome.get("paper_lane"),
+        action.get("paper_lane"),
+        decision.get("paper_lane"),
+    ]
+    for lane in lane_values:
+        lane = str(lane or "").strip().lower()
+        if lane == "exploration":
+            return "exploration"
+        if lane in {"protected", "manual", "protected_manual", "manual_protected"}:
+            return "protected_manual"
+    return "main"
+
+
+def decision_report_pnl(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
+    return safe_float(first_non_empty(decision.get("pnl"), result.get("pnl")), 0)
+
+
+def decision_report_pnl_pct(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
+    return safe_float(first_non_empty(decision.get("pnl_pct"), result.get("pnl_pct")), None)
+
+
+def decision_report_trade_status(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
+    return str(first_non_empty(decision.get("trade_status"), result.get("trade_status"), result.get("status"), "")).lower()
+
+
+def empty_decision_lane_summary(label, minimum_closed=50):
+    return {
+        "label": label,
+        "candidate_decisions": 0,
+        "paper_attempts": 0,
+        "paper_opened": 0,
+        "skipped": 0,
+        "quote_failed": 0,
+        "hard_blocked": 0,
+        "social_confirmed": 0,
+        "wallet_confirmed": 0,
+        "open_trades": 0,
+        "closed_trades": 0,
+        "failed_trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "total_pnl": 0,
+        "avg_pnl_pct": None,
+        "win_rate": 0,
+        "sample_ready": False,
+        "minimum_closed_trades": minimum_closed,
+        "protected_positions": 0,
+    }
+
+
+def add_decision_to_lane_summary(summary, decision):
+    action = str(decision.get("final_action") or "").lower()
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    rule_outcomes = payload.get("rule_outcomes") if isinstance(payload.get("rule_outcomes"), dict) else {}
+    risk = rule_outcomes.get("risk") if isinstance(rule_outcomes.get("risk"), dict) else {}
+    social = inputs.get("social_match") if isinstance(inputs.get("social_match"), dict) else {}
+    status = decision_report_trade_status(decision)
+
+    summary["candidate_decisions"] += 1
+    if decision.get("should_trade") or "open_attempt" in action:
+        summary["paper_attempts"] += 1
+    if "opened" in action:
+        summary["paper_opened"] += 1
+    if "skip" in action or "blocked" in action or action == "runtime_skip" or decision.get("should_trade") is False:
+        summary["skipped"] += 1
+    if decision.get("buy_quote_pass") is False or decision.get("sell_quote_pass") is False:
+        summary["quote_failed"] += 1
+    if risk.get("hard_block") or str(decision.get("risk_label") or "").upper() in {"DANGER", "EMERGENCY", "BLOCKED"}:
+        summary["hard_blocked"] += 1
+    if social.get("matched"):
+        summary["social_confirmed"] += 1
+    if inputs.get("wallets"):
+        summary["wallet_confirmed"] += 1
+
+    if status in {"closed", "sold", "exited"}:
+        pnl = decision_report_pnl(decision)
+        pnl_pct = decision_report_pnl_pct(decision)
+        summary["closed_trades"] += 1
+        summary["total_pnl"] = round(summary["total_pnl"] + pnl, 6)
+        if pnl >= 0:
+            summary["wins"] += 1
+        else:
+            summary["losses"] += 1
+        if pnl_pct is not None:
+            summary.setdefault("_pnl_pct_values", []).append(pnl_pct)
+    elif status in {"failed", "buy_failed"}:
+        summary["failed_trades"] += 1
+    elif status == "open" or ("opened" in action and not status):
+        summary["open_trades"] += 1
+
+
+def finalize_decision_lane_summary(summary):
+    closed = summary["closed_trades"]
+    pnl_pct_values = summary.pop("_pnl_pct_values", [])
+    summary["win_rate"] = round((summary["wins"] / closed) * 100, 2) if closed else 0
+    summary["avg_pnl_pct"] = (
+        round(sum(pnl_pct_values) / len(pnl_pct_values), 2)
+        if pnl_pct_values
+        else None
+    )
+    summary["sample_ready"] = closed >= summary["minimum_closed_trades"]
+    return summary
+
+
+def build_decision_lane_report_payload(limit=5000, state=None):
+    state = state if isinstance(state, dict) else read_state_files()
+    watchlist = state.get("watchlist") if isinstance(state.get("watchlist"), list) else []
+    decisions = fetch_decision_rows(limit=limit)
+    lanes = {
+        "main": empty_decision_lane_summary("Main Strategy"),
+        "exploration": empty_decision_lane_summary("Exploration Lane"),
+        "protected_manual": empty_decision_lane_summary("Protected / Manual", minimum_closed=0),
+    }
+    lanes["protected_manual"]["protected_positions"] = len(watchlist)
+
+    for decision in decisions:
+        lane = decision_report_lane(decision)
+        add_decision_to_lane_summary(lanes[lane], decision)
+
+    for summary in lanes.values():
+        finalize_decision_lane_summary(summary)
+
+    return {
+        "generated_at": time.time(),
+        "source": "sqlite_decision_records",
+        "source_detail": f"{relative_display_path(DB_FILE)}:decision_records",
+        "live_execution_locked": True,
+        "total_decisions": len(decisions),
+        "lanes": lanes,
+        "notes": [
+            "Main and exploration lanes come from canonical decision records.",
+            "Protected/manual count comes from the manual watchlist until protected actions write decision records.",
+        ],
+    }
+
+
+def decision_social_matched(decision):
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    social = inputs.get("social_match") if isinstance(inputs.get("social_match"), dict) else {}
+    catalyst = inputs.get("social_catalyst") if isinstance(inputs.get("social_catalyst"), dict) else {}
+    return bool(social.get("matched") or catalyst.get("matched"))
+
+
+def decision_wallet_confirmed(decision):
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    return bool(inputs.get("wallets") or safe_float(inputs.get("wallet_count"), 0) > 0)
+
+
+def clone_decision_summary(label, minimum_closed=50):
+    summary = empty_decision_lane_summary(label, minimum_closed=minimum_closed)
+    summary["expectancy_pnl"] = 0
+    summary["attempt_to_open_rate"] = 0
+    summary["decision_to_close_rate"] = 0
+    return summary
+
+
+def finalize_decision_analytics_summary(summary):
+    finalize_decision_lane_summary(summary)
+    attempts = summary.get("paper_attempts", 0)
+    candidates = summary.get("candidate_decisions", 0)
+    closed = summary.get("closed_trades", 0)
+    summary["expectancy_pnl"] = round(summary["total_pnl"] / closed, 6) if closed else 0
+    summary["attempt_to_open_rate"] = round((summary["paper_opened"] / attempts) * 100, 2) if attempts else 0
+    summary["decision_to_close_rate"] = round((closed / candidates) * 100, 2) if candidates else 0
+    return summary
+
+
+def add_to_summary(summary, decision):
+    add_decision_to_lane_summary(summary, decision)
+
+
+def build_social_expansion_gate(groups):
+    social = groups.get("social_catalyst", {})
+    non_social = groups.get("non_social", {})
+    social_closed = int(social.get("closed_trades", 0) or 0)
+    non_social_closed = int(non_social.get("closed_trades", 0) or 0)
+    if social_closed < 50:
+        return {
+            "allowed": False,
+            "reason": f"Need at least 50 labeled social outcomes before expanding sources; current={social_closed}",
+            "minimum_labeled_social_outcomes": 50,
+            "current_labeled_social_outcomes": social_closed,
+        }
+    if non_social_closed < 50:
+        return {
+            "allowed": False,
+            "reason": f"Need at least 50 non-social comparison outcomes; current={non_social_closed}",
+            "minimum_labeled_social_outcomes": 50,
+            "current_labeled_social_outcomes": social_closed,
+        }
+    allowed = (
+        safe_float(social.get("win_rate"), 0) > safe_float(non_social.get("win_rate"), 0)
+        and safe_float(social.get("expectancy_pnl"), 0) > safe_float(non_social.get("expectancy_pnl"), 0)
+    )
+    return {
+        "allowed": allowed,
+        "reason": "Reddit social cohort outperforms non-social cohort" if allowed else "Social cohort has enough sample but has not outperformed non-social decisions",
+        "minimum_labeled_social_outcomes": 50,
+        "current_labeled_social_outcomes": social_closed,
+    }
+
+
+def build_decision_outcome_analytics_payload(limit=5000):
+    decisions = fetch_decision_rows(limit=limit)
+    overall = clone_decision_summary("All Decisions")
+    lanes = {
+        "main": clone_decision_summary("Main Strategy"),
+        "exploration": clone_decision_summary("Exploration Lane"),
+        "protected_manual": clone_decision_summary("Protected / Manual", minimum_closed=0),
+    }
+    groups = {
+        "social_catalyst": clone_decision_summary("Social Catalyst"),
+        "wallet_only": clone_decision_summary("Wallet Only"),
+        "non_social": clone_decision_summary("Non-Social"),
+        "quote_failed": clone_decision_summary("Quote Failed", minimum_closed=0),
+        "hard_risk": clone_decision_summary("Hard Risk", minimum_closed=0),
+    }
+
+    for decision in decisions:
+        add_to_summary(overall, decision)
+        add_to_summary(lanes[decision_report_lane(decision)], decision)
+        social = decision_social_matched(decision)
+        wallet = decision_wallet_confirmed(decision)
+        if social:
+            add_to_summary(groups["social_catalyst"], decision)
+        else:
+            add_to_summary(groups["non_social"], decision)
+        if wallet and not social:
+            add_to_summary(groups["wallet_only"], decision)
+        if decision.get("buy_quote_pass") is False or decision.get("sell_quote_pass") is False:
+            add_to_summary(groups["quote_failed"], decision)
+        payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+        rule_outcomes = payload.get("rule_outcomes") if isinstance(payload.get("rule_outcomes"), dict) else {}
+        risk = rule_outcomes.get("risk") if isinstance(rule_outcomes.get("risk"), dict) else {}
+        if risk.get("hard_block") or str(decision.get("risk_label") or "").upper() in {"DANGER", "EMERGENCY", "BLOCKED"}:
+            add_to_summary(groups["hard_risk"], decision)
+
+    finalize_decision_analytics_summary(overall)
+    for summary in lanes.values():
+        finalize_decision_analytics_summary(summary)
+    for summary in groups.values():
+        finalize_decision_analytics_summary(summary)
+
+    return {
+        "generated_at": time.time(),
+        "source": "sqlite_decision_records",
+        "source_detail": f"{relative_display_path(DB_FILE)}:decision_records",
+        "live_execution_locked": True,
+        "limit": limit,
+        "total_decisions": len(decisions),
+        "overall": overall,
+        "lanes": lanes,
+        "groups": groups,
+        "social_expansion_gate": build_social_expansion_gate(groups),
+        "notes": [
+            "Analytics are labels over canonical decision records.",
+            "Social expansion remains blocked until labeled outcomes prove lift over non-social decisions.",
+        ],
     }
 
 
@@ -1473,6 +2430,13 @@ def build_snapshots_payload(mint=None, limit=250):
     snapshots = fetch_snapshot_rows(mint=mint, limit=limit, newest_first=False)
     return {
         "generated_at": time.time(),
+        "source": "sqlite_token_snapshots",
+        "source_detail": f"{DB_FILE.relative_to(ROOT)}:token_snapshots",
+        "source_contract": {
+            "snapshots": "sqlite_token_snapshots",
+            "trades": "paper_trades_json",
+            "decisions": "sqlite_decision_records",
+        },
         "mint": mint,
         "snapshot_count": len(snapshots),
         "snapshots": snapshots,
@@ -1493,6 +2457,14 @@ def first_non_empty(*values):
         if value not in (None, ""):
             return value
     return None
+
+
+def relative_display_path(path):
+    path = Path(path)
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 def safe_image_url(value):
@@ -1877,6 +2849,41 @@ def summarize_list_payload(source_name, data, key=None, limit=100):
     }
 
 
+def build_alerts_payload(live_state=None, limit=100):
+    state = live_state if live_state is not None else read_json(LIVE_STATE_FILE, {"alerts": []})
+    live_rows = state.get("alerts", []) if isinstance(state, dict) and isinstance(state.get("alerts"), list) else []
+    sqlite_rows = fetch_alert_rows(limit=limit)
+    if sqlite_rows:
+        rows = [row["payload"] for row in sqlite_rows if isinstance(row.get("payload"), dict)]
+        payload = summarize_list_payload("sqlite_alerts", rows, limit=limit)
+        payload["source_detail"] = f"{DB_FILE.relative_to(ROOT)}:alerts"
+        payload["fallback_source"] = "live_state_alerts"
+        payload["fallback_reason"] = None
+    else:
+        payload = summarize_list_payload("live_state_alerts", state, key="alerts", limit=limit)
+        payload["source_detail"] = str(LIVE_STATE_FILE.relative_to(ROOT))
+        payload["fallback_source"] = "sqlite_alerts"
+        payload["fallback_reason"] = "sqlite_alerts_empty"
+    sqlite_alert_count = safe_sqlite_counts().get("alerts", 0)
+    payload.update({
+        "source_contract": {
+            "alerts": payload["source"],
+            "alert_mirror": "live_state_alerts" if payload["source"] == "sqlite_alerts" else "sqlite_alerts",
+            "decisions": "sqlite_decision_records",
+        },
+        "sqlite_mirror_source": "sqlite_alerts",
+        "sqlite_mirror_detail": f"{DB_FILE.relative_to(ROOT)}:alerts",
+        "sqlite_mirror_count": sqlite_alert_count,
+        "live_state_count": len(live_rows),
+        "mirror_warning": None,
+    })
+    if sqlite_alert_count != len(live_rows) and payload.get("fallback_reason") != "sqlite_alerts_empty":
+        payload["mirror_warning"] = (
+            f"live_state_alerts count {len(live_rows)} differs from sqlite_alerts count {sqlite_alert_count}"
+        )
+    return payload
+
+
 def tracked_wallet_labels(rows):
     labels = {}
     if not isinstance(rows, list):
@@ -1987,7 +2994,15 @@ def build_wallets_payload(state=None, limit=80):
     signals = performance.get("signals") if isinstance(performance.get("signals"), list) else []
     return {
         "generated_at": time.time(),
-        "source": "wallet_performance",
+        "source": "wallet_performance_json",
+        "source_detail": str(WALLET_PERFORMANCE_FILE.relative_to(ROOT)),
+        "source_contract": {
+            "performance": "wallet_performance_json",
+            "behavior": "wallet_behavior_json",
+            "tracked_wallets": "tracked_wallets_json",
+            "paper_watch_wallets": "paper_watch_wallets_json",
+            "events": "sqlite_events_raw_activity",
+        },
         "live_execution_locked": True,
         "tracked_count": len(labels),
         "performance_count": len(wallet_records),
@@ -2069,6 +3084,13 @@ def build_wallet_detail_payload(wallet, state=None, limit=40):
                 trade_rows.append(summarize_wallet_trade(trade, source))
     return {
         "generated_at": time.time(),
+        "source": "wallet_detail_composed",
+        "source_contract": {
+            "performance": "wallet_performance_json",
+            "behavior": "wallet_behavior_json",
+            "tracked_wallets": "tracked_wallets_json",
+            "paper_trades": "sqlite_trades_or_json_fallback",
+        },
         "read_only": True,
         "live_execution_locked": True,
         "wallet": row,
@@ -2173,9 +3195,21 @@ def build_logs_payload(limit=60):
 
 
 def build_trades_payload():
-    data = read_json(PAPER_TRADES_FILE, {"open_trades": [], "closed_trades": [], "failed_trades": []})
+    data, source = load_paper_trade_state()
     return {
         "generated_at": time.time(),
+        "source": source["source"],
+        "source_detail": source["source_detail"],
+        "fallback_source": source["fallback_source"],
+        "fallback_reason": source["fallback_reason"],
+        "mirror_warning": source.get("mirror_warning"),
+        "sqlite_counts": source.get("sqlite_counts"),
+        "json_counts": source.get("json_counts"),
+        "source_contract": {
+            "trades": source["source"],
+            "decisions": "sqlite_decision_records",
+            "snapshots": "sqlite_token_snapshots",
+        },
         "live_execution_locked": True,
         "open_trades": data.get("open_trades", []) if isinstance(data, dict) else [],
         "closed_trades": data.get("closed_trades", []) if isinstance(data, dict) else [],
@@ -2503,6 +3537,12 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_runtime_payload())
     if path == "/api/freshness":
         return json_response(build_freshness_payload())
+    if path == "/api/social/freshness":
+        return json_response(build_social_freshness_payload(
+            read_json(SOCIAL_STATE_FILE, {"events": []}),
+            read_json(CATALYST_CARDS_FILE, {"cards": []}),
+            load_status(),
+        ))
     if path == "/api/readiness":
         return json_response(build_readiness_payload())
     if path == "/api/overview":
@@ -2523,12 +3563,23 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/candidates":
         limit = parse_int_query(query, "limit", 80, 1, 250)
         return json_response(build_candidate_feed_payload(limit=limit))
+    if path.startswith("/api/decisions/") and path.endswith("/explanation"):
+        decision_id = path_param(path.removeprefix("/api/decisions/").removesuffix("/explanation").strip("/"))
+        try:
+            return json_response(build_decision_explanation_payload(decision_id))
+        except ValueError as exc:
+            return json_error(exc, HTTPStatus.BAD_REQUEST)
+        except LookupError as exc:
+            return json_error(exc, HTTPStatus.NOT_FOUND)
     if path == "/api/decisions":
         limit = parse_int_query(query, "limit", 80, 1, 250)
         mint = path_param((query.get("mint") or [""])[0]) or None
         filter_name = path_param((query.get("filter") or ["all"])[0]) or "all"
         lane = path_param((query.get("lane") or [""])[0]) or None
         return json_response(build_decisions_payload(limit=limit, mint=mint, filter_name=filter_name, lane=lane))
+    if path == "/api/decision-analytics":
+        limit = parse_int_query(query, "limit", 5000, 1, 10000)
+        return json_response(build_decision_outcome_analytics_payload(limit=limit))
     if path == "/api/events":
         limit = parse_int_query(query, "limit", 120, 1, 500)
         return json_response(build_event_feed_payload(limit=limit))
@@ -2576,8 +3627,7 @@ def route_request(method, raw_path, body=None, headers=None):
         limit = parse_int_query(query, "limit", 40, 1, 100)
         return json_response(build_wallet_detail_payload(wallet, limit=limit))
     if path == "/api/alerts":
-        live_state = read_json(LIVE_STATE_FILE, {"alerts": []})
-        return json_response(summarize_list_payload("live_state_alerts", live_state, key="alerts"))
+        return json_response(build_alerts_payload())
     if path == "/api/catalyst-cards":
         return json_response(summarize_list_payload("catalyst_cards", read_json(CATALYST_CARDS_FILE, {"cards": []}), key="cards"))
     if path == "/api/social":

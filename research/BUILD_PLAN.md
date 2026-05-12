@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 
 ## Legend
 
@@ -10,9 +10,9 @@ Last updated: 2026-05-09
 
 ## Current Working Section
 
-<mark>Active roadmap area: Phase 2 / Phase 7 - Canonical Decision Ledger and measurable paper edge.</mark>
+<mark>Active roadmap area: Phase 2 / Phase 7 - Canonical Decision Ledger and measurable paper edge, with automated social/catalyst evidence feeding the ledger after Replay parity.</mark>
 
-<mark>Current focus: Make the decision ledger the product backbone: every candidate should have one structured record covering signal inputs, risk/quote checks, final action, and later paper outcome. GUI work should expose this clearly instead of adding more disconnected panels.</mark>
+<mark>Current focus: Make the decision ledger the product backbone while cleaning canonical read paths. Every candidate should have one structured record covering signal inputs, risk/holder/quote checks, social/catalyst evidence, final action, and later paper outcome. GUI/API work should expose each panel's current source clearly before any source-of-truth migration or automated social collectors.</mark>
 
 ## Product Goal
 
@@ -51,6 +51,7 @@ The project already has the core shape of a local trading cockpit:
 Current strategic correction:
 
 - [~] The next leverage point is not more feature breadth. It is measurement: a canonical decision ledger that records every token candidate, why it passed/failed, whether it entered main or exploration paper mode, and what happened afterward. The first SQLite/API/static-GUI foundation is now started.
+- [~] Manual social import proved the catalyst-card model, but it is not a scalable workflow. Automated social collectors should be added only after decision records and Replay detail can show their evidence clearly.
 - [ ] Live/rug protection must be split into fast pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection. The existing watchdog should not be treated as a sub-second rug-rescue system.
 
 ## Operating Principles
@@ -125,6 +126,8 @@ Deliverables:
 - [~] Lock-backed JSON writes for key runtime state; paper trades, wallet performance, settings, candidate ledger, social imports, runtime status, and watchlist now use locked/atomic paths.
 - [x] Open paper trades dedupe by active mint during locked state merges to reduce duplicate bot-instance opens.
 - [~] Canonical decision ledger schema for every candidate: detected token, wallet/social inputs, token/holder/mechanics risk, quote/liquidity checks, rule outcomes, final action, and later paper/live-safe result.
+- [~] Social-ready decision records: source social event IDs, catalyst score, match confidence, evidence URL/snapshot, collector name, and social-to-price follow-up fields. Core evidence fields exist; Reddit collector status/evidence ingestion is started, while social-to-price follow-up windows remain future work.
+- [~] Desktop API source contracts and canonical reads: `/api/trades` is SQLite-first after JSON parity, `/api/alerts` is SQLite-first with live-state fallback, `/api/tokens/{mint}/snapshots` uses SQLite token snapshots, `/api/positions/{mint}` declares JSON position state plus SQLite snapshot/social/wallet context sources, and wallet/social payloads now declare JSON source contracts while remaining unmigrated.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -139,8 +142,10 @@ Next actions:
 
 - Continue wiring `core/decision_ledger.py` and SQLite-backed decision records before adding more disconnected GUI panels.
 - Harden scanner skips, main paper entries, exploration entries, failed buys, exits, and postmortems around `decision_id`.
-- Choose the canonical source of truth for each data class.
-- Define minimum SQLite tables and backfill existing JSON.
+- Add social/catalyst evidence fields to decision records before automated collectors increase signal volume.
+- Keep wallet stats and social JSON-first until dedicated SQLite schemas/backfills exist.
+- Use live decision-ledger records, including scanner holder-risk evidence, as the next validation surface before adding more source breadth.
+- Define minimum SQLite tables for wallet/social only after the current decision-ledger path is stable.
 
 ## Phase 3 - Confirmation-Mode Paper Bot
 
@@ -175,7 +180,7 @@ Next actions:
 - Harden native candidate filters for scanner skip/entry and paper lifecycle snapshot contexts.
 - Split desktop API routing/projectors into smaller modules before adding more mutation surfaces.
 - Build the canonical decision ledger from signal, social, wallet, risk, quote, and paper-result records.
-- Add lane-separated paper reports from decision records: main, exploration, protected/manual.
+- Maintain lane-separated paper reports from decision records: main, exploration, protected/manual.
 - Backtest confirmation rules from `research/STRATEGY_RESEARCH.md`.
 
 ## Phase 4 - Wallet Intelligence
@@ -233,7 +238,7 @@ Deliverables:
 - [x] Dev bonded-token reputation heuristic added to dev analyzer.
 - [~] Anti-rug, dev analyzer, launch age, token age, liquidity, and scoring modules.
 - [~] Jupiter sell quote verification.
-- [ ] Holder concentration and linked-cluster checks.
+- [~] Holder concentration and linked-cluster checks.
 - [~] Risk severity model with hard rejects, warnings, and informational flags.
 
 Acceptance criteria:
@@ -246,7 +251,7 @@ Acceptance criteria:
 Next actions:
 
 - Use token snapshots to power candidate review, postmortems, and catalyst cards.
-- Add holder/cluster checks where reliable data is available.
+- Improve holder/cluster checks with pool/system-account labels and a real owner/funder graph source.
 
 ## Phase 6 - Manual Protection And Watchdog
 
@@ -306,6 +311,8 @@ Deliverables:
 - [~] Performance analyzer and replay analyzer modules.
 - [ ] Candidate review queue.
 - [ ] Replay lab for passed/skipped/entered tokens.
+- [x] React/Tauri Replay Decision Ledger parity with filters, clickable decisions, and detail drilldowns matching or exceeding the static desktop view.
+- [x] Rich decision detail covering why bought/skipped, quote pass/fail, route feasibility, wallet signals, social/catalyst signal, holder/risk checks, and eventual paper result.
 - [ ] Strategy comparison report for confirmation rules.
 - [ ] Daily operator summary.
 
@@ -318,7 +325,8 @@ Acceptance criteria:
 
 Next actions:
 
-- Add decision-ledger views to dashboard/desktop GUI.
+- Add the first automated Reddit social collector and write its status into `/api/social/freshness`.
+- Keep broader crypto and stablecoin data as market-regime context only, not an expanded trading universe.
 - Build daily summary from alerts, trades, watchdog events, and wallet performance.
 - Define replay input/output schema.
 
@@ -340,7 +348,7 @@ Deliverables:
 Acceptance criteria before live trading:
 
 - Paper strategy has a meaningful sample with acceptable drawdown and failure analysis.
-- Paper evidence comes from lane-separated decision-ledger records, not raw trade counts alone.
+- Paper evidence now includes lane-separated decision-ledger records, not raw trade counts alone.
 - Every live order passes execution safety, token risk, quote, slippage, price impact, and size gates.
 - Live mode requires deliberate user confirmation and visible armed/disarmed state.
 - Kill switch can stop new buys immediately.
@@ -375,6 +383,7 @@ Deliverables:
 - [x] Desktop Protection tab can add/update manual protected token mints for watchdog review without enabling live sells.
 - [x] Desktop Signals/Pulse tabs have Add Social Signal / Tweet forms backed by `POST /api/social/import`.
 - [ ] Desktop should expose social/catalyst refresh status and show whether a pasted tweet matched a mint, ticker, or keyword.
+- [ ] Desktop should expose automated collector status, last successful social scan, last collector error, and whether a decision's catalyst came from manual import, Reddit, X, Telegram, Discord, or token discovery.
 - [x] Static and native selected-token chart controls support 1s, 5s, 30s, and 1m intervals.
 - [x] Static desktop shell renders market cap and price as red/green candlesticks and liquidity as a line.
 - [ ] Eliminate remaining Streamlit-only workflows or explicitly mark Streamlit as legacy/admin until migrated.
@@ -384,6 +393,10 @@ Deliverables:
 - [x] Native Ops tab surfaces Helius provider health and active fallback provider while keeping live execution locked.
 - [x] Helius RPC read calls used by watchdog mint/balance/holder checks now prefer Gatekeeper and fall back to standard Helius mainnet.
 - [x] Public Solana RPC is available as an emergency read-only fallback after Helius Gatekeeper and standard Helius.
+- [x] Jupiter/Dexscreener market-data pressure control: cache, cooldown, serialized provider requests, and live runtime cooldown counters.
+- [x] Helius scanner `getTransaction` pressure control: same-signature dedupe, transaction cache, paced RPC fetches, backlog guard, and runtime pressure counters.
+- [x] Scanner per-wallet backpressure: websocket subscription ids map back to wallets so one noisy wallet cannot fill all transaction-processing capacity.
+- [x] Deep watchdog holder/mint-inspection pressure control: cache and cooldown holder, mint, wallet-balance, and prepared-exit quote checks separately from scanner transaction parsing.
 - [ ] Settings editor with validation.
 - [~] Local logs are visible read-only in the native Ops tab; export tools remain future work.
 - [ ] Job/progress monitor for long-running local actions.
@@ -441,6 +454,8 @@ Deliverables:
 - [ ] Real-time event timeline.
 - [ ] Advanced wallet graph and cluster views.
 - [ ] Token lifecycle replay with snapshots.
+- [~] Automated social/catalyst ingestion: Reddit first, official X second, Telegram/Discord later, all normalized into decision-ledger evidence.
+- [ ] Social-to-price alignment windows for catalyst events: event time, 5m, 15m, 1h, and 4h, with liquidity/volume outlier flags.
 - [ ] Rule editor and strategy comparison.
 - [ ] Protected position cockpit with prepared action queue.
 
@@ -466,6 +481,7 @@ Next actions:
 - Open-source Solana/meme bot repos are reference material only; reimplement useful ideas cleanly instead of cloning whole repos.
 - The watchdog is not the primary defense against instant rugs. Fast rejection before entry and lightweight open-position monitoring are required before any live execution work.
 - The GUI should expose the canonical decision pipeline; it should not create separate logic or separate truth.
+- Social/catalyst automation should feed canonical decision records. It must not become a standalone buy trigger or a second source of truth.
 
 ## Assumptions
 
@@ -491,9 +507,15 @@ Next actions:
 - [~] Scanner skip/main-entry/exploration-entry writes route through the ledger.
 - [~] Paper trade open/failed/exit records link back to `decision_id`.
 - [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed. Static desktop Replay tab now has first-pass filters and selected-decision detail; richer drilldown remains.
+- [x] React/Tauri Replay Decision Ledger parity with static filters and selected-decision detail.
+- [~] Social-ready decision record fields for automated catalyst evidence.
+- [~] Automated Reddit collector as the first non-manual catalyst source after Replay detail and decision schema are ready. Standalone local collector exists and hourly Codex scheduling is active; observe clean runs before adding sources.
 - [ ] Fast open-position monitor boundary separated from deep watchdog inspection.
-- [ ] Holder concentration / linked-cluster risk wired into candidate decision records.
-- [ ] Lane-separated paper reports from decision records: main vs exploration vs protected/manual.
+- [~] Holder concentration / linked-cluster risk wired into candidate decision records. Holder concentration is live for quote-worthy scanner candidates; true linked-wallet graph risk is explicitly `NOT_CHECKED` until a real linkage source exists.
+- [x] Lane-separated paper reports from decision records: main vs exploration vs protected/manual.
+- [~] Paper activity lane: mid-quality wallet buys can now trigger paper-only evaluations so the ledger gathers more labeled near-miss/exploration data without weakening main/live criteria.
+- [x] Swap quote budget gate: weak/mid candidates are recorded without spending Jupiter Swap quotes; route checks are reserved for candidates close to paper-entry quality.
+- [~] Exploration activity tuning: quote/exploration thresholds were lowered for the separate paper lane only, with main/live thresholds and hard-risk protections unchanged. Current paper collection mode uses a `45/45` quote and confirmation-observation floor with `$5` paper-only samples.
 - [ ] Live-readiness thresholds defined from decision-ledger metrics.
 - [ ] GUI cleanup continues only where it exposes canonical state clearly.
 - [x] Runtime health and per-source freshness indicators.
@@ -530,3 +552,10 @@ Next actions:
 - [x] Added `core/catalyst_cards.py`, `data/catalyst_cards.json`, Data Store Catalyst Cards tab, freshness tracking, and unit coverage for catalyst-card generation.
 - [x] Added Token Console catalyst outcome column and per-token Catalyst detail tab.
 - [x] Added structured local social events with ticker/mint extraction, sentiment, bulk import, dashboard Social Catalyst Tracker, and unit coverage.
+
+### 2026-05-09
+
+- [x] Added `research/SOCIAL_CATALYST_AUTOMATION_WORKFLOW.md` to merge Meme Radar and the latest GitHub research into the active roadmap.
+- [x] Updated the active workflow: React/Tauri Decision Ledger polish remains the next build step; automated social/catalyst ingestion follows once decision records can display source evidence safely.
+- [x] Added the recommended source order: Reddit via `asyncpraw` first, official X via `tweepy` second, Telegram/Discord later, and Solana launch-discovery enrichment after canonical decision paths are stable.
+- [x] Implemented React/Tauri Replay Decision Ledger parity: native Replay now loads `/api/decisions`, exposes static-equivalent filters, clickable rows, selected-decision detail, and paper-trade fallback when no decisions exist.

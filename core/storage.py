@@ -248,9 +248,10 @@ class EventStore:
     def upsert_trade(self, trade):
         with self.connect() as conn:
             mint = trade.get("token_mint") or trade.get("mint")
-            status = trade.get("status")
-            entry_time = self.safe_float(trade.get("entry_time"))
-            close_time = self.safe_float(trade.get("close_time"))
+            status = self.trade_status(trade)
+            entry_time = self.safe_float(trade.get("entry_time") or trade.get("time"))
+            close_time = self.safe_float(trade.get("close_time") or trade.get("exit_time"))
+            reason = self.trade_reason(trade)
             conn.execute(
                 """
                 DELETE FROM trades
@@ -261,6 +262,16 @@ class EventStore:
                 """,
                 (mint, status, entry_time, close_time),
             )
+            if status in {"closed", "failed"}:
+                conn.execute(
+                    """
+                    DELETE FROM trades
+                    WHERE mint IS ?
+                      AND status = 'open'
+                      AND entry_time IS ?
+                    """,
+                    (mint, entry_time),
+                )
             conn.execute(
                 """
                 INSERT OR REPLACE INTO trades (
@@ -275,10 +286,43 @@ class EventStore:
                     close_time,
                     self.safe_float(trade.get("total_pnl", trade.get("pnl"))),
                     self.safe_float(trade.get("total_pnl_pct", trade.get("pnl_pct"))),
-                    trade.get("entry_reason") or trade.get("reason"),
+                    reason,
                     json.dumps(trade),
                 ),
             )
+
+    def trade_status(self, trade):
+        status = str(trade.get("status") or "").lower()
+        if (
+            "fail" in status
+            or trade.get("failure_reason")
+            or trade.get("failed_reason")
+            or trade.get("error")
+            or trade.get("buy_failed")
+            or (not status and str(trade.get("side") or "").lower() == "buy" and not trade.get("entry_time"))
+        ):
+            return "failed"
+        if (
+            status in {"closed", "sold", "exited"}
+            or "closed" in status
+            or trade.get("close_time")
+            or trade.get("exit_time")
+            or trade.get("exit_reason")
+            or trade.get("close_reason")
+        ):
+            return "closed"
+        return status or "open"
+
+    def trade_reason(self, trade):
+        return (
+            trade.get("exit_reason")
+            or trade.get("close_reason")
+            or trade.get("failure_reason")
+            or trade.get("failed_reason")
+            or trade.get("entry_reason")
+            or trade.get("reason")
+            or trade.get("error")
+        )
 
     def upsert_watchlist_item(self, item):
         mint = item.get("token_mint")

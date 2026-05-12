@@ -70,6 +70,10 @@ export function importSocialSignal(payload) {
   return postJson("/api/social/import", payload);
 }
 
+export function loadDecisionExplanation(decisionId) {
+  return getJson(`/api/decisions/${encodeURIComponent(decisionId)}/explanation`);
+}
+
 export async function loadTokenState(mint, metric = "price", interval = 1, limit = 160) {
   if (!mint) {
     return {

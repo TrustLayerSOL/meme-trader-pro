@@ -1,11 +1,31 @@
 import type { PositionDetailPayload } from "../lib/api";
 import { money, pct, shortMint } from "../lib/format";
+import { EmptyState, LoadingState } from "./PanelState";
 
 type Props = {
   detail: PositionDetailPayload | null;
+  loading?: boolean;
 };
 
-export function TokenDetail({ detail }: Props) {
+export function TokenDetail({ detail, loading = false }: Props) {
+  if (loading) {
+    return (
+      <section className="token-detail-grid">
+        <div className="panel token-detail-state">
+          <LoadingState title="Loading selected-token detail" detail="Reading mechanics, holder risk, quote feasibility, and source contracts." rows={5} />
+        </div>
+      </section>
+    );
+  }
+  if (!detail) {
+    return (
+      <section className="token-detail-grid">
+        <div className="panel token-detail-state">
+          <EmptyState title="No token detail selected" detail="Select a paper position, protected token, wallet event, or scanner candidate to inspect the full diagnostic record." />
+        </div>
+      </section>
+    );
+  }
   const latest = detail?.latest_snapshot;
   const protection = detail?.protection;
   const mechanicsRisk = protection?.token_mechanics_risk || latest?.token_mechanics_risk || latest?.risk_label || "UNKNOWN";
@@ -50,6 +70,16 @@ export function TokenDetail({ detail }: Props) {
       </div>
 
       <WalletConfidenceCard detail={detail} />
+
+      <div className="panel token-card">
+        <h2>Data Sources</h2>
+        <KeyValue label="Position" value={sourceLabel(detail?.position_source, detail?.position_source_detail)} />
+        <KeyValue label="Snapshots" value={sourceLabel(detail?.snapshot_source, detail?.snapshot_source_detail)} />
+        <KeyValue label="Social" value={detail?.source_contract?.social || "unknown"} />
+        <KeyValue label="Wallet Context" value={detail?.source_contract?.wallet_context || detail?.source_contract?.wallet_stats || "unknown"} />
+        <KeyValue label="Mixed Fields" value={detail?.mixed_market_fields ? "YES" : "NO"} tone={detail?.mixed_market_fields ? "bad" : undefined} />
+        <p className="muted">{detail?.mixed_market_fields_note || "Selected-token fields use one declared source contract."}</p>
+      </div>
 
       <div className="panel token-card wide-token-card">
         <h2>Decision Record</h2>
@@ -137,6 +167,11 @@ function ReasonList({ title, items, empty }: { title?: string; items: string[]; 
 
 function listValue(items: string[] | undefined): string {
   return items?.length ? items.join(", ") : "none recorded";
+}
+
+function sourceLabel(source?: string | null, detail?: string | null): string {
+  if (!source) return "unknown";
+  return detail ? `${source} | ${detail}` : source;
 }
 
 function scoreValue(score: number | undefined, threshold: number | undefined): string {

@@ -111,6 +111,7 @@ def run_wallet_discovery_cycle(
     update_status(
         "wallet_discovery",
         status="cycle_ok",
+        last_error=None,
         live_execution_locked=True,
         candidate_wallets=summary["candidate_wallets"],
         paper_watch_wallets=summary["paper_watch_wallets"],

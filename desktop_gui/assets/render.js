@@ -810,7 +810,7 @@ function renderReplayPanel(state) {
           ${decisionFilterButton("social", "Social", filter)}
           ${decisionFilterButton("wallet", "Wallet", filter)}
         </div>
-        ${decisionDetailSection(selected)}
+        ${decisionDetailSection(selected, state)}
         <div class="ledger-list">
           ${filteredRows.slice(0, 30).map((decision) => decisionRow(decision, state.selectedDecisionId)).join("") || `<div class="ledger-empty">No decisions match this filter.</div>`}
         </div>
@@ -820,13 +820,25 @@ function renderReplayPanel(state) {
       button.addEventListener("click", () => {
         state.decisionFilter = button.dataset.decisionFilter || "all";
         state.selectedDecisionId = "";
+        state.decisionExplanation = null;
+        state.decisionExplanationDecisionId = "";
+        state.decisionExplanationError = "";
         renderReplayPanel(state);
       });
     });
     $("intel-grid").querySelectorAll("[data-decision-id]").forEach((row) => {
       row.addEventListener("click", () => {
         state.selectedDecisionId = row.dataset.decisionId || "";
+        state.decisionExplanation = null;
+        state.decisionExplanationDecisionId = "";
+        state.decisionExplanationError = "";
         renderReplayPanel(state);
+      });
+    });
+    $("intel-grid").querySelectorAll("[data-decision-explain]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        window.explainDecisionFromDesktop?.(button.dataset.decisionExplain || "");
       });
     });
     return;
@@ -886,7 +898,7 @@ function quotePair(decision) {
   return `${buy}/${sell}`;
 }
 
-function decisionDetailSection(decision) {
+function decisionDetailSection(decision, state = {}) {
   if (!decision) {
     return `<div class="decision-detail"><strong>Decision Detail</strong><p>No decision selected.</p></div>`;
   }
@@ -917,11 +929,34 @@ function decisionDetailSection(decision) {
       </div>
       <div class="trade-detail-notes">
         ${detailNote("Reason", decision.action_reason || "-")}
+        ${decisionAiSection(decision, state)}
         ${detailNote("Wallets", wallets)}
         ${detailNote("Social", social)}
         ${detailNote("Risk Notes", risks)}
         ${detailNote("Score Notes", scoreReasons)}
       </div>
+    </div>
+  `;
+}
+
+function decisionAiSection(decision, state = {}) {
+  const decisionId = decision.decision_id || "";
+  const matches = state.decisionExplanationDecisionId === decisionId;
+  const explanation = matches ? state.decisionExplanation : null;
+  const loading = matches && state.decisionExplanationLoading;
+  const error = matches ? state.decisionExplanationError : "";
+  const detail = explanation?.advisory || explanation?.detail || error || "Advisory only. Click to generate a plain-language decision review.";
+  const status = explanation?.available === false ? (explanation.status || "unavailable") : "does not trade";
+  return `
+    <div class="decision-ai-note">
+      <div class="decision-ai-head">
+        <strong>OpenAI Advisory</strong>
+        <button type="button" data-decision-explain="${escapeHtml(decisionId)}" ${!decisionId || loading ? "disabled" : ""}>
+          ${loading ? "Explaining..." : "Explain Decision"}
+        </button>
+      </div>
+      <p>${escapeHtml(detail)}</p>
+      <small>Advisory only | ${escapeHtml(status)}</small>
     </div>
   `;
 }

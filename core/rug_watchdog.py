@@ -11,7 +11,7 @@ from core.holder_concentration import HolderConcentrationAnalyzer
 from core.json_store import locked_update_json, read_json
 from core.protection_exit import ProtectionExitPlanner
 from core.redaction import redact_secrets
-from core.rpc_provider import post_json_with_provider_failover
+from core.rpc_provider import RpcProviderError, post_json_with_provider_failover
 from core.runtime_status import increment_component, update_component
 from core.storage import EventStore
 from core.token_balance import parse_owner_token_balance
@@ -27,7 +27,90 @@ MINT_INSPECTION_TIMEOUT_SECONDS = 8
 QUOTE_CHECK_TIMEOUT_SECONDS = 8
 HOLDER_CHECK_TIMEOUT_SECONDS = 8
 WALLET_BALANCE_TIMEOUT_SECONDS = 8
+
+
+def env_float(name, default, minimum=None):
+    try:
+        value = float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def env_int(name, default, minimum=None):
+    try:
+        value = int(float(os.getenv(name, default)))
+    except (TypeError, ValueError):
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+class WatchdogDeepRpcCache:
+    def __init__(self, ttl_seconds=None, cooldown_seconds=None, max_entries=None):
+        self.ttl_seconds = ttl_seconds if ttl_seconds is not None else env_float(
+            "MEMETRADER_WATCHDOG_RPC_CACHE_TTL_SECONDS",
+            300,
+            minimum=1,
+        )
+        self.cooldown_seconds = cooldown_seconds if cooldown_seconds is not None else env_float(
+            "MEMETRADER_WATCHDOG_RPC_COOLDOWN_SECONDS",
+            300,
+            minimum=1,
+        )
+        self.max_entries = max_entries if max_entries is not None else env_int(
+            "MEMETRADER_WATCHDOG_RPC_CACHE_MAX_ENTRIES",
+            1000,
+            minimum=100,
+        )
+        self.entries = {}
+        self.cooldowns = {}
+
+    def get(self, key):
+        entry = self.entries.get(key)
+        now = time.time()
+        if not entry:
+            return False, None
+        if now - entry["stored_at"] > self.ttl_seconds:
+            self.entries.pop(key, None)
+            return False, None
+        return True, entry["value"]
+
+    def set(self, key, value):
+        self.entries[key] = {"stored_at": time.time(), "value": value}
+        self._prune()
+
+    def in_cooldown(self, scope):
+        until = self.cooldowns.get(scope) or 0
+        if until <= time.time():
+            self.cooldowns.pop(scope, None)
+            return False
+        return True
+
+    def note_rate_limit(self, scope):
+        self.cooldowns[scope] = time.time() + self.cooldown_seconds
+
+    def _prune(self):
+        overflow = len(self.entries) - self.max_entries
+        if overflow <= 0:
+            return
+        for key, _entry in sorted(self.entries.items(), key=lambda item: item[1]["stored_at"])[:overflow]:
+            self.entries.pop(key, None)
+
+    def stats(self):
+        now = time.time()
+        active_cooldowns = sum(1 for until in self.cooldowns.values() if until > now)
+        return {
+            "deep_rpc_cache_entries": len(self.entries),
+            "deep_rpc_active_cooldowns": active_cooldowns,
+        }
+
+
 load_env()
+WATCHDOG_DEEP_RPC_CACHE = WatchdogDeepRpcCache()
 
 
 def utc_now():
@@ -41,6 +124,50 @@ def safe_float(value, default=0):
         return float(value)
     except Exception:
         return default
+
+
+def is_rate_limited_error(exc):
+    if isinstance(exc, RpcProviderError):
+        for failure in exc.failures or []:
+            status = failure.get("http_status")
+            detail = str(failure.get("detail") or failure.get("error") or "")
+            if status == 429 or "429" in detail or "Too Many Requests" in detail or "rate limit" in detail.lower():
+                return True
+    message = str(exc)
+    return "429" in message or "Too Many Requests" in message or "rate limit" in message.lower()
+
+
+def _record_cache_hit(method, mint=None):
+    increment_component(
+        "watchdog",
+        "deep_rpc_cache_hits",
+        status="deep_rpc_cache_hit",
+        last_method=method,
+        last_mint=mint,
+        **WATCHDOG_DEEP_RPC_CACHE.stats(),
+    )
+
+
+def _record_cooldown_skip(method, mint=None):
+    increment_component(
+        "watchdog",
+        "deep_rpc_cooldown_skips",
+        status="deep_rpc_cooldown_skip",
+        last_method=method,
+        last_mint=mint,
+        **WATCHDOG_DEEP_RPC_CACHE.stats(),
+    )
+
+
+def _record_rate_limit(method, mint=None):
+    increment_component(
+        "watchdog",
+        "deep_rpc_rate_limits",
+        status="deep_rpc_rate_limited",
+        last_method=method,
+        last_mint=mint,
+        **WATCHDOG_DEEP_RPC_CACHE.stats(),
+    )
 
 
 def load_watchlist():
@@ -241,7 +368,18 @@ def stamp_watchdog_result(token):
     return token
 
 
-async def fetch_mint_account_info(checker, mint):
+async def fetch_mint_account_info(checker, mint, cache=None):
+    cache = cache or WATCHDOG_DEEP_RPC_CACHE
+    cache_key = ("mint_account_info", mint)
+    cooldown_key = "getAccountInfo"
+    hit, value = cache.get(cache_key)
+    if hit:
+        _record_cache_hit("getAccountInfo", mint)
+        return value
+    if cache.in_cooldown(cooldown_key):
+        _record_cooldown_skip("getAccountInfo", mint)
+        return None
+
     await checker.init_session()
     payload = {
         "jsonrpc": "2.0",
@@ -256,14 +394,33 @@ async def fetch_mint_account_info(checker, mint):
         ],
     }
 
-    data, provider = await post_json_with_provider_failover(checker.session, payload)
+    try:
+        data, provider = await post_json_with_provider_failover(checker.session, payload)
+    except RpcProviderError as exc:
+        if is_rate_limited_error(exc):
+            cache.note_rate_limit(cooldown_key)
+            _record_rate_limit("getAccountInfo", mint)
+            return None
+        raise
     if provider:
         update_component("providers", active_provider=provider, last_method="getAccountInfo", status="ok")
+    if data is not None:
+        cache.set(cache_key, data)
     return data
 
 
-async def fetch_owner_token_balance(checker, wallet, mint):
+async def fetch_owner_token_balance(checker, wallet, mint, cache=None):
     if not wallet:
+        return None
+    cache = cache or WATCHDOG_DEEP_RPC_CACHE
+    cache_key = ("owner_token_balance", wallet, mint)
+    cooldown_key = "getTokenAccountsByOwner"
+    hit, value = cache.get(cache_key)
+    if hit:
+        _record_cache_hit("getTokenAccountsByOwner", mint)
+        return value
+    if cache.in_cooldown(cooldown_key):
+        _record_cooldown_skip("getTokenAccountsByOwner", mint)
         return None
 
     await checker.init_session()
@@ -283,13 +440,34 @@ async def fetch_owner_token_balance(checker, wallet, mint):
         ],
     }
 
-    data, provider = await post_json_with_provider_failover(checker.session, payload)
+    try:
+        data, provider = await post_json_with_provider_failover(checker.session, payload)
+    except RpcProviderError as exc:
+        if is_rate_limited_error(exc):
+            cache.note_rate_limit(cooldown_key)
+            _record_rate_limit("getTokenAccountsByOwner", mint)
+            return None
+        raise
     if provider:
         update_component("providers", active_provider=provider, last_method="getTokenAccountsByOwner", status="ok")
-    return parse_owner_token_balance(data) if data else None
+    balance = parse_owner_token_balance(data) if data else None
+    if balance is not None:
+        cache.set(cache_key, balance)
+    return balance
 
 
-async def fetch_largest_token_accounts(checker, mint):
+async def fetch_largest_token_accounts(checker, mint, cache=None):
+    cache = cache or WATCHDOG_DEEP_RPC_CACHE
+    cache_key = ("largest_token_accounts", mint)
+    cooldown_key = "getTokenLargestAccounts"
+    hit, value = cache.get(cache_key)
+    if hit:
+        _record_cache_hit("getTokenLargestAccounts", mint)
+        return value
+    if cache.in_cooldown(cooldown_key):
+        _record_cooldown_skip("getTokenLargestAccounts", mint)
+        return None
+
     await checker.init_session()
     payload = {
         "jsonrpc": "2.0",
@@ -303,15 +481,24 @@ async def fetch_largest_token_accounts(checker, mint):
         ],
     }
 
-    data, provider = await post_json_with_provider_failover(checker.session, payload)
+    try:
+        data, provider = await post_json_with_provider_failover(checker.session, payload)
+    except RpcProviderError as exc:
+        if is_rate_limited_error(exc):
+            cache.note_rate_limit(cooldown_key)
+            _record_rate_limit("getTokenLargestAccounts", mint)
+            return None
+        raise
     if provider:
         update_component("providers", active_provider=provider, last_method="getTokenLargestAccounts", status="ok")
     if not data:
         return None
-    return (data.get("result") or {}).get("value") or []
+    rows = (data.get("result") or {}).get("value") or []
+    cache.set(cache_key, rows)
+    return rows
 
 
-async def attach_exit_quote_feasibility(quote_engine, prepared_exit, token):
+async def attach_exit_quote_feasibility(quote_engine, prepared_exit, token, cache=None):
     if not prepared_exit.get("quote_required"):
         return prepared_exit
 
@@ -339,33 +526,61 @@ async def attach_exit_quote_feasibility(quote_engine, prepared_exit, token):
     sell_amount_raw = max(1, int(amount_raw * min(sell_pct, 100) / 100))
     slippage_bps = int(safe_float(token.get("protection_exit_slippage_bps"), 2000))
     max_price_impact_pct = safe_float(token.get("protection_exit_max_price_impact_pct"), 15)
+    cache = cache or WATCHDOG_DEEP_RPC_CACHE
+    cache_key = (
+        "exit_quote",
+        mint,
+        sell_amount_raw,
+        slippage_bps,
+        max_price_impact_pct,
+    )
+    cooldown_key = "exit_quote"
 
-    try:
-        quote = await asyncio.wait_for(
-            quote_engine.get_sell_quote(
-                input_mint=mint,
-                token_amount_raw=sell_amount_raw,
-                slippage_bps=slippage_bps,
-            ),
-            timeout=QUOTE_CHECK_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
+    hit, quote = cache.get(cache_key)
+    if hit:
+        _record_cache_hit("exit_quote", mint)
+    elif cache.in_cooldown(cooldown_key):
+        _record_cooldown_skip("exit_quote", mint)
         prepared_exit.update({
-            "quote_status": "timeout",
+            "quote_status": "rate_limited",
             "quote_pass": False,
-            "quote_reason": "quote_check_timeout",
+            "quote_reason": "watchdog_quote_cooldown",
             "quote_checked_at": utc_now(),
             "quote_input_amount_raw": sell_amount_raw,
             "quote_slippage_bps": slippage_bps,
             "quote_max_price_impact_pct": max_price_impact_pct,
             "live_action_allowed": False,
         })
-        update_component(
-            "watchdog",
-            status="quote_timeout",
-            last_mint=mint,
-        )
         return prepared_exit
+    else:
+        try:
+            quote = await asyncio.wait_for(
+                quote_engine.get_sell_quote(
+                    input_mint=mint,
+                    token_amount_raw=sell_amount_raw,
+                    slippage_bps=slippage_bps,
+                ),
+                timeout=QUOTE_CHECK_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            prepared_exit.update({
+                "quote_status": "timeout",
+                "quote_pass": False,
+                "quote_reason": "quote_check_timeout",
+                "quote_checked_at": utc_now(),
+                "quote_input_amount_raw": sell_amount_raw,
+                "quote_slippage_bps": slippage_bps,
+                "quote_max_price_impact_pct": max_price_impact_pct,
+                "live_action_allowed": False,
+            })
+            update_component(
+                "watchdog",
+                status="quote_timeout",
+                last_mint=mint,
+            )
+            return prepared_exit
+        if quote is not None:
+            cache.set(cache_key, quote)
 
     analysis = quote_engine.analyze_quote(
         quote,
@@ -379,6 +594,8 @@ async def attach_exit_quote_feasibility(quote_engine, prepared_exit, token):
             quote_status = "missing_api_key"
         elif "429" in reason or "cooldown" in reason:
             quote_status = "rate_limited"
+            cache.note_rate_limit(cooldown_key)
+            _record_rate_limit("exit_quote", mint)
         else:
             quote_status = "failed"
 

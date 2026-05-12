@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { LockedActions } from "./components/LockedActions";
+import { DecisionLedger } from "./components/DecisionLedger";
 import { OpsPanel } from "./components/OpsPanel";
 import { EmptyState, LoadingState } from "./components/PanelState";
 import { PositionMonitor } from "./components/PositionMonitor";
 import { ProtectionDrilldown } from "./components/ProtectionDrilldown";
+import { SocialFreshnessPanel } from "./components/SocialFreshnessPanel";
 import { TokenDetail } from "./components/TokenDetail";
 import { TradeLifecycle } from "./components/TradeLifecycle";
 import { TradingChart } from "./components/TradingChart";
@@ -11,6 +13,8 @@ import { WalletIntelligence } from "./components/WalletIntelligence";
 import {
   candidateFeedApiPath,
   candidateWalletsApiPath,
+  decisionAnalyticsApiPath,
+  decisionLedgerApiPath,
   ensureDesktopApi,
   eventFeedApiPath,
   fetchJson,
@@ -19,6 +23,7 @@ import {
   OVERVIEW_REFRESH_MS,
   SELECTED_TOKEN_REFRESH_MS,
   setDesktopApiToken,
+  socialFreshnessApiPath,
   walletDetailApiPath,
   walletReviewApplyApiPath,
   walletLifecycleApiPath,
@@ -32,6 +37,8 @@ import {
   type ChartMetric,
   type EventFeedPayload,
   type EventFeedItem,
+  type DecisionLedgerPayload,
+  type DecisionAnalyticsPayload,
   type WalletDetailPayload,
   type WalletReviewApplyPayload,
   type WalletLifecyclePayload,
@@ -41,6 +48,7 @@ import {
   type PositionDetailPayload,
   type ReadinessPayload,
   type SnapshotPayload,
+  type SocialFreshnessPayload,
   type TradeRecord,
   type TradesPayload,
   type WatchlistItem,
@@ -49,7 +57,7 @@ import {
   type WalletsPayload,
 } from "./lib/api";
 import { money, pct, price, shortMint } from "./lib/format";
-import { findTradeForMint, summarizeTrades, tradeLabel, tradeMarketCapIn, tradeMarketCapOut, tradeMint, tradePnl, tradePnlPct, tradeReason, tradeSizeUsd } from "./lib/trades";
+import { findTradeForMint, summarizeTrades, tradeLabel, tradeLedgerSourceLabel, tradeMarketCapIn, tradeMarketCapOut, tradeMint, tradePnl, tradePnlPct, tradeReason, tradeSizeUsd } from "./lib/trades";
 
 type RuntimeComponent = {
   name: string;
@@ -145,6 +153,29 @@ type PaperReviewPayload = {
     expectancy: number;
     profit_factor?: number | null;
   }>;
+  decision_lane_report?: {
+    source: string;
+    total_decisions: number;
+    lanes: Record<string, {
+      label: string;
+      candidate_decisions: number;
+      paper_attempts: number;
+      paper_opened: number;
+      skipped: number;
+      quote_failed: number;
+      hard_blocked: number;
+      social_confirmed: number;
+      wallet_confirmed: number;
+      open_trades: number;
+      closed_trades: number;
+      failed_trades: number;
+      total_pnl: number;
+      win_rate: number;
+      avg_pnl_pct?: number | null;
+      sample_ready: boolean;
+      protected_positions?: number;
+    }>;
+  };
   readiness_gaps: string[];
   exit_reasons: Record<string, number>;
   failure_reasons: Record<string, number>;
@@ -175,6 +206,7 @@ export function App() {
   const [snapshots, setSnapshots] = useState<SnapshotPayload | null>(null);
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [freshness, setFreshness] = useState<FreshnessPayload | null>(null);
+  const [socialFreshness, setSocialFreshness] = useState<SocialFreshnessPayload | null>(null);
   const [trades, setTrades] = useState<TradesPayload | null>(null);
   const [paperReview, setPaperReview] = useState<PaperReviewPayload | null>(null);
   const [winnerPatterns, setWinnerPatterns] = useState<WinnerPatternPayload | null>(null);
@@ -189,6 +221,9 @@ export function App() {
   const [logs, setLogs] = useState<LogsPayload | null>(null);
   const [candidates, setCandidates] = useState<CandidateFeedPayload | null>(null);
   const [events, setEvents] = useState<EventFeedPayload | null>(null);
+  const [decisions, setDecisions] = useState<DecisionLedgerPayload | null>(null);
+  const [decisionAnalytics, setDecisionAnalytics] = useState<DecisionAnalyticsPayload | null>(null);
+  const [socialFreshnessAttempted, setSocialFreshnessAttempted] = useState(false);
   const [tokenError, setTokenError] = useState<string>("");
   const [workArea, setWorkArea] = useState<WorkArea>("cockpit");
 
@@ -226,9 +261,12 @@ export function App() {
           fetchJson<LogsPayload>("/api/logs?limit=40"),
           fetchJson<CandidateFeedPayload>(candidateFeedApiPath()),
           fetchJson<EventFeedPayload>(eventFeedApiPath()),
+          fetchJson<DecisionLedgerPayload>(decisionLedgerApiPath()),
+          fetchJson<DecisionAnalyticsPayload>(decisionAnalyticsApiPath()),
+          fetchJson<SocialFreshnessPayload>(socialFreshnessApiPath()),
         ]);
         if (cancelled) return;
-        const [readinessResult, freshnessResult, tradesResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult] = optional;
+        const [readinessResult, freshnessResult, tradesResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult, decisionsResult, decisionAnalyticsResult, socialFreshnessResult] = optional;
         setOverview(overviewPayload);
         const nextPositions = positionsPayload.positions || [];
         setPositions(nextPositions);
@@ -253,6 +291,14 @@ export function App() {
         if (logsResult.status === "fulfilled") setLogs(logsResult.value);
         if (candidatesResult.status === "fulfilled") setCandidates(candidatesResult.value);
         if (eventsResult.status === "fulfilled") setEvents(eventsResult.value);
+        if (decisionsResult.status === "fulfilled") setDecisions(decisionsResult.value);
+        if (decisionAnalyticsResult.status === "fulfilled") setDecisionAnalytics(decisionAnalyticsResult.value);
+        setSocialFreshnessAttempted(true);
+        if (socialFreshnessResult.status === "fulfilled") {
+          setSocialFreshness(socialFreshnessResult.value);
+        } else {
+          setSocialFreshness(null);
+        }
         const candidateMints = candidatesResult.status === "fulfilled"
           ? new Set((candidatesResult.value.items || []).map((item) => item.mint).filter(Boolean))
           : new Set<string>();
@@ -365,7 +411,10 @@ export function App() {
   const readinessLoaded = readiness !== null;
   const freshnessLoaded = freshness !== null;
   const tradesLoaded = trades !== null;
+  const decisionsLoaded = decisions !== null;
   const selectedTokenLoading = Boolean(selectedMint && !tokenDetail && !tokenError);
+  const socialFreshnessLoaded = socialFreshnessAttempted || Boolean(freshness?.social);
+  const socialFreshnessPayload = socialFreshness || freshness?.social || null;
   const handleProtectedAmountSaved = (item: WatchlistItem) => {
     const mint = item.token_mint || item.mint || "";
     setWatchlist((current) => {
@@ -405,11 +454,11 @@ export function App() {
           <h1>{selected?.label || (events?.items?.length ? "Scanner activity live" : "Waiting for local state")}</h1>
           <p>{selected ? `${shortMint(selected.mint)} | ${selected.source} | ${selected.status}` : (events?.items?.length ? `${events.count} recent wallet events. Candidates/trades appear only after filters pass.` : "Start the desktop API to populate local state.")}</p>
         </div>
-        <div className="lock-card">
+        <div className={`lock-card ${overview?.live_execution_locked === false ? "danger" : "safe"}`}>
           <span>Live execution</span>
           <strong>{overview?.live_execution_locked === false ? "UNLOCKED" : "LOCKED"}</strong>
         </div>
-        <div className="lock-card api-card">
+        <div className={`lock-card api-card ${apiStatus?.running ? "safe" : apiStatus ? "warn" : "neutral"}`}>
           <span>Local API</span>
           <strong>{apiStatus?.running ? (apiStatus.started ? "STARTED" : "RUNNING") : "CHECKING"}</strong>
           <small>{apiStatus?.detail || "Checking local read-only API..."}</small>
@@ -540,6 +589,7 @@ export function App() {
 
         <div className="panel">
           <h2>Snapshot Feed</h2>
+          <p className="muted">Source: {snapshots ? [snapshots.source || "unknown", snapshots.source_detail].filter(Boolean).join(" | ") : "loading source"}</p>
           {selectedTokenLoading ? <LoadingState title="Loading snapshot feed" detail="Waiting for selected-token snapshots." rows={4} /> : (snapshots?.snapshots || []).slice(-8).reverse().map((snapshot, index) => (
             <div className="snapshot" key={`${snapshot.time}-${snapshot.context}-${index}`}>
               <strong>{snapshot.context || "snapshot"}</strong>
@@ -552,12 +602,13 @@ export function App() {
         <TradeLifecycle trade={selectedTrade} />
       </section> : null}
 
-      {workArea === "details" ? <TokenDetail detail={tokenDetail} /> : null}
+      {workArea === "details" ? <TokenDetail detail={tokenDetail} loading={selectedTokenLoading} /> : null}
 
       {workArea === "signals" ? <section className="detail-grid wide">
         <LiveWalletActivity events={events} onSelectMint={setSelectedMint} expanded />
         <LiveLaunchFeed candidates={candidates} onSelectMint={setSelectedMint} expanded />
         <SocialImportPanel selectedMint={selectedMint} selectedLabel={selected?.label || tokenDetail?.position?.label || ""} />
+        <SocialFreshnessPanel freshness={socialFreshnessPayload} loaded={socialFreshnessLoaded} />
         <div className="panel">
           <h2>Selected Catalyst Matches</h2>
           {(signals?.catalysts || []).map((item) => (
@@ -592,10 +643,15 @@ export function App() {
       </section> : null}
 
       {workArea === "replay" ? <section className="detail-grid wide replay-grid">
-        <PaperReviewPanel review={paperReview} loaded={tradesLoaded} />
-        <ReplayPanel title="Open Paper Trades" trades={trades?.open_trades || []} loaded={tradesLoaded} empty="No open paper trades." />
-        <ReplayPanel title="Closed Trades" trades={trades?.closed_trades || []} loaded={tradesLoaded} empty="No closed paper trades." />
-        <ReplayPanel title="Failed Trades" trades={trades?.failed_trades || []} loaded={tradesLoaded} empty="No failed paper trades." />
+        <PaperReviewPanel review={paperReview} analytics={decisionAnalytics} loaded={tradesLoaded} />
+        <DecisionLedger decisions={decisions} loaded={decisionsLoaded} onSelectMint={setSelectedMint} />
+        {decisionsLoaded && !(decisions?.items || []).length ? (
+          <>
+            <ReplayPanel title="Open Paper Trades" trades={trades?.open_trades || []} loaded={tradesLoaded} empty="No open paper trades." />
+            <ReplayPanel title="Closed Trades" trades={trades?.closed_trades || []} loaded={tradesLoaded} empty="No closed paper trades." />
+            <ReplayPanel title="Failed Trades" trades={trades?.failed_trades || []} loaded={tradesLoaded} empty="No failed paper trades." />
+          </>
+        ) : null}
       </section> : null}
 
       {workArea === "system" ? <section className="detail-grid wide">
@@ -655,6 +711,7 @@ export function App() {
           ))}
           {freshnessLoaded && !(freshness?.freshness?.rows || []).length ? <EmptyState title="No freshness rows" detail="Freshness data was not present in the desktop API payload." /> : null}
         </div>
+        <SocialFreshnessPanel freshness={socialFreshnessPayload} loaded={socialFreshnessLoaded} />
       </section> : null}
     </main>
   );
@@ -904,10 +961,14 @@ function formatScore(value?: number | null) {
   return Number(value).toFixed(1);
 }
 
-function PaperReviewPanel({ review, loaded }: { review: PaperReviewPayload | null; loaded: boolean }) {
+function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPayload | null; analytics: DecisionAnalyticsPayload | null; loaded: boolean }) {
   const metrics = review?.metrics;
   const mainLane = review?.lane_metrics?.main;
   const explorationLane = review?.lane_metrics?.exploration;
+  const decisionReport = review?.decision_lane_report;
+  const decisionMain = decisionReport?.lanes?.main;
+  const decisionExploration = decisionReport?.lanes?.exploration;
+  const decisionProtected = decisionReport?.lanes?.protected_manual;
   const progress = metrics ? Math.min(100, Math.round((metrics.closed_trades / review.minimum_closed_trades) * 100)) : 0;
   return (
     <div className="panel paper-review-panel">
@@ -944,6 +1005,29 @@ function PaperReviewPanel({ review, loaded }: { review: PaperReviewPayload | nul
               <small>{money(explorationLane?.realized_pnl ?? 0)} realized | {pct(explorationLane?.win_rate ?? 0)} wins</small>
             </div>
           </div>
+          {decisionReport ? (
+            <div className="review-block">
+              <strong>Decision Ledger Lanes</strong>
+              <div className="lane-grid decision-lane-grid">
+                <div>
+                  <span>Main Decisions</span>
+                  <strong>{decisionMain?.candidate_decisions ?? 0} seen</strong>
+                  <small>{decisionMain?.paper_opened ?? 0} opened | {decisionMain?.skipped ?? 0} skipped | {decisionMain?.quote_failed ?? 0} quote fail | {pct(decisionMain?.win_rate ?? 0)} wins</small>
+                </div>
+                <div>
+                  <span>Exploration Decisions</span>
+                  <strong>{decisionExploration?.candidate_decisions ?? 0} seen</strong>
+                  <small>{decisionExploration?.paper_opened ?? 0} opened | {decisionExploration?.skipped ?? 0} skipped | {decisionExploration?.quote_failed ?? 0} quote fail | {pct(decisionExploration?.win_rate ?? 0)} wins</small>
+                </div>
+                <div>
+                  <span>Protected / Manual</span>
+                  <strong>{decisionProtected?.protected_positions ?? 0} watched</strong>
+                  <small>{decisionProtected?.candidate_decisions ?? 0} decision records | {decisionProtected?.closed_trades ?? 0} closed | {money(decisionProtected?.total_pnl ?? 0)} PnL</small>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {analytics ? <DecisionAnalyticsBlock analytics={analytics} /> : null}
           <ReviewList title="Readiness Gaps" rows={review.readiness_gaps} empty="No readiness gaps. This sample is large enough for a meaningful paper review." />
           <ReviewPairs title="Entry Reasons" rows={review.entry_reasons} />
           <ReviewPairs title="Exit Reasons" rows={review.exit_reasons} />
@@ -952,6 +1036,35 @@ function PaperReviewPanel({ review, loaded }: { review: PaperReviewPayload | nul
           <ReviewList title="Next Review Actions" rows={review.next_review_actions} empty="No review actions recorded." />
         </>
       )}
+    </div>
+  );
+}
+
+function DecisionAnalyticsBlock({ analytics }: { analytics: DecisionAnalyticsPayload }) {
+  const social = analytics.groups?.social_catalyst;
+  const walletOnly = analytics.groups?.wallet_only;
+  const quoteFailed = analytics.groups?.quote_failed;
+  return (
+    <div className="review-block">
+      <strong>Decision Outcome Analytics</strong>
+      <div className="lane-grid decision-lane-grid">
+        <div>
+          <span>Social Catalyst</span>
+          <strong>{social?.closed_trades ?? 0} closed</strong>
+          <small>{pct(social?.win_rate ?? 0)} wins | {money(social?.total_pnl ?? 0)} PnL | {social?.candidate_decisions ?? 0} decisions</small>
+        </div>
+        <div>
+          <span>Wallet Only</span>
+          <strong>{walletOnly?.closed_trades ?? 0} closed</strong>
+          <small>{pct(walletOnly?.win_rate ?? 0)} wins | {money(walletOnly?.total_pnl ?? 0)} PnL | {walletOnly?.candidate_decisions ?? 0} decisions</small>
+        </div>
+        <div>
+          <span>Quote Failed</span>
+          <strong>{quoteFailed?.candidate_decisions ?? 0} blocked</strong>
+          <small>{quoteFailed?.failed_trades ?? 0} failed trades | {quoteFailed?.skipped ?? 0} skipped</small>
+        </div>
+      </div>
+      <p>{analytics.social_expansion_gate?.allowed ? "Social expansion gate open." : analytics.social_expansion_gate?.reason || "Social expansion gate closed."}</p>
     </div>
   );
 }
@@ -994,7 +1107,7 @@ function PortfolioPanel({ trades, winnerPatterns, loaded, onSelectMint }: { trad
         <div className="portfolio-head">
           <div>
             <h2>Portfolio PnL</h2>
-            <p className="muted">Paper-trade ledger totals from open and closed positions.</p>
+            <p className="muted">Paper-trade ledger totals from open and closed positions. Source: {tradeLedgerSourceLabel(trades)}</p>
           </div>
           <strong className={`portfolio-total ${pnlTone(summary.totalPnl)}`}>{pnlMoney(summary.totalPnl)}</strong>
         </div>

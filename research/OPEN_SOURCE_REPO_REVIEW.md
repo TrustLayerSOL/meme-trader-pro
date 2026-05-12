@@ -1,6 +1,6 @@
 # Open Source Repo Review
 
-Last updated: 2026-04-29
+Last updated: 2026-05-09
 
 Reviewed:
 
@@ -864,3 +864,73 @@ The biggest edge from Rohun's repo ecosystem is not a single bot script. It is a
 - every outcome feeds back into wallet/social/risk scoring.
 
 That should become the core data model behind MemeTraderPro's competitive advantage.
+
+## 2026-05-09 Social Catalyst / Discovery Repo Sweep
+
+Purpose:
+
+- Replace manual-only social catalyst import with automated, auditable collection.
+- Keep the current priority on the canonical decision ledger.
+- Use public repos as references or dependencies only when licensing, API terms, and architecture fit the safety-first local cockpit.
+
+### Meme Radar Reference
+
+Repo: `https://github.com/wagmi97/Meme-Radar`
+
+What it is:
+
+- Next.js / TypeScript Reddit meme-stock scanner.
+- Extracts stock tickers from Reddit posts/comments.
+- Scores weighted sentiment, stores evidence, and ranks trending/fading stocks.
+
+Useful concepts:
+
+- Scan cadence and source freshness.
+- Mention velocity and rank-delta thinking.
+- Evidence links per mention.
+- Sentiment categories and keyword weights.
+- Public/API dashboard shape for top trending and fading items.
+
+Limits:
+
+- It is equity ticker focused, not Solana mint focused.
+- Stock whitelist and Reddit subreddit choices do not transfer directly.
+- It should inspire the social/catalyst workflow, not be merged.
+
+### Recommended Social Collection References
+
+| Repo | License | Use | Stance |
+| --- | --- | --- | --- |
+| `https://github.com/praw-dev/asyncpraw` | BSD-2-Clause | Async Reddit API wrapper. | Best first automated collector. |
+| `https://github.com/tweepy/tweepy` | MIT | Official X/Twitter API client. | Preferred production X collector if API access exists. |
+| `https://github.com/vladkens/twscrape` | MIT | X GraphQL scraping/search patterns. | Experimental only; disable by default due ToS/account risk. |
+| `https://github.com/LonamiWebs/Telethon` | MIT | Telegram MTProto client. | Useful for authorized public channels/groups. |
+| `https://github.com/Rapptz/discord.py` | MIT | Discord bot/client library. | Useful for opted-in servers/channels. |
+| `https://github.com/cjhutto/vaderSentiment` | MIT | Lightweight social sentiment. | Good baseline, but extend with crypto/meme slang. |
+| `https://github.com/ArchiveBox/ArchiveBox` | MIT | Durable URL/post evidence capture. | Strong future evidence layer. |
+
+### Recommended Solana / Meme Discovery References
+
+| Repo | License | Use | Stance |
+| --- | --- | --- | --- |
+| `https://github.com/0xfnzero/solana-streamer` | MIT | PumpFun/PumpSwap/Bonk/Raydium event streaming model. | Best future launch-discovery reference. |
+| `https://github.com/chainstacklabs/pumpfun-bonkfun-bot` | Apache-2.0 | Pump.fun / LetsBonk listener, migration, bonding curve, IDL concepts. | Use listener/account-layout concepts only. |
+| `https://github.com/petershepherd/j33t-intel` | MIT | Local meme-token analysis/risk cockpit ideas. | Strong product/risk reference. |
+| `https://github.com/Shyft-to/solana-defi` | MIT badge in README | Yellowstone gRPC parsing examples. | Useful parser reference; confirm license before copying. |
+| `https://github.com/Immutal0/dexscreener-analysis-bot-meme` | no obvious license | DexScreener filters, social presence, anomaly checks. | Conceptual reference only unless licensing is clarified. |
+| `https://github.com/savantpseudoist/Solana-Token-Purchase-Monitor` | MIT | Python Helius wallet purchase monitor with Telegram alerts and DexScreener. | Useful alert/monitoring reference. |
+
+### Integration Decision
+
+The next project step does not change: finish React/Tauri Replay Decision Ledger polish first.
+
+The new repo findings change what comes immediately after:
+
+1. Add social/catalyst evidence fields to decision records.
+2. Add collector status/freshness so automated sources cannot silently go stale.
+3. Add Reddit collection first using official/compliant API access.
+4. Add official X collection second if credentials are available.
+5. Keep Telegram/Discord and Solana launch-discovery enrichment behind separate adapters.
+6. Add evidence capture and social-to-price alignment only after normalized events exist.
+
+Do not create social-only buy logic. Automated catalysts should raise review priority, enrich decision records, and improve postmortems.

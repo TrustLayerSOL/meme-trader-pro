@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 
 ## Current Work
 
@@ -31,6 +31,7 @@ Safety carryover:
 Highest-value active workstreams:
 
 - Canonical decision ledger and lane-separated paper metrics.
+- Automated social/catalyst ingestion that feeds the decision ledger instead of manual-only imports.
 - Fast open-position monitor vs slower deep watchdog architecture split.
 - Desktop app launch/session reliability and stale-state visibility.
 - Selected-token chart polish and trade-stream candle pipeline.
@@ -60,20 +61,444 @@ Why this matters:
 - Deep watchdog checks can take 40-120 seconds due to RPC/market/mint inspection latency. This is too slow to represent as sub-second rug rescue, so fast open-position monitoring must be separated from deep inspection before live execution.
 - Helius Gatekeeper, standard Helius mainnet, and public Solana read fallback currently report healthy.
 - Some runtime and live-state sources are stale when the backend loops are not running.
-- Holder concentration analyzer exists but is not wired into live risk snapshots yet.
+- Holder concentration is now wired into quote-worthy live candidate decisions. True linked-wallet graph risk is still marked as not checked until a real owner/funder graph source exists.
 - Prepared exits now carry quote-feasibility metadata. One protected token has a clearly marked simulated/test amount and quote-feasible result; remaining protected manual items still need wallet-derived or verified operator-owned amounts.
 
 ## Next Actions
 
-1. Bring the React/Tauri Replay view up to the same Decision Ledger filter/detail standard as the static desktop view.
-2. Add richer Decision Ledger drill-downs for quote snapshots, route feasibility, holder/risk checks, and eventual paper outcome.
-3. Add or repair canonical read paths so trades, wallet stats, alerts, and decisions do not disagree across JSON and SQLite panels.
-4. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
-5. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
-6. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
-7. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
+1. Monitor the hourly Reddit collector for clean runs, rate-limit errors, duplicate quality, and noisy keywords before adding more sources.
+2. Keep broader crypto and stablecoin data as market-regime context only; do not expand the trade universe beyond memecoin candidates until paper edge is proven.
+3. Continue canonical read-path migration only where a table, backfill, and parity guard exist; wallet stats and social remain JSON-first for now.
+4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
+5. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
+6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-10 - Paper Sample Acceleration Lane
+
+What changed:
+
+- Added a paper-only route-failed observation mode inside Exploration Lane.
+- Strong signals that fail buy/sell route checks can now open tiny `$5` exploration samples when `paper_exploration_route_failed_enabled` is on, while `live_should_trade` remains false and the sample is marked `route_observation_only`.
+- Preserved main-strategy strictness: hard risk, market sanity, strategy guard, and confirmation blocks still prevent exploration samples.
+- Paper trade reasons now distinguish `route_failed_observation` from normal `quote_ok` entries so route-failed samples do not pollute main-lane interpretation.
+- Saved runtime controls for route-failed exploration thresholds: score `70`, edge `65`, size `$5`.
+- Restarted the paper bot so the scanner is running the new acceleration logic; live execution stayed locked.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic.ScannerCandidateFilterTests.test_paper_exploration_lifts_safe_near_miss_as_separate_lane tests.test_core_logic.ScannerCandidateFilterTests.test_paper_exploration_does_not_override_hard_risk_block tests.test_core_logic.ScannerCandidateFilterTests.test_paper_exploration_does_not_override_exit_liquidity_block tests.test_core_logic.ScannerCandidateFilterTests.test_paper_exploration_can_sample_strong_route_failed_observation tests.test_core_logic.ScannerCandidateFilterTests.test_paper_exploration_route_failed_observation_requires_strong_signal tests.test_core_logic.SettingsManagerTests.test_save_settings_preserves_route_failed_exploration_controls`
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api`
+
+### 2026-05-10 - Runtime Readiness Status Cleanup
+
+What changed:
+
+- Updated desktop runtime/readiness status handling so an old successful quote or expired Jupiter quote cooldown is treated as healthy idle state instead of a stale subsystem warning.
+- Kept real quote failures visible: missing API key, current cooldown/429, HTTP errors, quote exceptions, or quote `last_error` still mark quotes unhealthy.
+- Updated scanner freshness so a fresh scanner heartbeat with active wallet events is not failed only because route-backed swap ticks are quiet. It now reports `wallet_feed_quiet` with detail instead of failing the critical scanner component.
+- Restarted the desktop API only; paper bot/scanner, watchdog, wallet discovery, and live execution settings were not loosened.
+- Ran Reddit collector and rebuilt catalyst cards once to restore social freshness after it aged out.
+
+Verification:
+
+- Added regression tests for old `quote_ok`, expired quote cooldown, recent quote exception, and scanner events with quiet route-backed ticks.
+- `./trading_env/bin/python -m unittest tests.test_desktop_api tests.test_core_logic tests.test_market_checker` passed 232 tests.
+- `./trading_env/bin/python -m py_compile desktop_api.py` passed.
+- `git diff --check` passed.
+- `/api/readiness` now reports `overall: OK`, including `runtime_quotes: OK` and `runtime_scanner: OK`.
+- `/api/social/freshness` reports `OK` after collector refresh.
+
+### 2026-05-10 - Deep Watchdog RPC Pressure Control
+
+What changed:
+
+- Added watchdog-level cache and cooldown protection for deep Helius read calls: mint account inspection, owner token-balance lookup, holder largest-account checks, and prepared exit quote feasibility.
+- Kept the fast open-position monitor separate from the slower deep watchdog path; this change only lowers repeated deep-check pressure and does not enable live execution.
+- Added runtime counters for deep RPC cache hits, cooldown skips, and rate-limit cooldowns so operator status can show whether the watchdog is protecting upstream providers.
+- Added scanner per-wallet backpressure using websocket subscription-to-wallet mapping so one noisy wallet cannot fill all scanner transaction tasks and crowd out other watched wallets.
+- Restart targets are watchdog for deep-check cache/cooldown and paper bot/scanner for per-wallet backpressure. Live execution remains locked.
+
+Verification:
+
+- Added failing tests first for holder cache reuse, mint-inspection cooldown after `429`, wallet/mint scoped balance cache, and exit quote cache reuse.
+- Added failing tests first for subscription ack wallet mapping and noisy-wallet queue isolation.
+- `./trading_env/bin/python -m unittest tests.test_core_logic.WatchdogPressureTests` passed.
+- `./trading_env/bin/python -m unittest tests.test_core_logic.SolanaRpcPressureTests` passed.
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker` passed 228 tests.
+- `./trading_env/bin/python -m py_compile infra/rpc_client.py core/rug_watchdog.py main.py desktop_api.py` passed.
+- `git diff --check` passed.
+- Restarted watchdog with 5-minute deep RPC cache/cooldown settings. Runtime shows watchdog fresh with deep cache hits and no active deep RPC cooldown.
+- Restarted paper bot/scanner with `MEMETRADER_MAX_INFLIGHT_PER_WALLET=40`. Runtime recovered from scanner stale/fail to `online`; scanner active tasks dropped from the 2500 backlog ceiling into normal double digits and route-backed swap ticks became fresh again.
+- Ran the Reddit collector and rebuilt catalyst cards once. `/api/social/freshness` returned `OK` with manual imports, Reddit collector, and catalyst cards fresh.
+
+Remaining:
+
+- Watch Helius holder/mint request volume over the next 1-4 hours and confirm the dashboard stays near the improved success rate.
+- Watch per-wallet backlog drops. Drops are expected for noisy wallets, but scanner active tasks should stay well below the global backlog ceiling.
+- Continue collecting paper outcomes; provider pressure control improves runtime durability but does not replace the 50 closed main-lane trade requirement.
+
+### 2026-05-10 - Provider Pressure Control
+
+What changed:
+
+- Added Jupiter Price API pressure control: longer market cache, provider cooldown after `429`, per-provider request serialization, and safer Dexscreener fallback behavior.
+- Restarted the paper bot/watchdog with lower-pressure market settings while keeping live execution locked.
+- Added Helius `getTransaction` pressure control in the scanner runtime: per-signature cache, same-signature in-flight dedupe, max request pacing, backlog drop guard, and runtime counters for transaction cache/fetch behavior.
+- Restarted the paper bot/scanner with `MEMETRADER_GET_TRANSACTION_MAX_RPS=8`, 5-minute transaction cache, and backlog protection.
+
+Verification:
+
+- Jupiter dashboard improved from roughly 63% Price API error rate to roughly 99.5% success / 0.45% error in the last-hour view after pressure control.
+- Live runtime reports bot, websocket, scanner, wallet feed, fast open-position monitor, watchdog, wallet discovery, and Reddit collector fresh.
+- Helius transaction limiter is active in runtime: `transaction_min_interval=0.125`, transaction cache filling, and `getTransaction` status 200.
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker` passed 222 tests.
+- `./trading_env/bin/python -m py_compile infra/rpc_client.py main.py core/scanner.py infra/market_checker.py core/fast_position_monitor.py core/rug_watchdog.py execution/jupiter_quote.py` passed.
+- `git diff --check` passed.
+
+Remaining:
+
+- Watch the Helius dashboard over the next 1-4 hours. Requests should flatten below prior burst levels; if not, lower `MEMETRADER_GET_TRANSACTION_MAX_RPS` from 8 toward 5 and add log-level prefilters before transaction fetch.
+- Helius holder/deep watchdog checks now have their own watchdog cache/cooldown layer. The next validation is live dashboard observation, not another backend pressure feature.
+
+### 2026-05-10 - Fast Monitor, Decision Analytics, Reddit Hygiene
+
+What changed:
+
+- Added a separate fast open-position monitor path that performs cheap quote/liquidity checks for open paper trades and updates paper PnL/snapshots through the existing `PaperTrader.update_price()` lifecycle.
+- Kept the deep watchdog separate for slower mint inspection, holder checks, wallet balances, prepared exits, and quote feasibility.
+- Added `/api/decision-analytics` as a read-only decision outcome view over canonical SQLite decision records, grouping social catalyst, wallet-only, quote-failed, hard-risk, lane, and overall outcomes.
+- Added a social expansion gate: broader social sources remain blocked until labeled social outcomes are large enough and outperform non-social decisions.
+- Tightened Reddit collector hygiene with duplicate detection, noisy-author/thread rejection, explicit rejected/duplicate counts, and research-only source expansion metadata.
+- Wired decision outcome analytics into the Replay/Paper Review surface in the React/Tauri GUI.
+
+Next validation target:
+
+1. Run the fast monitor during an active paper session and confirm open trades receive fresh snapshots without invoking deep watchdog checks.
+2. Watch Reddit collector duplicate/noise counts over multiple scheduled runs.
+3. Use decision analytics only after enough labeled closed outcomes exist; do not add Twitter/Telegram/etc. as scoring inputs until the social expansion gate is earned.
+
+### 2026-05-09 - Hourly Reddit Collector Automation
+
+What changed:
+
+- Created active Codex automation `reddit-social-collector`.
+- It runs the standalone Reddit social collector hourly against the local workspace, rebuilds catalyst cards after collection, verifies social freshness, and reports counts/errors.
+- The automation prompt explicitly keeps live execution locked and does not enable trading or modify execution settings.
+- Current local social freshness remains `OK`: manual/social events fresh, catalyst cards fresh, and Reddit collector fresh.
+
+Verification:
+
+- Confirmed `/api/social/freshness` helper reports `overall: OK` with 3 fresh rows.
+
+### 2026-05-09 - Paper Outcome Decision Backfill
+
+Changed files:
+
+- `utils/sync_state_to_sqlite.py`
+- `tests/test_core_logic.py`
+- `WORK_LOG.md`
+- `research/PROJECT_STATE.md`
+
+What changed:
+
+- Extended the SQLite sync utility so paper trades with `signal_metadata.decision_id` backfill `decision_records` action/result fields.
+- Backfill covers open, closed, and failed paper trades, including lane, position size, trade status, PnL, PnL percent, and paper outcome details.
+- Real local sync still found all 13 current paper trades missing decision IDs, so no historical decision outcomes could be backfilled. Future scanner-created trades carry `decision_id`, so new paper lifecycle events should populate the lane report.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic.PositionCockpitTests.test_trade_sync_backfills_decision_results_from_paper_trade_metadata`
+- `./trading_env/bin/python utils/sync_state_to_sqlite.py`
+
+### 2026-05-09 - Decision Ledger Lane Report
+
+Changed files:
+
+- `desktop_api.py`
+- `apps/desktop/src/App.tsx`
+- `apps/desktop/src/styles.css`
+- `tests/test_desktop_api.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added `decision_lane_report` to `/api/paper-review`, sourced from SQLite `decision_records`.
+- The report summarizes main, exploration, and protected/manual lanes by candidate decisions, paper attempts, opens, skips, quote failures, hard blocks, social/wallet confirmation, open/closed/failed trades, PnL, win rate, and sample readiness.
+- Protected/manual currently combines protected watchlist count with any protected/manual decision records.
+- Lane normalization now prefers explicit non-main lanes from result paper outcome, action payload, or top-level decision row before falling back to main.
+- Native Paper Review now shows a compact Decision Ledger Lanes grid beside the existing paper-trade lane metrics.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_decision_lane_report_normalizes_protected_and_result_lanes tests.test_desktop_api.DesktopApiTests.test_decision_lane_report_summarizes_decision_record_outcomes tests.test_desktop_api.DesktopApiTests.test_paper_review_includes_decision_lane_report`
+- `npm run check`
+- `python3 -m py_compile desktop_api.py`
+
+### 2026-05-09 - Reddit Social Collector Foundation
+
+Changed files:
+
+- `social/reddit_collector.py`
+- `social/social_signal.py`
+- `tests/test_core_logic.py`
+- `tests/test_desktop_api.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a standalone Reddit collector that reads subreddit JSON listings, normalizes posts into local social evidence, and does not trigger trades.
+- Avoided new dependencies after `requests` import proved blocking in this environment; the collector uses the standard library HTTP client plus injectable fetchers for tests.
+- Reddit collector status now writes into `runtime_status.social_collectors.reddit`, which the existing `/api/social/freshness` contract already displays.
+- Fixed social state compatibility: `SocialSignalEngine` now reads both canonical `events` and legacy `signals`; new manual and Reddit writes use canonical `events`.
+- Added tests for Reddit post mapping, collector storage, manual-event preservation, social matching from `events`, and runtime social-collector freshness.
+- First live standalone observation pass fetched 6 Reddit posts from `SolanaMemeCoins` and `memecoins`, stored them as local evidence, kept `trade_triggered: false`, rebuilt 3 catalyst cards, and moved social freshness to `OK`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic.SocialSignalTests.test_social_engine_matches_canonical_events_rows tests.test_core_logic.SocialSignalTests.test_social_signal_extracts_ticker_mint_and_sentiment tests.test_core_logic.SocialSignalTests.test_exact_mint_matches_without_market_metadata tests.test_core_logic.SocialSignalTests.test_malformed_social_rows_do_not_break_active_signals tests.test_core_logic.PositionCockpitTests.test_reddit_collector_preserves_existing_canonical_events tests.test_core_logic.PositionCockpitTests.test_reddit_collector_stores_signals_and_status_without_trade_trigger`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_social_freshness_reads_runtime_social_collectors_dict tests.test_desktop_api.DesktopApiTests.test_social_freshness_payload_flags_stale_sources_and_collectors`
+- `./trading_env/bin/python -m core.catalyst_cards`
+
+### 2026-05-09 - Scanner Holder/Cluster Risk Decision Wiring
+
+Changed files:
+
+- `core/scanner.py`
+- `core/settings_manager.py`
+- `tests/test_core_logic.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a bounded scanner holder check using `getTokenLargestAccounts` and the existing `HolderConcentrationAnalyzer`.
+- Gated holder RPC checks to quote-worthy or near-entry candidates so low-prescore skips do not slow the hot path.
+- Holder `DANGER` now elevates the candidate risk to a hard block before paper entry; holder `WARNING` elevates risk context without bypassing quote or safety checks.
+- Live decision records now receive holder concentration risk, warnings, metrics, and top-holder percentages through the canonical decision ledger.
+- Linked-wallet graph risk is explicitly recorded as `NOT_CHECKED` with observed wallet-cluster context until a real linkage source exists.
+- Added settings defaults for `scanner_holder_check_enabled` and `scanner_holder_check_timeout_seconds`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic.ScannerRuntimeTests`
+- `python3 -m py_compile core/scanner.py core/settings_manager.py`
+
+### 2026-05-09 - Canonical Read Path Source Contracts
+
+Changed files:
+
+- `desktop_api.py`
+- `tests/test_desktop_api.py`
+- `core/storage.py`
+- `utils/sync_state_to_sqlite.py`
+- `tests/test_core_logic.py`
+- `apps/desktop/src/App.tsx`
+- `apps/desktop/src/components/TokenDetail.tsx`
+- `apps/desktop/src/components/TokenDetail.test.tsx`
+- `apps/desktop/src/lib/api.ts`
+- `apps/desktop/src/lib/trades.ts`
+- `apps/desktop/src/lib/trades.test.ts`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Migrated `/api/trades` and shared paper-trade state to prefer SQLite `trades` once SQLite and JSON pass bucket/key parity.
+- Added a JSON fallback for trades when SQLite is empty or parity fails, with `mirror_warning`, `sqlite_counts`, and `json_counts`.
+- Fixed SQLite trade mirror writes so failed rows are normalized as `failed`, terminal rows remove stale open mirror rows, and rebuilds preserve full payload JSON.
+- Added a `utils/sync_state_to_sqlite.py --rebuild-trades` path and rebuilt the local SQLite `trades` table from `data/paper_trades.json`; live parity is now open 1, closed 10, failed 2.
+- Migrated `/api/alerts` to prefer SQLite `alerts` with live-state fallback and summary-column fallback for malformed alert payload JSON.
+- Added explicit source metadata to `/api/tokens/{mint}/snapshots`: `sqlite_token_snapshots`, `data/memetrader.db:token_snapshots`, and the related source contract.
+- Added selected-position detail source metadata: JSON paper/manual position source, SQLite snapshot source, social/catalyst/wallet source contract, and a mixed-market-field warning.
+- Added source contracts for wallet list/detail payloads and social payloads without migrating those JSON-first readers yet.
+- React/Tauri Portfolio now shows the paper-trade source in the Portfolio header.
+- React/Tauri selected-token Snapshot Feed now shows the SQLite snapshot source.
+- React/Tauri Details now shows a Data Sources card for selected-token source contracts and mixed-field warnings.
+- Mapped the remaining JSON/SQLite inconsistencies with a read-only helper pass. Full source-of-truth migration remains an Extra High task because it touches writers, retention, schema, backfill, and analytics.
+
+Verification:
+
+- Added failing tests first for trade and snapshot source contracts.
+- Added failing tests first for the alert source contract and route payload.
+- Added failing tests first for selected-position source contracts and the Details Data Sources card.
+- Added failing tests first for SQLite-first trades, trade parity fallback, legacy failed-row bucketing, SQLite-first alerts, malformed alert payload fallback, wallet contracts, and social contracts.
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_trades_payload_prefers_sqlite_source_of_truth tests.test_desktop_api.DesktopApiTests.test_trades_payload_falls_back_to_json_when_sqlite_parity_fails tests.test_desktop_api.DesktopApiTests.test_legacy_failed_sqlite_trade_rows_are_not_bucketed_as_open`
+- `./trading_env/bin/python -m unittest tests.test_core_logic.PositionCockpitTests.test_event_store_normalizes_failed_trade_rows_for_sqlite_mirror tests.test_core_logic.PositionCockpitTests.test_event_store_terminal_trade_removes_stale_open_mirror_row tests.test_core_logic.PositionCockpitTests.test_trade_sync_rebuilds_sqlite_trades_to_match_json_buckets`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_alerts_payload_prefers_sqlite_source_of_truth tests.test_desktop_api.DesktopApiTests.test_alerts_payload_falls_back_to_live_state_when_sqlite_empty tests.test_desktop_api.DesktopApiTests.test_fetch_alert_rows_falls_back_to_summary_columns_when_payload_is_malformed tests.test_desktop_api.DesktopApiTests.test_alerts_route_uses_alerts_source_contract`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_position_detail_declares_mixed_json_and_sqlite_sources tests.test_desktop_api.DesktopApiTests.test_position_detail_declares_manual_watchlist_source tests.test_desktop_api.DesktopApiTests.test_position_detail_keeps_source_contract_without_selected_position`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_social_payload_declares_json_source_and_decision_evidence_boundary tests.test_desktop_api.DesktopApiTests.test_wallets_payload_merges_labels_and_performance tests.test_desktop_api.DesktopApiTests.test_wallet_detail_payload_includes_signals_and_paper_trades`
+- `npm test -- --run src/lib/trades.test.ts`
+- `npm test -- --run src/components/TokenDetail.test.tsx`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests`
+- `npm test`
+- `python3 -m py_compile desktop_api.py`
+- `npm run check`
+- `npm run build:web`
+- `git diff --check`
+
+### 2026-05-09 - Social Collector Freshness Indicators
+
+Changed files:
+
+- `desktop_api.py`
+- `tests/test_desktop_api.py`
+- `apps/desktop/src/App.tsx`
+- `apps/desktop/src/components/SocialFreshnessPanel.tsx`
+- `apps/desktop/src/components/SocialFreshnessPanel.test.tsx`
+- `apps/desktop/src/lib/api.ts`
+- `apps/desktop/src/lib/api.test.ts`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `research/SOCIAL_CATALYST_AUTOMATION_WORKFLOW.md`
+
+What changed:
+
+- Added read-only `/api/social/freshness` for manual social imports, catalyst cards, and future automated collector status.
+- Social freshness rows now report status, age, event count, last success, last error, enabled state, and freshness thresholds.
+- React/Tauri Signals and System views now show Social Freshness without trade-action language.
+- The API also embeds social freshness inside `/api/freshness` for system-level source health.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_social_freshness_payload_flags_stale_sources_and_collectors tests.test_desktop_api.DesktopApiTests.test_social_freshness_route_is_read_only tests.test_desktop_api.DesktopApiTests.test_social_endpoint_supports_legacy_signals_key`
+- `npm test -- --run src/lib/api.test.ts src/components/SocialFreshnessPanel.test.tsx`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests`
+- `npm test`
+- `python3 -m py_compile desktop_api.py`
+- `npm run check`
+- `npm run build:web`
+- `git diff --check`
+
+### 2026-05-09 - React/Tauri Rich Decision Detail
+
+Changed files:
+
+- `apps/desktop/src/components/DecisionLedger.tsx`
+- `apps/desktop/src/components/DecisionLedger.test.tsx`
+- `apps/desktop/src/lib/decisions.ts`
+- `apps/desktop/src/lib/decisions.test.ts`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `research/SOCIAL_CATALYST_AUTOMATION_WORKFLOW.md`
+
+What changed:
+
+- React/Tauri Decision Detail now shows the richer backend evidence already attached to decisions.
+- Added detail cards for catalyst evidence, route feasibility, holder/cluster risk, market context, and paper outcome.
+- Kept row density unchanged so the ledger remains scannable; the expanded evidence stays in the selected-decision drilldown.
+- Added formatter and component render tests for the new evidence sections.
+
+Verification:
+
+- `npm test -- --run src/lib/decisions.test.ts src/components/DecisionLedger.test.tsx`
+- `npm test`
+- `npm run check`
+- `npm run build:web`
+- `git diff --check`
+
+### 2026-05-09 - Backend Decision Evidence Fields
+
+Changed files:
+
+- `core/decision_ledger.py`
+- `core/scanner.py`
+- `tests/test_core_logic.py`
+- `tests/test_desktop_api.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `research/SOCIAL_CATALYST_AUTOMATION_WORKFLOW.md`
+
+What changed:
+
+- Extended canonical backend decision payloads with structured social/catalyst evidence, market context, holder/cluster risk, and route-feasibility sections.
+- Added paper-outcome detail to decision results, including lane, exploration state, prices, liquidity, size, fees, and entry/exit reasons when available.
+- Scanner decision writes now include sanitized Jupiter quote route details such as route count, mints, raw amounts, slippage, max impact, and route-plan summary.
+- Broad crypto/stablecoin inputs are now documented as context-only risk signals, not a product expansion into non-memecoin trading.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic.PositionCockpitTests.test_decision_record_preserves_extended_evidence_fields tests.test_core_logic.PositionCockpitTests.test_trade_result_preserves_paper_outcome_details`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_decisions_route_preserves_extended_decision_evidence`
+- `python3 -m py_compile core/decision_ledger.py core/scanner.py`
+
+### 2026-05-09 - React/Tauri Replay Decision Ledger Parity
+
+Changed files:
+
+- `apps/desktop/src/App.tsx`
+- `apps/desktop/src/components/DecisionLedger.tsx`
+- `apps/desktop/src/lib/api.ts`
+- `apps/desktop/src/lib/api.test.ts`
+- `apps/desktop/src/lib/decisions.ts`
+- `apps/desktop/src/lib/decisions.test.ts`
+- `apps/desktop/src/styles.css`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+
+What changed:
+
+- Added React/Tauri support for the canonical `/api/decisions` ledger.
+- Added a dedicated native Decision Ledger panel in the Replay tab.
+- Replay now prefers canonical decision records when present and falls back to paper-trade replay only when decision records are unavailable.
+- Added decision filters matching the static desktop view: all, bought, skipped, exploration, quote failed, hard risk, social, and wallet.
+- Added selectable decision rows and rich detail showing lane, score, threshold, risk, buy/sell quote reason, action reason, wallet evidence, social match, risk notes, and score notes.
+- Added typed decision helper functions and tests for filter parity, selection fallback, quote badges, and wallet summaries.
+
+Verification:
+
+- `npm test -- --run src/lib/decisions.test.ts src/lib/api.test.ts`
+- `npm run check`
+- `npm test`
+- `python3 -m py_compile desktop_api.py core/decision_ledger.py core/storage.py`
+- `npm run build:web`
+
+Remaining:
+
+- Backend decision evidence fields are now complete in the later work-log entry above.
+- Next GUI pass should expose those fields before the first automated Reddit collector is wired in.
+
+### 2026-05-09 - Automated Social Catalyst Workflow Added To Roadmap
+
+Changed files:
+
+- `WORK_LOG.md`
+- `AGENT_WORKFLOW.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/OPEN_SOURCE_REPO_REVIEW.md`
+- `research/SOCIAL_CATALYST_AUTOMATION_WORKFLOW.md`
+
+What changed:
+
+- Reviewed the current work log, build plan, data source map, social tracker plan, decision ledger direction, and open-source research.
+- Added a dedicated social-catalyst automation workflow that folds in Meme Radar, async Reddit ingestion, official X ingestion, Telegram/Discord, evidence capture, and Solana launch-discovery references.
+- Reframed the next workflow as Decision Ledger first, automated social ingestion second, and social-to-price validation third.
+- Kept the safety rule explicit: social evidence can raise priority and improve explanations, but cannot bypass wallet confirmation, risk gates, quote feasibility, lane separation, or live execution locks.
+
+Verification:
+
+- Documentation-only update; no runtime code changed.
+- Cross-checked against the active Phase 2 / Phase 7 decision-ledger roadmap and current manual social import implementation.
+
+Remaining:
+
+- React/Tauri Replay Decision Ledger parity is now complete in the later work-log entry above.
+- Add decision-record fields needed for social/catalyst evidence before adding the first Reddit collector.
 
 ### 2026-05-09 - Runtime SQLite Store Rebuilt
 
@@ -3536,3 +3961,119 @@ Verification:
 Remaining:
 
 - Route detection is now safer than raw balance deltas, but it is still not full pool attribution. Next step is decoding route/pool accounts enough to show venue/pair attribution and filter non-swap side effects more aggressively.
+
+### 2026-05-10 - Paper Activity Lane Trigger
+
+Changed files:
+
+- `core/scanner.py`
+- `core/settings_manager.py`
+- `tests/test_core_logic.py`
+- `research/BUILD_PLAN.md`
+- `research/PROJECT_STATE.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a setting-backed paper activity evaluation trigger so mid-quality wallet buys can be evaluated and recorded instead of waiting only for full cluster or strong weighted-wallet triggers.
+- Kept low-quality single-wallet noise out with a minimum combined-wallet score gate.
+- The change only increases paper/decision visibility. Main strategy thresholds, hard-risk blocks, route feasibility checks, and live execution gating remain unchanged.
+- Runtime tuning intended for the current paper run:
+  - `paper_activity_evaluation_enabled=true`
+  - `paper_activity_evaluation_weighted_trigger=0.8`
+  - `paper_activity_evaluation_min_combined_wallet_score=45`
+  - `paper_exploration_score_threshold=45`
+  - `paper_exploration_min_edge_score=45`
+  - `paper_exploration_size_usd=5`
+
+Verification:
+
+- Added failing tests first for the new scanner trigger and setting persistence.
+- `trading_env/bin/python -m unittest tests.test_core_logic.ScannerCandidateFilterTests tests.test_core_logic.SettingsManagerTests tests.test_core_logic.ScannerRuntimeTests` passed 37 tests.
+
+Remaining:
+
+- Watch the next 30-60 minutes of paper data. The expected result is more decision-ledger activity and some small exploration samples, without claiming the main strategy is proven.
+
+### 2026-05-10 - Swap Quote Budget Gate
+
+Changed files:
+
+- `core/scanner.py`
+- `core/settings_manager.py`
+- `core/paper_exploration.py`
+- `execution/jupiter_quote.py`
+- `tests/test_core_logic.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+
+What changed:
+
+- Added a scanner-side Swap quote quality gate so weak/mid candidates are still recorded as decisions but do not spend Jupiter Swap API calls.
+- Added a per-window Swap quote request budget. The current paper run is capped at 8 Swap requests per 60 seconds.
+- Saved runtime quote-gate thresholds:
+  - `swap_quote_score_threshold=68`
+  - `swap_quote_min_edge_score=65`
+  - `swap_quote_max_requests_per_minute=8`
+  - `swap_quote_budget_window_seconds=60`
+- Extended Jupiter Swap cooldown after `429` from the old short default to `MEMETRADER_JUPITER_SWAP_COOLDOWN_SECONDS`, defaulting to 180 seconds.
+- Prevented quote-budget/cooldown skips from being mislabeled as route-failed exploration samples. Route-failed exploration now requires an actual quote attempt, not a skipped quote.
+
+Verification:
+
+- Added failing tests first for setting persistence, quote quality gating, quote-budget exhaustion, scanner recording without quote calls, and exploration not sampling budget-skipped quotes.
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker` passed 253 tests.
+- `./trading_env/bin/python -m py_compile core/scanner.py core/settings_manager.py core/paper_exploration.py execution/jupiter_quote.py` passed.
+
+Expected effect:
+
+- Decision activity should remain high.
+- Jupiter Swap API request rate and 429s should fall.
+- Paper trades may still stay low until high-quality candidates arrive, but the bot should stop burning Swap quotes on candidates that are only useful as ledger observations.
+
+### 2026-05-10 - Exploration Activity Threshold Tuning
+
+Changed runtime settings:
+
+- `swap_quote_score_threshold=58`
+- `swap_quote_min_edge_score=52`
+- `swap_quote_max_requests_per_minute=8`
+- `paper_exploration_confirmation_score_threshold=54`
+- `paper_exploration_confirmation_min_edge_score=54`
+- `paper_exploration_route_failed_score_threshold=58`
+- `paper_exploration_route_failed_min_edge_score=52`
+
+What changed:
+
+- Lowered only the exploration/quote-quality gates so near-miss candidates can generate more small paper samples.
+- Left the main paper/live-quality threshold unchanged.
+- Kept hard-risk, market-sanity, confirmation, route feasibility, and quote-budget protections active.
+
+Early runtime result:
+
+- The scanner began producing exploration-lane attempts after the change.
+- At least one early exploration attempt failed at simulated buy execution, confirming the lower gate is active while still requiring execution feasibility.
+
+### 2026-05-10 - Exploration Collection Pace Tuning
+
+Changed runtime settings:
+
+- `swap_quote_score_threshold=45`
+- `swap_quote_min_edge_score=45`
+- `paper_exploration_score_threshold=45`
+- `paper_exploration_min_edge_score=45`
+- `paper_exploration_confirmation_score_threshold=45`
+- `paper_exploration_confirmation_min_edge_score=45`
+- `paper_exploration_route_failed_score_threshold=50`
+- `paper_exploration_route_failed_min_edge_score=45`
+
+Why:
+
+- Recent decision analysis showed the collection bottleneck was the confirmation/quote gate, not the main strategy score.
+- The previous exploration settings still left nearly all near-miss candidates as skipped decisions.
+
+Guardrails kept:
+
+- Main-lane and live-quality thresholds were not lowered.
+- Hard-risk, market-sanity, strategy-guard, route feasibility, and quote-budget controls remain active.
+- Exploration samples remain tiny `$5` paper-only observations.

@@ -1,4 +1,4 @@
-import { importSocialSignal, loadCoreState, loadTokenState, saveProtectedToken } from "./api.js";
+import { importSocialSignal, loadCoreState, loadDecisionExplanation, loadTokenState, saveProtectedToken } from "./api.js";
 import { $ } from "./format.js";
 import {
   renderCandles,
@@ -26,6 +26,10 @@ const state = {
   decisions: null,
   decisionFilter: "all",
   selectedDecisionId: "",
+  decisionExplanation: null,
+  decisionExplanationDecisionId: "",
+  decisionExplanationLoading: false,
+  decisionExplanationError: "",
   selectedDetail: null,
   loadingToken: false,
   chartMetric: "market_cap",
@@ -156,6 +160,24 @@ window.importSocialFromDesktop = async function importSocialFromDesktop(event) {
     renderIntelPanel(state, { force: true });
   } catch (error) {
     state.socialFormError = error instanceof Error ? error.message : "Unable to import social signal.";
+    renderIntelPanel(state, { force: true });
+  }
+};
+
+window.explainDecisionFromDesktop = async function explainDecisionFromDesktop(decisionId) {
+  if (!decisionId || state.decisionExplanationLoading) return;
+  state.decisionExplanation = null;
+  state.decisionExplanationDecisionId = decisionId;
+  state.decisionExplanationError = "";
+  state.decisionExplanationLoading = true;
+  renderIntelPanel(state, { force: true });
+  try {
+    state.decisionExplanation = await loadDecisionExplanation(decisionId);
+  } catch (error) {
+    state.decisionExplanation = null;
+    state.decisionExplanationError = error instanceof Error ? error.message : "Unable to explain decision.";
+  } finally {
+    state.decisionExplanationLoading = false;
     renderIntelPanel(state, { force: true });
   }
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findTradeForMint, summarizeTrades, tradeMarketCapIn, tradeMarketCapOut, tradePnl, tradePnlPct, tradeReason } from "./trades";
+import { findTradeForMint, summarizeTrades, tradeLedgerSourceLabel, tradeMarketCapIn, tradeMarketCapOut, tradePnl, tradePnlPct, tradeReason } from "./trades";
 
 describe("trade helpers", () => {
   it("finds trades by either mint key", () => {
@@ -28,6 +28,7 @@ describe("trade helpers", () => {
 
   it("summarizes open, closed, failed, and total pnl", () => {
     const summary = summarizeTrades({
+      source: "paper_trades_json",
       open_trades: [{ total_pnl: 2 }, { unrealized_pnl: -0.5 }],
       closed_trades: [{ pnl: 4 }, { realized_pnl: -1 }],
       failed_trades: [{ failure_reason: "quote failed" }],
@@ -39,6 +40,17 @@ describe("trade helpers", () => {
     expect(summary.openPnl).toBe(1.5);
     expect(summary.closedPnl).toBe(3);
     expect(summary.totalPnl).toBe(4.5);
+  });
+
+  it("formats the declared trade ledger source", () => {
+    expect(tradeLedgerSourceLabel({
+      source: "paper_trades_json",
+      source_detail: "data/paper_trades.json",
+      open_trades: [],
+      closed_trades: [],
+      failed_trades: [],
+    })).toBe("paper_trades_json | data/paper_trades.json");
+    expect(tradeLedgerSourceLabel(null)).toBe("loading source");
   });
 
   it("normalizes entry and exit market caps for trade detail", () => {

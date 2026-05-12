@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import os
+import time
 
 from dotenv import load_dotenv
 from core.redaction import redact_secrets
@@ -93,7 +94,14 @@ class MarketChecker:
         self.dex_url = "https://api.dexscreener.com/latest/dex/tokens/"
         self.session = None
         self.cache = {}
-        self.cache_ttl = float(os.getenv("MEMETRADER_MARKET_CACHE_TTL_SECONDS", "0.8"))
+        self.cache_ttl = float(os.getenv("MEMETRADER_MARKET_CACHE_TTL_SECONDS", "15"))
+        self.jupiter_price_cooldown_seconds = float(os.getenv("MEMETRADER_JUPITER_PRICE_COOLDOWN_SECONDS", "300"))
+        self.dexscreener_cooldown_seconds = float(os.getenv("MEMETRADER_DEXSCREENER_COOLDOWN_SECONDS", "300"))
+        self.last_jupiter_429_time = 0
+        self.last_dexscreener_429_time = 0
+        self.jupiter_price_lock = asyncio.Lock()
+        self.dexscreener_lock = asyncio.Lock()
+        self.mint_locks = {}
 
     async def init_session(self):
         if not self.session:
@@ -122,150 +130,232 @@ class MarketChecker:
             "data": data,
         }
 
+    def jupiter_price_cooling_down(self):
+        if self.last_jupiter_429_time <= 0:
+            return False
+        return time.time() - self.last_jupiter_429_time < self.jupiter_price_cooldown_seconds
+
+    def note_jupiter_price_rate_limit(self, mint=None):
+        self.last_jupiter_429_time = time.time()
+        increment_component(
+            "market",
+            "jupiter_price_http_429s",
+            status="jupiter_price_http_429",
+            jupiter_price_cooldown_seconds=self.jupiter_price_cooldown_seconds,
+            last_price_source="jupiter",
+            last_price_mint=mint,
+        )
+
+    def dexscreener_cooling_down(self):
+        if self.last_dexscreener_429_time <= 0:
+            return False
+        return time.time() - self.last_dexscreener_429_time < self.dexscreener_cooldown_seconds
+
+    def note_dexscreener_rate_limit(self, mint=None):
+        self.last_dexscreener_429_time = time.time()
+        increment_component(
+            "market",
+            "dexscreener_http_429s",
+            status="dexscreener_http_429",
+            dexscreener_cooldown_seconds=self.dexscreener_cooldown_seconds,
+            last_price_source="dexscreener",
+            last_price_mint=mint,
+        )
+
     async def get_jupiter_price(self, mint):
         if not self.jupiter_api_key:
             return None
 
-        try:
-            await self.init_session()
-
-            headers = {"x-api-key": self.jupiter_api_key}
-            params = {"ids": mint}
-
-            async with self.session.get(
-                self.jupiter_price_url,
-                headers=headers,
-                params=params,
-            ) as resp:
-                if resp.status != 200:
-                    update_component(
-                        "market",
-                        jupiter_price_status=resp.status,
-                        last_price_source="jupiter",
-                    )
-                    return None
-
-                data = await resp.json()
-                item = data.get(mint)
-
-                if not item:
-                    return None
-
-                price = float(item.get("usdPrice") or 0)
-                liquidity = float(item.get("liquidity") or 0)
-
-                if price <= 0:
-                    return None
-
-                increment_component(
+        async with self.jupiter_price_lock:
+            if self.jupiter_price_cooling_down():
+                update_component(
                     "market",
-                    "jupiter_price_successes",
-                    last_price_source="jupiter",
-                    last_price_mint=mint,
-                )
-
-                return {
-                    "source": "jupiter",
-                    "name": None,
-                    "symbol": None,
-                    "price": price,
-                    "liquidity": liquidity,
-                    "volume": 0,
-                    "block_id": item.get("blockId"),
-                    "decimals": item.get("decimals"),
-                    "price_change_24h": item.get("priceChange24h"),
-                    "pair_address": None,
-                    "dex": None,
-                    "url": None,
-                }
-
-        except Exception as e:
-            print("Jupiter price error:", redact_secrets(e))
-            return None
-
-    async def get_dexscreener_info(self, mint):
-        try:
-            await self.init_session()
-
-            async with self.session.get(self.dex_url + mint) as resp:
-                if resp.status != 200:
-                    update_component(
-                        "market",
-                        dexscreener_status=resp.status,
-                        last_price_source="dexscreener",
-                    )
-                    return None
-
-                data = await resp.json()
-                pairs = data.get("pairs")
-
-                if not pairs:
-                    return None
-
-                sol_pairs = [
-                    p for p in pairs
-                    if p.get("chainId") == "solana"
-                ]
-
-                if not sol_pairs:
-                    return None
-
-                best_pair = max(
-                    sol_pairs,
-                    key=lambda p: float(p.get("liquidity", {}).get("usd") or 0)
-                )
-
-                price = float(best_pair.get("priceUsd") or 0)
-                liquidity = float(best_pair.get("liquidity", {}).get("usd") or 0)
-                volume = float(best_pair.get("volume", {}).get("h24") or 0)
-
-                if price <= 0:
-                    return None
-
-                metadata = extract_dexscreener_pair_metadata(best_pair)
-
-                increment_component(
-                    "market",
-                    "dexscreener_successes",
+                    status="jupiter_price_cooldown",
+                    jupiter_price_cooldown_seconds=self.jupiter_price_cooldown_seconds,
                     last_price_source="dexscreener",
                     last_price_mint=mint,
                 )
+                return None
 
-                return {
-                    "source": "dexscreener",
-                    "name": best_pair.get("baseToken", {}).get("name"),
-                    "symbol": best_pair.get("baseToken", {}).get("symbol"),
-                    "price": price,
-                    "liquidity": liquidity,
-                    "market_cap": best_pair.get("marketCap"),
-                    "fdv": best_pair.get("fdv"),
-                    "volume": volume,
-                    "block_id": None,
-                    "decimals": None,
-                    "price_change_24h": None,
-                    "pair_address": best_pair.get("pairAddress"),
-                    "dex": best_pair.get("dexId"),
-                    "url": best_pair.get("url"),
-                    **metadata,
-                }
+            try:
+                await self.init_session()
 
-        except Exception as e:
-            print("Dexscreener fetch error:", redact_secrets(e))
-            return None
+                headers = {"x-api-key": self.jupiter_api_key}
+                params = {"ids": mint}
+
+                async with self.session.get(
+                    self.jupiter_price_url,
+                    headers=headers,
+                    params=params,
+                ) as resp:
+                    if resp.status != 200:
+                        if resp.status == 429:
+                            self.note_jupiter_price_rate_limit(mint)
+                        update_component(
+                            "market",
+                            jupiter_price_status=resp.status,
+                            last_price_source="jupiter",
+                        )
+                        return None
+
+                    data = await resp.json()
+                    item = data.get(mint)
+
+                    if not item:
+                        return None
+
+                    price = float(item.get("usdPrice") or 0)
+                    liquidity = float(item.get("liquidity") or 0)
+
+                    if price <= 0:
+                        return None
+
+                    increment_component(
+                        "market",
+                        "jupiter_price_successes",
+                        last_price_source="jupiter",
+                        last_price_mint=mint,
+                    )
+
+                    return {
+                        "source": "jupiter",
+                        "name": None,
+                        "symbol": None,
+                        "price": price,
+                        "liquidity": liquidity,
+                        "volume": 0,
+                        "block_id": item.get("blockId"),
+                        "decimals": item.get("decimals"),
+                        "price_change_24h": item.get("priceChange24h"),
+                        "pair_address": None,
+                        "dex": None,
+                        "url": None,
+                    }
+
+            except Exception as e:
+                print("Jupiter price error:", redact_secrets(e))
+                return None
+
+    async def get_dexscreener_info(self, mint):
+        async with self.dexscreener_lock:
+            if self.dexscreener_cooling_down():
+                update_component(
+                    "market",
+                    status="dexscreener_cooldown",
+                    dexscreener_cooldown_seconds=self.dexscreener_cooldown_seconds,
+                    last_price_source="dexscreener",
+                    last_price_mint=mint,
+                )
+                return None
+
+            try:
+                await self.init_session()
+
+                async with self.session.get(self.dex_url + mint) as resp:
+                    if resp.status != 200:
+                        if resp.status == 429:
+                            self.note_dexscreener_rate_limit(mint)
+                        update_component(
+                            "market",
+                            dexscreener_status=resp.status,
+                            last_price_source="dexscreener",
+                        )
+                        return None
+
+                    data = await resp.json()
+                    pairs = data.get("pairs")
+
+                    if not pairs:
+                        return None
+
+                    sol_pairs = [
+                        p for p in pairs
+                        if p.get("chainId") == "solana"
+                    ]
+
+                    if not sol_pairs:
+                        return None
+
+                    best_pair = max(
+                        sol_pairs,
+                        key=lambda p: float(p.get("liquidity", {}).get("usd") or 0)
+                    )
+
+                    price = float(best_pair.get("priceUsd") or 0)
+                    liquidity = float(best_pair.get("liquidity", {}).get("usd") or 0)
+                    volume = float(best_pair.get("volume", {}).get("h24") or 0)
+
+                    if price <= 0:
+                        return None
+
+                    metadata = extract_dexscreener_pair_metadata(best_pair)
+
+                    increment_component(
+                        "market",
+                        "dexscreener_successes",
+                        last_price_source="dexscreener",
+                        last_price_mint=mint,
+                    )
+
+                    return {
+                        "source": "dexscreener",
+                        "name": best_pair.get("baseToken", {}).get("name"),
+                        "symbol": best_pair.get("baseToken", {}).get("symbol"),
+                        "price": price,
+                        "liquidity": liquidity,
+                        "market_cap": best_pair.get("marketCap"),
+                        "fdv": best_pair.get("fdv"),
+                        "volume": volume,
+                        "block_id": None,
+                        "decimals": None,
+                        "price_change_24h": None,
+                        "pair_address": best_pair.get("pairAddress"),
+                        "dex": best_pair.get("dexId"),
+                        "url": best_pair.get("url"),
+                        **metadata,
+                    }
+
+            except Exception as e:
+                print("Dexscreener fetch error:", redact_secrets(e))
+                return None
 
     async def get_token_info(self, mint, enrich=True):
         cached = self.cached(mint)
         if cached:
             return cached
 
-        # Primary: Jupiter
-        info = await self.get_jupiter_price(mint)
+        lock = self.mint_locks.setdefault(mint, asyncio.Lock())
+        async with lock:
+            cached = self.cached(mint)
+            if cached:
+                return cached
+
+            info = await self._fetch_token_info_uncached(mint, enrich=enrich)
+
+            if info:
+                self.store_cache(mint, info)
+
+            return info
+
+    async def _fetch_token_info_uncached(self, mint, enrich=True):
+        # Primary: Jupiter, unless recent rate limits say to preserve the quota.
+        if self.jupiter_price_cooling_down():
+            update_component(
+                "market",
+                status="jupiter_price_cooldown",
+                jupiter_price_cooldown_seconds=self.jupiter_price_cooldown_seconds,
+                last_price_source="dexscreener",
+                last_price_mint=mint,
+            )
+            info = None
+        else:
+            info = await self.get_jupiter_price(mint)
 
         # Fallback/enrichment: Dexscreener carries launch display metadata that Jupiter often omits.
         if not info:
-            info = await self.get_dexscreener_info(mint)
+            info = None if self.dexscreener_cooling_down() else await self.get_dexscreener_info(mint)
         elif enrich and needs_dexscreener_enrichment(info):
-            enrichment = await self.get_dexscreener_info(mint)
+            enrichment = None if self.dexscreener_cooling_down() else await self.get_dexscreener_info(mint)
             info = merge_market_info(info, enrichment)
 
         if info and not info.get("market_cap"):
@@ -273,9 +363,6 @@ class MarketChecker:
             if estimated_market_cap:
                 info["market_cap"] = estimated_market_cap
                 info["market_cap_estimated"] = True
-
-        if info:
-            self.store_cache(mint, info)
 
         return info
 

@@ -13,6 +13,7 @@ DEFAULT_STATUS = {
     "market": {},
     "quotes": {},
     "watchdog": {},
+    "open_position_monitor": {},
     "wallet_discovery": {},
 }
 

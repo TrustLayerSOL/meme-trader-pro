@@ -186,6 +186,8 @@ class PaperTrader:
                 for trade in self.state.get(key, []):
                     if isinstance(trade, dict):
                         self.store.upsert_trade(trade)
+            from utils.sync_state_to_sqlite import sync_decision_results
+            sync_decision_results(self.store, self.state, create_missing=True)
         except Exception:
             pass
 
@@ -201,6 +203,27 @@ class PaperTrader:
             except (TypeError, ValueError):
                 continue
         return None
+
+    def normalize_signal_metadata(self, signal_metadata, decision_id=None):
+        metadata = dict(signal_metadata) if isinstance(signal_metadata, dict) else {}
+        decision_id = decision_id or metadata.get("decision_id")
+        if decision_id:
+            metadata["decision_id"] = decision_id
+        return metadata
+
+    def attach_decision_lineage(self, trade, signal_metadata=None):
+        if not isinstance(trade, dict):
+            return trade
+
+        metadata = self.normalize_signal_metadata(
+            signal_metadata if signal_metadata is not None else trade.get("signal_metadata"),
+            trade.get("decision_id"),
+        )
+        decision_id = trade.get("decision_id") or metadata.get("decision_id")
+        trade["signal_metadata"] = metadata
+        if decision_id:
+            trade["decision_id"] = decision_id
+        return trade
 
     def market_cap_from_info(self, market_info):
         if not isinstance(market_info, dict):
@@ -225,12 +248,18 @@ class PaperTrader:
             if isinstance(trade.get("signal_metadata"), dict)
             else {}
         )
+        decision_id = trade.get("decision_id") or signal_metadata.get("decision_id")
+        if decision_id:
+            signal_metadata = self.normalize_signal_metadata(signal_metadata, decision_id)
+            trade["signal_metadata"] = signal_metadata
+            trade["decision_id"] = decision_id
         now = time.time()
         snapshot = {
             "time": now,
             "timestamp": now,
             "source": "paper_trader",
             "context": context,
+            "decision_id": decision_id,
             "mint": mint,
             "token_mint": mint,
             "status": trade.get("status"),
@@ -278,7 +307,6 @@ class PaperTrader:
         except Exception as exc:
             print("⚠️ Paper trade snapshot write failed:", exc)
 
-        decision_id = signal_metadata.get("decision_id")
         if decision_id:
             try:
                 final_action = {
@@ -286,13 +314,23 @@ class PaperTrader:
                     "paper_entry_failed": "paper_failed",
                     "paper_partial_exit": "paper_partial_exit",
                     "paper_exit_closed": "paper_closed",
+                    "paper_exit_failed": "paper_exit_failed",
                     "paper_price_update": "paper_monitor",
                 }.get(context)
+                action_reason = None
+                if isinstance(extra, dict):
+                    action_reason = extra.get("failure_reason") or extra.get("exit_reason")
                 if final_action:
                     self.store.update_decision_action(decision_id, {
                         "scanner_stage": extra.get("decision_stage") if isinstance(extra, dict) else context,
                         "final_action": final_action,
-                        "reason": trade.get("failure_reason") or trade.get("exit_reason") or trade.get("close_reason") or context,
+                        "reason": (
+                            trade.get("failure_reason")
+                            or action_reason
+                            or trade.get("exit_reason")
+                            or trade.get("close_reason")
+                            or context
+                        ),
                         "paper_lane": trade.get("paper_lane") or signal_metadata.get("paper_lane"),
                     })
                 self.store.update_decision_result(
@@ -305,6 +343,8 @@ class PaperTrader:
     def apply_trade_aliases(self, trade):
         if not isinstance(trade, dict):
             return trade
+
+        self.attach_decision_lineage(trade)
 
         mint = trade.get("mint") or trade.get("token_mint")
         if mint:
@@ -435,10 +475,11 @@ class PaperTrader:
         paper_lane="main",
         exploration=False,
     ):
+        signal_metadata = self.normalize_signal_metadata(signal_metadata)
         existing = self.find_open_trade(mint)
         if existing:
             print("⚠️ Trade already open:", mint)
-            decision_id = (signal_metadata or {}).get("decision_id")
+            decision_id = signal_metadata.get("decision_id")
             if decision_id:
                 try:
                     self.store.update_decision_action(decision_id, {
@@ -477,8 +518,9 @@ class PaperTrader:
                 "entry_value": size_usd,
                 "liquidity_usd": liquidity_usd,
                 "market_info": market_info or {},
-                "signal_metadata": signal_metadata or {},
+                "signal_metadata": signal_metadata,
             }
+            self.attach_decision_lineage(failed, signal_metadata)
 
             self.state.setdefault("failed_trades", []).insert(0, failed)
             self.update_stats()
@@ -511,7 +553,7 @@ class PaperTrader:
             "paper_lane": paper_lane or "main",
             "exploration": bool(exploration),
             "wallets": wallets or [],
-            "signal_metadata": signal_metadata or {},
+            "signal_metadata": signal_metadata,
 
             "quoted_entry_price": entry_price,
             "entry_price": result["effective_price"],
@@ -556,6 +598,7 @@ class PaperTrader:
 
             "sells": [],
         }
+        self.attach_decision_lineage(trade, signal_metadata)
 
         self.state.setdefault("open_trades", []).append(trade)
         self.record_trade_snapshot(trade, "paper_entry_opened", {
@@ -648,6 +691,12 @@ class PaperTrader:
 
         if not result.get("success"):
             print("❌ PARTIAL SELL FAILED:", result.get("reason"))
+            self.record_trade_snapshot(trade, "paper_exit_failed", {
+                "decision_stage": "paper_exit",
+                "exit_reason": reason,
+                "failure_reason": result.get("reason", "sell_failed"),
+                "sell_pct": sell_pct,
+            })
             return False
 
         entry = float(trade["entry_price"])
@@ -711,6 +760,12 @@ class PaperTrader:
 
             if not result.get("success"):
                 print("❌ CLOSE SELL FAILED:", result.get("reason"))
+                self.record_trade_snapshot(trade, "paper_exit_failed", {
+                    "decision_stage": "paper_exit",
+                    "exit_reason": reason,
+                    "failure_reason": result.get("reason", "sell_failed"),
+                    "sell_pct": 100,
+                })
                 return False
 
             entry = float(trade["entry_price"])

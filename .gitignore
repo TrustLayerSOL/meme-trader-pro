@@ -25,4 +25,5 @@ data/*.json
 data/*.lock
 data/.*.tmp
 data/archives/
+data/process_locks/
 !data/__init__.py

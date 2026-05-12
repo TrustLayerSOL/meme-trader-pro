@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { candidateFeedApiPath, candidateWalletsApiPath, desktopApiUrl, eventFeedApiPath, fetchJson, importSocialPost, OVERVIEW_REFRESH_MS, postJson, protectedAmountApiPath, protectedTokenApiPath, SELECTED_TOKEN_REFRESH_MS, setDesktopApiToken, socialImportApiPath, tokenApiPaths, walletDetailApiPath, walletLifecycleApiPath, walletReviewApplyApiPath, walletReviewDecisionApiPath, winnerPatternsApiPath } from "./api";
+import { candidateFeedApiPath, candidateWalletsApiPath, decisionAnalyticsApiPath, decisionExplanationApiPath, decisionLedgerApiPath, desktopApiUrl, eventFeedApiPath, fetchJson, importSocialPost, loadDecisionExplanation, OVERVIEW_REFRESH_MS, postJson, protectedAmountApiPath, protectedTokenApiPath, SELECTED_TOKEN_REFRESH_MS, setDesktopApiToken, socialFreshnessApiPath, socialImportApiPath, tokenApiPaths, walletDetailApiPath, walletLifecycleApiPath, walletReviewApplyApiPath, walletReviewDecisionApiPath, winnerPatternsApiPath } from "./api";
 
 describe("desktop API helper", () => {
   it("builds localhost API URLs without touching live execution routes", () => {
@@ -36,6 +36,23 @@ describe("desktop API helper", () => {
 
   it("allows paper trade replay reads", () => {
     expect(desktopApiUrl("/api/trades").toString()).toBe("http://127.0.0.1:8765/api/trades");
+  });
+
+  it("builds decision ledger read-only paths", () => {
+    expect(decisionLedgerApiPath()).toBe("/api/decisions?limit=80");
+    expect(decisionLedgerApiPath({ limit: 25, filter: "quote_failed", lane: "main" })).toBe("/api/decisions?limit=25&filter=quote_failed&lane=main");
+    expect(desktopApiUrl(decisionLedgerApiPath({ filter: "social" })).toString()).toBe("http://127.0.0.1:8765/api/decisions?limit=80&filter=social");
+  });
+
+  it("builds decision analytics read-only paths", () => {
+    expect(decisionAnalyticsApiPath()).toBe("/api/decision-analytics?limit=5000");
+    expect(decisionAnalyticsApiPath(250)).toBe("/api/decision-analytics?limit=250");
+    expect(desktopApiUrl(decisionAnalyticsApiPath(250)).toString()).toBe("http://127.0.0.1:8765/api/decision-analytics?limit=250");
+  });
+
+  it("builds encoded decision explanation read-only paths", () => {
+    expect(decisionExplanationApiPath("dec / ai")).toBe("/api/decisions/dec%20%2F%20ai/explanation");
+    expect(desktopApiUrl(decisionExplanationApiPath("dec_1")).toString()).toBe("http://127.0.0.1:8765/api/decisions/dec_1/explanation");
   });
 
   it("allows wallet intelligence reads", () => {
@@ -83,6 +100,11 @@ describe("desktop API helper", () => {
   it("builds the social import endpoint", () => {
     expect(socialImportApiPath()).toBe("/api/social/import");
     expect(desktopApiUrl(socialImportApiPath()).toString()).toBe("http://127.0.0.1:8765/api/social/import");
+  });
+
+  it("builds the social freshness endpoint", () => {
+    expect(socialFreshnessApiPath()).toBe("/api/social/freshness");
+    expect(desktopApiUrl(socialFreshnessApiPath()).toString()).toBe("http://127.0.0.1:8765/api/social/freshness");
   });
 
   it("allows read-only operator config and logs reads", () => {
@@ -152,6 +174,33 @@ describe("desktop API helper", () => {
         account: "@watcher",
         text: "Fresh volume spike",
       }));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("loads decision explanations with a read-only request", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({
+        available: true,
+        advisory: "Explainable skip",
+        live_execution_locked: true,
+        read_only: true,
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const response = await loadDecisionExplanation("dec_1");
+
+      expect(response.advisory).toBe("Explainable skip");
+      expect(calls[0].url).toBe("http://127.0.0.1:8765/api/decisions/dec_1/explanation");
+      expect(calls[0].init?.method).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;
     }

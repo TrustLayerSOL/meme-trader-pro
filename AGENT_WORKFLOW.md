@@ -14,6 +14,7 @@ Current project priority:
 
 - Treat measurable decision quality as the product backbone.
 - Prefer canonical decision-ledger work over adding disconnected GUI panels.
+- Route new automated social/catalyst inputs into the canonical decision ledger instead of creating a separate social dashboard truth.
 - Separate pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection.
 - Do not describe the slow watchdog as sub-second rug protection.
 
@@ -196,6 +197,7 @@ Favor work that improves:
 
 - risk recognition,
 - canonical candidate decision records,
+- automated but auditable social/catalyst evidence,
 - lane-separated paper evidence,
 - explainable skipped candidates,
 - paper-trade evidence,
@@ -209,5 +211,6 @@ Avoid work that mainly adds:
 - blind launch sniping,
 - artificial volume behavior,
 - casino-style UI,
+- social-only buy triggers,
 - ungated live trading,
 - opaque AI decisions.

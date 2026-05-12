@@ -1,6 +1,10 @@
 import unittest
+from unittest import mock
+
+import time
 
 from infra.market_checker import (
+    MarketChecker,
     estimate_pump_market_cap,
     extract_dexscreener_pair_metadata,
     merge_market_info,
@@ -103,3 +107,143 @@ class MarketCheckerMetadataTests(unittest.TestCase):
             estimate_pump_market_cap("Mint111111111111111111111111111111111pump", 0.0000067),
             6700,
         )
+
+
+class MarketCheckerPressureTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.increment_patch = mock.patch("infra.market_checker.increment_component")
+        self.update_patch = mock.patch("infra.market_checker.update_component")
+        self.increment_patch.start()
+        self.update_patch.start()
+
+    async def asyncTearDown(self):
+        self.update_patch.stop()
+        self.increment_patch.stop()
+
+    async def test_jupiter_price_429_starts_cooldown(self):
+        class FakeResponse:
+            status = 429
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeSession:
+            def get(self, *args, **kwargs):
+                return FakeResponse()
+
+        checker = MarketChecker()
+        checker.jupiter_api_key = "test-key"
+        checker.session = FakeSession()
+
+        info = await checker.get_jupiter_price("Mint429")
+
+        self.assertIsNone(info)
+        self.assertTrue(checker.jupiter_price_cooling_down())
+
+    async def test_dexscreener_429_starts_cooldown(self):
+        class FakeResponse:
+            status = 429
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeSession:
+            def get(self, *args, **kwargs):
+                return FakeResponse()
+
+        checker = MarketChecker()
+        checker.session = FakeSession()
+
+        info = await checker.get_dexscreener_info("Mint429")
+
+        self.assertIsNone(info)
+        self.assertTrue(checker.dexscreener_cooling_down())
+
+    async def test_get_token_info_avoids_external_calls_when_price_sources_are_cooling_down(self):
+        class FakeChecker(MarketChecker):
+            def __init__(self):
+                super().__init__()
+                self.jupiter_calls = 0
+                self.dex_calls = 0
+
+            async def get_jupiter_price(self, mint):
+                self.jupiter_calls += 1
+                return {"source": "jupiter", "price": 1.0, "liquidity": 1000}
+
+            async def get_dexscreener_info(self, mint):
+                self.dex_calls += 1
+                return {"source": "dexscreener", "price": 1.1, "liquidity": 2000}
+
+        checker = FakeChecker()
+        checker.last_jupiter_429_time = time.time()
+        checker.last_dexscreener_429_time = time.time()
+
+        info = await checker.get_token_info("MintBothLimited")
+
+        self.assertIsNone(info)
+        self.assertEqual(checker.jupiter_calls, 0)
+        self.assertEqual(checker.dex_calls, 0)
+
+    async def test_get_token_info_uses_dexscreener_while_jupiter_price_is_cooling_down(self):
+        class FakeChecker(MarketChecker):
+            def __init__(self):
+                super().__init__()
+                self.jupiter_calls = 0
+                self.dex_calls = 0
+
+            async def get_jupiter_price(self, mint):
+                self.jupiter_calls += 1
+                return {"source": "jupiter", "price": 1.0, "liquidity": 1000}
+
+            async def get_dexscreener_info(self, mint):
+                self.dex_calls += 1
+                return {"source": "dexscreener", "price": 1.1, "liquidity": 2000}
+
+        checker = FakeChecker()
+        checker.last_jupiter_429_time = time.time()
+
+        info = await checker.get_token_info("MintRateLimited")
+
+        self.assertEqual(info["source"], "dexscreener")
+        self.assertEqual(checker.jupiter_calls, 0)
+        self.assertEqual(checker.dex_calls, 1)
+
+    async def test_get_token_info_reuses_cached_market_info_across_fast_monitor_ticks(self):
+        class FakeChecker(MarketChecker):
+            def __init__(self):
+                super().__init__()
+                self.cache_ttl = 30
+                self.jupiter_calls = 0
+                self.dex_calls = 0
+
+            async def get_jupiter_price(self, mint):
+                self.jupiter_calls += 1
+                return {
+                    "source": "jupiter",
+                    "price": 1.0,
+                    "liquidity": 1000,
+                    "name": "Cached Token",
+                    "symbol": "CACHE",
+                    "image_url": "https://example.test/cache.png",
+                    "market_cap": 100000,
+                    "tx_count": 12,
+                }
+
+            async def get_dexscreener_info(self, mint):
+                self.dex_calls += 1
+                return None
+
+        checker = FakeChecker()
+
+        first = await checker.get_token_info("MintCached")
+        second = await checker.get_token_info("MintCached")
+
+        self.assertEqual(first, second)
+        self.assertEqual(checker.jupiter_calls, 1)
+        self.assertEqual(checker.dex_calls, 0)

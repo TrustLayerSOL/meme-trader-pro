@@ -18,7 +18,7 @@ class JupiterQuoteEngine:
         self.session = None
 
         self.last_429_time = 0
-        self.cooldown_seconds = 20
+        self.cooldown_seconds = float(os.getenv("MEMETRADER_JUPITER_SWAP_COOLDOWN_SECONDS", "180"))
         self.cache = {}
         self.cache_ttl = 3
 

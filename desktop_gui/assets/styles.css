@@ -521,6 +521,50 @@ nav button:hover {
   margin-bottom: 12px;
 }
 
+.decision-ai-note {
+  border-color: #35506e !important;
+  background: #0a1219 !important;
+}
+
+.decision-ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+
+.decision-ai-head strong {
+  margin: 0;
+}
+
+.decision-ai-head button {
+  min-height: 28px;
+  border: 1px solid #3d5470;
+  border-radius: 7px;
+  background: #162235;
+  color: var(--text);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.decision-ai-head button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.decision-ai-note small {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .ledger-row span,
 .ledger-row strong,
 .ledger-row small {

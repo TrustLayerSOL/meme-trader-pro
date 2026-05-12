@@ -7,6 +7,7 @@ from core.scoring_engine import ScoringEngine
 from core.anti_rug import AntiRugAnalyzer
 from core.confirmation_filter import ConfirmationFilter
 from core.decision_ledger import build_decision_record
+from core.holder_concentration import HolderConcentrationAnalyzer
 from core.wallet_quality import WalletQualityAnalyzer
 from core.wallet_performance import WalletPerformanceTracker
 from core.position_sizer import PositionSizer
@@ -99,6 +100,7 @@ class Scanner:
         self.token_age = TokenAgeTracker()
         self.token_inspector = TokenInspector()
         self.token_launch_age = TokenLaunchAgeTracker(rpc)
+        self.holder_analyzer = HolderConcentrationAnalyzer()
         self.social_signal = SocialSignalEngine()
         self.store = EventStore()
 
@@ -109,6 +111,7 @@ class Scanner:
         self.signal_locks = {}
         self.pending_signal_reruns = set()
         self.quote_price_cache = {}
+        self.swap_quote_request_times = []
 
     def is_observed_wallet(self, wallet):
         return wallet in self.observed_wallets
@@ -154,6 +157,119 @@ class Scanner:
     def jupiter_prescore_threshold(self):
         value = self.first_number(self.settings.get("jupiter_prescore_threshold"))
         return value if value is not None else 40
+
+    def scanner_holder_check_enabled(self):
+        value = self.settings.get("scanner_holder_check_enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off"}
+        return bool(value)
+
+    def scanner_holder_check_timeout(self):
+        value = self.first_number(self.settings.get("scanner_holder_check_timeout_seconds"))
+        return value if value is not None and value > 0 else 3
+
+    def skipped_holder_cluster_risk(self, reason):
+        return {
+            "holder_concentration_risk": "UNKNOWN",
+            "holder_concentration_reasons": [reason],
+            "holder_concentration_metrics": {},
+            "holder_concentration": None,
+        }
+
+    def holder_check_candidate_worthy(self, decision, edge_result):
+        score = self.first_number((decision or {}).get("score")) or 0
+        return (
+            score >= self.jupiter_prescore_threshold()
+            or bool((edge_result or {}).get("quote_worthy"))
+            or bool((edge_result or {}).get("paper_trade_worthy"))
+        )
+
+    async def evaluate_holder_cluster_risk(self, mint):
+        if not self.scanner_holder_check_enabled():
+            return self.skipped_holder_cluster_risk("Scanner holder check disabled")
+        if not self.rpc or not hasattr(self.rpc, "rpc_call"):
+            return self.skipped_holder_cluster_risk("Scanner holder check unavailable")
+
+        try:
+            response = await asyncio.wait_for(
+                self.rpc.rpc_call(
+                    "getTokenLargestAccounts",
+                    [
+                        mint,
+                        {
+                            "commitment": "confirmed",
+                        },
+                    ],
+                ),
+                timeout=self.scanner_holder_check_timeout(),
+            )
+        except asyncio.TimeoutError:
+            return self.skipped_holder_cluster_risk("Scanner holder check timed out")
+        except Exception as exc:
+            return self.skipped_holder_cluster_risk(f"Scanner holder check error: {str(exc)[:160]}")
+
+        rows = ((response or {}).get("result") or {}).get("value") or []
+        holder_result = self.holder_analyzer.analyze(rows)
+        return {
+            "holder_concentration": holder_result,
+            "holder_concentration_risk": holder_result.get("risk_label"),
+            "holder_concentration_reasons": holder_result.get("warnings", []),
+            "holder_concentration_metrics": holder_result.get("metrics", {}),
+        }
+
+    def wallet_cluster_risk_context(self, signal_type, wallets, wallet_count, repeated_buys):
+        return {
+            "risk_label": "NOT_CHECKED",
+            "reason": "no_linked_wallet_graph_source",
+            "observed_wallet_cluster": {
+                "signal_type": signal_type,
+                "wallet_count": wallet_count,
+                "cluster_threshold": self.cluster_threshold,
+                "cluster_window_seconds": self.cluster_window,
+                "repeated_buys": repeated_buys,
+                "wallets": wallets,
+            },
+        }
+
+    def apply_holder_cluster_to_rug_result(self, rug_result, holder_context, cluster_context):
+        rug_result = rug_result if isinstance(rug_result, dict) else {}
+        holder_context = holder_context if isinstance(holder_context, dict) else {}
+
+        rug_result.update(holder_context)
+        rug_result["linked_wallet_risk"] = cluster_context
+
+        holder_risk = holder_context.get("holder_concentration_risk")
+        holder_reasons = holder_context.get("holder_concentration_reasons") or []
+        if holder_risk in {"DANGER", "WARNING"}:
+            prefix = "Holder concentration"
+            for reason in holder_reasons:
+                warning = f"{prefix}: {reason}"
+                if warning not in rug_result.setdefault("warnings", []):
+                    rug_result["warnings"].append(warning)
+
+        if holder_risk == "DANGER":
+            rug_result["hard_block"] = True
+            rug_result["hard_block_reason"] = (
+                "Holder concentration: " + "; ".join(holder_reasons)
+                if holder_reasons
+                else "Holder concentration danger"
+            )
+            rug_result["risk_score"] = max(self.first_number(rug_result.get("risk_score")) or 0, 22)
+            rug_result["risk_label"] = "HIGH_RISK"
+            rug_result.setdefault("penalties", []).append({
+                "label": "Dangerous holder concentration",
+                "amount": 12,
+            })
+        elif holder_risk == "WARNING":
+            rug_result["risk_score"] = max(self.first_number(rug_result.get("risk_score")) or 0, 10)
+            if rug_result.get("risk_label") == "LOW_RISK":
+                rug_result["risk_label"] = "MEDIUM_RISK"
+            rug_result.setdefault("penalties", []).append({
+                "label": "Holder concentration warning",
+                "amount": 6,
+            })
+
+        return rug_result
 
     def market_cap_from_info(self, market_info):
         if not isinstance(market_info, dict):
@@ -226,6 +342,19 @@ class Scanner:
             "detected": bool(seen_labels),
             "programs": seen_labels,
             "program_ids": seen_programs,
+        }
+
+    def quote_decision_fields(self, prefix, quote, slippage_bps, max_price_impact_pct):
+        quote = quote if isinstance(quote, dict) else {}
+        return {
+            f"{prefix}_quote_input_mint": quote.get("input_mint"),
+            f"{prefix}_quote_output_mint": quote.get("output_mint"),
+            f"{prefix}_quote_in_amount_raw": quote.get("in_amount_raw"),
+            f"{prefix}_quote_out_amount": quote.get("out_amount"),
+            f"{prefix}_quote_route_count": quote.get("route_count"),
+            f"{prefix}_quote_slippage_bps": slippage_bps,
+            f"{prefix}_quote_max_price_impact_pct": max_price_impact_pct,
+            f"{prefix}_quote_route_plan": quote.get("route_plan", []),
         }
 
     def native_delta_for_wallet(self, result, wallet):
@@ -353,7 +482,13 @@ class Scanner:
         try:
             inserted = self.store.insert_swap_tick(tick)
             if inserted:
-                increment_component("scanner", "swap_ticks_written", last_swap_tick_mint=event.get("mint"))
+                increment_component(
+                    "scanner",
+                    "swap_ticks_written",
+                    last_swap_tick_mint=event.get("mint"),
+                    last_swap_tick_at=tick["time"],
+                    wallet_feed_fresh_seconds=300,
+                )
             return bool(inserted)
         except Exception as exc:
             update_component("scanner", status="swap_tick_write_error", last_error=str(exc))
@@ -631,13 +766,100 @@ class Scanner:
         if combined_wallet_score >= 78:
             return True
 
-        if weighted_wallet_score >= 1.8:
+        if weighted_wallet_score >= self.first_number(self.settings.get("weighted_wallet_trigger")):
             return True
 
         if wallet_count >= self.cluster_threshold:
             return True
 
+        activity_enabled = self.settings.get("paper_activity_evaluation_enabled", True)
+        if isinstance(activity_enabled, str):
+            activity_enabled = activity_enabled.strip().lower() not in {"0", "false", "no", "off"}
+
+        activity_weighted_trigger = self.first_number(
+            self.settings.get("paper_activity_evaluation_weighted_trigger")
+        )
+        if activity_weighted_trigger is None:
+            activity_weighted_trigger = 0.8
+
+        activity_min_combined = self.first_number(
+            self.settings.get("paper_activity_evaluation_min_combined_wallet_score")
+        )
+        if activity_min_combined is None:
+            activity_min_combined = 45
+
+        if (
+            activity_enabled
+            and weighted_wallet_score >= activity_weighted_trigger
+            and combined_wallet_score >= activity_min_combined
+        ):
+            return True
+
         return False
+
+    def swap_quote_budget_enabled(self):
+        value = self.settings.get("swap_quote_budget_enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off"}
+        return bool(value)
+
+    def swap_quote_budget_window_seconds(self):
+        value = self.first_number(self.settings.get("swap_quote_budget_window_seconds"))
+        return value if value is not None and value > 0 else 60
+
+    def swap_quote_budget_max_requests(self):
+        value = self.first_number(self.settings.get("swap_quote_max_requests_per_minute"))
+        return int(value) if value is not None and value > 0 else 18
+
+    def prune_swap_quote_budget(self, now=None):
+        now = time.time() if now is None else now
+        window = self.swap_quote_budget_window_seconds()
+        self.swap_quote_request_times = [
+            item for item in self.swap_quote_request_times if now - item < window
+        ]
+
+    def consume_swap_quote_budget(self, now=None):
+        if not self.swap_quote_budget_enabled():
+            return True
+
+        now = time.time() if now is None else now
+        self.prune_swap_quote_budget(now)
+
+        if len(self.swap_quote_request_times) >= self.swap_quote_budget_max_requests():
+            return False
+
+        self.swap_quote_request_times.append(now)
+        return True
+
+    def should_request_swap_quote(self, decision, edge_result, rug_result, market_sanity):
+        decision = decision if isinstance(decision, dict) else {}
+        edge_result = edge_result if isinstance(edge_result, dict) else {}
+        rug_result = rug_result if isinstance(rug_result, dict) else {}
+        market_sanity = market_sanity if isinstance(market_sanity, dict) else {}
+
+        if not self.swap_quote_budget_enabled():
+            return True, "swap_quote_budget_disabled"
+
+        if rug_result.get("hard_block"):
+            return False, "hard_risk_block"
+
+        if not market_sanity.get("allow", True):
+            return False, "market_sanity_block"
+
+        if (decision.get("strategy_guard") or {}).get("action") == "BLOCK":
+            return False, "strategy_guard_block"
+
+        score = self.first_number(decision.get("score")) or 0
+        edge_score = self.first_number(edge_result.get("edge_score")) or 0
+        score_threshold = self.first_number(self.settings.get("swap_quote_score_threshold"))
+        edge_threshold = self.first_number(self.settings.get("swap_quote_min_edge_score"))
+        score_threshold = score_threshold if score_threshold is not None else 68
+        edge_threshold = edge_threshold if edge_threshold is not None else 65
+
+        if score >= score_threshold or edge_score >= edge_threshold:
+            return True, "swap_quote_quality_gate_passed"
+
+        return False, "below_swap_quote_quality_gate"
 
     def learning_mode_penalties(self, penalties):
         cleaned = []
@@ -824,6 +1046,24 @@ class Scanner:
 
         decision["should_trade"] = decision["score"] >= decision["threshold"]
 
+        if self.holder_check_candidate_worthy(decision, edge_result):
+            holder_context = await self.evaluate_holder_cluster_risk(mint)
+        else:
+            holder_context = self.skipped_holder_cluster_risk(
+                "Scanner holder check skipped below quote threshold"
+            )
+        cluster_context = self.wallet_cluster_risk_context(
+            signal_type=signal_type,
+            wallets=wallets,
+            wallet_count=wallet_count,
+            repeated_buys=repeated_buys,
+        )
+        rug_result = self.apply_holder_cluster_to_rug_result(
+            rug_result=rug_result,
+            holder_context=holder_context,
+            cluster_context=cluster_context,
+        )
+
         confirmation_result = self.confirmation_filter.evaluate(
             signal_type=signal_type,
             wallet_count=wallet_count,
@@ -937,6 +1177,8 @@ class Scanner:
                 rug_result=rug_result,
                 buy_quote_analysis=buy_quote_analysis,
                 sell_quote_analysis=sell_quote_analysis,
+                buy_quote=buy_quote,
+                sell_quote=sell_quote,
                 position_size_usd=position_size_usd,
                 token_age_seconds=token_age_seconds,
                 true_launch_age_seconds=true_launch_age_seconds,
@@ -957,32 +1199,86 @@ class Scanner:
             print("⛔ Paper trade skipped early.")
             return
 
-        if hasattr(self.rpc, "jupiter_quote") and self.rpc.jupiter_quote:
-            buy_quote = await self.rpc.jupiter_quote.get_buy_quote(
-                output_mint=mint,
-                sol_amount=0.1,
-                slippage_bps=1500,
-            )
+        quote_allowed, quote_gate_reason = self.should_request_swap_quote(
+            decision=decision,
+            edge_result=edge_result,
+            rug_result=rug_result,
+            market_sanity=market_sanity,
+        )
 
-            buy_quote_analysis = self.rpc.jupiter_quote.analyze_quote(
-                buy_quote,
-                max_price_impact_pct=8,
+        if not quote_allowed:
+            decision["should_trade"] = False
+            decision["reasons"].append(f"SWAP QUOTE SKIPPED: {quote_gate_reason}")
+            buy_quote_analysis = {
+                "pass": False,
+                "reason": quote_gate_reason,
+                "price_impact_pct": None,
+            }
+            sell_quote_analysis = {
+                "pass": False,
+                "reason": f"sell_quote_not_checked_{quote_gate_reason}",
+                "price_impact_pct": None,
+            }
+            increment_component(
+                "scanner",
+                "swap_quote_quality_skips",
+                last_swap_quote_skip_reason=quote_gate_reason,
+                last_swap_quote_skip_mint=mint,
+                last_swap_quote_skip_score=decision["score"],
+                last_swap_quote_skip_edge=edge_result["edge_score"],
             )
+        elif hasattr(self.rpc, "jupiter_quote") and self.rpc.jupiter_quote:
+            if not self.consume_swap_quote_budget():
+                buy_quote_analysis = {
+                    "pass": False,
+                    "reason": "swap_quote_budget_exhausted",
+                    "price_impact_pct": None,
+                }
+                increment_component(
+                    "scanner",
+                    "swap_quote_budget_skips",
+                    last_swap_quote_skip_reason="swap_quote_budget_exhausted",
+                    last_swap_quote_skip_mint=mint,
+                )
+            else:
+                buy_quote = await self.rpc.jupiter_quote.get_buy_quote(
+                    output_mint=mint,
+                    sol_amount=0.1,
+                    slippage_bps=1500,
+                )
+
+                buy_quote_analysis = self.rpc.jupiter_quote.analyze_quote(
+                    buy_quote,
+                    max_price_impact_pct=8,
+                )
 
             if buy_quote and buy_quote.get("ok"):
                 token_amount_raw = int(buy_quote.get("out_amount") or 0)
 
                 if token_amount_raw > 0:
-                    sell_quote = await self.rpc.jupiter_quote.get_sell_quote(
-                        input_mint=mint,
-                        token_amount_raw=token_amount_raw,
-                        slippage_bps=2000,
-                    )
+                    if not self.consume_swap_quote_budget():
+                        sell_quote_analysis = {
+                            "pass": False,
+                            "reason": "swap_quote_budget_exhausted_before_sell",
+                            "price_impact_pct": None,
+                        }
+                        increment_component(
+                            "scanner",
+                            "swap_quote_budget_skips",
+                            last_swap_quote_skip_reason="swap_quote_budget_exhausted_before_sell",
+                            last_swap_quote_skip_mint=mint,
+                        )
+                    else:
+                        sell_quote = await self.rpc.jupiter_quote.get_sell_quote(
+                            input_mint=mint,
+                            token_amount_raw=token_amount_raw,
+                            slippage_bps=2000,
+                        )
 
-                    sell_quote_analysis = self.rpc.jupiter_quote.analyze_quote(
-                        sell_quote,
-                        max_price_impact_pct=10,
-                    )
+                        sell_quote_analysis = self.rpc.jupiter_quote.analyze_quote(
+                            sell_quote,
+                            max_price_impact_pct=10,
+                        )
 
         if not buy_quote_analysis["pass"]:
             decision["should_trade"] = False
@@ -996,11 +1292,14 @@ class Scanner:
                 f'EXIT LIQUIDITY BLOCK: {sell_quote_analysis["reason"]}'
             )
 
-        position_size_usd = self.position_sizer.size_trade(
-            decision=decision,
-            rug_result=rug_result,
-            quote_analysis=buy_quote_analysis,
-        )
+        if quote_allowed and buy_quote_analysis["pass"]:
+            position_size_usd = self.position_sizer.size_trade(
+                decision=decision,
+                rug_result=rug_result,
+                quote_analysis=buy_quote_analysis,
+            )
+        else:
+            position_size_usd = 0
 
         if position_size_usd <= 0:
             decision["should_trade"] = False
@@ -1053,6 +1352,8 @@ class Scanner:
             rug_result=rug_result,
             buy_quote_analysis=buy_quote_analysis,
             sell_quote_analysis=sell_quote_analysis,
+            buy_quote=buy_quote,
+            sell_quote=sell_quote,
             position_size_usd=position_size_usd,
             token_age_seconds=token_age_seconds,
             true_launch_age_seconds=true_launch_age_seconds,
@@ -1090,6 +1391,7 @@ class Scanner:
                 "timestamp": time.time(),
                 "source": "scanner",
                 "context": "scanner_runtime_skip",
+                "decision_id": decision_id,
                 "decision_stage": "paper_trade_precheck",
                 "mint": mint,
                 "price": (market_info or {}).get("price") if isinstance(market_info, dict) else None,
@@ -1112,6 +1414,7 @@ class Scanner:
                 "timestamp": time.time(),
                 "source": "scanner",
                 "context": "scanner_runtime_skip",
+                "decision_id": decision_id,
                 "decision_stage": "paper_trade_precheck",
                 "mint": mint,
                 "risk_label": rug_result.get("risk_label"),
@@ -1134,6 +1437,7 @@ class Scanner:
                 "timestamp": time.time(),
                 "source": "scanner",
                 "context": "scanner_runtime_skip",
+                "decision_id": decision_id,
                 "decision_stage": "paper_trade_precheck",
                 "mint": mint,
                 "price": entry_price,
@@ -1147,12 +1451,20 @@ class Scanner:
             })
             return
 
+        exploration = decision.get("exploration") or {}
+        if exploration.get("route_observation_only"):
+            route_label = "route_failed_observation"
+        elif exploration.get("confirmation_observation_only"):
+            route_label = "confirmation_block_observation"
+        else:
+            route_label = "quote_ok"
+
         trade = self.paper_trader.open_trade(
             mint=mint,
             entry_price=entry_price,
             size_usd=position_size_usd,
             liquidity_usd=liquidity_usd,
-            reason=f'{signal_type}_{decision.get("paper_lane", "main")}_{decision["mode"]}_score_{decision["score"]}_{rug_result["risk_label"]}_quote_ok',
+            reason=f'{signal_type}_{decision.get("paper_lane", "main")}_{decision["mode"]}_score_{decision["score"]}_{rug_result["risk_label"]}_{route_label}',
             wallets=wallets,
             market_info=market_info,
             paper_lane=decision.get("paper_lane", "main"),
@@ -1254,6 +1566,8 @@ class Scanner:
         rug_result,
         buy_quote_analysis,
         sell_quote_analysis,
+        buy_quote,
+        sell_quote,
         position_size_usd,
         token_age_seconds,
         true_launch_age_seconds,
@@ -1291,12 +1605,19 @@ class Scanner:
             "risk_warnings": rug_result["warnings"],
             "hard_block": rug_result["hard_block"],
             "hard_block_reason": rug_result["hard_block_reason"],
+            "holder_concentration": rug_result.get("holder_concentration"),
+            "holder_concentration_risk": rug_result.get("holder_concentration_risk"),
+            "holder_concentration_reasons": rug_result.get("holder_concentration_reasons", []),
+            "holder_concentration_metrics": rug_result.get("holder_concentration_metrics", {}),
+            "linked_wallet_risk": rug_result.get("linked_wallet_risk"),
             "buy_quote_pass": buy_quote_analysis["pass"],
             "buy_quote_reason": buy_quote_analysis["reason"],
             "buy_quote_price_impact_pct": buy_quote_analysis["price_impact_pct"],
+            **self.quote_decision_fields("buy", buy_quote, 1500, 8),
             "sell_quote_pass": sell_quote_analysis["pass"],
             "sell_quote_reason": sell_quote_analysis["reason"],
             "sell_quote_price_impact_pct": sell_quote_analysis["price_impact_pct"],
+            **self.quote_decision_fields("sell", sell_quote, 2000, 10),
             "position_size_usd": position_size_usd,
             "token_age_seconds": token_age_seconds,
             "true_launch_age_seconds": true_launch_age_seconds,
@@ -1381,6 +1702,11 @@ class Scanner:
             "risk_warnings": rug_result["warnings"],
             "hard_block": rug_result["hard_block"],
             "hard_block_reason": rug_result["hard_block_reason"],
+            "holder_concentration": rug_result.get("holder_concentration"),
+            "holder_concentration_risk": rug_result.get("holder_concentration_risk"),
+            "holder_concentration_reasons": rug_result.get("holder_concentration_reasons", []),
+            "holder_concentration_metrics": rug_result.get("holder_concentration_metrics", {}),
+            "linked_wallet_risk": rug_result.get("linked_wallet_risk"),
             "buy_quote_pass": buy_quote_analysis["pass"],
             "buy_quote_reason": buy_quote_analysis["reason"],
             "buy_quote_price_impact_pct": buy_quote_analysis["price_impact_pct"],

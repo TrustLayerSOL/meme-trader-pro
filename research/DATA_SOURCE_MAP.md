@@ -57,7 +57,22 @@ Desktop read-path indexes:
 
 Backfill/sync utility: `utils/sync_state_to_sqlite.py`
 
-Current stance: JSON files remain the practical runtime source for several panels, while SQLite is the durable query layer. Future work should consolidate more read paths onto SQLite once schemas are stable.
+Current stance: JSON files remain the practical runtime source for several panels, while SQLite is the durable query layer. Future work should consolidate more read paths onto SQLite once schemas are stable. Until then, desktop API payloads should declare their current source contract so mixed JSON/SQLite panels are visible to the operator.
+
+## Current Desktop Source Contracts
+
+These are current read contracts, not final architecture promises.
+
+| Area | Current Canonical Read | Mirror / Secondary Source | Risk |
+| --- | --- | --- | --- |
+| Trades / Portfolio / paper replay | SQLite `trades` after JSON parity | `data/paper_trades.json` fallback | `/api/trades` and shared paper-trade state use SQLite only when bucket/key parity matches JSON. The local table was rebuilt from JSON and currently matches open 1, closed 10, failed 2. |
+| Decisions / Replay Decision Ledger | SQLite `decision_records` | paper-trade fallback when no decisions exist | This is the intended canonical path for candidate decision review. |
+| Selected-token detail / snapshots / candidates / candles fallback | JSON paper/manual position state plus SQLite `token_snapshots` | Social/catalyst/wallet JSON context | `/api/positions/{mint}` now declares position, snapshot, social, catalyst, and wallet-context sources. It warns when JSON position market fields are shown beside SQLite snapshot fields. |
+| Alerts | SQLite `alerts` | `live_state.json` fallback | `/api/alerts` reads durable SQLite alert payloads first, falls back to live-state alerts if SQLite is empty, and warns when live-state retention differs from SQLite history. |
+| Wallet stats | `data/wallet_performance.json`, `data/wallet_behavior.json`, wallet list JSON | SQLite `events` raw activity | Wallet payloads now declare their source contract, but wallet stats remain JSON-first until a dedicated schema/backfill exists. |
+| Social / catalysts | `data/social_state.json`, `data/catalyst_cards.json` | social evidence frozen inside SQLite `decision_records` | Social payloads now declare the JSON source and decision-embedded evidence boundary. Historical decisions do not automatically change when social imports are edited later. |
+
+Safe next work: wire holder/cluster risk into live candidate decisions. Wallet/social SQLite migration should wait for dedicated schemas and backfills; the source contracts now make their current JSON-first boundary explicit.
 
 Known `token_snapshots.context` values:
 
@@ -120,7 +135,7 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | `/api/readiness` | required state files, runtime status, read-only SQLite counts | Avoids live execution and reports degraded state as warnings/failures. |
 | `/api/freshness` | `core.data_freshness.DataFreshness` | Source freshness report used for stale-state visibility. |
 | `/api/positions` | `data/paper_trades.json`, `data/manual_watchlist.json` | Uses `core.position_cockpit.build_position_rows`. |
-| `/api/positions/{mint}` | positions plus SQLite `token_snapshots`, `data/social_state.json`, `data/catalyst_cards.json`, `data/wallet_performance.json`, `data/wallet_behavior.json`, `data/paper_trades.json` | Selected-position detail payload with snapshot trend metrics, read-only protection summary, local signal/catalyst matches, and wallet confidence context. |
+| `/api/positions/{mint}` | positions plus SQLite `token_snapshots`, `data/social_state.json`, `data/catalyst_cards.json`, `data/wallet_performance.json`, `data/wallet_behavior.json`, `data/paper_trades.json` | Selected-position detail payload with snapshot trend metrics, read-only protection summary, local signal/catalyst matches, and wallet confidence context. Payload declares `position_source`, `snapshot_source`, social/catalyst/wallet context contracts, and `mixed_market_fields` when JSON position market fields appear beside SQLite snapshots. |
 | `/api/candidates` | SQLite `token_snapshots` scanner contexts | Read-only live launch feed. Dedupes recent scanner candidates by mint and exposes image URL, name/symbol, market cap, liquidity, tx count, holder count, wallet score, risk, and pass/skip/block reasons when available. |
 | `/api/decisions` | SQLite `decision_records` | Read-only canonical decision feed. Exposes recent candidate decisions, action, lane, score, risk, quote pass/fail flags, paper outcome fields, and compact payload/result JSON. Supports filters such as `filter=quote_failed` and `lane=main`. |
 | `/api/candidate-wallets` | `data/candidate_wallets.json` | Watch-only discovered wallets for manual review. Read-only; does not promote wallets or execute trades. |
@@ -129,15 +144,15 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | `/api/wallet-review-apply` | `data/wallet_review_decisions.json`, `data/tracked_wallets.json`, `data/paper_watch_wallets.json`, `data/bad_wallets.json`, `data/wallet_list_update_audit.json` | GET returns dry-run preview without raw wallet lists. POST requires exact confirmation `APPLY_WALLET_REVIEW`, runs the controlled apply tool, creates backups/audit records, and still does not execute trades. |
 | `/api/events` | SQLite `events` | Read-only scanner tape for raw tracked-wallet buy/sell events before strategy filters promote them into launch candidates. Exposes mint, wallet, age, amount, and wallet score fields when present in payload JSON. |
 | `/api/candles`, `/api/tokens/{mint}/candles` | SQLite `swap_ticks`, fallback SQLite `token_snapshots` | Uses `core.position_cockpit.build_candles`; supports strict read-only `metric=market_cap`, `metric=price`, or `metric=liquidity` plus `interval=1`, `5`, `30`, or `60`. Prefers tick-derived candles when `swap_ticks` exist for the mint and reports `sample_kind=swap_tick`, `tick_count`, and `trade_stream_active=true`. Falls back to sampled quote/snapshot candles with `sample_kind=sampled_quote` when tick rows are absent. |
-| `/api/tokens/{mint}/snapshots` | SQLite `token_snapshots` | Oldest-to-newest token snapshot rows. |
-| `/api/trades` | `data/paper_trades.json` | Open/closed/failed trade state. Feeds the desktop Portfolio view, static desktop Portfolio panel, paper replay, and selected-token trade lifecycle. |
-| `/api/paper-review` | `data/paper_trades.json`, `data/wallet_behavior.json` | Read-only paper profitability review with readiness gaps, paper metrics, main-vs-exploration lane metrics, entry/exit/failure reasons, and wallet-label exposure. |
-| `/api/winner-patterns` | `data/paper_trades.json` | Read-only winner-pattern review comparing closed winners against closed losers. Used for paper tuning only; live execution remains locked. |
+| `/api/tokens/{mint}/snapshots` | SQLite `token_snapshots` | Oldest-to-newest token snapshot rows. Payload declares `source=sqlite_token_snapshots` and `source_detail=data/memetrader.db:token_snapshots`. |
+| `/api/trades` | SQLite `trades`, JSON fallback | Open/closed/failed trade state. Feeds the desktop Portfolio view, static desktop Portfolio panel, paper replay, and selected-token trade lifecycle. Payload declares `source=sqlite_trades` when parity passes, plus JSON fallback diagnostics. |
+| `/api/paper-review` | Shared paper-trade state, `data/wallet_behavior.json` | Read-only paper profitability review with readiness gaps, paper metrics, main-vs-exploration lane metrics, entry/exit/failure reasons, and wallet-label exposure. Shared paper-trade state is SQLite-first after JSON parity. |
+| `/api/winner-patterns` | Shared paper-trade state | Read-only winner-pattern review comparing closed winners against closed losers. Used for paper tuning only; live execution remains locked. Shared paper-trade state is SQLite-first after JSON parity. |
 | `/api/watchlist` | `data/manual_watchlist.json` | Protected manual positions. |
 | `POST /api/watchlist/protected-token` | `data/manual_watchlist.json` | Scoped local metadata update for adding/updating a manual protected token from the desktop Protection tab. Watch/alert only; live execution and auto-sell remain locked. |
 | `POST /api/watchlist/protected-amount` | `data/manual_watchlist.json` | Scoped local metadata update for protected-position amount/decimals/raw/test flag only. Live execution and auto-sell remain locked. |
-| `/api/alerts` | `live_state.json` alerts | Root live-state compatibility source. |
-| `/api/social` | `data/social_state.json` | Local social events/signals; supports both `events` and legacy `signals` keys. |
+| `/api/alerts` | SQLite `alerts` | Root `live_state.json` fallback. Payload declares `source=sqlite_alerts` when rows exist, preserves live-state fallback, and reports live-state/SQLite count differences as advisory retention diagnostics. |
+| `/api/social` | `data/social_state.json` | Local social events/signals; supports both `events` and legacy `signals` keys. Payload declares the social JSON source, catalyst-card JSON source, and the separate decision-embedded social evidence boundary. |
 | `POST /api/social/import` | `data/social_state.json` | Scoped local metadata update for importing a tweet/social signal from the desktop Signals/Pulse panel. Local research only; does not trigger trades. |
 | `/api/catalyst-cards` | `data/catalyst_cards.json` | Generated catalyst cards. |
 | `/api/settings` | `data/bot_settings.json` | Read-only settings snapshot. |
@@ -153,10 +168,11 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | Dev reputation | developer wallet metadata, bonded/migrated token count, known bad/suspicious flags | `core/dev_analyzer.py`, `dev_reputation.json` |
 | Paper entry | candidate score, risk result, quote result, settings, position sizing, paper lane, explicit non-live eligibility for exploration | `paper_trader.py`, `core/scanner.py`, `core/paper_exploration.py` |
 | Paper Exploration Lane | near-miss score, edge score, confirmation result, strategy guard, hard-block status, market sanity, buy quote, sell quote, configured exploration size | `core/paper_exploration.py`, `core/scanner.py`, `data/paper_trades.json`, `/api/paper-review` |
+| Decision lane report | main/exploration/protected-manual candidate decisions, opens, skips, quote failures, hard blocks, social/wallet confirmations, and recorded outcomes | SQLite `decision_records`, `desktop_api.py`, native Paper Review |
 | Paper exit | trade state, partial profit rules, stops, exit advisor | `paper_trader.py`, `core/exit_advisor.py` |
 | Protected mint status | current price/liquidity, peak/baseline drawdown, token mechanics, wallet token balance, prepared simulation exit intent | `core/rug_watchdog.py`, `core/protection_exit.py`, `core/token_balance.py` |
 | Fast open-position monitor | open paper/protected positions, lightweight market snapshots, liquidity/market-cap/price drawdown, quote degradation, exit-rule state | planned boundary; should be separate from `core/rug_watchdog.py` deep inspection |
-| Holder concentration risk | largest token accounts, supplied holder rows/account balances | `core/rug_watchdog.py`, `core/holder_concentration.py` |
+| Holder concentration risk | largest token accounts, supplied holder rows/account balances; bounded scanner checks for quote-worthy candidates | `core/scanner.py`, `core/rug_watchdog.py`, `core/holder_concentration.py` |
 | Token snapshots | watchdog status, scanner entries/skips, paper entries/exits, market metrics, mechanics, holder concentration, prepared exit quote status | SQLite `token_snapshots`, `core/rug_watchdog.py`, `core/scanner.py`, `paper_trader.py` |
 | Trade-stream candles | parsed swap/tick rows grouped into 1s/5s/30s/1m OHLC candles; sampled snapshots only as fallback | SQLite `swap_ticks`, `desktop_api.py`, `core.position_cockpit.build_candles`, `core.scanner.Scanner.record_swap_tick_from_event`, future exact DEX instruction parser |
 | Live launch feed | recent `scanner_skip`, `scanner_entry_candidate`, and `scanner_runtime_skip` snapshots, including Dexscreener metadata when present | `desktop_api.py`, SQLite `token_snapshots`, `infra/market_checker.py`, native desktop GUI |
@@ -172,6 +188,8 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | Catalyst cards | token snapshots, social matches, wallet confirmation, risk fields, paper outcomes | `core/catalyst_cards.py`, `data/catalyst_cards.json` |
 | Social import | pasted account, text, URL, keywords, and optional mint from desktop Signals/Pulse | `desktop_api.py`, `data/social_state.json`, native/static desktop GUI |
 | Social event matching | token name/symbol/mint against active social keywords, tickers, and extracted mints | `social/social_signal.py`, `core/scanner.py` |
+| Automated social collectors | Reddit/X/Telegram/Discord source posts normalized into `data/social_state.json`, then attached to catalyst cards and decision records | `social/reddit_collector.py`, `social/social_signal.py`, `data/runtime_status.json`; X/Telegram/Discord future |
+| Social-to-price alignment | catalyst event timestamp, selected mint, event-time market/liquidity, 5m/15m/1h/4h follow-up, outlier flags | planned; should read market snapshots from SQLite `token_snapshots` / `swap_ticks` and write back to catalyst/decision evidence |
 | Position cockpit action intent | selected paper/protected token, operator button press, live execution lock | `core/position_cockpit.py`, `data/position_action_intents.json` |
 | Live execution permission | environment, safety flags, wallet/config, explicit arming | `core/execution_safety.py`, `execution/*` |
 
@@ -181,7 +199,8 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 - `core/data_freshness.py` classifies important state sources as fresh, stale, old, missing, or broken and renders those results in the Data Store panel.
 - `live_state.json` and `data/live_state.json` can diverge. Future work should pick a canonical live-state file and make the other a compatibility alias or remove it.
 - SQLite is useful for querying and persistence, but several panels still read JSON directly. Treat SQLite as durable memory, not yet the only source of truth.
-- Candidate decisions are currently reconstructed from scanner snapshots, paper trades, wallet state, social state, and catalyst cards. This should be replaced by `decision_records` as the canonical source before strategy tuning or live-readiness claims.
+- Candidate decisions should read from `decision_records` as the canonical source. Scanner records now include holder concentration evidence for quote-worthy candidates, while true linked-wallet graph risk remains explicitly marked as not checked until a real owner/funder graph source exists.
+- Manual social import is only the bridge for operator-entered evidence. Reddit collection now writes normalized social `events` and collector freshness, but it is standalone/unscheduled until observed safely. Future collectors must use the same social evidence path instead of creating a separate social source of truth.
 - Deep watchdog state and fast open-position monitoring should be separate sources. The UI must not label slow deep-inspection freshness as real-time exit protection.
 - Any future live execution feature must write an audit record before and after every attempted order.
 
