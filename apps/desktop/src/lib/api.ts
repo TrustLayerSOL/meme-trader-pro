@@ -831,6 +831,10 @@ export function eventFeedApiPath(limit = 120) {
   return `/api/events?limit=${encodeURIComponent(String(limit))}`;
 }
 
+export function decisionLedgerApiPath(limit = 80) {
+  return `/api/decisions?limit=${encodeURIComponent(String(limit))}`;
+}
+
 export function protectedAmountApiPath() {
   return "/api/watchlist/protected-amount";
 }

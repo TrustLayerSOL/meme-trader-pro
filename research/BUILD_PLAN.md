@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-09
+Last updated: 2026-05-12
 
 ## Legend
 
@@ -50,7 +50,7 @@ The project already has the core shape of a local trading cockpit:
 
 Current strategic correction:
 
-- [~] The next leverage point is not more feature breadth. It is measurement: a canonical decision ledger that records every token candidate, why it passed/failed, whether it entered main or exploration paper mode, and what happened afterward. The first SQLite/API/static-GUI foundation is now started.
+- [~] The next leverage point is not more feature breadth. It is measurement: a canonical decision ledger that records every token candidate, why it passed/failed, whether it entered main or exploration paper mode, and what happened afterward. The first SQLite/API/static-GUI foundation exists, and the React/Tauri Replay tab now reads and filters the ledger.
 - [ ] Live/rug protection must be split into fast pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection. The existing watchdog should not be treated as a sub-second rug-rescue system.
 
 ## Operating Principles
@@ -391,7 +391,7 @@ Deliverables:
 - [~] Tauri + React shell exists, builds a macOS `.app`/`.dmg`, and can start/check the local read-only desktop API.
 - [~] Native React shell now has selected-token chart, protection, signal/catalyst, and snapshot panels.
 - [x] Native selected-token chart/detail/snapshot path refreshes every 1 second with request-overlap protection.
-- [~] Native React shell now has top navigation for Cockpit, Details, Protection, Signals, Replay, and System plus readiness and paper-trade replay panels.
+- [~] Native React shell now has top navigation for Cockpit, Details, Protection, Signals, Replay, and System plus readiness, paper-trade replay panels, and a filterable canonical Decision Ledger.
 - [x] Native React shell now has a Portfolio tab backed by the paper-trade ledger with total/open/closed PnL, per-trade rows, and selected-trade detail.
 - [~] Native React shell now has a Wallets tab backed by read-only wallet performance and tracked-wallet labels.
 - [x] Native Wallets tab now supports selected-wallet drilldown with matching signals and attributed paper trades.
@@ -490,7 +490,7 @@ Next actions:
 - [~] Canonical decision ledger: every candidate gets one structured decision record.
 - [~] Scanner skip/main-entry/exploration-entry writes route through the ledger.
 - [~] Paper trade open/failed/exit records link back to `decision_id`.
-- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed. Static desktop Replay tab now has first-pass filters and selected-decision detail; richer drilldown remains.
+- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed. Static desktop Replay and React/Tauri Replay now have first-pass filters and selected-decision detail; richer drilldown remains.
 - [ ] Fast open-position monitor boundary separated from deep watchdog inspection.
 - [ ] Holder concentration / linked-cluster risk wired into candidate decision records.
 - [ ] Lane-separated paper reports from decision records: main vs exploration vs protected/manual.

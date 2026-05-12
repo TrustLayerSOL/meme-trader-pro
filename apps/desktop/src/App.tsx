@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { LockedActions } from "./components/LockedActions";
+import { DecisionLedger } from "./components/DecisionLedger";
 import { OpsPanel } from "./components/OpsPanel";
 import { EmptyState, LoadingState } from "./components/PanelState";
 import { PositionMonitor } from "./components/PositionMonitor";
@@ -11,6 +12,7 @@ import { WalletIntelligence } from "./components/WalletIntelligence";
 import {
   candidateFeedApiPath,
   candidateWalletsApiPath,
+  decisionLedgerApiPath,
   ensureDesktopApi,
   eventFeedApiPath,
   fetchJson,
@@ -48,6 +50,7 @@ import {
   type WinnerPatternPayload,
   type WalletsPayload,
 } from "./lib/api";
+import type { DecisionLedgerPayload } from "./lib/decisions";
 import { money, pct, price, shortMint } from "./lib/format";
 import { findTradeForMint, summarizeTrades, tradeLabel, tradeMarketCapIn, tradeMarketCapOut, tradeMint, tradePnl, tradePnlPct, tradeReason, tradeSizeUsd } from "./lib/trades";
 
@@ -176,6 +179,7 @@ export function App() {
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [freshness, setFreshness] = useState<FreshnessPayload | null>(null);
   const [trades, setTrades] = useState<TradesPayload | null>(null);
+  const [decisions, setDecisions] = useState<DecisionLedgerPayload | null>(null);
   const [paperReview, setPaperReview] = useState<PaperReviewPayload | null>(null);
   const [winnerPatterns, setWinnerPatterns] = useState<WinnerPatternPayload | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistPayload | null>(null);
@@ -215,6 +219,7 @@ export function App() {
           fetchJson<ReadinessPayload>("/api/readiness"),
           fetchJson<FreshnessPayload>("/api/freshness"),
           fetchJson<TradesPayload>("/api/trades"),
+          fetchJson<DecisionLedgerPayload>(decisionLedgerApiPath()),
           fetchJson<PaperReviewPayload>("/api/paper-review"),
           fetchJson<WinnerPatternPayload>(winnerPatternsApiPath()),
           fetchJson<WatchlistPayload>("/api/watchlist"),
@@ -228,13 +233,14 @@ export function App() {
           fetchJson<EventFeedPayload>(eventFeedApiPath()),
         ]);
         if (cancelled) return;
-        const [readinessResult, freshnessResult, tradesResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult] = optional;
+        const [readinessResult, freshnessResult, tradesResult, decisionsResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult] = optional;
         setOverview(overviewPayload);
         const nextPositions = positionsPayload.positions || [];
         setPositions(nextPositions);
         if (readinessResult.status === "fulfilled") setReadiness(readinessResult.value);
         if (freshnessResult.status === "fulfilled") setFreshness(freshnessResult.value);
         if (tradesResult.status === "fulfilled") setTrades(tradesResult.value);
+        if (decisionsResult.status === "fulfilled") setDecisions(decisionsResult.value);
         if (paperReviewResult.status === "fulfilled") setPaperReview(paperReviewResult.value);
         if (winnerPatternsResult.status === "fulfilled") setWinnerPatterns(winnerPatternsResult.value);
         if (watchlistResult.status === "fulfilled") setWatchlist(watchlistResult.value);
@@ -365,6 +371,7 @@ export function App() {
   const readinessLoaded = readiness !== null;
   const freshnessLoaded = freshness !== null;
   const tradesLoaded = trades !== null;
+  const decisionsLoaded = decisions !== null;
   const selectedTokenLoading = Boolean(selectedMint && !tokenDetail && !tokenError);
   const handleProtectedAmountSaved = (item: WatchlistItem) => {
     const mint = item.token_mint || item.mint || "";
@@ -592,6 +599,7 @@ export function App() {
       </section> : null}
 
       {workArea === "replay" ? <section className="detail-grid wide replay-grid">
+        <DecisionLedger decisions={decisions} loaded={decisionsLoaded} onSelectMint={setSelectedMint} />
         <PaperReviewPanel review={paperReview} loaded={tradesLoaded} />
         <ReplayPanel title="Open Paper Trades" trades={trades?.open_trades || []} loaded={tradesLoaded} empty="No open paper trades." />
         <ReplayPanel title="Closed Trades" trades={trades?.closed_trades || []} loaded={tradesLoaded} empty="No closed paper trades." />

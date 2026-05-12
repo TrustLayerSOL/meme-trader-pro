@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { candidateFeedApiPath, candidateWalletsApiPath, desktopApiUrl, eventFeedApiPath, fetchJson, importSocialPost, OVERVIEW_REFRESH_MS, postJson, protectedAmountApiPath, protectedTokenApiPath, SELECTED_TOKEN_REFRESH_MS, setDesktopApiToken, socialImportApiPath, tokenApiPaths, walletDetailApiPath, walletLifecycleApiPath, walletReviewApplyApiPath, walletReviewDecisionApiPath, winnerPatternsApiPath } from "./api";
+import { candidateFeedApiPath, candidateWalletsApiPath, decisionLedgerApiPath, desktopApiUrl, eventFeedApiPath, fetchJson, importSocialPost, OVERVIEW_REFRESH_MS, postJson, protectedAmountApiPath, protectedTokenApiPath, SELECTED_TOKEN_REFRESH_MS, setDesktopApiToken, socialImportApiPath, tokenApiPaths, walletDetailApiPath, walletLifecycleApiPath, walletReviewApplyApiPath, walletReviewDecisionApiPath, winnerPatternsApiPath } from "./api";
 
 describe("desktop API helper", () => {
   it("builds localhost API URLs without touching live execution routes", () => {
@@ -36,6 +36,12 @@ describe("desktop API helper", () => {
 
   it("allows paper trade replay reads", () => {
     expect(desktopApiUrl("/api/trades").toString()).toBe("http://127.0.0.1:8765/api/trades");
+  });
+
+  it("builds the canonical decision ledger read-only path", () => {
+    expect(decisionLedgerApiPath()).toBe("/api/decisions?limit=80");
+    expect(decisionLedgerApiPath(24)).toBe("/api/decisions?limit=24");
+    expect(desktopApiUrl(decisionLedgerApiPath(24)).toString()).toBe("http://127.0.0.1:8765/api/decisions?limit=24");
   });
 
   it("allows wallet intelligence reads", () => {

@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-09
+Last updated: 2026-05-12
 
 ## Current Work
 
@@ -65,15 +65,53 @@ Why this matters:
 
 ## Next Actions
 
-1. Bring the React/Tauri Replay view up to the same Decision Ledger filter/detail standard as the static desktop view.
-2. Add richer Decision Ledger drill-downs for quote snapshots, route feasibility, holder/risk checks, and eventual paper outcome.
-3. Add or repair canonical read paths so trades, wallet stats, alerts, and decisions do not disagree across JSON and SQLite panels.
-4. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
-5. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
-6. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
-7. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
+1. Add richer Decision Ledger drill-downs for quote snapshots, route feasibility, holder/risk checks, and eventual paper outcome.
+2. Add or repair canonical read paths so trades, wallet stats, alerts, and decisions do not disagree across JSON and SQLite panels.
+3. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
+4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
+5. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
+6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-12 - Native Replay Decision Ledger
+
+Changed files:
+
+- `apps/desktop/src/App.tsx`
+- `apps/desktop/src/components/DecisionLedger.tsx`
+- `apps/desktop/src/lib/api.ts`
+- `apps/desktop/src/lib/api.test.ts`
+- `apps/desktop/src/lib/decisions.ts`
+- `apps/desktop/src/lib/decisions.test.ts`
+- `apps/desktop/src/styles.css`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Wired the React/Tauri Replay tab to read `/api/decisions`.
+- Added the native Decision Ledger panel above paper-trade replay.
+- Added native filters for all, bought, skipped, exploration, quote failed, hard risk, social, and wallet decisions.
+- Added clickable decision rows and selected-decision detail with lane, score, threshold, risk, buy/sell quote reason, action reason, wallets, social, risk notes, and score notes.
+- Added a typed API helper for the read-only decision ledger path.
+- Repaired the local desktop npm install after the `esbuild` binary was corrupt and blocked Vite/Vitest startup.
+
+Verification:
+
+- Added the failing API helper test first, then implemented the helper and React wiring.
+- `npm run check` passed.
+- `npm test` passed 35 desktop tests.
+- `npm run build:web` passed.
+- Static desktop JavaScript syntax/chart tests passed.
+- `trading_env/bin/python -m py_compile desktop_api.py core/storage.py` passed.
+- `trading_env/bin/python -m unittest discover` passed 162 Python tests after reinstalling the repo's declared Python requirements in `trading_env`.
+
+Remaining:
+
+- Add deeper drilldowns for route/quote payloads, holder concentration, token mechanics, and paper outcome.
+- Backfill older scanner/paper records into `decision_records` if historical Replay coverage is needed.
 
 ### 2026-05-09 - Runtime SQLite Store Rebuilt
 

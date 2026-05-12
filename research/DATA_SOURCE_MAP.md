@@ -1,6 +1,6 @@
 # MemeTraderPro Data Source Map
 
-Last updated: 2026-05-09
+Last updated: 2026-05-12
 
 This map explains where the dashboard and bot state comes from. Use it before changing a panel, parser, storage schema, or strategy rule.
 
@@ -122,7 +122,7 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | `/api/positions` | `data/paper_trades.json`, `data/manual_watchlist.json` | Uses `core.position_cockpit.build_position_rows`. |
 | `/api/positions/{mint}` | positions plus SQLite `token_snapshots`, `data/social_state.json`, `data/catalyst_cards.json`, `data/wallet_performance.json`, `data/wallet_behavior.json`, `data/paper_trades.json` | Selected-position detail payload with snapshot trend metrics, read-only protection summary, local signal/catalyst matches, and wallet confidence context. |
 | `/api/candidates` | SQLite `token_snapshots` scanner contexts | Read-only live launch feed. Dedupes recent scanner candidates by mint and exposes image URL, name/symbol, market cap, liquidity, tx count, holder count, wallet score, risk, and pass/skip/block reasons when available. |
-| `/api/decisions` | SQLite `decision_records` | Read-only canonical decision feed. Exposes recent candidate decisions, action, lane, score, risk, quote pass/fail flags, paper outcome fields, and compact payload/result JSON. Supports filters such as `filter=quote_failed` and `lane=main`. |
+| `/api/decisions` | SQLite `decision_records` | Read-only canonical decision feed. Exposes recent candidate decisions, action, lane, score, risk, quote pass/fail flags, paper outcome fields, and compact payload/result JSON. Supports filters such as `filter=quote_failed` and `lane=main`. Feeds the static desktop Replay tab and the React/Tauri Replay Decision Ledger. |
 | `/api/candidate-wallets` | `data/candidate_wallets.json` | Watch-only discovered wallets for manual review. Read-only; does not promote wallets or execute trades. |
 | `/api/wallet-lifecycle` | `data/tracked_wallets.json`, `data/paper_watch_wallets.json`, `data/candidate_wallets.json`, `data/wallet_performance.json`, `data/wallet_behavior.json` | Read-only promotion/demotion queue with trade count, win/loss record, win rate, total PnL, average PnL, score, behavior labels, rolling windows, postmortem summary, and lifecycle recommendation. |
 | `POST /api/wallet-review-decision` | `data/wallet_review_decisions.json` | Scoped local metadata update for operator wallet review decisions: approve promotion, approve demotion, hold, or reject. Does not apply changes to tracked/bad wallet lists and does not execute trades. |
