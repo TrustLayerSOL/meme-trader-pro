@@ -65,7 +65,7 @@ Why this matters:
 
 ## Next Actions
 
-1. Continue canonical read-path cleanup for wallet performance stats and decision-linked paper outcomes.
+1. Continue canonical read-path cleanup for wallet performance stats.
 2. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
 3. Expand Decision Ledger drilldowns again when raw route/pool attribution and holder-cluster payloads are available.
 4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
@@ -73,6 +73,30 @@ Why this matters:
 6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-12 - Decision Outcomes Enriched From Linked Trades
+
+Changed files:
+
+- `desktop_api.py`
+- `tests/test_desktop_api.py`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- `/api/decisions` now enriches missing paper outcome fields from linked SQLite trade rows when a trade payload carries `signal_metadata.decision_id`.
+- Replay can show trade status, PnL, PnL percent, exit/failure reason, entry time, close time, and trade id even when older decision records were not fully backfilled with `result_json`.
+- The enrichment is read-only and does not mutate decision or trade tables.
+
+Verification:
+
+- Added a failing route test first for a decision with no result but a linked SQLite trade.
+- Focused decision route tests passed.
+
+Remaining:
+
+- Continue canonical cleanup for wallet performance stats.
 
 ### 2026-05-12 - Wallet Context Uses Canonical Trades
 

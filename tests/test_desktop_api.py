@@ -435,6 +435,42 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(payload["lane"], "main")
         self.assertEqual(payload["items"][0]["decision_id"], "dec_quote_failed")
 
+    def test_decisions_route_enriches_missing_result_from_linked_trade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.upsert_decision(build_decision_record({
+                "decision_id": "dec_trade_link",
+                "timestamp": 123,
+                "mint": "MintLinked",
+                "type": "cluster",
+                "should_trade": True,
+                "score_reasons": ["cluster confirmed"],
+            }))
+            store.upsert_trade({
+                "mint": "MintLinked",
+                "status": "closed",
+                "entry_time": 130,
+                "close_time": 190,
+                "total_pnl": 36,
+                "total_pnl_pct": 144,
+                "exit_reason": "take_profit",
+                "signal_metadata": {"decision_id": "dec_trade_link", "trade_id": "trade_1"},
+            })
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                status, _, body = desktop_api.route_request("GET", "/api/decisions?limit=10")
+
+        payload = json.loads(body)
+        item = payload["items"][0]
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(item["decision_id"], "dec_trade_link")
+        self.assertEqual(item["trade_status"], "closed")
+        self.assertEqual(item["pnl"], 36)
+        self.assertEqual(item["pnl_pct"], 144)
+        self.assertEqual(item["result"]["exit_reason"], "take_profit")
+        self.assertEqual(item["result"]["source"], "sqlite_trade_link")
+
     def test_alerts_route_prefers_sqlite_alerts_over_live_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = desktop_api.Path(tmp) / "memetrader.db"

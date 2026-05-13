@@ -1275,6 +1275,52 @@ def fetch_decision_rows(limit=80, mint=None):
             "payload": parse_payload_json(row["payload_json"]),
             "result": parse_payload_json(row["result_json"]) if row["result_json"] else None,
         })
+    enrich_decisions_with_trade_results(decisions)
+    return decisions
+
+
+def trade_result_from_row(trade):
+    trade = trade if isinstance(trade, dict) else {}
+    signal_metadata = trade.get("signal_metadata") if isinstance(trade.get("signal_metadata"), dict) else {}
+    return {
+        "source": "sqlite_trade_link",
+        "mint": trade.get("mint") or trade.get("token_mint"),
+        "trade_status": trade.get("status"),
+        "trade_id": trade.get("trade_id") or signal_metadata.get("trade_id"),
+        "entry_time": trade.get("entry_time"),
+        "close_time": trade.get("close_time"),
+        "pnl": trade.get("total_pnl", trade.get("pnl")),
+        "pnl_pct": trade.get("total_pnl_pct", trade.get("pnl_pct")),
+        "failure_reason": trade.get("failure_reason"),
+        "exit_reason": trade.get("exit_reason") or trade.get("close_reason"),
+    }
+
+
+def enrich_decisions_with_trade_results(decisions):
+    decision_ids = {
+        str(decision.get("decision_id"))
+        for decision in decisions
+        if decision.get("decision_id") and not decision.get("result")
+    }
+    if not decision_ids:
+        return decisions
+    linked = {}
+    for trade in fetch_trade_rows(limit=1000):
+        signal_metadata = trade.get("signal_metadata") if isinstance(trade.get("signal_metadata"), dict) else {}
+        decision_id = signal_metadata.get("decision_id")
+        if decision_id in decision_ids and decision_id not in linked:
+            linked[decision_id] = trade_result_from_row(trade)
+    for decision in decisions:
+        result = linked.get(decision.get("decision_id"))
+        if not result:
+            continue
+        decision["result"] = result
+        decision["trade_id"] = decision.get("trade_id") or result.get("trade_id")
+        decision["trade_status"] = decision.get("trade_status") or result.get("trade_status")
+        decision["entry_time"] = decision.get("entry_time") or result.get("entry_time")
+        decision["close_time"] = decision.get("close_time") or result.get("close_time")
+        decision["pnl"] = decision.get("pnl") if decision.get("pnl") is not None else result.get("pnl")
+        decision["pnl_pct"] = decision.get("pnl_pct") if decision.get("pnl_pct") is not None else result.get("pnl_pct")
     return decisions
 
 
