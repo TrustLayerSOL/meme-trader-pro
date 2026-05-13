@@ -1396,6 +1396,34 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(payload["postmortem"]["closed_trades"], 1)
         self.assertEqual(payload["postmortem"]["failure_reasons"]["risk"], 1)
 
+    def test_wallet_detail_payload_uses_canonical_trades_when_state_has_no_paper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.upsert_trade({
+                "mint": "MintSqlite",
+                "status": "closed",
+                "entry_time": 100,
+                "close_time": 150,
+                "wallets": ["Wallet111"],
+                "total_pnl": 18,
+                "total_pnl_pct": 45,
+                "exit_reason": "take_profit",
+            })
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                payload = desktop_api.build_wallet_detail_payload("Wallet111", {
+                    "tracked_wallets": [{"trackedWalletAddress": "Wallet111", "name": "alpha"}],
+                    "wallet_performance": {"wallets": {"Wallet111": {"score": 72}}, "signals": []},
+                    "wallet_behavior": {"wallets": {}},
+                })
+
+        self.assertEqual(payload["trade_source"], "sqlite_trades")
+        self.assertEqual(len(payload["paper_trades"]), 1)
+        self.assertEqual(payload["paper_trades"][0]["mint"], "MintSqlite")
+        self.assertEqual(payload["paper_trades"][0]["pnl"], 18)
+        self.assertEqual(payload["paper_trades"][0]["reason"], "take_profit")
+
     def test_wallet_context_for_mint_summarizes_signal_wallet_confidence(self):
         context = desktop_api.build_wallet_context_for_mint("Mint111", {
             "tracked_wallets": [{"trackedWalletAddress": "Wallet111", "name": "alpha"}],
@@ -1443,6 +1471,28 @@ class DesktopApiTests(unittest.TestCase):
         self.assertIn("paper-profitable", context["wallets"][0]["labels"])
         self.assertEqual(context["wallets"][0]["postmortem"]["closed_trades"], 3)
         self.assertEqual(context["matched_signals"], 1)
+
+    def test_wallet_context_for_mint_uses_canonical_trades_when_state_has_no_paper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.upsert_trade({
+                "mint": "MintSqlite",
+                "status": "open",
+                "entry_time": 100,
+                "wallets": ["Wallet111"],
+            })
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                context = desktop_api.build_wallet_context_for_mint("MintSqlite", {
+                    "tracked_wallets": [{"trackedWalletAddress": "Wallet111", "name": "alpha"}],
+                    "wallet_performance": {"wallets": {"Wallet111": {"score": 72}}, "signals": []},
+                    "wallet_behavior": {"wallets": {}},
+                })
+
+        self.assertEqual(context["trade_source"], "sqlite_trades")
+        self.assertEqual(context["wallet_count"], 1)
+        self.assertEqual(context["wallets"][0]["wallet"], "Wallet111")
 
     def test_wallets_route_is_read_only(self):
         with mock.patch.object(desktop_api, "build_wallets_payload", return_value={"wallets": [], "live_execution_locked": True}):

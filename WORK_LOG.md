@@ -65,7 +65,7 @@ Why this matters:
 
 ## Next Actions
 
-1. Continue canonical read-path cleanup for wallet stats and decision-linked paper outcomes.
+1. Continue canonical read-path cleanup for wallet performance stats and decision-linked paper outcomes.
 2. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
 3. Expand Decision Ledger drilldowns again when raw route/pool attribution and holder-cluster payloads are available.
 4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
@@ -73,6 +73,31 @@ Why this matters:
 6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-12 - Wallet Context Uses Canonical Trades
+
+Changed files:
+
+- `desktop_api.py`
+- `tests/test_desktop_api.py`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a shared canonical trade-state helper for desktop wallet views.
+- Wallet detail now uses SQLite-first `/api/trades` data when explicit paper state is not supplied.
+- Selected-token wallet confidence now uses SQLite-first trade attribution when explicit paper state is not supplied.
+- Existing explicit state injection for tests and local callers remains supported.
+
+Verification:
+
+- Added failing tests first for wallet detail and selected-token wallet context using SQLite trades without JSON paper state.
+- Focused wallet-context tests passed.
+
+Remaining:
+
+- Continue canonical cleanup for wallet performance stats and decision-linked paper outcomes.
 
 ### 2026-05-12 - Canonical Trades Read Path
 

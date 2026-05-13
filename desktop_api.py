@@ -808,7 +808,8 @@ def build_wallet_context_for_mint(mint, state=None, limit=8):
     wallet_records = performance.get("wallets") if isinstance(performance.get("wallets"), dict) else {}
     signals = performance.get("signals") if isinstance(performance.get("signals"), list) else []
     matched_signals = [signal for signal in signals if isinstance(signal, dict) and signal.get("mint") == mint]
-    wallets = wallets_for_mint_from_paper(mint, state.get("paper"))
+    paper = canonical_trade_state(state)
+    wallets = wallets_for_mint_from_paper(mint, paper)
 
     for signal in matched_signals:
         wallets.update(str(wallet) for wallet in listify(signal.get("wallets")) if wallet)
@@ -847,6 +848,7 @@ def build_wallet_context_for_mint(mint, state=None, limit=8):
         "trap_wallets": len(traps),
         "avg_score": round(sum(scores) / len(scores), 2) if scores else 0,
         "live_execution_locked": True,
+        "trade_source": paper.get("source"),
         "wallets": rows[:limit],
     }
 
@@ -2022,6 +2024,24 @@ def summarize_wallet_trade(row, source):
     }
 
 
+def canonical_trade_state(state=None):
+    paper = state.get("paper") if isinstance(state, dict) and isinstance(state.get("paper"), dict) else None
+    if paper is not None:
+        return {
+            "source": "state_paper",
+            "open_trades": paper.get("open_trades", []) if isinstance(paper.get("open_trades"), list) else [],
+            "closed_trades": paper.get("closed_trades", []) if isinstance(paper.get("closed_trades"), list) else [],
+            "failed_trades": paper.get("failed_trades", []) if isinstance(paper.get("failed_trades"), list) else [],
+        }
+    trade_payload = build_trades_payload()
+    return {
+        "source": trade_payload.get("source") or "unknown",
+        "open_trades": trade_payload.get("open_trades", []) if isinstance(trade_payload.get("open_trades"), list) else [],
+        "closed_trades": trade_payload.get("closed_trades", []) if isinstance(trade_payload.get("closed_trades"), list) else [],
+        "failed_trades": trade_payload.get("failed_trades", []) if isinstance(trade_payload.get("failed_trades"), list) else [],
+    }
+
+
 def build_wallets_payload(state=None, limit=80):
     state = state or read_state_files()
     performance = state.get("wallet_performance") if isinstance(state.get("wallet_performance"), dict) else {}
@@ -2112,7 +2132,7 @@ def build_wallet_detail_payload(wallet, state=None, limit=40):
         for signal in performance.get("signals", [])
         if isinstance(signal, dict) and wallet in listify(signal.get("wallets"))
     ]
-    paper = state.get("paper") if isinstance(state.get("paper"), dict) else {}
+    paper = canonical_trade_state(state)
     behavior = state.get("wallet_behavior") if isinstance(state.get("wallet_behavior"), dict) else {}
     behavior_wallets = behavior.get("wallets") if isinstance(behavior.get("wallets"), dict) else {}
     behavior_row = behavior_wallets.get(wallet) if isinstance(behavior_wallets.get(wallet), dict) else {}
@@ -2128,6 +2148,7 @@ def build_wallet_detail_payload(wallet, state=None, limit=40):
         "wallet": row,
         "recent_signals": signals[:limit],
         "paper_trades": trade_rows[:limit],
+        "trade_source": paper.get("source"),
         "behavior": {
             "labels": behavior_row.get("labels") if isinstance(behavior_row.get("labels"), list) else [],
             "rolling": behavior_row.get("rolling") if isinstance(behavior_row.get("rolling"), dict) else {},
