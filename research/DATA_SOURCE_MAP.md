@@ -136,7 +136,7 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 | `/api/watchlist` | `data/manual_watchlist.json` | Protected manual positions. |
 | `POST /api/watchlist/protected-token` | `data/manual_watchlist.json` | Scoped local metadata update for adding/updating a manual protected token from the desktop Protection tab. Watch/alert only; live execution and auto-sell remain locked. |
 | `POST /api/watchlist/protected-amount` | `data/manual_watchlist.json` | Scoped local metadata update for protected-position amount/decimals/raw/test flag only. Live execution and auto-sell remain locked. |
-| `/api/alerts` | `live_state.json` alerts | Root live-state compatibility source. |
+| `/api/alerts` | SQLite `alerts`, fallback `live_state.json` alerts | Canonical read path now prefers durable SQLite alerts and falls back to root live-state compatibility alerts only when SQLite has no alert rows. |
 | `/api/social` | `data/social_state.json` | Local social events/signals; supports both `events` and legacy `signals` keys. |
 | `POST /api/social/import` | `data/social_state.json` | Scoped local metadata update for importing a tweet/social signal from the desktop Signals/Pulse panel. Local research only; does not trigger trades. |
 | `/api/catalyst-cards` | `data/catalyst_cards.json` | Generated catalyst cards. |
@@ -180,7 +180,7 @@ The desktop GUI is primarily a local presentation layer. It binds to `127.0.0.1`
 - `data/runtime_status.json` is the heartbeat file. If a component is stale there, the dashboard should treat related data as stale too.
 - `core/data_freshness.py` classifies important state sources as fresh, stale, old, missing, or broken and renders those results in the Data Store panel.
 - `live_state.json` and `data/live_state.json` can diverge. Future work should pick a canonical live-state file and make the other a compatibility alias or remove it.
-- SQLite is useful for querying and persistence, but several panels still read JSON directly. Treat SQLite as durable memory, not yet the only source of truth.
+- SQLite is useful for querying and persistence, but several panels still read JSON directly. Treat SQLite as durable memory, not yet the only source of truth. `/api/alerts` now prefers SQLite alert rows with a live-state fallback.
 - Candidate decisions are currently reconstructed from scanner snapshots, paper trades, wallet state, social state, and catalyst cards. This should be replaced by `decision_records` as the canonical source before strategy tuning or live-readiness claims.
 - Deep watchdog state and fast open-position monitoring should be separate sources. The UI must not label slow deep-inspection freshness as real-time exit protection.
 - Any future live execution feature must write an audit record before and after every attempted order.

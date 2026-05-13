@@ -435,6 +435,50 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(payload["lane"], "main")
         self.assertEqual(payload["items"][0]["decision_id"], "dec_quote_failed")
 
+    def test_alerts_route_prefers_sqlite_alerts_over_live_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.insert_alert({
+                "time": 123,
+                "mint": "MintSqlite",
+                "type": "cluster",
+                "total_score": 77,
+                "edge_score": 14,
+                "edge_verdict": "watch",
+                "should_trade": True,
+                "risk_label": "LOW",
+                "wallets": ["Wallet111"],
+            })
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                with mock.patch.object(desktop_api, "read_json", return_value={"alerts": [{"mint": "MintLive"}]}):
+                    status, content_type, body = desktop_api.route_request("GET", "/api/alerts?limit=10")
+
+        payload = json.loads(body)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertEqual(payload["source"], "sqlite_alerts")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["items"][0]["mint"], "MintSqlite")
+        self.assertTrue(payload["items"][0]["should_trade"])
+        self.assertEqual(payload["items"][0]["payload"]["wallets"], ["Wallet111"])
+
+    def test_alerts_route_falls_back_to_live_state_when_sqlite_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            EventStore(db_path)
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                with mock.patch.object(desktop_api, "read_json", return_value={"alerts": [{"mint": "MintLive"}]}):
+                    status, _, body = desktop_api.route_request("GET", "/api/alerts?limit=10")
+
+        payload = json.loads(body)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(payload["source"], "live_state_alerts")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["items"][0]["mint"], "MintLive")
+
     def test_cors_only_allows_local_desktop_origins(self):
         self.assertIsNone(desktop_api.allowed_cors_origin("http://127.0.0.1:5173"))
         self.assertIsNone(desktop_api.allowed_cors_origin("http://localhost:8765"))

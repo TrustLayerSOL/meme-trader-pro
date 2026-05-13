@@ -1324,6 +1324,60 @@ def build_decisions_payload(limit=80, mint=None, filter_name=None, lane=None):
     }
 
 
+def fetch_alert_rows(limit=100):
+    if not DB_FILE.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT time, mint, signal_type, total_score, edge_score,
+                   edge_verdict, should_trade, risk_label, payload_json
+            FROM alerts
+            ORDER BY time DESC, id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    alerts = []
+    for row in rows:
+        alerts.append({
+            "time": row["time"],
+            "mint": row["mint"],
+            "signal_type": row["signal_type"],
+            "total_score": row["total_score"],
+            "edge_score": row["edge_score"],
+            "edge_verdict": row["edge_verdict"],
+            "should_trade": bool(row["should_trade"]),
+            "risk_label": row["risk_label"],
+            "payload": parse_payload_json(row["payload_json"]),
+        })
+    return alerts
+
+
+def build_alerts_payload(limit=100):
+    alerts = fetch_alert_rows(limit=limit)
+    if alerts:
+        return {
+            "generated_at": time.time(),
+            "source": "sqlite_alerts",
+            "count": len(alerts),
+            "items": alerts,
+            "live_execution_locked": True,
+        }
+    live_state = read_json(LIVE_STATE_FILE, {"alerts": []})
+    return summarize_list_payload("live_state_alerts", live_state, key="alerts", limit=limit)
+
+
 def fetch_event_metadata(mints):
     unique_mints = [mint for mint in dict.fromkeys(str(mint or "").strip() for mint in mints or []) if mint]
     if not unique_mints or not DB_FILE.exists():
@@ -2576,8 +2630,8 @@ def route_request(method, raw_path, body=None, headers=None):
         limit = parse_int_query(query, "limit", 40, 1, 100)
         return json_response(build_wallet_detail_payload(wallet, limit=limit))
     if path == "/api/alerts":
-        live_state = read_json(LIVE_STATE_FILE, {"alerts": []})
-        return json_response(summarize_list_payload("live_state_alerts", live_state, key="alerts"))
+        limit = parse_int_query(query, "limit", 100, 1, 250)
+        return json_response(build_alerts_payload(limit=limit))
     if path == "/api/catalyst-cards":
         return json_response(summarize_list_payload("catalyst_cards", read_json(CATALYST_CARDS_FILE, {"cards": []}), key="cards"))
     if path == "/api/social":

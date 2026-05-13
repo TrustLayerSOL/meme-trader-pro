@@ -65,7 +65,7 @@ Why this matters:
 
 ## Next Actions
 
-1. Add or repair canonical read paths so trades, wallet stats, alerts, and decisions do not disagree across JSON and SQLite panels.
+1. Continue canonical read-path cleanup for trades, wallet stats, and decision-linked paper outcomes.
 2. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
 3. Expand Decision Ledger drilldowns again when raw route/pool attribution and holder-cluster payloads are available.
 4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
@@ -73,6 +73,31 @@ Why this matters:
 6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-12 - Canonical Alerts Read Path
+
+Changed files:
+
+- `desktop_api.py`
+- `tests/test_desktop_api.py`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- `/api/alerts` now prefers durable SQLite `alerts` rows.
+- The route falls back to root `live_state.json` alerts only when SQLite has no alert rows or is unavailable.
+- SQLite alert rows expose the canonical alert columns plus parsed payload JSON.
+- The data source map now documents the canonical/fallback behavior.
+
+Verification:
+
+- Added failing route tests first for SQLite-preferred alerts and live-state fallback.
+- Focused alert route tests passed.
+
+Remaining:
+
+- Continue canonical read-path cleanup for trades, wallet stats, and decision-linked paper outcomes.
 
 ### 2026-05-12 - Decision Ledger Drilldowns
 
