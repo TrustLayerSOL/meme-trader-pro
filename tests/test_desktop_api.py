@@ -479,6 +479,69 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["items"][0]["mint"], "MintLive")
 
+    def test_trades_route_prefers_sqlite_trades_over_json_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.upsert_trade({
+                "mint": "MintOpen",
+                "status": "open",
+                "entry_time": 123,
+                "entry_reason": "paper_opened",
+                "wallets": ["Wallet111"],
+            })
+            store.upsert_trade({
+                "mint": "MintClosed",
+                "status": "closed",
+                "entry_time": 100,
+                "close_time": 140,
+                "total_pnl": 42.5,
+                "total_pnl_pct": 170,
+            })
+            store.upsert_trade({
+                "mint": "MintFailed",
+                "status": "failed",
+                "entry_time": 150,
+                "failure_reason": "quote_failed",
+            })
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                with mock.patch.object(desktop_api, "read_json", return_value={
+                    "open_trades": [{"mint": "JsonOpen"}],
+                    "closed_trades": [],
+                    "failed_trades": [],
+                }):
+                    status, content_type, body = desktop_api.route_request("GET", "/api/trades")
+
+        payload = json.loads(body)
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertEqual(payload["source"], "sqlite_trades")
+        self.assertEqual(payload["open_trades"][0]["mint"], "MintOpen")
+        self.assertEqual(payload["open_trades"][0]["wallets"], ["Wallet111"])
+        self.assertEqual(payload["closed_trades"][0]["mint"], "MintClosed")
+        self.assertEqual(payload["closed_trades"][0]["total_pnl"], 42.5)
+        self.assertEqual(payload["failed_trades"][0]["mint"], "MintFailed")
+        self.assertEqual(payload["failed_trades"][0]["failure_reason"], "quote_failed")
+
+    def test_trades_route_falls_back_to_json_when_sqlite_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            EventStore(db_path)
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                with mock.patch.object(desktop_api, "read_json", return_value={
+                    "open_trades": [{"mint": "JsonOpen"}],
+                    "closed_trades": [{"mint": "JsonClosed"}],
+                    "failed_trades": [{"mint": "JsonFailed"}],
+                }):
+                    payload = desktop_api.build_trades_payload()
+
+        self.assertEqual(payload["source"], "paper_trades_json")
+        self.assertEqual(payload["open_trades"][0]["mint"], "JsonOpen")
+        self.assertEqual(payload["closed_trades"][0]["mint"], "JsonClosed")
+        self.assertEqual(payload["failed_trades"][0]["mint"], "JsonFailed")
+
     def test_cors_only_allows_local_desktop_origins(self):
         self.assertIsNone(desktop_api.allowed_cors_origin("http://127.0.0.1:5173"))
         self.assertIsNone(desktop_api.allowed_cors_origin("http://localhost:8765"))

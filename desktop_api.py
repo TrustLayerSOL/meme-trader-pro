@@ -2227,14 +2227,80 @@ def build_logs_payload(limit=60):
 
 
 def build_trades_payload():
+    sqlite_trades = fetch_trade_rows(limit=500)
+    if sqlite_trades:
+        grouped = group_trade_rows(sqlite_trades)
+        return {
+            "generated_at": time.time(),
+            "source": "sqlite_trades",
+            "live_execution_locked": True,
+            **grouped,
+        }
     data = read_json(PAPER_TRADES_FILE, {"open_trades": [], "closed_trades": [], "failed_trades": []})
     return {
         "generated_at": time.time(),
+        "source": "paper_trades_json",
         "live_execution_locked": True,
         "open_trades": data.get("open_trades", []) if isinstance(data, dict) else [],
         "closed_trades": data.get("closed_trades", []) if isinstance(data, dict) else [],
         "failed_trades": data.get("failed_trades", []) if isinstance(data, dict) else [],
     }
+
+
+def fetch_trade_rows(limit=500):
+    if not DB_FILE.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT mint, status, entry_time, close_time, pnl, pnl_pct, reason, payload_json
+            FROM trades
+            ORDER BY COALESCE(close_time, entry_time, 0) DESC, id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    trades = []
+    for row in rows:
+        payload = parse_payload_json(row["payload_json"])
+        if not isinstance(payload, dict):
+            payload = {}
+        trade = {
+            **payload,
+            "mint": payload.get("mint") or payload.get("token_mint") or row["mint"],
+            "token_mint": payload.get("token_mint") or payload.get("mint") or row["mint"],
+            "status": payload.get("status") or row["status"],
+            "entry_time": payload.get("entry_time") or row["entry_time"],
+            "close_time": payload.get("close_time") or row["close_time"],
+            "total_pnl": payload.get("total_pnl", payload.get("pnl", row["pnl"])),
+            "total_pnl_pct": payload.get("total_pnl_pct", payload.get("pnl_pct", row["pnl_pct"])),
+            "reason": payload.get("reason") or payload.get("entry_reason") or row["reason"],
+        }
+        trades.append(trade)
+    return trades
+
+
+def group_trade_rows(rows):
+    grouped = {"open_trades": [], "closed_trades": [], "failed_trades": []}
+    for trade in rows:
+        status = str(trade.get("status") or "").lower()
+        if status == "closed":
+            grouped["closed_trades"].append(trade)
+        elif status in ("failed", "error", "rejected"):
+            grouped["failed_trades"].append(trade)
+        else:
+            grouped["open_trades"].append(trade)
+    return grouped
 
 
 def json_response(payload, status=HTTPStatus.OK):

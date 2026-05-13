@@ -65,7 +65,7 @@ Why this matters:
 
 ## Next Actions
 
-1. Continue canonical read-path cleanup for trades, wallet stats, and decision-linked paper outcomes.
+1. Continue canonical read-path cleanup for wallet stats and decision-linked paper outcomes.
 2. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
 3. Expand Decision Ledger drilldowns again when raw route/pool attribution and holder-cluster payloads are available.
 4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
@@ -73,6 +73,31 @@ Why this matters:
 6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-12 - Canonical Trades Read Path
+
+Changed files:
+
+- `desktop_api.py`
+- `tests/test_desktop_api.py`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- `/api/trades` now prefers durable SQLite `trades` rows.
+- The route preserves the existing GUI response shape: `open_trades`, `closed_trades`, and `failed_trades`.
+- SQLite trade payload JSON is merged with canonical trade columns so UI detail fields such as wallets, failure reason, PnL, entry time, and close time remain available.
+- The route falls back to `data/paper_trades.json` when SQLite has no trade rows or is unavailable.
+
+Verification:
+
+- Added failing route tests first for SQLite-preferred trades and JSON fallback.
+- Focused trade route tests passed.
+
+Remaining:
+
+- Continue canonical read-path cleanup for wallet stats and decision-linked paper outcomes.
 
 ### 2026-05-12 - Canonical Alerts Read Path
 
