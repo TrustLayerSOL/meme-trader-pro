@@ -65,14 +65,44 @@ Why this matters:
 
 ## Next Actions
 
-1. Add richer Decision Ledger drill-downs for quote snapshots, route feasibility, holder/risk checks, and eventual paper outcome.
-2. Add or repair canonical read paths so trades, wallet stats, alerts, and decisions do not disagree across JSON and SQLite panels.
-3. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
+1. Add or repair canonical read paths so trades, wallet stats, alerts, and decisions do not disagree across JSON and SQLite panels.
+2. Wire holder concentration and linked-cluster risk into live candidate/decision snapshots.
+3. Expand Decision Ledger drilldowns again when raw route/pool attribution and holder-cluster payloads are available.
 4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
 5. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
 6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-12 - Decision Ledger Drilldowns
+
+Changed files:
+
+- `apps/desktop/src/components/DecisionLedger.tsx`
+- `apps/desktop/src/lib/decisions.ts`
+- `apps/desktop/src/lib/decisions.test.ts`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added deterministic formatting helpers for richer decision detail.
+- Replay selected-decision detail now surfaces market context, paper outcome, buy/sell quote detail, route/impact when present, token-mechanics detail, holder-concentration detail, risk warnings, wallets, social notes, and score notes.
+- Kept the feature read-only and limited to existing `/api/decisions` payload/result data.
+
+Verification:
+
+- Added failing helper tests first, then implemented the helpers and UI wiring.
+- `npm test -- src/lib/decisions.test.ts` passed 4 tests.
+- `npm run check` passed.
+- `npm test` passed 36 desktop tests.
+- `npm run build:web` passed.
+- Static desktop JavaScript syntax/chart checks passed.
+- `trading_env/bin/python -m py_compile desktop_api.py core/storage.py` passed.
+
+Remaining:
+
+- Add raw route/pool attribution and holder linked-cluster payloads into decision records before expanding the drilldown further.
 
 ### 2026-05-12 - Native Replay Decision Ledger
 

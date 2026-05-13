@@ -17,6 +17,10 @@ export type DecisionRecord = {
   buy_quote_pass?: boolean | null;
   sell_quote_pass?: boolean | null;
   wallet_count?: number | string | null;
+  trade_status?: string | null;
+  pnl?: number | string | null;
+  pnl_pct?: number | string | null;
+  result?: Record<string, unknown> | null;
   paper_result?: Record<string, unknown> | null;
   payload?: {
     inputs?: {
@@ -26,12 +30,21 @@ export type DecisionRecord = {
         matched?: boolean;
         reason?: string | null;
       };
+      market_info?: Record<string, unknown> | null;
+      token_inspection?: {
+        risk_label?: string | null;
+        reasons?: string[];
+      } | null;
     };
     rule_outcomes?: {
       risk?: {
         hard_block?: boolean;
         hard_block_reason?: string | null;
         warnings?: string[];
+        holder_concentration?: {
+          risk_label?: string | null;
+          metrics?: Record<string, unknown> | null;
+        } | null;
       };
       scoring?: {
         reasons?: string[];
@@ -111,4 +124,92 @@ export function decisionScoreNotes(decision: DecisionRecord): string {
 export function decisionQuoteReason(decision: DecisionRecord, side: "buy" | "sell"): string {
   const quote = decision.payload?.quotes?.[side];
   return quote?.reason || String(side === "buy" ? decision.buy_quote_pass ?? "-" : decision.sell_quote_pass ?? "-");
+}
+
+function asNumber(value: unknown): number | null {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function compactMoney(value: unknown): string | null {
+  const numberValue = asNumber(value);
+  if (numberValue === null) return null;
+  const abs = Math.abs(numberValue);
+  if (abs >= 1_000_000) return `$${(numberValue / 1_000_000).toFixed(abs >= 10_000_000 ? 1 : 2).replace(/\.0+$/, "")}M`;
+  if (abs >= 1_000) return `$${(numberValue / 1_000).toFixed(abs >= 100_000 ? 0 : 1).replace(/\.0+$/, "")}K`;
+  return `$${numberValue.toFixed(abs >= 100 ? 0 : 2)}`;
+}
+
+function percent(value: unknown): string | null {
+  const numberValue = asNumber(value);
+  return numberValue === null ? null : `${Number(numberValue.toFixed(2))}%`;
+}
+
+function firstKnown(source: Record<string, unknown> | null | undefined, keys: string[]): unknown {
+  if (!source) return null;
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
+}
+
+export function decisionQuoteDetail(decision: DecisionRecord, side: "buy" | "sell"): string {
+  const quote = decision.payload?.quotes?.[side];
+  const pass = side === "buy" ? decision.buy_quote_pass : decision.sell_quote_pass;
+  const impact = percent(quote?.price_impact_pct);
+  const parts = [
+    quote?.reason || String(pass ?? "-"),
+    quote?.route ? `route ${quote.route}` : "",
+    impact ? `impact ${impact}` : "",
+  ].filter(Boolean);
+  return parts.join(" | ") || "-";
+}
+
+export function decisionRiskDetail(decision: DecisionRecord): string {
+  const risk = decision.payload?.rule_outcomes?.risk;
+  const tokenInspection = decision.payload?.inputs?.token_inspection;
+  const holder = risk?.holder_concentration;
+  const holderMetrics = holder?.metrics || {};
+  const holderCount = firstKnown(holderMetrics, ["holder_count"]);
+  const topOnePct = percent(firstKnown(holderMetrics, ["top_1_pct"]));
+  const parts = [
+    tokenInspection?.risk_label ? `Token mechanics ${tokenInspection.risk_label}` : "",
+    (tokenInspection?.reasons || []).slice(0, 2).join("; "),
+    holder?.risk_label ? `Holder concentration ${holder.risk_label}` : "",
+    holderCount !== null ? `${holderCount} holders` : "",
+    topOnePct ? `top 1 ${topOnePct}` : "",
+    risk?.hard_block_reason ? `Hard block: ${risk.hard_block_reason}` : "",
+    (risk?.warnings || []).slice(0, 3).join("; "),
+  ].filter(Boolean);
+  return parts.join(" | ") || decisionRiskNotes(decision);
+}
+
+export function decisionMarketSummary(decision: DecisionRecord): string {
+  const market = decision.payload?.inputs?.market_info || {};
+  const marketCap = compactMoney(firstKnown(market, ["market_cap", "market_cap_usd", "mc"]));
+  const liquidity = compactMoney(firstKnown(market, ["liquidity", "liquidity_usd", "liq"]));
+  const holders = firstKnown(market, ["holders", "holder_count"]);
+  const txCount = firstKnown(market, ["tx_count", "transactions", "txs"]);
+  const parts = [
+    marketCap ? `MC ${marketCap}` : "",
+    liquidity ? `Liq ${liquidity}` : "",
+    holders !== null ? `Holders ${holders}` : "",
+    txCount !== null ? `Tx ${txCount}` : "",
+  ].filter(Boolean);
+  return parts.join(" | ") || "-";
+}
+
+export function decisionOutcomeSummary(decision: DecisionRecord): string {
+  const result = decision.result || decision.paper_result || {};
+  const status = decision.trade_status || String(result.trade_status || "-");
+  const pnlValue = compactMoney(decision.pnl ?? result.pnl);
+  const pnlPct = percent(decision.pnl_pct ?? result.pnl_pct);
+  const exitReason = result.exit_reason || result.failure_reason || decision.action_reason;
+  const parts = [
+    status,
+    pnlValue || pnlPct ? `PnL ${pnlValue || "-"} / ${pnlPct || "-"}` : "",
+    exitReason ? `exit ${exitReason}` : "",
+  ].filter(Boolean);
+  return parts.join(" | ") || "-";
 }

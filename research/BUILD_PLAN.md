@@ -50,7 +50,7 @@ The project already has the core shape of a local trading cockpit:
 
 Current strategic correction:
 
-- [~] The next leverage point is not more feature breadth. It is measurement: a canonical decision ledger that records every token candidate, why it passed/failed, whether it entered main or exploration paper mode, and what happened afterward. The first SQLite/API/static-GUI foundation exists, and the React/Tauri Replay tab now reads and filters the ledger.
+- [~] The next leverage point is not more feature breadth. It is measurement: a canonical decision ledger that records every token candidate, why it passed/failed, whether it entered main or exploration paper mode, and what happened afterward. The first SQLite/API/static-GUI foundation exists, and the React/Tauri Replay tab now reads, filters, and explains decision records with market, quote, risk, wallet, social, and paper-outcome drilldowns.
 - [ ] Live/rug protection must be split into fast pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection. The existing watchdog should not be treated as a sub-second rug-rescue system.
 
 ## Operating Principles
@@ -490,7 +490,7 @@ Next actions:
 - [~] Canonical decision ledger: every candidate gets one structured decision record.
 - [~] Scanner skip/main-entry/exploration-entry writes route through the ledger.
 - [~] Paper trade open/failed/exit records link back to `decision_id`.
-- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed. Static desktop Replay and React/Tauri Replay now have first-pass filters and selected-decision detail; richer drilldown remains.
+- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed. Static desktop Replay and React/Tauri Replay now have first-pass filters and selected-decision drilldowns for market context, quotes, route/impact when present, token mechanics, holder concentration, wallet/social notes, and paper outcome. Raw route/pool and linked-cluster drilldowns still need better upstream payloads.
 - [ ] Fast open-position monitor boundary separated from deep watchdog inspection.
 - [ ] Holder concentration / linked-cluster risk wired into candidate decision records.
 - [ ] Lane-separated paper reports from decision records: main vs exploration vs protected/manual.

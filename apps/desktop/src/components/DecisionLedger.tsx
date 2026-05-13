@@ -1,8 +1,12 @@
 import { useMemo, useState } from "react";
 import {
   decisionMatchesFilter,
+  decisionMarketSummary,
+  decisionOutcomeSummary,
+  decisionQuoteDetail,
   decisionQuotePair,
   decisionQuoteReason,
+  decisionRiskDetail,
   decisionRiskNotes,
   decisionScoreNotes,
   decisionSocialSummary,
@@ -132,11 +136,15 @@ function DecisionDetail({ decision }: { decision: DecisionRecord | null }) {
         <DecisionMetric label="Risk" value={decision.risk_label || "-"} />
         <DecisionMetric label="Buy Quote" value={decisionQuoteReason(decision, "buy")} />
         <DecisionMetric label="Sell Quote" value={decisionQuoteReason(decision, "sell")} />
+        <DecisionMetric label="Market" value={decisionMarketSummary(decision)} />
+        <DecisionMetric label="Outcome" value={decisionOutcomeSummary(decision)} />
       </div>
       <div className="trade-detail-notes">
         <DecisionNote label="Reason" value={decision.action_reason || "-"} />
+        <DecisionNote label="Quote Detail" value={`Buy: ${decisionQuoteDetail(decision, "buy")} | Sell: ${decisionQuoteDetail(decision, "sell")}`} />
         <DecisionNote label="Wallets" value={decisionWalletSummary(decision)} />
         <DecisionNote label="Social" value={decisionSocialSummary(decision)} />
+        <DecisionNote label="Risk Detail" value={decisionRiskDetail(decision)} />
         <DecisionNote label="Risk Notes" value={decisionRiskNotes(decision)} />
         <DecisionNote label="Score Notes" value={decisionScoreNotes(decision)} />
       </div>

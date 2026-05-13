@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { decisionMatchesFilter, decisionQuotePair, decisionWalletSummary, selectedDecisionForFilter, type DecisionRecord } from "./decisions";
+import {
+  decisionMarketSummary,
+  decisionMatchesFilter,
+  decisionOutcomeSummary,
+  decisionQuoteDetail,
+  decisionQuotePair,
+  decisionRiskDetail,
+  decisionWalletSummary,
+  selectedDecisionForFilter,
+  type DecisionRecord,
+} from "./decisions";
 
 const baseDecision: DecisionRecord = {
   decision_id: "dec_base",
@@ -68,5 +78,44 @@ describe("decision ledger helpers", () => {
 
     expect(decisionQuotePair(quoteFailed)).toBe("B-/S?");
     expect(decisionWalletSummary(baseDecision)).toBe("WalletA1...1111");
+  });
+
+  it("formats richer quote, risk, market, and outcome drilldowns", () => {
+    const richDecision: DecisionRecord = {
+      ...baseDecision,
+      position_size_usd: 25,
+      trade_status: "closed",
+      pnl: 42.5,
+      pnl_pct: 170,
+      result: { exit_reason: "trailing_stop" },
+      payload: {
+        ...baseDecision.payload,
+        inputs: {
+          ...baseDecision.payload?.inputs,
+          market_info: { market_cap: 153000, liquidity: 32700, holders: 656, tx_count: 1401 },
+          token_inspection: { risk_label: "PASS", reasons: ["No dangerous token mechanics detected"] },
+        },
+        rule_outcomes: {
+          ...baseDecision.payload?.rule_outcomes,
+          risk: {
+            hard_block: false,
+            warnings: ["Top holder controls at least 20%"],
+            holder_concentration: { risk_label: "WARNING", metrics: { holder_count: 44, top_1_pct: 21.2 } },
+          },
+        },
+        quotes: {
+          buy: { reason: "quote_ok", route: "Jupiter", price_impact_pct: 1.4 },
+          sell: { reason: "sell_quote_ok", route: "Jupiter", price_impact_pct: 1.8 },
+        },
+      },
+    };
+
+    expect(decisionQuoteDetail(richDecision, "buy")).toContain("quote_ok");
+    expect(decisionQuoteDetail(richDecision, "buy")).toContain("route Jupiter");
+    expect(decisionQuoteDetail(richDecision, "buy")).toContain("impact 1.4%");
+    expect(decisionRiskDetail(richDecision)).toContain("Token mechanics PASS");
+    expect(decisionRiskDetail(richDecision)).toContain("Holder concentration WARNING");
+    expect(decisionMarketSummary(richDecision)).toBe("MC $153K | Liq $32.7K | Holders 656 | Tx 1401");
+    expect(decisionOutcomeSummary(richDecision)).toBe("closed | PnL $42.50 / 170% | exit trailing_stop");
   });
 });
