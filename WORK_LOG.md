@@ -6,20 +6,21 @@ Last updated: 2026-05-14
 
 ## Current Work
 
-<mark>Active section: Phase 2 / Phase 7 - Canonical Decision Ledger plus paper-only co-main Market Radar Lane.</mark>
+<mark>Active section: Quant Wallet Tracker V1.</mark>
 
 Current implementation target:
 
-- Build the canonical decision ledger so every scanned candidate has one durable record of inputs, rule outcomes, final action, and later paper result.
-- Promote hot-market discovery to a co-main paper strategy so tokens trending on Dexscreener/Pump-style surfaces can be tested beside wallet-main, while keeping both lanes separately measurable.
+- Refocus the product around wallet discovery, wallet behavior measurement, paper-watch evidence, and promotion/demotion quality.
+- Freeze broad cockpit, chart, social, protection, Market Radar, AI explanation, marketing, and live-execution work unless it directly supports wallet evaluation.
+- Build a Wallet Quant Report so the operator can evaluate wallets by repeatable behavior instead of raw PnL or one-off trades.
 
-Lead-agent active plan for 2026-05-13:
+Lead-agent active plan for 2026-05-14:
 
-1. Keep live execution locked while paper lanes collect cleaner evidence.
-2. Exclude the single PENGUINZ outlier from strategy-readiness summaries until it is proven repeatable.
-3. Suppress repeat bad-sample exploration entries that are medium-risk, weak-score/weak-edge, or thin on liquidity/market cap.
-4. Keep wallet-main, Market Radar, exploration, and manual/protected results lane-separated.
-5. Continue using the decision ledger and Portfolio review as the main measurement surface.
+1. Keep live execution locked.
+2. Treat wallet tracking as the primary product and feedback loop.
+3. Treat runner discovery as wallet intake, not as a separate strategy center.
+4. Define wallet metrics, tiers, and recommendation reasons.
+5. Build `data/wallet_quant_report.json` and then expose it in the API/UI.
 
 Safety carryover:
 
@@ -31,10 +32,34 @@ Safety carryover:
 
 Highest-value active workstreams:
 
-- Canonical decision ledger and lane-separated paper metrics.
-- Paper-trade sample quality: block obvious bad exploration samples instead of collecting more polluted tiny losses.
-- Wallet supply refresh: use local runners and Dexscreener trending/boosted mints to seed a larger paper-watch wallet universe, then promote/demote by paper evidence.
-- Automated social/catalyst ingestion that feeds the decision ledger instead of manual-only imports.
+- Wallet Quant Report V1.
+- Wallet tiering: candidate, paper-watch, promotion-review, trusted, demotion-review, blocked.
+- Wallet metrics: early entry, runner capture, drawdown after entry, hold time, round-trip rate, rug exposure, dead-token rate, sample quality, recency decay.
+- Wallet supply refresh from runners and paper-watch evidence.
+- Clean wallet-evaluation UI/reporting.
+
+2026-05-14 update - Quant Wallet Tracker refocus:
+
+Changed files:
+
+- `docs/superpowers/specs/2026-05-14-wallet-quant-tracker-design.md`
+- `docs/superpowers/plans/2026-05-14-wallet-quant-tracker.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Accepted the strategic refocus: MemeTraderPro is now centered on Quant Wallet Tracking, not a broad meme trading cockpit.
+- Defined the strongest feedback loop as wallet discovery -> observation -> paper-watch evidence -> wallet scoring -> promotion/demotion.
+- Frozen lanes for the next iteration: chart polish, broad GUI work, social/catalyst automation, AI explanations, Market Radar as a separate strategy, manual protection expansion, marketing assets, and live execution wiring.
+- Created a design spec and implementation plan for Wallet Quant Tracker V1.
+- Added `data/wallet_quant_report.json` as the next target wallet-evaluation artifact in the data source map.
+
+Next step:
+
+- Implement Wallet Quant Report V1: metric aggregation, tier recommendation, report builder, API endpoint, and wallet-first UI/report surface.
 
 2026-05-14 update - File integrity and GitHub audit after external upgrade:
 

@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-12
+Last updated: 2026-05-14
 
 ## Legend
 
@@ -10,15 +10,50 @@ Last updated: 2026-05-12
 
 ## Current Working Section
 
-<mark>Active roadmap area: Phase 2 / Phase 7 - Canonical Decision Ledger and measurable paper edge.</mark>
+<mark>Active roadmap area: Quant Wallet Tracker V1.</mark>
 
-<mark>Current focus: Make the decision ledger the product backbone: every candidate should have one structured record covering signal inputs, risk/quote checks, final action, and later paper outcome. GUI work should expose this clearly instead of adding more disconnected panels.</mark>
+<mark>Current focus: Build a private wallet intelligence system that discovers wallets from runners, tracks repeat behavior, creates paper-watch evidence, promotes useful wallets, demotes noisy wallets, and gives the operator clean data-evaluation views.</mark>
 
 ## Product Goal
 
-Turn this repo into a competitive local Solana meme trading workstation focused on safer decision-making, confirmation-mode paper trading, wallet intelligence, token risk/mechanics inspection, manual protection/watchdog flows, gated live execution, and a polished local GUI.
+Turn this repo into a competitive local Solana meme wallet intelligence system focused on discovering, measuring, ranking, promoting, and demoting wallets from repeatable evidence.
 
-The strategic lane is confirmation trading, not 3-second launch sniping. MemeTraderPro should help the operator understand what it would do, why, and how those decisions perform before any live SOL is at risk.
+The strategic lane is quant wallet tracking, not a broad trading cockpit. MemeTraderPro should help the operator understand which wallets are worth following, which wallets are noise, and which wallet behaviors actually repeat.
+
+## Quant Wallet Tracker Refocus
+
+The project has intentionally narrowed. The wallet tracking system is now the product center because it is the cleanest feedback loop:
+
+- wallets are repeat actors,
+- wallet behavior can be measured across many tokens,
+- paper-watch outcomes can be tied back to specific wallets,
+- promotion/demotion can be evidence-based,
+- poor wallets can be removed without changing strategy logic.
+
+Primary next iteration:
+
+1. Define canonical wallet metrics.
+2. Build `data/wallet_quant_report.json`.
+3. Add a wallet quant endpoint and operator view.
+4. Use runner-token discovery only as wallet intake.
+5. Freeze unrelated lanes until wallet edge is measured.
+
+PnL is useful but not the main proof yet. The first proof is a clean data loop: discovery -> observation -> outcome -> score -> tier change.
+
+## Frozen Until Wallet Edge Is Measured
+
+These lanes should receive no new feature work unless they directly support wallet evaluation:
+
+- chart polish and Axiom-style visual work,
+- broad GUI expansion,
+- social/catalyst automation,
+- AI decision explanations,
+- Market Radar as a separate co-main strategy,
+- manual protected-token workflow expansion,
+- marketing assets,
+- live execution wiring.
+
+Existing code can remain in place while the project refocuses. Do not delete useful data paths until wallet quant reports and source maps replace them.
 
 ## Current Status
 
@@ -50,14 +85,16 @@ The project already has the core shape of a local trading cockpit:
 
 Current strategic correction:
 
-- [~] The next leverage point is not more feature breadth. It is measurement: a canonical decision ledger that records every token candidate, why it passed/failed, whether it entered main or exploration paper mode, and what happened afterward. The first SQLite/API/static-GUI foundation exists, and the React/Tauri Replay tab now reads, filters, and explains decision records with market, quote, risk, wallet, social, and paper-outcome drilldowns.
-- [ ] Live/rug protection must be split into fast pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection. The existing watchdog should not be treated as a sub-second rug-rescue system.
+- [~] The next leverage point is wallet measurement, not more feature breadth. The decision ledger remains useful only where it connects wallet signals to outcomes.
+- [ ] Live/rug protection, charting, and broad GUI work are frozen unless they directly improve wallet-quality measurement.
 
 ## Operating Principles
 
 - Paper mode first. Live execution is gated and earned through observed performance.
 - Local-first memory. Alerts, tokens, wallets, paper trades, skipped candidates, protected positions, and postmortems should persist.
 - Explain every action. The user should see why a token passed, failed, entered paper mode, exited, or triggered protection.
+- Wallet evidence first. A wallet is promoted or demoted by repeatable behavior, not reputation or one lucky trade.
+- Runner discovery is an intake source for wallets, not a separate strategy center.
 - Favor exits and risk control over raw entry speed.
 - Do not trust stale state. Runtime health and data freshness must be visible.
 - Treat Token-2022 mechanics and authority controls as pre-entry risk inputs, not afterthoughts.
@@ -487,18 +524,16 @@ Next actions:
 
 ## Near-Term Priority Stack
 
-- [~] Canonical decision ledger: every candidate gets one structured decision record.
-- [~] Scanner skip/main-entry/exploration-entry writes route through the ledger.
-- [~] Paper trade open/failed/exit records link back to `decision_id`.
-- [~] Decision ledger GUI/API view with filters for bought, skipped, exploration, hard-risk blocked, quote failed, wallet-only, social-confirmed. Static desktop Replay and React/Tauri Replay now have first-pass filters and selected-decision drilldowns for market context, quotes, route/impact when present, token mechanics, holder concentration, wallet/social notes, and paper outcome. Raw route/pool and linked-cluster drilldowns still need better upstream payloads.
-- [ ] Fast open-position monitor boundary separated from deep watchdog inspection.
-- [ ] Holder concentration / linked-cluster risk wired into candidate decision records.
-- [ ] Lane-separated paper reports from decision records: main vs exploration vs protected/manual.
-- [ ] Live-readiness thresholds defined from decision-ledger metrics.
-- [ ] GUI cleanup continues only where it exposes canonical state clearly.
+- [ ] Wallet Quant Report V1: one generated artifact with wallet tier, sample size, behavior metrics, paper-watch evidence, recommendation, and reasons.
+- [ ] Wallet Quant API endpoint for read-only review.
+- [ ] Wallet UI/report cleanup: show funnel, rankings, promotion queue, demotion queue, and wallet detail.
+- [ ] Runner-based wallet intake hardening: use local runners, Dexscreener runners, paper winners, and skipped-later-ran tokens to discover wallets.
+- [ ] Wallet metric definitions: early entry, runner capture, drawdown after entry, hold time, round-trip rate, rug exposure, dead-token rate, sample quality, recency decay.
+- [ ] Wallet tier history: candidate, paper-watch, promotion-review, trusted, demotion-review, blocked.
+- [ ] Freeze or hide non-wallet GUI lanes so the operator is not distracted by cockpit noise.
+- [~] Decision ledger remains useful only for wallet-signal lineage and outcome attribution.
 - [x] Runtime health and per-source freshness indicators.
-- [x] Quote-feasibility metadata for prepared protection exits.
-- [x] Native protected-position exit readiness checklist distinguishes wallet-owned, manual, simulated/test, quote-feasible, and locked live-action states.
+- [x] Existing wallet discovery, paper-watch, lifecycle review, guarded apply, and behavior rollups.
 
 ## Change Log
 

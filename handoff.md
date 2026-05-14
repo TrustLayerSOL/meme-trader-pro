@@ -12,9 +12,10 @@ Use this repo as the real working copy:
 
 ## Most Recent User Direction
 
-- Check file/repo integrity after external upgrade work.
-- Determine why the GitHub upload looked messy.
-- Verify GitHub state and repair local issues where appropriate.
+- Refocus the project into a Quant Wallet Tracker.
+- Cut out broad trading-cockpit noise: charts, GUI polish, social/catalyst automation, manual protection expansion, Market Radar as its own strategy, AI explanations, marketing, and live execution work.
+- Keep a clean way to evaluate wallet data.
+- Define the right wallet data points and build the feedback loop before worrying about PnL.
 
 ## Current Status
 
@@ -25,6 +26,10 @@ Use this repo as the real working copy:
 - Runtime currently reports 518 tracked wallets, 5719 paper-watch wallets, and 6237 observed wallets.
 - Active Git branch is `phase6-protection-exits`, synced with `origin/phase6-protection-exits`.
 - GitHub default branch is `main`; `origin/main` has one newer README-only commit that local `main` does not have.
+- Product focus is now Quant Wallet Tracker V1.
+- `docs/superpowers/specs/2026-05-14-wallet-quant-tracker-design.md` defines the refocus.
+- `docs/superpowers/plans/2026-05-14-wallet-quant-tracker.md` is the implementation plan.
+- `research/BUILD_PLAN.md` now marks Quant Wallet Tracker V1 as the active roadmap.
 
 ## Performance Snapshot Excluding PENGUINZ
 
@@ -40,6 +45,35 @@ Use this repo as the real working copy:
 Interpretation: without PENGUINZ, the current paper data does not prove edge. The immediate priority is cleaner sample collection, not declaring profitability.
 
 ## Latest Change
+
+Refocused the product around Quant Wallet Tracking.
+
+Files changed:
+
+- `docs/superpowers/specs/2026-05-14-wallet-quant-tracker-design.md`
+- `docs/superpowers/plans/2026-05-14-wallet-quant-tracker.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+New operating stance:
+
+- Wallet behavior is the core measurable data loop.
+- Runner discovery is an intake source for wallets, not a separate strategy.
+- PnL remains useful but is not the primary proof until the wallet loop is clean.
+- Broad GUI/chart/social/protection/live-execution lanes are frozen unless directly needed for wallet evaluation.
+
+Next implementation target:
+
+1. Create `core/wallet_quant.py`.
+2. Create `utils/build_wallet_quant_report.py`.
+3. Create `tests/test_wallet_quant.py`.
+4. Generate `data/wallet_quant_report.json`.
+5. Add a read-only `/api/wallet-quant` endpoint.
+6. Simplify the GUI/reporting surface around wallet funnel, rankings, promotion queue, demotion queue, and wallet detail.
+
+## Previous Change
 
 Completed file-integrity and GitHub audit after external upgrade work.
 
