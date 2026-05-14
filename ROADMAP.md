@@ -69,9 +69,11 @@ The wallet outcome ledger now also backfills wallet-performance signal observati
 
 Signal observations can now be linked to later token snapshots inside a bounded evaluation window. The linked outcome stays separated under `later_token_outcome`; decision fields remain signal-time only.
 
+Snapshot-linked promotion/demotion candidates now flow into `data/wallet_candidate_audit.json`, a review-only audit report that explicitly blocks wallet-list apply.
+
 ## Next Milestone
 
-Audit snapshot-linked promotion/demotion candidates and decide what minimum evidence should be required before wallet-list actions can consume them.
+Add an explicit human review/export workflow for wallet audit candidates before any wallet-list action consumes them.
 
 That ledger should measure:
 

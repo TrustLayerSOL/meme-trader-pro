@@ -20,6 +20,36 @@ Next action:
 
 ## Entries
 
+### 2026-05-14 - Wallet Candidate Audit Report
+
+Date: 2026-05-14
+
+Hypothesis: Snapshot-linked promotion/demotion candidates should be audited in a separate review-only artifact before any wallet-list action can consume them.
+
+Files changed:
+
+- `wallets/wallet_candidate_audit.py`
+- `utils/build_wallet_candidate_audit.py`
+- `tests/test_wallet_candidate_audit.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Data used: Current local `data/wallet_outcome_ledger.json` and `data/wallet_baseline_comparison.json`.
+
+Sample size: Current audit report has `14` candidates: `1` promotion-review and `13` demotion-review.
+
+Baseline result: Promotion/demotion candidates were visible in the outcome ledger, but there was no separate audit packet that blocked wallet-list apply.
+
+New result: `data/wallet_candidate_audit.json` now summarizes each candidate's sample gate, known outcomes, source coverage, runner/rug/dead counts, average PnL, confidence, recommendation reasons, and baseline comparison status.
+
+Conclusion: Review candidates are now easier to inspect and remain explicitly disconnected from wallet-list apply. All current candidates are marked `HUMAN_REVIEW_REQUIRED`; none are auto-applied.
+
+Next action: Add a human-readable export/review workflow for these candidates before any wallet-list action consumes them.
+
 ### 2026-05-14 - Snapshot-Linked Signal Outcomes
 
 Date: 2026-05-14

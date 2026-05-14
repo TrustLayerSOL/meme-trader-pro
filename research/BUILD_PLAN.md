@@ -176,6 +176,7 @@ Deliverables:
 - [~] Unified signal outcome schema for accepted trades, failed trades, rejected signals, skipped signals, and future replay evaluations. `research/signal_schema.py` creates comparable records but runtime persistence is not wired yet.
 - [~] Wallet-outcome ledger. `wallets/wallet_outcome_ledger.py` and `utils/build_wallet_outcome_ledger.py` generate a review-only JSON ledger from current paper trades, rejection rows, and wallet-performance signal observations. `research/outcome_labeler.py` now classifies later outcomes, `research/outcome_linker.py` links signal observations to later token snapshots inside an evaluation window, and `wallets/wallet_promotion_engine.py` owns review-only promotion/demotion recommendations. Runtime persistence still needs hardening.
 - [~] Wallet baseline comparison. `wallets/wallet_baseline_comparison.py` and `utils/build_wallet_baseline_comparison.py` compare `data/wallet_quant_report.json` against `data/wallet_outcome_ledger.json` and identify agreement, conflict, unconfirmed quant signals, quant-only wallets, and ledger-only wallets. Coverage improved from `28` to `251` ledger wallets; known outcome labels now exist for `1,617` wallet signal/trade observations from local snapshot evidence.
+- [~] Wallet candidate audit. `wallets/wallet_candidate_audit.py` and `utils/build_wallet_candidate_audit.py` generate `data/wallet_candidate_audit.json` for snapshot-linked promotion/demotion candidates. Current report has `14` candidates: `1` promotion-review and `13` demotion-review. It is review-only and blocks wallet-list apply.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -191,7 +192,7 @@ Next actions:
 - Continue wiring `core/decision_ledger.py` and SQLite-backed decision records before adding more disconnected GUI panels.
 - Harden scanner skips, main paper entries, exploration entries, failed buys, exits, and postmortems around `decision_id`.
 - Persist unified signal outcome records for accepted paper trades and rejected signals into a review-only ledger.
-- Audit snapshot-linked promotion/demotion candidates before allowing any wallet-list action to consume them.
+- Add explicit human review/export workflow for wallet audit candidates before any wallet-list action consumes them.
 - Choose the canonical source of truth for each data class.
 - Define minimum SQLite tables and backfill existing JSON.
 

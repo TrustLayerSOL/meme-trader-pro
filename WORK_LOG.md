@@ -43,6 +43,37 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-14 update - Wallet Candidate Audit Report:
+
+Changed files:
+
+- `wallets/wallet_candidate_audit.py`
+- `utils/build_wallet_candidate_audit.py`
+- `tests/test_wallet_candidate_audit.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added a review-only audit report for snapshot-linked promotion/demotion candidates.
+- The report summarizes sample gates, source coverage, known outcomes, runner/rug/dead counts, average PnL, confidence, recommendation reasons, and baseline comparison status.
+- Generated `data/wallet_candidate_audit.json`.
+- Current audit counts: `14` candidates, `1` promotion-review, `13` demotion-review, `14` human-review-required, `0` insufficient-evidence.
+- Wallet-list apply is explicitly blocked in the report.
+
+Verification:
+
+- Added failing tests before implementation for candidate inclusion, apply blocking, comparison status, and thin-sample audit status.
+- Focused tests passed: `./trading_env/bin/python -m unittest tests.test_wallet_candidate_audit`.
+
+Remaining risk / next step:
+
+- This is an audit artifact only. Next step is a human-readable export/review workflow so the operator can inspect candidates before any list mutation is allowed.
+
 2026-05-14 update - Snapshot-Linked Signal Outcomes:
 
 Changed files:
