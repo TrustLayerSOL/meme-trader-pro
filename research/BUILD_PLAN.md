@@ -32,14 +32,16 @@ The project has intentionally narrowed. The wallet tracking system is now the pr
 
 Primary next iteration:
 
-1. Define canonical wallet metrics.
-2. Build `data/wallet_quant_report.json`.
-3. Add a wallet quant endpoint and operator view.
-4. Use runner-token discovery only as wallet intake.
-5. Freeze unrelated lanes until wallet edge is measured.
-6. Store replayable signal contexts for triggered and rejected signals.
-7. Build no-trade/rejection reports that show whether filters protect the system or block winners.
-8. Tag market regime so wallet performance can be compared across dead, runner-heavy, rug-heavy, and volatile periods.
+1. Govern research changes with `RESEARCH_RULES.md`, `SIGNAL_REGISTRY.md`, and `EXPERIMENT_LOG.md`.
+2. Unify accepted-trade and rejected-signal records around one outcome schema.
+3. Define canonical wallet metrics.
+4. Build `data/wallet_quant_report.json`.
+5. Add a wallet quant endpoint and operator view.
+6. Use runner-token discovery only as wallet intake.
+7. Freeze unrelated lanes until wallet edge is measured.
+8. Store replayable signal contexts for triggered and rejected signals.
+9. Build no-trade/rejection reports that show whether filters protect the system or block winners.
+10. Tag market regime so wallet performance can be compared across dead, runner-heavy, rug-heavy, and volatile periods.
 
 PnL is useful but not the main proof yet. The first proof is a clean data loop: discovery -> observation -> outcome -> score -> tier change.
 
@@ -111,6 +113,10 @@ Deliverables:
 - [x] `research/` folder for state, strategy, product, and token-risk notes.
 - [x] Living project state note.
 - [x] Living build plan.
+- [x] Root roadmap for Quant Wallet Tracker V2 governance.
+- [x] Research rules for signal/filter/replay promotion.
+- [x] Signal registry with decision-time safety notes.
+- [x] Experiment log template and first schema experiment entry.
 - [x] Add a lightweight "where data lives" reference that maps each UI panel to its source files/tables.
 - [x] Add a "safe editing zones" note for future builders.
 
@@ -166,6 +172,7 @@ Deliverables:
 - [x] Open paper trades dedupe by active mint during locked state merges to reduce duplicate bot-instance opens.
 - [~] Canonical decision ledger schema for every candidate: detected token, wallet/social inputs, token/holder/mechanics risk, quote/liquidity checks, rule outcomes, final action, and later paper/live-safe result.
 - [~] Canonical signal context schema for wallet-triggered candidates and no-trade rows. `core/signal_context.py` now builds review-only V2 contexts for scanner/Market Radar skip paths; successful paper entries still need the same schema wired end-to-end.
+- [~] Unified signal outcome schema for accepted trades, failed trades, rejected signals, skipped signals, and future replay evaluations. `research/signal_schema.py` creates comparable records but runtime persistence is not wired yet.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -180,6 +187,7 @@ Next actions:
 
 - Continue wiring `core/decision_ledger.py` and SQLite-backed decision records before adding more disconnected GUI panels.
 - Harden scanner skips, main paper entries, exploration entries, failed buys, exits, and postmortems around `decision_id`.
+- Persist unified signal outcome records for accepted paper trades and rejected signals into a review-only ledger.
 - Choose the canonical source of truth for each data class.
 - Define minimum SQLite tables and backfill existing JSON.
 
@@ -264,6 +272,7 @@ Acceptance criteria:
 Next actions:
 
 - Wire `core.signal_context.build_signal_context` into successful paper entries and closed paper outcomes.
+- Use `research.signal_schema.build_signal_outcome_record` as the comparable accepted/rejected record adapter.
 - Build a wallet-outcome table or JSONL ledger that links wallet -> signal context -> paper entry/skip -> later token outcome.
 - Use no-trade rows to find filters that protect the system versus filters that reject later winners.
 - Add dev-adjacent behavior attribution only after the data source is reliable enough to avoid false blame.

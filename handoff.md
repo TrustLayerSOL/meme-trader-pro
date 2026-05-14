@@ -46,6 +46,44 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
+Added research governance and the first unified signal outcome schema layer.
+
+Files changed:
+
+- `ROADMAP.md`
+- `RESEARCH_RULES.md`
+- `SIGNAL_REGISTRY.md`
+- `EXPERIMENT_LOG.md`
+- `research/__init__.py`
+- `research/signal_schema.py`
+- `tests/test_research_signal_schema.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Behavior:
+
+- Research changes now have root docs for roadmap, rules, signal registry, and experiment logging.
+- New signals/filters/scores/replay features require hypothesis, decision-time safety, measurable source, baseline comparison, and experiment tracking.
+- `research.signal_schema` can normalize accepted paper trades and rejected signals into one comparable record shape:
+
+```text
+wallet(s) -> signal context -> trade/skip decision -> later token outcome
+```
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_research_signal_schema` passed 3 tests.
+
+Next implementation target:
+
+1. Build `wallets/wallet_outcome_ledger.py`.
+2. Backfill unified outcome records from rejected signals and paper trades.
+3. Aggregate by wallet into review-only promotion, demotion, and confidence fields.
+
+## Previous Change
+
 Added Quant Wallet Tracker V2 context and replay foundation.
 
 Files changed:

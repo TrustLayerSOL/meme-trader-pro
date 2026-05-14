@@ -32,6 +32,8 @@ Safety carryover:
 
 Highest-value active workstreams:
 
+- Research governance for signals, filters, scores, replay, and experiments.
+- Unified signal outcome schema for accepted trades and rejected signals.
 - Wallet Quant Tracker V2 report/context layer.
 - Wallet tiering: candidate, paper-watch, promotion-review, trusted, demotion-review, blocked.
 - Wallet metrics: early entry, runner capture, drawdown after entry, hold time, round-trip rate, rug exposure, dead-token rate, sample quality, recency decay.
@@ -39,6 +41,44 @@ Highest-value active workstreams:
 - Replay visibility reports for rejected/no-trade decisions.
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
+
+2026-05-14 update - Research governance and unified signal outcome schema:
+
+Changed files:
+
+- `ROADMAP.md`
+- `RESEARCH_RULES.md`
+- `SIGNAL_REGISTRY.md`
+- `EXPERIMENT_LOG.md`
+- `research/__init__.py`
+- `research/signal_schema.py`
+- `tests/test_research_signal_schema.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added formal research governance docs so new signals, filters, wallet scores, and replay features require a hypothesis, decision-time safety, measurable source, baseline comparison, and experiment log entry.
+- Added a root roadmap that keeps the active phase centered on Quant Wallet Tracker V2 and freezes dashboards, live execution, social scraping, ML, and unrelated UI work.
+- Added a signal registry covering wallet ROI, win rate, hold duration, rug association, cluster timing, liquidity, market cap, token age, estimated slippage, concentration/risk flags, market regime, entry timing quality, rejection reason, and later token outcome.
+- Added an experiment log template and first entry for the unified signal outcome schema.
+- Added `research.signal_schema`, which creates one comparable record shape for accepted trades, failed trades, rejected signals, skipped signals, and future replay evaluations:
+
+```text
+wallet(s) -> signal context -> trade/skip decision -> later token outcome
+```
+
+Verification:
+
+- Added failing tests first for the missing unified schema layer.
+- `./trading_env/bin/python -m unittest tests.test_research_signal_schema` passed 3 tests.
+
+Remaining risk / next step:
+
+- The unified schema exists as a helper and adapters. Runtime accepted paper entries are not yet being persisted into a dedicated unified outcome ledger.
+- Next step is `wallets/wallet_outcome_ledger.py`: aggregate unified signal outcome records by wallet and produce review-only promotion/demotion confidence fields.
 
 2026-05-14 update - Quant Wallet Tracker V2 context and replay foundation:
 
