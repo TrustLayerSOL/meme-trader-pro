@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  decisionCatalystEvidenceSummary,
-  decisionHolderClusterSummary,
-  decisionMarketContextSummary,
-  decisionMarketRadarSummary,
+  decisionMarketSummary,
   decisionMatchesFilter,
-  decisionPaperOutcomeSummary,
+  decisionOutcomeSummary,
+  decisionQuoteDetail,
   decisionQuotePair,
-  decisionRouteFeasibilitySummary,
+  decisionRiskDetail,
   decisionWalletSummary,
   selectedDecisionForFilter,
   type DecisionRecord,
@@ -62,10 +60,21 @@ describe("decision ledger helpers", () => {
     expect(decisionMatchesFilter(hardRisk, "hard_risk")).toBe(true);
     expect(decisionMatchesFilter(social, "social")).toBe(true);
     expect(decisionMatchesFilter(baseDecision, "wallet")).toBe(true);
-    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "market_radar" }, "market_radar")).toBe(true);
-    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "market_radar" }, "co_main")).toBe(true);
-    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "main" }, "co_main")).toBe(true);
-    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "exploration" }, "co_main")).toBe(false);
+
+    const radarLane = { ...baseDecision, decision_id: "dec_radar_lane", paper_lane: "market_radar" as const };
+    const radarPayload = {
+      ...baseDecision,
+      decision_id: "dec_radar_payload",
+      paper_lane: "exploration",
+      payload: {
+        ...baseDecision.payload,
+        market_radar: { decision: { skip_reason: "thin" } },
+      },
+    };
+    expect(decisionMatchesFilter(radarLane, "co_main")).toBe(true);
+    expect(decisionMatchesFilter(radarLane, "market_radar")).toBe(true);
+    expect(decisionMatchesFilter(radarPayload, "market_radar")).toBe(true);
+    expect(decisionMatchesFilter(baseDecision, "market_radar")).toBe(false);
   });
 
   it("keeps selected decision valid when filters change", () => {
@@ -86,78 +95,42 @@ describe("decision ledger helpers", () => {
     expect(decisionWalletSummary(baseDecision)).toBe("WalletA1...1111");
   });
 
-  it("formats richer backend evidence for decision detail drilldowns", () => {
+  it("formats richer quote, risk, market, and outcome drilldowns", () => {
     const richDecision: DecisionRecord = {
       ...baseDecision,
+      position_size_usd: 25,
+      trade_status: "closed",
+      pnl: 42.5,
+      pnl_pct: 170,
+      result: { exit_reason: "trailing_stop" },
       payload: {
         ...baseDecision.payload,
         inputs: {
           ...baseDecision.payload?.inputs,
-          social_catalyst: {
-            matched: true,
-            account: "alpha",
-            keywords: ["launch"],
-            event_ids: ["social_1"],
-            catalyst_card_ids: ["card_1"],
-            match_confidence: 0.91,
-          },
-          market_context: {
-            risk_regime: "risk_off",
-            sol_price_change_pct: -3.2,
-            stablecoin: { usdc_depeg_warning: false },
-          },
+          market_info: { market_cap: 153000, liquidity: 32700, holders: 656, tx_count: 1401 },
+          token_inspection: { risk_label: "PASS", reasons: ["No dangerous token mechanics detected"] },
         },
         rule_outcomes: {
           ...baseDecision.payload?.rule_outcomes,
-          holder_cluster: {
-            holder_risk_label: "WARNING",
-            holder_count: 41,
-            top_10_pct: 72.2,
-            linked_wallet_risk: { risk_label: "WATCH" },
+          risk: {
+            hard_block: false,
+            warnings: ["Top holder controls at least 20%"],
+            holder_concentration: { risk_label: "WARNING", metrics: { holder_count: 44, top_1_pct: 21.2 } },
           },
         },
-        route_feasibility: {
-          buy: { pass: true, reason: "quote_passed", route_count: 2, price_impact_pct: 1.2, slippage_bps: 1500 },
-          sell: { pass: false, reason: "no_route_plan", route_count: 0, slippage_bps: 2000 },
-        },
-      },
-      result: {
-        trade_status: "closed",
-        pnl_pct: 74,
-        exit_reason: "target_profit",
-        paper_outcome: {
-          paper_lane: "exploration",
-          entry_price: 0.001,
-          exit_price: 0.0018,
-          position_size_usd: 25,
-          fees_usd: 0.18,
+        quotes: {
+          buy: { reason: "quote_ok", route: "Jupiter", price_impact_pct: 1.4 },
+          sell: { reason: "sell_quote_ok", route: "Jupiter", price_impact_pct: 1.8 },
         },
       },
     };
 
-    expect(decisionRouteFeasibilitySummary(richDecision)).toBe("Buy pass: quote_passed, routes 2, impact 1.2%, slip 1500bps | Sell blocked: no_route_plan, routes 0, slip 2000bps");
-    expect(decisionHolderClusterSummary(richDecision)).toBe("WARNING | holders 41 | top 10 72.2% | linked WATCH");
-    expect(decisionCatalystEvidenceSummary(richDecision)).toBe("matched | @alpha | keywords launch | 1 event | 1 card | confidence 0.91");
-    expect(decisionMarketContextSummary(richDecision)).toBe("risk_off | SOL -3.2% | stablecoin ok");
-    expect(decisionPaperOutcomeSummary(richDecision)).toBe("closed | exploration | PnL 74% | entry 0.001 | exit 0.0018 | size $25 | fees $0.18 | target_profit");
-  });
-
-  it("formats Market Radar skip and open reasons", () => {
-    const radarDecision: DecisionRecord = {
-      ...baseDecision,
-      paper_lane: "market_radar",
-      payload: {
-        ...baseDecision.payload,
-        market_radar: {
-          decision: {
-            skip_reason: "shared_quote_cooldown_after_429",
-            skip_bucket: "quote_or_route",
-            quote_retryable: true,
-          },
-        },
-      },
-    };
-
-    expect(decisionMarketRadarSummary(radarDecision)).toBe("skip shared_quote_cooldown_after_429 | quote_or_route | retry soon");
+    expect(decisionQuoteDetail(richDecision, "buy")).toContain("quote_ok");
+    expect(decisionQuoteDetail(richDecision, "buy")).toContain("route Jupiter");
+    expect(decisionQuoteDetail(richDecision, "buy")).toContain("impact 1.4%");
+    expect(decisionRiskDetail(richDecision)).toContain("Token mechanics PASS");
+    expect(decisionRiskDetail(richDecision)).toContain("Holder concentration WARNING");
+    expect(decisionMarketSummary(richDecision)).toBe("MC $153K | Liq $32.7K | Holders 656 | Tx 1401");
+    expect(decisionOutcomeSummary(richDecision)).toBe("closed | PnL $42.50 / 170% | exit trailing_stop");
   });
 });

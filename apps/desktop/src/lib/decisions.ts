@@ -1,6 +1,16 @@
 import { shortMint } from "./format";
 
-export type DecisionFilter = "all" | "bought" | "skipped" | "co_main" | "market_radar" | "exploration" | "quote_failed" | "hard_risk" | "social" | "wallet";
+export type DecisionFilter =
+  | "all"
+  | "bought"
+  | "skipped"
+  | "co_main"
+  | "market_radar"
+  | "exploration"
+  | "quote_failed"
+  | "hard_risk"
+  | "social"
+  | "wallet";
 
 export type DecisionRecord = {
   decision_id?: string;
@@ -17,11 +27,16 @@ export type DecisionRecord = {
   buy_quote_pass?: boolean | null;
   sell_quote_pass?: boolean | null;
   wallet_count?: number | string | null;
+  trade_status?: string | null;
+  pnl?: number | string | null;
+  pnl_pct?: number | string | null;
   paper_result?: Record<string, unknown> | null;
   result?: {
     trade_status?: string | null;
+    pnl?: number | string | null;
     pnl_pct?: number | string | null;
     exit_reason?: string | null;
+    failure_reason?: string | null;
     paper_outcome?: {
       paper_lane?: string | null;
       entry_price?: number | string | null;
@@ -52,12 +67,21 @@ export type DecisionRecord = {
         stablecoin_depeg_warning?: boolean | null;
         stablecoin?: Record<string, unknown> | null;
       } & Record<string, unknown>;
+      market_info?: Record<string, unknown> | null;
+      token_inspection?: {
+        risk_label?: string | null;
+        reasons?: string[];
+      } | null;
     };
     rule_outcomes?: {
       risk?: {
         hard_block?: boolean;
         hard_block_reason?: string | null;
         warnings?: string[];
+        holder_concentration?: {
+          risk_label?: string | null;
+          metrics?: Record<string, unknown> | null;
+        } | null;
       };
       holder_cluster?: {
         holder_risk_label?: string | null;
@@ -227,7 +251,8 @@ export function decisionCatalystEvidenceSummary(decision: DecisionRecord): strin
 export function decisionMarketContextSummary(decision: DecisionRecord): string {
   const context = decision.payload?.inputs?.market_context;
   if (!context) return "-";
-  const stablecoinWarning = context.stablecoin_depeg_warning ?? context.stablecoin?.usdc_depeg_warning ?? context.stablecoin?.usdt_depeg_warning;
+  const stablecoinWarning =
+    context.stablecoin_depeg_warning ?? context.stablecoin?.usdc_depeg_warning ?? context.stablecoin?.usdt_depeg_warning;
   return compactParts([
     context.risk_regime || null,
     present(context.sol_price_change_pct) ? `SOL ${context.sol_price_change_pct}%` : null,
@@ -248,7 +273,7 @@ export function decisionMarketRadarSummary(decision: DecisionRecord): string {
 
 export function decisionPaperOutcomeSummary(decision: DecisionRecord): string {
   const result = decision.result || {};
-  const outcome = result.paper_outcome || {};
+  const outcome = (result.paper_outcome || {}) as Record<string, unknown>;
   return compactParts([
     result.trade_status || null,
     outcome.paper_lane || null,
@@ -259,4 +284,85 @@ export function decisionPaperOutcomeSummary(decision: DecisionRecord): string {
     present(outcome.fees_usd) ? `fees $${outcome.fees_usd}` : null,
     result.exit_reason || null,
   ]);
+}
+
+function asNumber(value: unknown): number | null {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function compactMoney(value: unknown): string | null {
+  const numberValue = asNumber(value);
+  if (numberValue === null) return null;
+  const abs = Math.abs(numberValue);
+  if (abs >= 1_000_000) return `$${(numberValue / 1_000_000).toFixed(abs >= 10_000_000 ? 1 : 2).replace(/\.0+$/, "")}M`;
+  if (abs >= 1_000) return `$${(numberValue / 1_000).toFixed(abs >= 100_000 ? 0 : 1).replace(/\.0+$/, "")}K`;
+  return `$${numberValue.toFixed(abs >= 100 ? 0 : 2)}`;
+}
+
+function percent(value: unknown): string | null {
+  const numberValue = asNumber(value);
+  return numberValue === null ? null : `${Number(numberValue.toFixed(2))}%`;
+}
+
+function firstKnown(source: Record<string, unknown> | null | undefined, keys: string[]): unknown {
+  if (!source) return null;
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
+}
+
+export function decisionQuoteDetail(decision: DecisionRecord, side: "buy" | "sell"): string {
+  const quote = decision.payload?.quotes?.[side];
+  const pass = side === "buy" ? decision.buy_quote_pass : decision.sell_quote_pass;
+  const impact = percent(quote?.price_impact_pct);
+  const parts = [quote?.reason || String(pass ?? "-"), quote?.route ? `route ${quote.route}` : "", impact ? `impact ${impact}` : ""].filter(Boolean);
+  return parts.join(" | ") || "-";
+}
+
+export function decisionRiskDetail(decision: DecisionRecord): string {
+  const risk = decision.payload?.rule_outcomes?.risk;
+  const tokenInspection = decision.payload?.inputs?.token_inspection;
+  const holder = risk?.holder_concentration;
+  const holderMetrics = holder?.metrics || {};
+  const holderCount = firstKnown(holderMetrics as Record<string, unknown>, ["holder_count"]);
+  const topOnePct = percent(firstKnown(holderMetrics as Record<string, unknown>, ["top_1_pct"]));
+  const parts = [
+    tokenInspection?.risk_label ? `Token mechanics ${tokenInspection.risk_label}` : "",
+    (tokenInspection?.reasons || []).slice(0, 2).join("; "),
+    holder?.risk_label ? `Holder concentration ${holder.risk_label}` : "",
+    holderCount !== null ? `${holderCount} holders` : "",
+    topOnePct ? `top 1 ${topOnePct}` : "",
+    risk?.hard_block_reason ? `Hard block: ${risk.hard_block_reason}` : "",
+    (risk?.warnings || []).slice(0, 3).join("; "),
+  ].filter(Boolean);
+  return parts.join(" | ") || decisionRiskNotes(decision);
+}
+
+export function decisionMarketSummary(decision: DecisionRecord): string {
+  const market = (decision.payload?.inputs?.market_info || {}) as Record<string, unknown>;
+  const marketCap = compactMoney(firstKnown(market, ["market_cap", "market_cap_usd", "mc"]));
+  const liquidity = compactMoney(firstKnown(market, ["liquidity", "liquidity_usd", "liq"]));
+  const holders = firstKnown(market, ["holders", "holder_count"]);
+  const txCount = firstKnown(market, ["tx_count", "transactions", "txs"]);
+  const parts = [
+    marketCap ? `MC ${marketCap}` : "",
+    liquidity ? `Liq ${liquidity}` : "",
+    holders !== null ? `Holders ${holders}` : "",
+    txCount !== null ? `Tx ${txCount}` : "",
+  ].filter(Boolean);
+  return parts.join(" | ") || "-";
+}
+
+export function decisionOutcomeSummary(decision: DecisionRecord): string {
+  const raw = decision.result || decision.paper_result || {};
+  const r = raw as Record<string, unknown>;
+  const status = decision.trade_status || String(r.trade_status || "-");
+  const pnlValue = compactMoney(decision.pnl ?? r.pnl);
+  const pnlPct = percent(decision.pnl_pct ?? r.pnl_pct);
+  const exitReason = (r.exit_reason || r.failure_reason || decision.action_reason) as string | undefined;
+  const parts = [status, pnlValue || pnlPct ? `PnL ${pnlValue || "-"} / ${pnlPct || "-"}` : "", exitReason ? `exit ${exitReason}` : ""].filter(Boolean);
+  return parts.join(" | ") || "-";
 }

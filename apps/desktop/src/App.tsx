@@ -5,7 +5,6 @@ import { OpsPanel } from "./components/OpsPanel";
 import { EmptyState, LoadingState } from "./components/PanelState";
 import { PositionMonitor } from "./components/PositionMonitor";
 import { ProtectionDrilldown } from "./components/ProtectionDrilldown";
-import { SocialFreshnessPanel } from "./components/SocialFreshnessPanel";
 import { TokenDetail } from "./components/TokenDetail";
 import { TradeLifecycle } from "./components/TradeLifecycle";
 import { TradingChart } from "./components/TradingChart";
@@ -13,18 +12,15 @@ import { WalletIntelligence } from "./components/WalletIntelligence";
 import {
   candidateFeedApiPath,
   candidateWalletsApiPath,
-  decisionAnalyticsApiPath,
   decisionLedgerApiPath,
   ensureDesktopApi,
   eventFeedApiPath,
   fetchJson,
   importSocialPost,
   loadTokenState,
-  marketRadarReviewApiPath,
   OVERVIEW_REFRESH_MS,
   SELECTED_TOKEN_REFRESH_MS,
   setDesktopApiToken,
-  socialFreshnessApiPath,
   walletDetailApiPath,
   walletReviewApplyApiPath,
   walletLifecycleApiPath,
@@ -38,20 +34,15 @@ import {
   type ChartMetric,
   type EventFeedPayload,
   type EventFeedItem,
-  type DecisionLedgerPayload,
-  type DecisionAnalyticsPayload,
   type WalletDetailPayload,
   type WalletReviewApplyPayload,
   type WalletLifecyclePayload,
   type FreshnessPayload,
   type LogsPayload,
-  type MarketRadarReviewItem,
-  type MarketRadarReviewPayload,
   type OperatorConfigPayload,
   type PositionDetailPayload,
   type ReadinessPayload,
   type SnapshotPayload,
-  type SocialFreshnessPayload,
   type TradeRecord,
   type TradesPayload,
   type WatchlistItem,
@@ -59,8 +50,9 @@ import {
   type WinnerPatternPayload,
   type WalletsPayload,
 } from "./lib/api";
+import type { DecisionLedgerPayload } from "./lib/decisions";
 import { money, pct, price, shortMint } from "./lib/format";
-import { findTradeForMint, summarizeTrades, tradeLabel, tradeLedgerSourceLabel, tradeMarketCapIn, tradeMarketCapOut, tradeMint, tradePnl, tradePnlPct, tradeReason, tradeSizeUsd } from "./lib/trades";
+import { findTradeForMint, summarizeTrades, tradeLabel, tradeMarketCapIn, tradeMarketCapOut, tradeMint, tradePnl, tradePnlPct, tradeReason, tradeSizeUsd } from "./lib/trades";
 
 type RuntimeComponent = {
   name: string;
@@ -128,30 +120,9 @@ type PaperReviewPayload = {
   live_execution_locked: boolean;
   meaningful_test_ready: boolean;
   main_meaningful_test_ready?: boolean;
-  co_main_meaningful_test_ready?: boolean;
-  wallet_main_meaningful_test_ready?: boolean;
-  market_radar_main_meaningful_test_ready?: boolean;
   exploration_sample_ready?: boolean;
-  market_radar_sample_ready?: boolean;
   minimum_closed_trades: number;
   recommended_closed_trades: number;
-  sample_progress?: {
-    minimum_closed_trades: number;
-    recommended_closed_trades: number;
-    lanes: Record<string, {
-      closed_trades: number;
-      to_minimum_pct: number;
-      to_recommended_pct: number;
-      meets_minimum: boolean;
-      meets_recommended: boolean;
-    }>;
-  };
-  decision_lineage?: Record<string, {
-    total: number;
-    with_decision_id: number;
-    missing_decision_id: number;
-    coverage_pct: number;
-  }>;
   open_trades: number;
   metrics: {
     open_trades: number;
@@ -177,32 +148,6 @@ type PaperReviewPayload = {
     expectancy: number;
     profit_factor?: number | null;
   }>;
-  decision_lane_report?: {
-    source: string;
-    total_decisions: number;
-    lanes: Record<string, {
-      label: string;
-      candidate_decisions: number;
-      paper_attempts: number;
-      paper_opened: number;
-      skipped: number;
-      quote_failed: number;
-      hard_blocked: number;
-      social_confirmed: number;
-      wallet_confirmed: number;
-      open_trades: number;
-      closed_trades: number;
-      failed_trades: number;
-      total_pnl: number;
-      win_rate: number;
-      avg_pnl_pct?: number | null;
-      sample_ready: boolean;
-      protected_positions?: number;
-      skip_reasons?: Record<string, number>;
-      skip_buckets?: Record<string, number>;
-      open_reasons?: Record<string, number>;
-    }>;
-  };
   readiness_gaps: string[];
   exit_reasons: Record<string, number>;
   failure_reasons: Record<string, number>;
@@ -233,8 +178,8 @@ export function App() {
   const [snapshots, setSnapshots] = useState<SnapshotPayload | null>(null);
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [freshness, setFreshness] = useState<FreshnessPayload | null>(null);
-  const [socialFreshness, setSocialFreshness] = useState<SocialFreshnessPayload | null>(null);
   const [trades, setTrades] = useState<TradesPayload | null>(null);
+  const [decisions, setDecisions] = useState<DecisionLedgerPayload | null>(null);
   const [paperReview, setPaperReview] = useState<PaperReviewPayload | null>(null);
   const [winnerPatterns, setWinnerPatterns] = useState<WinnerPatternPayload | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistPayload | null>(null);
@@ -248,10 +193,6 @@ export function App() {
   const [logs, setLogs] = useState<LogsPayload | null>(null);
   const [candidates, setCandidates] = useState<CandidateFeedPayload | null>(null);
   const [events, setEvents] = useState<EventFeedPayload | null>(null);
-  const [decisions, setDecisions] = useState<DecisionLedgerPayload | null>(null);
-  const [decisionAnalytics, setDecisionAnalytics] = useState<DecisionAnalyticsPayload | null>(null);
-  const [marketRadarReview, setMarketRadarReview] = useState<MarketRadarReviewPayload | null>(null);
-  const [socialFreshnessAttempted, setSocialFreshnessAttempted] = useState(false);
   const [tokenError, setTokenError] = useState<string>("");
   const [workArea, setWorkArea] = useState<WorkArea>("cockpit");
 
@@ -278,6 +219,7 @@ export function App() {
           fetchJson<ReadinessPayload>("/api/readiness"),
           fetchJson<FreshnessPayload>("/api/freshness"),
           fetchJson<TradesPayload>("/api/trades"),
+          fetchJson<DecisionLedgerPayload>(decisionLedgerApiPath()),
           fetchJson<PaperReviewPayload>("/api/paper-review"),
           fetchJson<WinnerPatternPayload>(winnerPatternsApiPath()),
           fetchJson<WatchlistPayload>("/api/watchlist"),
@@ -289,19 +231,16 @@ export function App() {
           fetchJson<LogsPayload>("/api/logs?limit=40"),
           fetchJson<CandidateFeedPayload>(candidateFeedApiPath()),
           fetchJson<EventFeedPayload>(eventFeedApiPath()),
-          fetchJson<DecisionLedgerPayload>(decisionLedgerApiPath()),
-          fetchJson<DecisionAnalyticsPayload>(decisionAnalyticsApiPath()),
-          fetchJson<MarketRadarReviewPayload>(marketRadarReviewApiPath()),
-          fetchJson<SocialFreshnessPayload>(socialFreshnessApiPath()),
         ]);
         if (cancelled) return;
-        const [readinessResult, freshnessResult, tradesResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult, decisionsResult, decisionAnalyticsResult, marketRadarReviewResult, socialFreshnessResult] = optional;
+        const [readinessResult, freshnessResult, tradesResult, decisionsResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult] = optional;
         setOverview(overviewPayload);
         const nextPositions = positionsPayload.positions || [];
         setPositions(nextPositions);
         if (readinessResult.status === "fulfilled") setReadiness(readinessResult.value);
         if (freshnessResult.status === "fulfilled") setFreshness(freshnessResult.value);
         if (tradesResult.status === "fulfilled") setTrades(tradesResult.value);
+        if (decisionsResult.status === "fulfilled") setDecisions(decisionsResult.value);
         if (paperReviewResult.status === "fulfilled") setPaperReview(paperReviewResult.value);
         if (winnerPatternsResult.status === "fulfilled") setWinnerPatterns(winnerPatternsResult.value);
         if (watchlistResult.status === "fulfilled") setWatchlist(watchlistResult.value);
@@ -320,15 +259,6 @@ export function App() {
         if (logsResult.status === "fulfilled") setLogs(logsResult.value);
         if (candidatesResult.status === "fulfilled") setCandidates(candidatesResult.value);
         if (eventsResult.status === "fulfilled") setEvents(eventsResult.value);
-        if (decisionsResult.status === "fulfilled") setDecisions(decisionsResult.value);
-        if (decisionAnalyticsResult.status === "fulfilled") setDecisionAnalytics(decisionAnalyticsResult.value);
-        if (marketRadarReviewResult.status === "fulfilled") setMarketRadarReview(marketRadarReviewResult.value);
-        setSocialFreshnessAttempted(true);
-        if (socialFreshnessResult.status === "fulfilled") {
-          setSocialFreshness(socialFreshnessResult.value);
-        } else {
-          setSocialFreshness(null);
-        }
         const candidateMints = candidatesResult.status === "fulfilled"
           ? new Set((candidatesResult.value.items || []).map((item) => item.mint).filter(Boolean))
           : new Set<string>();
@@ -442,10 +372,7 @@ export function App() {
   const freshnessLoaded = freshness !== null;
   const tradesLoaded = trades !== null;
   const decisionsLoaded = decisions !== null;
-  const marketRadarReviewLoaded = marketRadarReview !== null;
   const selectedTokenLoading = Boolean(selectedMint && !tokenDetail && !tokenError);
-  const socialFreshnessLoaded = socialFreshnessAttempted || Boolean(freshness?.social);
-  const socialFreshnessPayload = socialFreshness || freshness?.social || null;
   const handleProtectedAmountSaved = (item: WatchlistItem) => {
     const mint = item.token_mint || item.mint || "";
     setWatchlist((current) => {
@@ -485,11 +412,11 @@ export function App() {
           <h1>{selected?.label || (events?.items?.length ? "Scanner activity live" : "Waiting for local state")}</h1>
           <p>{selected ? `${shortMint(selected.mint)} | ${selected.source} | ${selected.status}` : (events?.items?.length ? `${events.count} recent wallet events. Candidates/trades appear only after filters pass.` : "Start the desktop API to populate local state.")}</p>
         </div>
-        <div className={`lock-card ${overview?.live_execution_locked === false ? "danger" : "safe"}`}>
+        <div className="lock-card">
           <span>Live execution</span>
           <strong>{overview?.live_execution_locked === false ? "UNLOCKED" : "LOCKED"}</strong>
         </div>
-        <div className={`lock-card api-card ${apiStatus?.running ? "safe" : apiStatus ? "warn" : "neutral"}`}>
+        <div className="lock-card api-card">
           <span>Local API</span>
           <strong>{apiStatus?.running ? (apiStatus.started ? "STARTED" : "RUNNING") : "CHECKING"}</strong>
           <small>{apiStatus?.detail || "Checking local read-only API..."}</small>
@@ -620,7 +547,6 @@ export function App() {
 
         <div className="panel">
           <h2>Snapshot Feed</h2>
-          <p className="muted">Source: {snapshots ? [snapshots.source || "unknown", snapshots.source_detail].filter(Boolean).join(" | ") : "loading source"}</p>
           {selectedTokenLoading ? <LoadingState title="Loading snapshot feed" detail="Waiting for selected-token snapshots." rows={4} /> : (snapshots?.snapshots || []).slice(-8).reverse().map((snapshot, index) => (
             <div className="snapshot" key={`${snapshot.time}-${snapshot.context}-${index}`}>
               <strong>{snapshot.context || "snapshot"}</strong>
@@ -633,13 +559,12 @@ export function App() {
         <TradeLifecycle trade={selectedTrade} />
       </section> : null}
 
-      {workArea === "details" ? <TokenDetail detail={tokenDetail} loading={selectedTokenLoading} /> : null}
+      {workArea === "details" ? <TokenDetail detail={tokenDetail} /> : null}
 
       {workArea === "signals" ? <section className="detail-grid wide">
         <LiveWalletActivity events={events} onSelectMint={setSelectedMint} expanded />
         <LiveLaunchFeed candidates={candidates} onSelectMint={setSelectedMint} expanded />
         <SocialImportPanel selectedMint={selectedMint} selectedLabel={selected?.label || tokenDetail?.position?.label || ""} />
-        <SocialFreshnessPanel freshness={socialFreshnessPayload} loaded={socialFreshnessLoaded} />
         <div className="panel">
           <h2>Selected Catalyst Matches</h2>
           {(signals?.catalysts || []).map((item) => (
@@ -674,16 +599,11 @@ export function App() {
       </section> : null}
 
       {workArea === "replay" ? <section className="detail-grid wide replay-grid">
-        <PaperReviewPanel review={paperReview} analytics={decisionAnalytics} loaded={tradesLoaded} />
-        <MarketRadarReviewPanel review={marketRadarReview} loaded={marketRadarReviewLoaded} onSelectMint={setSelectedMint} />
         <DecisionLedger decisions={decisions} loaded={decisionsLoaded} onSelectMint={setSelectedMint} />
-        {decisionsLoaded && !(decisions?.items || []).length ? (
-          <>
-            <ReplayPanel title="Open Paper Trades" trades={trades?.open_trades || []} loaded={tradesLoaded} empty="No open paper trades." />
-            <ReplayPanel title="Closed Trades" trades={trades?.closed_trades || []} loaded={tradesLoaded} empty="No closed paper trades." />
-            <ReplayPanel title="Failed Trades" trades={trades?.failed_trades || []} loaded={tradesLoaded} empty="No failed paper trades." />
-          </>
-        ) : null}
+        <PaperReviewPanel review={paperReview} loaded={tradesLoaded} />
+        <ReplayPanel title="Open Paper Trades" trades={trades?.open_trades || []} loaded={tradesLoaded} empty="No open paper trades." />
+        <ReplayPanel title="Closed Trades" trades={trades?.closed_trades || []} loaded={tradesLoaded} empty="No closed paper trades." />
+        <ReplayPanel title="Failed Trades" trades={trades?.failed_trades || []} loaded={tradesLoaded} empty="No failed paper trades." />
       </section> : null}
 
       {workArea === "system" ? <section className="detail-grid wide">
@@ -743,7 +663,6 @@ export function App() {
           ))}
           {freshnessLoaded && !(freshness?.freshness?.rows || []).length ? <EmptyState title="No freshness rows" detail="Freshness data was not present in the desktop API payload." /> : null}
         </div>
-        <SocialFreshnessPanel freshness={socialFreshnessPayload} loaded={socialFreshnessLoaded} />
       </section> : null}
     </main>
   );
@@ -993,96 +912,26 @@ function formatScore(value?: number | null) {
   return Number(value).toFixed(1);
 }
 
-function topReasonLine(values?: Record<string, number>) {
-  const rows = Object.entries(values || {}).sort((a, b) => b[1] - a[1]).slice(0, 2);
-  return rows.length ? rows.map(([key, count]) => `${key} ${count}`).join(" | ") : "-";
-}
-
-function SampleReadinessStrip({ review }: { review: PaperReviewPayload }) {
-  const sp = review.sample_progress;
-  if (!sp?.lanes) return null;
-  const minimum = sp.minimum_closed_trades ?? review.minimum_closed_trades;
-  const lanes: Array<[string, string]> = [
-    ["Co-main", "co_main"],
-    ["Wallet main", "wallet_main"],
-    ["Market radar", "market_radar"],
-    ["Exploration", "exploration"],
-  ];
-  return (
-    <div className="sample-readiness-strip">
-      <div className="sample-readiness-strip-title">Paper sample targets (closed)</div>
-      <div className="sample-readiness-lanes">
-        {lanes.map(([label, key]) => {
-          const row = sp.lanes[key];
-          if (!row) return null;
-          return (
-            <div key={key} className="sample-readiness-lane">
-              <div className="sample-readiness-lane-head">
-                <span>{label}</span>
-                <strong>
-                  {row.closed_trades} / {minimum}
-                  {row.meets_minimum ? " ✓" : ""}
-                </strong>
-              </div>
-              <div className="sample-rec-bar minimal" aria-hidden="true">
-                <span style={{ width: `${Math.min(100, row.to_minimum_pct)}%` }} />
-              </div>
-              <small className="muted">
-                Recommended {review.recommended_closed_trades}: {Math.min(100, Math.round(row.to_recommended_pct))}%
-              </small>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function DecisionLineageLine({ lineage }: { lineage?: PaperReviewPayload["decision_lineage"] }) {
-  const agg = lineage?.all;
-  if (!agg?.total) return null;
-  return (
-    <div className={`lineage-chip ${agg.coverage_pct >= 99.9 ? "" : "lineage-chip-warn"}`}>
-      <span>Decision ID lineage:</span>
-      <strong>{pct(agg.coverage_pct)}</strong>
-      <span className="muted">
-        ({agg.with_decision_id}/{agg.total} rows; missing {agg.missing_decision_id})
-      </span>
-    </div>
-  );
-}
-
-function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPayload | null; analytics: DecisionAnalyticsPayload | null; loaded: boolean }) {
+function PaperReviewPanel({ review, loaded }: { review: PaperReviewPayload | null; loaded: boolean }) {
   const metrics = review?.metrics;
-  const coMainLane = review?.lane_metrics?.co_main;
   const mainLane = review?.lane_metrics?.main;
-  const marketRadarLane = review?.lane_metrics?.market_radar;
   const explorationLane = review?.lane_metrics?.exploration;
-  const decisionReport = review?.decision_lane_report;
-  const decisionCoMain = decisionReport?.lanes?.co_main;
-  const decisionMain = decisionReport?.lanes?.main;
-  const decisionMarketRadar = decisionReport?.lanes?.market_radar;
-  const decisionExploration = decisionReport?.lanes?.exploration;
-  const decisionProtected = decisionReport?.lanes?.protected_manual;
-  const progressClosed = coMainLane?.closed_trades ?? metrics?.closed_trades ?? 0;
-  const progress = review ? Math.min(100, Math.round((progressClosed / review.minimum_closed_trades) * 100)) : 0;
+  const progress = metrics ? Math.min(100, Math.round((metrics.closed_trades / review.minimum_closed_trades) * 100)) : 0;
   return (
     <div className="panel paper-review-panel">
       <div className="paper-review-head">
         <div>
           <h2>Paper Profitability Review</h2>
-          <p className="muted">{review?.co_main_meaningful_test_ready ? "Co-main strategy sample ready" : "Collecting co-main sample across wallet-main and Market Radar"}</p>
+          <p className="muted">{review?.main_meaningful_test_ready ? "Main strategy sample ready" : "Collecting main-strategy sample before judging profitability"}</p>
         </div>
-        <span className={review?.co_main_meaningful_test_ready ? "good-pill" : "warn-pill"}>{review?.co_main_meaningful_test_ready ? "READY" : "NOT READY"}</span>
+        <span className={review?.main_meaningful_test_ready ? "good-pill" : "warn-pill"}>{review?.main_meaningful_test_ready ? "READY" : "NOT READY"}</span>
       </div>
       {!loaded || !review || !metrics ? <LoadingState title="Loading paper review" detail="Analyzing paper trades, exits, failures, and wallet labels." rows={4} /> : (
         <>
           <div className="paper-progress">
             <div><span style={{ width: `${progress}%` }} /></div>
-            <small>{progressClosed} / {review.minimum_closed_trades} minimum co-main closed trades | {review.recommended_closed_trades} recommended</small>
+            <small>{metrics.closed_trades} / {review.minimum_closed_trades} minimum closed trades | {review.recommended_closed_trades} recommended</small>
           </div>
-          <SampleReadinessStrip review={review} />
-          <DecisionLineageLine lineage={review.decision_lineage} />
           <div className="mini-grid">
             <div><span>Closed</span><strong>{metrics.closed_trades}</strong></div>
             <div><span>Failed</span><strong>{metrics.failed_trades}</strong></div>
@@ -1093,19 +942,9 @@ function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPa
           </div>
           <div className="lane-grid">
             <div>
-              <span>Co-Main Strategy</span>
-              <strong>{coMainLane?.closed_trades ?? 0} closed</strong>
-              <small>{money(coMainLane?.realized_pnl ?? 0)} realized | {pct(coMainLane?.win_rate ?? 0)} wins</small>
-            </div>
-            <div>
-              <span>Wallet Main</span>
+              <span>Main Strategy</span>
               <strong>{mainLane?.closed_trades ?? 0} closed</strong>
               <small>{money(mainLane?.realized_pnl ?? 0)} realized | {pct(mainLane?.win_rate ?? 0)} wins</small>
-            </div>
-            <div>
-              <span>Market Radar Co-Main</span>
-              <strong>{marketRadarLane?.closed_trades ?? 0} closed</strong>
-              <small>{money(marketRadarLane?.realized_pnl ?? 0)} realized | {pct(marketRadarLane?.win_rate ?? 0)} wins</small>
             </div>
             <div>
               <span>Exploration Lane</span>
@@ -1113,40 +952,6 @@ function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPa
               <small>{money(explorationLane?.realized_pnl ?? 0)} realized | {pct(explorationLane?.win_rate ?? 0)} wins</small>
             </div>
           </div>
-          {decisionReport ? (
-            <div className="review-block">
-              <strong>Decision Ledger Lanes</strong>
-              <div className="lane-grid decision-lane-grid">
-                <div>
-                  <span>Co-Main Decisions</span>
-                  <strong>{decisionCoMain?.candidate_decisions ?? 0} seen</strong>
-                  <small>{decisionCoMain?.paper_opened ?? 0} opened | {decisionCoMain?.skipped ?? 0} skipped | {decisionCoMain?.quote_failed ?? 0} quote fail | {pct(decisionCoMain?.win_rate ?? 0)} wins</small>
-                </div>
-                <div>
-                  <span>Wallet Main Decisions</span>
-                  <strong>{decisionMain?.candidate_decisions ?? 0} seen</strong>
-                  <small>{decisionMain?.paper_opened ?? 0} opened | {decisionMain?.skipped ?? 0} skipped | {decisionMain?.quote_failed ?? 0} quote fail | {pct(decisionMain?.win_rate ?? 0)} wins</small>
-                </div>
-                <div>
-                  <span>Market Radar Decisions</span>
-                  <strong>{decisionMarketRadar?.candidate_decisions ?? 0} seen</strong>
-                  <small>{decisionMarketRadar?.paper_opened ?? 0} opened | {decisionMarketRadar?.skipped ?? 0} skipped | {decisionMarketRadar?.quote_failed ?? 0} quote fail | {pct(decisionMarketRadar?.win_rate ?? 0)} wins</small>
-                  <small>Top skips: {topReasonLine(decisionMarketRadar?.skip_reasons)}</small>
-                </div>
-                <div>
-                  <span>Exploration Decisions</span>
-                  <strong>{decisionExploration?.candidate_decisions ?? 0} seen</strong>
-                  <small>{decisionExploration?.paper_opened ?? 0} opened | {decisionExploration?.skipped ?? 0} skipped | {decisionExploration?.quote_failed ?? 0} quote fail | {pct(decisionExploration?.win_rate ?? 0)} wins</small>
-                </div>
-                <div>
-                  <span>Protected / Manual</span>
-                  <strong>{decisionProtected?.protected_positions ?? 0} watched</strong>
-                  <small>{decisionProtected?.candidate_decisions ?? 0} decision records | {decisionProtected?.closed_trades ?? 0} closed | {money(decisionProtected?.total_pnl ?? 0)} PnL</small>
-                </div>
-              </div>
-            </div>
-          ) : null}
-          {analytics ? <DecisionAnalyticsBlock analytics={analytics} /> : null}
           <ReviewList title="Readiness Gaps" rows={review.readiness_gaps} empty="No readiness gaps. This sample is large enough for a meaningful paper review." />
           <ReviewPairs title="Entry Reasons" rows={review.entry_reasons} />
           <ReviewPairs title="Exit Reasons" rows={review.exit_reasons} />
@@ -1155,141 +960,6 @@ function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPa
           <ReviewList title="Next Review Actions" rows={review.next_review_actions} empty="No review actions recorded." />
         </>
       )}
-    </div>
-  );
-}
-
-function marketRadarStageLabel(stage: string) {
-  if (stage === "quote_watch") return "Quote Watch";
-  if (stage === "paper_bought") return "Paper Bought";
-  return stage.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
-}
-
-function MarketRadarReviewPanel({ review, loaded, onSelectMint }: { review: MarketRadarReviewPayload | null; loaded: boolean; onSelectMint: (mint: string) => void }) {
-  const items = review?.items || [];
-  const summary = review?.summary || {};
-  const stageCards: Array<[string, number]> = [
-    ["Rejected", summary.rejected ?? 0],
-    ["Watch", summary.watch ?? 0],
-    ["Quote Watch", summary.quote_watch ?? 0],
-    ["Paper Bought", summary.paper_bought ?? 0],
-    ["Closed", summary.closed ?? 0],
-    ["Failed", summary.failed ?? 0],
-  ];
-  return (
-    <div className="panel market-radar-review-panel">
-      <div className="paper-review-head">
-        <div>
-          <h2>Market Radar Token Nursery</h2>
-          <p className="muted">Hot Dex/Pump candidates grouped by what happened next.</p>
-        </div>
-        <span className="neutral-pill">{summary.total ?? 0} seen</span>
-      </div>
-      {!loaded || !review ? <LoadingState title="Loading Market Radar review" detail="Reading Market Radar decision records." rows={3} /> : (
-        <>
-          <div className="nursery-stage-grid">
-            {stageCards.map(([label, value]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
-          </div>
-          <div className="nursery-table-head" aria-hidden="true">
-            <span>Token</span>
-            <span>Stage</span>
-            <span>Score</span>
-            <span>Liquidity</span>
-            <span>Market Cap</span>
-            <span>Reason</span>
-          </div>
-          <div className="nursery-row-list">
-            {items.slice(0, 24).map((item) => (
-              <MarketRadarReviewRow key={item.decision_id || item.mint || item.reason || item.stage} item={item} onSelectMint={onSelectMint} />
-            ))}
-            {!items.length ? <EmptyState title="No Market Radar candidates" detail="The nursery will populate after Market Radar writes decision records." /> : null}
-          </div>
-          <ReviewList title="Review Notes" rows={review.notes || []} empty="No Market Radar notes recorded." />
-        </>
-      )}
-    </div>
-  );
-}
-
-function MarketRadarReviewRow({ item, onSelectMint }: { item: MarketRadarReviewItem; onSelectMint: (mint: string) => void }) {
-  const score = item.score === null || item.score === undefined ? "-" : `${item.score}`;
-  const threshold = item.threshold === null || item.threshold === undefined ? "-" : `${item.threshold}`;
-  const blockers = (item.blockers || []).slice(0, 2).join("; ");
-  const positives = (item.positives || []).slice(0, 2).join("; ");
-  const postmortem = item.postmortem || {};
-  const hasPostmortem = ["closed", "failed"].includes(String(item.stage));
-  const pnl = postmortem.pnl ?? item.pnl;
-  const pnlPct = postmortem.pnl_pct ?? item.pnl_pct;
-  const pnlPctValue = numberOrNull(pnlPct);
-  const outcomeReason = postmortem.exit_reason || postmortem.failure_reason;
-  const detail = blockers || positives || item.skip_bucket || "-";
-  const reasonDetail = hasPostmortem
-    ? [outcomeReason, postmortem.hold_seconds ? `${Math.round(Number(postmortem.hold_seconds))}s hold` : null].filter(Boolean).join(" | ") || detail
-    : detail;
-  return (
-    <button type="button" className={`nursery-row ${item.stage}`} onClick={() => item.mint && onSelectMint(item.mint)}>
-      <span>
-        <strong>{item.symbol || shortMint(item.mint || "")}</strong>
-        <small>{shortMint(item.mint || "")}</small>
-      </span>
-      <span><strong className={`decision-pill ${marketRadarStageTone(item.stage)}`}>{marketRadarStageLabel(item.stage)}</strong></span>
-      <span><strong>{hasPostmortem ? pnlMoney(pnl) : score}</strong><small>{hasPostmortem ? `${pct(pnlPctValue)} PnL` : `threshold ${threshold}`}</small></span>
-      <span><strong>{money(postmortem.exit_liquidity_usd ?? item.liquidity_usd)}</strong><small>{postmortem.liquidity_change_pct == null ? `${item.tx_count_m5 ?? "-"} tx m5` : `${pct(postmortem.liquidity_change_pct)} liq`}</small></span>
-      <span><strong>{money(postmortem.exit_market_cap ?? item.market_cap_usd)}</strong><small>{postmortem.market_cap_change_pct == null ? `h1 vol ${money(item.volume_h1)}` : `${pct(postmortem.market_cap_change_pct)} MC`}</small></span>
-      <span className="decision-reason"><strong>{hasPostmortem ? outcomeReason || item.reason || "-" : item.reason || "-"}</strong><small>{reasonDetail}</small></span>
-    </button>
-  );
-}
-
-function marketRadarStageTone(stage: string): string {
-  if (stage === "closed" || stage === "paper_bought") return "good";
-  if (stage === "failed" || stage === "rejected") return "bad";
-  if (stage === "quote_watch" || stage === "watch") return "warn";
-  return "neutral";
-}
-
-function DecisionAnalyticsBlock({ analytics }: { analytics: DecisionAnalyticsPayload }) {
-  const coMain = analytics.lanes?.co_main;
-  const marketRadar = analytics.lanes?.market_radar;
-  const social = analytics.groups?.social_catalyst;
-  const walletOnly = analytics.groups?.wallet_only;
-  const quoteFailed = analytics.groups?.quote_failed;
-  return (
-    <div className="review-block">
-      <strong>Decision Outcome Analytics</strong>
-      <div className="lane-grid decision-lane-grid">
-        <div>
-          <span>Co-Main</span>
-          <strong>{coMain?.closed_trades ?? 0} closed</strong>
-          <small>{pct(coMain?.win_rate ?? 0)} wins | {money(coMain?.total_pnl ?? 0)} PnL | {coMain?.candidate_decisions ?? 0} decisions</small>
-        </div>
-        <div>
-          <span>Market Radar</span>
-          <strong>{marketRadar?.closed_trades ?? 0} closed</strong>
-          <small>{pct(marketRadar?.win_rate ?? 0)} wins | {money(marketRadar?.total_pnl ?? 0)} PnL | {marketRadar?.candidate_decisions ?? 0} decisions</small>
-        </div>
-        <div>
-          <span>Social Catalyst</span>
-          <strong>{social?.closed_trades ?? 0} closed</strong>
-          <small>{pct(social?.win_rate ?? 0)} wins | {money(social?.total_pnl ?? 0)} PnL | {social?.candidate_decisions ?? 0} decisions</small>
-        </div>
-        <div>
-          <span>Wallet Only</span>
-          <strong>{walletOnly?.closed_trades ?? 0} closed</strong>
-          <small>{pct(walletOnly?.win_rate ?? 0)} wins | {money(walletOnly?.total_pnl ?? 0)} PnL | {walletOnly?.candidate_decisions ?? 0} decisions</small>
-        </div>
-        <div>
-          <span>Quote Failed</span>
-          <strong>{quoteFailed?.candidate_decisions ?? 0} blocked</strong>
-          <small>{quoteFailed?.failed_trades ?? 0} failed trades | {quoteFailed?.skipped ?? 0} skipped</small>
-        </div>
-      </div>
-      <p>{analytics.social_expansion_gate?.allowed ? "Social expansion gate open." : analytics.social_expansion_gate?.reason || "Social expansion gate closed."}</p>
     </div>
   );
 }
@@ -1332,7 +1002,7 @@ function PortfolioPanel({ trades, winnerPatterns, loaded, onSelectMint }: { trad
         <div className="portfolio-head">
           <div>
             <h2>Portfolio PnL</h2>
-            <p className="muted">Paper-trade ledger totals from open and closed positions. Source: {tradeLedgerSourceLabel(trades)}</p>
+            <p className="muted">Paper-trade ledger totals from open and closed positions.</p>
           </div>
           <strong className={`portfolio-total ${pnlTone(summary.totalPnl)}`}>{pnlMoney(summary.totalPnl)}</strong>
         </div>
@@ -1560,11 +1230,6 @@ function pnlMoney(value: unknown): string {
   if (absolute >= 1_000_000) return `${sign}$${(absolute / 1_000_000).toFixed(2)}M`;
   if (absolute >= 1_000) return `${sign}$${(absolute / 1_000).toFixed(2)}K`;
   return `${sign}$${absolute.toFixed(2)}`;
-}
-
-function numberOrNull(value: unknown): number | null {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function pnlTone(value: unknown): string {

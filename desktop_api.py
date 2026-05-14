@@ -1010,7 +1010,8 @@ def build_wallet_context_for_mint(mint, state=None, limit=8):
     wallet_records = performance.get("wallets") if isinstance(performance.get("wallets"), dict) else {}
     signals = performance.get("signals") if isinstance(performance.get("signals"), list) else []
     matched_signals = [signal for signal in signals if isinstance(signal, dict) and signal.get("mint") == mint]
-    wallets = wallets_for_mint_from_paper(mint, state.get("paper"))
+    paper = canonical_trade_state(state)
+    wallets = wallets_for_mint_from_paper(mint, paper)
 
     for signal in matched_signals:
         wallets.update(str(wallet) for wallet in listify(signal.get("wallets")) if wallet)
@@ -1049,6 +1050,7 @@ def build_wallet_context_for_mint(mint, state=None, limit=8):
         "trap_wallets": len(traps),
         "avg_score": round(sum(scores) / len(scores), 2) if scores else 0,
         "live_execution_locked": True,
+        "trade_source": paper.get("source"),
         "wallets": rows[:limit],
     }
 
@@ -1903,7 +1905,9 @@ def fetch_decision_rows(limit=80, mint=None):
         except Exception:
             pass
 
-    return [decision_from_sqlite_row(row) for row in rows]
+    decisions = [decision_from_sqlite_row(row) for row in rows]
+    enrich_decisions_with_trade_results(decisions)
+    return decisions
 
 
 def fetch_decision_row_by_id(decision_id):
@@ -1930,6 +1934,51 @@ def fetch_decision_row_by_id(decision_id):
         except Exception:
             pass
     return decision_from_sqlite_row(row) if row else None
+
+
+def trade_result_from_row(trade):
+    trade = trade if isinstance(trade, dict) else {}
+    signal_metadata = trade.get("signal_metadata") if isinstance(trade.get("signal_metadata"), dict) else {}
+    return {
+        "source": "sqlite_trade_link",
+        "mint": trade.get("mint") or trade.get("token_mint"),
+        "trade_status": trade.get("status"),
+        "trade_id": trade.get("trade_id") or signal_metadata.get("trade_id"),
+        "entry_time": trade.get("entry_time"),
+        "close_time": trade.get("close_time"),
+        "pnl": trade.get("total_pnl", trade.get("pnl")),
+        "pnl_pct": trade.get("total_pnl_pct", trade.get("pnl_pct")),
+        "failure_reason": trade.get("failure_reason"),
+        "exit_reason": trade.get("exit_reason") or trade.get("close_reason"),
+    }
+
+
+def enrich_decisions_with_trade_results(decisions):
+    decision_ids = {
+        str(decision.get("decision_id"))
+        for decision in decisions
+        if decision.get("decision_id") and not decision.get("result")
+    }
+    if not decision_ids:
+        return decisions
+    linked = {}
+    for trade in fetch_trade_rows(limit=1000):
+        signal_metadata = trade.get("signal_metadata") if isinstance(trade.get("signal_metadata"), dict) else {}
+        decision_id = signal_metadata.get("decision_id")
+        if decision_id in decision_ids and decision_id not in linked:
+            linked[decision_id] = trade_result_from_row(trade)
+    for decision in decisions:
+        result = linked.get(decision.get("decision_id"))
+        if not result:
+            continue
+        decision["result"] = result
+        decision["trade_id"] = decision.get("trade_id") or result.get("trade_id")
+        decision["trade_status"] = decision.get("trade_status") or result.get("trade_status")
+        decision["entry_time"] = decision.get("entry_time") or result.get("entry_time")
+        decision["close_time"] = decision.get("close_time") or result.get("close_time")
+        decision["pnl"] = decision.get("pnl") if decision.get("pnl") is not None else result.get("pnl")
+        decision["pnl_pct"] = decision.get("pnl_pct") if decision.get("pnl_pct") is not None else result.get("pnl_pct")
+    return decisions
 
 
 def decision_matches_filter(decision, filter_name=None, lane=None):
@@ -3220,7 +3269,7 @@ def build_alerts_payload(live_state=None, limit=100):
     if sqlite_rows:
         rows = [row["payload"] for row in sqlite_rows if isinstance(row.get("payload"), dict)]
         payload = summarize_list_payload("sqlite_alerts", rows, limit=limit)
-        payload["source_detail"] = f"{DB_FILE.relative_to(ROOT)}:alerts"
+        payload["source_detail"] = f"{relative_display_path(DB_FILE)}:alerts"
         payload["fallback_source"] = "live_state_alerts"
         payload["fallback_reason"] = None
     else:
@@ -3236,7 +3285,7 @@ def build_alerts_payload(live_state=None, limit=100):
             "decisions": "sqlite_decision_records",
         },
         "sqlite_mirror_source": "sqlite_alerts",
-        "sqlite_mirror_detail": f"{DB_FILE.relative_to(ROOT)}:alerts",
+        "sqlite_mirror_detail": f"{relative_display_path(DB_FILE)}:alerts",
         "sqlite_mirror_count": sqlite_alert_count,
         "live_state_count": len(live_rows),
         "mirror_warning": None,
@@ -3339,6 +3388,24 @@ def summarize_wallet_trade(row, source):
     }
 
 
+def canonical_trade_state(state=None):
+    paper = state.get("paper") if isinstance(state, dict) and isinstance(state.get("paper"), dict) else None
+    if paper is not None:
+        return {
+            "source": "state_paper",
+            "open_trades": paper.get("open_trades", []) if isinstance(paper.get("open_trades"), list) else [],
+            "closed_trades": paper.get("closed_trades", []) if isinstance(paper.get("closed_trades"), list) else [],
+            "failed_trades": paper.get("failed_trades", []) if isinstance(paper.get("failed_trades"), list) else [],
+        }
+    trade_payload = build_trades_payload()
+    return {
+        "source": trade_payload.get("source") or "unknown",
+        "open_trades": trade_payload.get("open_trades", []) if isinstance(trade_payload.get("open_trades"), list) else [],
+        "closed_trades": trade_payload.get("closed_trades", []) if isinstance(trade_payload.get("closed_trades"), list) else [],
+        "failed_trades": trade_payload.get("failed_trades", []) if isinstance(trade_payload.get("failed_trades"), list) else [],
+    }
+
+
 def build_wallets_payload(state=None, limit=80):
     state = state or read_state_files()
     performance = state.get("wallet_performance") if isinstance(state.get("wallet_performance"), dict) else {}
@@ -3437,7 +3504,7 @@ def build_wallet_detail_payload(wallet, state=None, limit=40):
         for signal in performance.get("signals", [])
         if isinstance(signal, dict) and wallet in listify(signal.get("wallets"))
     ]
-    paper = state.get("paper") if isinstance(state.get("paper"), dict) else {}
+    paper = canonical_trade_state(state)
     behavior = state.get("wallet_behavior") if isinstance(state.get("wallet_behavior"), dict) else {}
     behavior_wallets = behavior.get("wallets") if isinstance(behavior.get("wallets"), dict) else {}
     behavior_row = behavior_wallets.get(wallet) if isinstance(behavior_wallets.get(wallet), dict) else {}
@@ -3460,6 +3527,7 @@ def build_wallet_detail_payload(wallet, state=None, limit=40):
         "wallet": row,
         "recent_signals": signals[:limit],
         "paper_trades": trade_rows[:limit],
+        "trade_source": paper.get("source"),
         "behavior": {
             "labels": behavior_row.get("labels") if isinstance(behavior_row.get("labels"), list) else [],
             "rolling": behavior_row.get("rolling") if isinstance(behavior_row.get("rolling"), dict) else {},
@@ -3587,6 +3655,15 @@ def build_logs_payload(limit=60):
 
 
 def build_trades_payload():
+    sqlite_trades = fetch_trade_rows(limit=500)
+    if sqlite_trades:
+        grouped = group_trade_rows(sqlite_trades)
+        return {
+            "generated_at": time.time(),
+            "source": "sqlite_trades",
+            "live_execution_locked": True,
+            **grouped,
+        }
     data, source = load_paper_trade_state()
     return {
         "generated_at": time.time(),
@@ -3607,6 +3684,62 @@ def build_trades_payload():
         "closed_trades": data.get("closed_trades", []) if isinstance(data, dict) else [],
         "failed_trades": data.get("failed_trades", []) if isinstance(data, dict) else [],
     }
+
+
+def fetch_trade_rows(limit=500):
+    if not DB_FILE.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT mint, status, entry_time, close_time, pnl, pnl_pct, reason, payload_json
+            FROM trades
+            ORDER BY COALESCE(close_time, entry_time, 0) DESC, id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    trades = []
+    for row in rows:
+        payload = parse_payload_json(row["payload_json"])
+        if not isinstance(payload, dict):
+            payload = {}
+        trade = {
+            **payload,
+            "mint": payload.get("mint") or payload.get("token_mint") or row["mint"],
+            "token_mint": payload.get("token_mint") or payload.get("mint") or row["mint"],
+            "status": payload.get("status") or row["status"],
+            "entry_time": payload.get("entry_time") or row["entry_time"],
+            "close_time": payload.get("close_time") or row["close_time"],
+            "total_pnl": payload.get("total_pnl", payload.get("pnl", row["pnl"])),
+            "total_pnl_pct": payload.get("total_pnl_pct", payload.get("pnl_pct", row["pnl_pct"])),
+            "reason": payload.get("reason") or payload.get("entry_reason") or row["reason"],
+        }
+        trades.append(trade)
+    return trades
+
+
+def group_trade_rows(rows):
+    grouped = {"open_trades": [], "closed_trades": [], "failed_trades": []}
+    for trade in rows:
+        status = str(trade.get("status") or "").lower()
+        if status == "closed":
+            grouped["closed_trades"].append(trade)
+        elif status in ("failed", "error", "rejected"):
+            grouped["failed_trades"].append(trade)
+        else:
+            grouped["open_trades"].append(trade)
+    return grouped
 
 
 def json_response(payload, status=HTTPStatus.OK):
@@ -4022,7 +4155,8 @@ def route_request(method, raw_path, body=None, headers=None):
         limit = parse_int_query(query, "limit", 40, 1, 100)
         return json_response(build_wallet_detail_payload(wallet, limit=limit))
     if path == "/api/alerts":
-        return json_response(build_alerts_payload())
+        limit = parse_int_query(query, "limit", 100, 1, 250)
+        return json_response(build_alerts_payload(limit=limit))
     if path == "/api/catalyst-cards":
         return json_response(summarize_list_payload("catalyst_cards", read_json(CATALYST_CARDS_FILE, {"cards": []}), key="cards"))
     if path == "/api/social":

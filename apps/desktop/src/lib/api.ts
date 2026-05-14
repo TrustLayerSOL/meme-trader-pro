@@ -3,25 +3,6 @@ export const SELECTED_TOKEN_REFRESH_MS = 1000;
 export const OVERVIEW_REFRESH_MS = 7000;
 let desktopApiToken: string | null = initialDesktopApiToken();
 
-export type { DecisionLedgerPayload } from "./decisions";
-
-export type DecisionExplanationPayload = {
-  generated_at?: number;
-  source?: string;
-  read_only?: boolean;
-  advisory_only?: boolean;
-  live_execution_locked?: boolean;
-  execution_routes_enabled?: boolean;
-  decision_id?: string;
-  mint?: string;
-  available?: boolean;
-  status?: string;
-  model?: string;
-  response_id?: string | null;
-  advisory?: string | null;
-  detail?: string;
-};
-
 function initialDesktopApiToken(): string | null {
   try {
     const token = new URLSearchParams(window.location.search).get("api_token");
@@ -522,20 +503,6 @@ export type EventFeedPayload = {
 export type PositionDetailPayload = {
   mint: string;
   snapshot_count: number;
-  position_source?: string | null;
-  position_source_detail?: string | null;
-  snapshot_source?: string | null;
-  snapshot_source_detail?: string | null;
-  source_contract?: {
-    position?: string;
-    snapshots?: string;
-    social?: string;
-    catalysts?: string;
-    wallet_stats?: string;
-    wallet_context?: string;
-  };
-  mixed_market_fields?: boolean;
-  mixed_market_fields_note?: string;
   position?: {
     source?: string;
     label?: string;
@@ -648,133 +615,6 @@ export type FreshnessPayload = {
       detail?: string;
     }>;
   };
-  social?: SocialFreshnessPayload;
-};
-
-export type SocialFreshnessRow = {
-  source: string;
-  label?: string;
-  status: string;
-  age?: string;
-  age_seconds?: number | null;
-  fresh_seconds?: number | null;
-  event_count?: number;
-  enabled?: boolean;
-  last_success_at?: number | string | null;
-  last_error?: string | null;
-  collector_type?: string;
-  detail?: string;
-};
-
-export type SocialFreshnessPayload = {
-  generated_at?: number;
-  mode: "SOCIAL_FRESHNESS_READ_ONLY" | string;
-  live_execution_locked: boolean;
-  overall: string;
-  counts?: Record<string, number>;
-  rows: SocialFreshnessRow[];
-  detail?: string;
-};
-
-export type DecisionAnalyticsSummary = {
-  label?: string;
-  candidate_decisions: number;
-  paper_attempts: number;
-  paper_opened: number;
-  skipped: number;
-  quote_failed: number;
-  hard_blocked: number;
-  social_confirmed: number;
-  wallet_confirmed: number;
-  open_trades: number;
-  closed_trades: number;
-  failed_trades: number;
-  wins: number;
-  losses: number;
-  total_pnl: number;
-  avg_pnl_pct?: number | null;
-  win_rate: number;
-  expectancy_pnl?: number;
-  attempt_to_open_rate?: number;
-  decision_to_close_rate?: number;
-  skip_reasons?: Record<string, number>;
-  skip_buckets?: Record<string, number>;
-  open_reasons?: Record<string, number>;
-  sample_ready: boolean;
-};
-
-export type DecisionAnalyticsPayload = {
-  generated_at?: number;
-  source: string;
-  live_execution_locked: boolean;
-  total_decisions: number;
-  overall: DecisionAnalyticsSummary;
-  lanes: Record<string, DecisionAnalyticsSummary>;
-  groups: Record<string, DecisionAnalyticsSummary>;
-  social_expansion_gate: {
-    allowed: boolean;
-    reason?: string;
-    minimum_labeled_social_outcomes?: number;
-    current_labeled_social_outcomes?: number;
-  };
-  notes?: string[];
-};
-
-export type MarketRadarReviewItem = {
-  decision_id?: string;
-  mint?: string;
-  symbol?: string | null;
-  updated_at?: number | string | null;
-  stage: "rejected" | "watch" | "quote_watch" | "paper_bought" | "closed" | "failed" | string;
-  action?: string | null;
-  reason?: string | null;
-  skip_bucket?: string | null;
-  quote_retryable?: boolean;
-  score?: number | string | null;
-  threshold?: number | string | null;
-  liquidity_usd?: number | null;
-  market_cap_usd?: number | null;
-  volume_h1?: number | null;
-  tx_count_m5?: number | null;
-  buy_ratio?: number | string | null;
-  sell_ratio?: number | string | null;
-  pair_age_seconds?: number | string | null;
-  blockers?: string[];
-  positives?: string[];
-  sources?: string[];
-  trade_status?: string | null;
-  pnl?: number | null;
-  pnl_pct?: number | string | null;
-  buy_quote_pass?: boolean | null;
-  sell_quote_pass?: boolean | null;
-  postmortem?: {
-    status?: string | null;
-    pnl?: number | null;
-    pnl_pct?: number | string | null;
-    entry_price?: number | null;
-    exit_price?: number | null;
-    entry_liquidity_usd?: number | null;
-    exit_liquidity_usd?: number | null;
-    liquidity_change_pct?: number | null;
-    entry_market_cap?: number | null;
-    exit_market_cap?: number | null;
-    market_cap_change_pct?: number | null;
-    position_size_usd?: number | null;
-    entry_reason?: string | null;
-    exit_reason?: string | null;
-    failure_reason?: string | null;
-    hold_seconds?: number | null;
-  };
-};
-
-export type MarketRadarReviewPayload = {
-  generated_at?: number;
-  mode: "MARKET_RADAR_REVIEW_ONLY" | string;
-  source?: string;
-  live_execution_locked: boolean;
-  summary: Record<string, number>;
-  items: MarketRadarReviewItem[];
-  notes?: string[];
 };
 
 export type TradeRecord = {
@@ -835,13 +675,6 @@ export type TradeRecord = {
 };
 
 export type TradesPayload = {
-  source?: string;
-  source_detail?: string;
-  source_contract?: {
-    trades?: string;
-    decisions?: string;
-    snapshots?: string;
-  };
   open_trades: TradeRecord[];
   closed_trades: TradeRecord[];
   failed_trades: TradeRecord[];
@@ -877,13 +710,6 @@ export type WinnerPatternPayload = {
 };
 
 export type SnapshotPayload = {
-  source?: string;
-  source_detail?: string;
-  source_contract?: {
-    snapshots?: string;
-    trades?: string;
-    decisions?: string;
-  };
   snapshots: Array<{
     time?: number;
     source?: string;
@@ -1005,16 +831,8 @@ export function eventFeedApiPath(limit = 120) {
   return `/api/events?limit=${encodeURIComponent(String(limit))}`;
 }
 
-export function decisionLedgerApiPath(options: { limit?: number; filter?: string; lane?: string } = {}) {
-  const params = new URLSearchParams();
-  params.set("limit", String(options.limit ?? 80));
-  if (options.filter) params.set("filter", options.filter);
-  if (options.lane) params.set("lane", options.lane);
-  return `/api/decisions?${params.toString()}`;
-}
-
-export function decisionExplanationApiPath(decisionId: string) {
-  return `/api/decisions/${encodeURIComponent(decisionId)}/explanation`;
+export function decisionLedgerApiPath(limit = 80) {
+  return `/api/decisions?limit=${encodeURIComponent(String(limit))}`;
 }
 
 export function protectedAmountApiPath() {
@@ -1039,22 +857,6 @@ export function walletReviewApplyApiPath() {
 
 export function socialImportApiPath() {
   return "/api/social/import";
-}
-
-export function socialFreshnessApiPath() {
-  return "/api/social/freshness";
-}
-
-export function decisionAnalyticsApiPath(limit = 5000) {
-  return `/api/decision-analytics?limit=${encodeURIComponent(String(limit))}`;
-}
-
-export function marketRadarReviewApiPath(limit = 120) {
-  return `/api/market-radar-review?limit=${encodeURIComponent(String(limit))}`;
-}
-
-export function loadDecisionExplanation(decisionId: string) {
-  return fetchJson<DecisionExplanationPayload>(decisionExplanationApiPath(decisionId));
 }
 
 export function saveProtectedAmount(payload: ProtectedAmountRequest) {
