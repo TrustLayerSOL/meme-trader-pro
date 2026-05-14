@@ -43,6 +43,32 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-14 update - Obsidian Wallet Review Decisions Page:
+
+Changed files:
+
+- `obsidian_export/decision_note.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/README.md`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added an Obsidian dashboard page for `data/wallet_review_decisions.json`.
+- Export now writes `MemeTraderPro/Dashboards/Wallet Review Decisions.md`.
+- The page summarizes saved decisions, approved promotions/demotions, notes, timestamps, wallet links, and whether each decision still maps to the current candidate audit.
+- Confirmed `/Applications/MemeTraderPro Obsidian Export.app` runs the current repo exporter against `/Users/dianeposs/Desktop/Jordan/obsidian-research/quant-database`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_obsidian_export`
+
+Remaining risk / next step:
+
+- Saved decisions are visible in Obsidian, but the apply path should still be tightened to reject stale decisions that no longer appear in the current candidate audit.
+
 2026-05-14 update - Obsidian Wallet Candidate Review Export:
 
 Changed files:

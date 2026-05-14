@@ -4,6 +4,7 @@ from pathlib import Path
 
 from obsidian_export.dashboard_notes import render_dashboard_notes
 from obsidian_export.candidate_note import render_wallet_candidate_note, wallet_candidate_filename
+from obsidian_export.decision_note import render_wallet_review_decisions_note
 from obsidian_export.exporter import GENERATED_MARKER, merge_generated_note
 from obsidian_export.signal_note import render_signal_note
 from obsidian_export.wallet_note import render_wallet_note, wallet_filename
@@ -171,6 +172,47 @@ old generated body
         self.assertIn("[[WAL-WalletABC123|WalletABC123]]", note)
         self.assertIn("runner-heavy known outcomes", note)
         self.assertIn("review recommendation has enough known outcomes", note)
+
+    def test_wallet_review_decisions_note_summarizes_saved_operator_decisions(self):
+        note = render_wallet_review_decisions_note(
+            {
+                "decisions": [
+                    {
+                        "wallet": "WalletABC123",
+                        "decision": "approve_promotion",
+                        "approved": True,
+                        "note": "repeat winner",
+                        "approved_by": "operator",
+                        "approved_at": 1778770000.0,
+                    },
+                    {
+                        "wallet": "WalletBAD999",
+                        "decision": "reject",
+                        "approved": False,
+                        "note": "weak evidence",
+                        "approved_by": "operator",
+                        "approved_at": 1778770100.0,
+                    },
+                ]
+            },
+            candidate_audit={
+                "candidates": [
+                    {
+                        "wallet": "WalletABC123",
+                        "recommendation_action": "PROMOTION_REVIEW",
+                        "audit_status": "HUMAN_REVIEW_REQUIRED",
+                    }
+                ]
+            },
+        )
+
+        self.assertIn("type: wallet_review_decisions", note)
+        self.assertIn("approved_decisions: 1", note)
+        self.assertIn("[[WAL-WalletABC123|WalletABC123]]", note)
+        self.assertIn("[[WREV-PROMOTION_REVIEW-WalletABC123|candidate review]]", note)
+        self.assertIn("approve_promotion", note)
+        self.assertIn("repeat winner", note)
+        self.assertIn("not_in_current_candidate_audit", note)
 
 
 if __name__ == "__main__":

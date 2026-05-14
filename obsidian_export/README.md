@@ -13,6 +13,7 @@ Obsidian is not the source of truth. The source of truth remains the MemeTraderP
 - `data/postmortems/paper_closed.jsonl`
 - `data/candidate_wallets.json`
 - `data/wallet_candidate_audit.json`
+- `data/wallet_review_decisions.json`
 - `data/replay_visibility_report.json`
 
 ## Setup
@@ -35,6 +36,12 @@ You can also pass the vault path manually:
 python3 -m obsidian_export.exporter --vault /path/to/QuantResearchVault
 ```
 
+The installed Dock app `/Applications/MemeTraderPro Obsidian Export.app` runs this exporter against:
+
+```text
+/Users/dianeposs/Desktop/Jordan/obsidian-research/quant-database
+```
+
 For a small smoke test:
 
 ```bash
@@ -55,6 +62,7 @@ MemeTraderPro/
   Postmortems/
   DailyReports/
   Dashboards/
+    Wallet Review Decisions.md
 ```
 
 Every generated note includes:

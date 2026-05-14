@@ -11,6 +11,7 @@ from obsidian_export.config import ObsidianExportConfig
 from obsidian_export.candidate_note import render_wallet_candidate_note, wallet_candidate_filename
 from obsidian_export.dashboard_notes import render_dashboard_notes
 from obsidian_export.daily_report import daily_report_filename, render_daily_report
+from obsidian_export.decision_note import render_wallet_review_decisions_note
 from obsidian_export.markdown import GENERATED_MARKER, as_dict, slugify, yaml_frontmatter
 from obsidian_export.signal_note import (
     paper_trade_filename,
@@ -121,6 +122,15 @@ class ObsidianExporter:
             self.write_rendered_note(relative_path, content)
             stats["written"] += 1
 
+        self.write_rendered_note(
+            "Dashboards/Wallet Review Decisions.md",
+            render_wallet_review_decisions_note(
+                as_dict(snapshot.get("wallet_review_decisions")),
+                candidate_audit=as_dict(snapshot.get("wallet_candidate_audit")),
+            ),
+        )
+        stats["written"] += 1
+
         return stats
 
 
@@ -218,6 +228,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
     performance = read_json(data_dir / "wallet_performance.json", {})
     candidate_wallets = read_json(data_dir / "candidate_wallets.json", {})
     wallet_candidate_audit = read_json(data_dir / "wallet_candidate_audit.json", {})
+    wallet_review_decisions = read_json(data_dir / "wallet_review_decisions.json", {})
     paper = read_json(data_dir / "paper_trades.json", {})
     replay_visibility = read_json(data_dir / "replay_visibility_report.json", {})
 
@@ -238,6 +249,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
         "postmortems": postmortems,
         "candidate_wallets": candidate_wallets,
         "wallet_candidate_audit": wallet_candidate_audit,
+        "wallet_review_decisions": wallet_review_decisions,
         "replay_visibility": replay_visibility,
     }
 

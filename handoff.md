@@ -46,40 +46,33 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
-Added Obsidian Wallet Candidate Review export.
+Added Obsidian Wallet Review Decisions page.
 
 Files changed:
 
-- `obsidian_export/candidate_note.py`
+- `obsidian_export/decision_note.py`
 - `obsidian_export/exporter.py`
-- `obsidian_export/dashboard_notes.py`
 - `obsidian_export/README.md`
 - `tests/test_obsidian_export.py`
-- `ROADMAP.md`
-- `research/BUILD_PLAN.md`
 - `WORK_LOG.md`
 - `handoff.md`
 
 Behavior:
 
-- `obsidian_export.exporter` now reads `data/wallet_candidate_audit.json`.
-- It writes generated candidate review notes under `MemeTraderPro/WalletCandidateReviews/`.
-- Each review note links to the wallet note and exposes recommendation action, audit status, evidence gates, outcome evidence, recommendation reasons, and audit notes.
-- The Obsidian dashboard now includes a Wallet Candidate Audit Queue Dataview section.
-- Wallet-list apply remains blocked by generated audit state; this is review/export only.
+- `obsidian_export.exporter` now reads `data/wallet_review_decisions.json`.
+- It writes `MemeTraderPro/Dashboards/Wallet Review Decisions.md`.
+- The page summarizes saved approvals, holds, rejects, notes, timestamps, wallet links, and whether each decision maps to the current candidate audit.
+- Confirmed `/Applications/MemeTraderPro Obsidian Export.app` runs this repo exporter against `/Users/dianeposs/Desktop/Jordan/obsidian-research/quant-database`.
 - Live execution remains locked.
 
 Verification:
 
 - `./trading_env/bin/python -m unittest tests.test_obsidian_export`
-- `./trading_env/bin/python -m py_compile obsidian_export/*.py tests/test_obsidian_export.py`
-- Smoke export to `/tmp/mtp_obsidian_candidate_smoke` wrote `619` notes including candidate review notes.
 
 Interpretation:
 
-- The system now has a separate audit layer between generated recommendations and any future wallet-list action.
-- The human-readable export/review surface now exists through Obsidian generated notes.
-- Do not let wallet-list apply consume generated candidates directly; approved decisions still need to be explicitly recorded and validated.
+- The Dock export app is the correct way to refresh Obsidian with the newest wallet review files.
+- Saved decisions are now reviewable in Obsidian, but wallet-list apply remains a separate gated step.
 
 Next implementation target:
 
