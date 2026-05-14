@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from unittest import mock
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -21,6 +22,13 @@ from core.protection_exit import ProtectionExitPlanner
 from core.protection_amounts import apply_manual_amount_to_watchlist, build_manual_amount_patch
 from core.position_cockpit import build_candles, build_simulated_action_intent
 from core.paper_exploration import evaluate_paper_exploration
+from core.market_radar import (
+    MarketRadar,
+    market_radar_holder_cluster_placeholder,
+    market_radar_linked_wallet_placeholder,
+    normalize_market_radar_candidates,
+    score_hot_market_candidate,
+)
 from core.rpc_provider import (
     HeliusRpcProvider,
     build_helius_rpc_providers,
@@ -55,6 +63,7 @@ from core.scanner import Scanner
 from infra.rpc_client import SolanaRPC
 from social.reddit_collector import collect_reddit_social, reddit_post_to_signal
 from social.social_signal import SocialSignalEngine
+from utils.discover_candidate_wallets import load_local_runner_mints
 
 
 _MODULE_CWD = Path.cwd()
@@ -78,6 +87,9 @@ class NoopStore:
         return None
 
     def insert_token_snapshot(self, snapshot):
+        return None
+
+    def upsert_decision(self, decision):
         return None
 
     def update_decision_action(self, decision_id, action):
@@ -256,24 +268,24 @@ class CandidateWalletDiscoveryTests(unittest.TestCase):
         decision = evaluate_candidate_wallet({
             "wallet": "New111",
             "already_tracked": False,
-            "score": 78,
-            "early_buy_events": 4,
-            "winner_mints": 2,
-            "unique_mints": 2,
+            "score": 54,
+            "early_buy_events": 1,
+            "winner_mints": 1,
+            "unique_mints": 1,
             "sell_ratio": 0.1,
         })
 
         self.assertEqual(decision["action"], "PAPER_WATCH")
         self.assertFalse(decision["mutates_tracked_wallets"])
-        self.assertIn("score >= 70", decision["reasons"])
+        self.assertIn("score >= 52", decision["reasons"])
 
     def test_candidate_wallet_policy_holds_thin_evidence(self):
         decision = evaluate_candidate_wallet({
             "wallet": "New111",
             "already_tracked": False,
-            "score": 53,
+            "score": 51,
             "early_buy_events": 1,
-            "winner_mints": 1,
+            "winner_mints": 0,
             "unique_mints": 1,
             "sell_ratio": 0,
         })
@@ -308,6 +320,46 @@ class CandidateWalletDiscoveryTests(unittest.TestCase):
         self.assertEqual(report["review_summary"]["paper_watch"], 1)
         self.assertEqual(report["review_summary"]["demote_review"], 1)
         self.assertEqual(report["candidates"][0]["review"]["action"], "PAPER_WATCH")
+
+    def test_load_local_runner_mints_selects_skipped_tokens_that_later_ran(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "memetrader.db"
+            import sqlite3
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE token_snapshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        time REAL,
+                        mint TEXT,
+                        source TEXT,
+                        context TEXT,
+                        price REAL,
+                        liquidity REAL,
+                        risk_label TEXT,
+                        payload_json TEXT
+                    )
+                """)
+                conn.executemany(
+                    "INSERT INTO token_snapshots (time, mint, source, context, price) VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (100, "Runner111pump", "scanner", "scanner_skip", 0.00001),
+                        (120, "Runner111pump", "scanner", "scanner_skip", 0.00009),
+                        (100, "Flat111pump", "scanner", "scanner_skip", 0.00001),
+                        (120, "Flat111pump", "scanner", "scanner_skip", 0.000011),
+                    ],
+                )
+
+            rows = load_local_runner_mints(
+                min_gain_pct=500,
+                max_mints=5,
+                min_snapshots=2,
+                db_path=db_path,
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["mint"], "Runner111pump")
+        self.assertEqual(rows[0]["reason"], "local_skipped_runner")
+        self.assertGreaterEqual(rows[0]["runner_gain_pct"], 500)
 
 
 class WalletLifecycleTests(unittest.TestCase):
@@ -1447,6 +1499,47 @@ class PaperTraderPnlTests(unittest.TestCase):
             finally:
                 paper_trader.PAPER_TRADES_FILE = original_file
 
+    def test_save_state_writes_synthetic_decision_ids_for_legacy_json_trades(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = paper_trader.PAPER_TRADES_FILE
+            path = Path(tmpdir) / "paper_trades.json"
+            paper_trader.PAPER_TRADES_FILE = str(path)
+            try:
+                seed = {
+                    "balance": 10000,
+                    "open_trades": [],
+                    "stats": {},
+                    "closed_trades": [{
+                        "mint": "LegacyOnlyMint",
+                        "token_mint": "LegacyOnlyMint",
+                        "status": "closed",
+                        "entry_time": 1_700_000_000,
+                        "close_time": 1_700_000_100,
+                        "entry_reason": "pre_ledger",
+                        "close_reason": "test",
+                        "total_pnl": 1,
+                        "total_pnl_pct": 1,
+                    }],
+                    "failed_trades": [],
+                }
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "w") as f:
+                    json.dump(seed, f)
+
+                trader = paper_trader.PaperTrader()
+                trader.store = NoopStore()
+                trader.wallet_performance = NoopWalletPerformance()
+                trader.save_state()
+
+                with open(path) as f:
+                    saved = json.load(f)
+                row = saved["closed_trades"][0]
+                self.assertTrue(str(row.get("decision_id") or "").startswith("dec_legacy_paper_"))
+                meta = row.get("signal_metadata") or {}
+                self.assertEqual(meta.get("decision_id"), row["decision_id"])
+            finally:
+                paper_trader.PAPER_TRADES_FILE = original_file
+
     def test_failed_buy_records_canonical_failure_fields(self):
         with TemporaryDirectory() as tmpdir:
             original_file = paper_trader.PAPER_TRADES_FILE
@@ -1822,6 +1915,996 @@ class ScannerCandidateFilterTests(unittest.TestCase):
         self.assertEqual(result["decision"]["paper_lane"], "main")
         self.assertEqual(result["decision"]["exploration"]["reason"], "confirmation_block")
 
+    def test_paper_exploration_suppresses_weak_medium_risk_confirmation_sample(self):
+        result = evaluate_paper_exploration(
+            decision={
+                "should_trade": False,
+                "score": 55,
+                "threshold": 68,
+                "risk_label": "MEDIUM_RISK",
+                "market_info": {"liquidity": 19_000, "market_cap": 37_000},
+                "reasons": ["CONFIRMATION BLOCK: observation only"],
+                "confirmation": {"allow": False, "reasons": ["observation only"]},
+            },
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_confirmation_blocked_enabled": True,
+                "paper_exploration_confirmation_score_threshold": 45,
+                "paper_exploration_confirmation_min_edge_score": 45,
+                "paper_exploration_confirmation_size_usd": 5,
+                "paper_exploration_bad_sample_suppression_enabled": True,
+                "paper_exploration_confirmation_medium_risk_min_score": 68,
+                "paper_exploration_confirmation_medium_risk_min_edge_score": 60,
+                "paper_exploration_confirmation_min_liquidity_usd": 25_000,
+                "paper_exploration_confirmation_min_market_cap_usd": 50_000,
+            },
+            rug_result={"hard_block": False, "risk_label": "MEDIUM_RISK"},
+            market_sanity={"allow": True, "liquidity": 19_000, "market_cap": 37_000},
+            buy_quote_analysis={"pass": True, "reason": "quote_passed"},
+            sell_quote_analysis={"pass": True, "reason": "quote_passed"},
+            edge_result={"paper_trade_worthy": False, "edge_score": 48},
+            position_size_usd=45,
+        )
+
+        decision = result["decision"]
+        self.assertFalse(decision["should_trade"])
+        self.assertEqual(decision["paper_lane"], "main")
+        self.assertEqual(decision["exploration"]["reason"], "bad_sample_suppressed_medium_risk_confirmation")
+        self.assertEqual(result["position_size_usd"], 0)
+        self.assertIn("PAPER EXPLORATION SUPPRESSED", " ".join(decision["reasons"]))
+
+    def test_paper_exploration_allows_low_risk_confirmation_sample_when_thresholds_are_met(self):
+        result = evaluate_paper_exploration(
+            decision={
+                "should_trade": False,
+                "score": 55,
+                "threshold": 68,
+                "risk_label": "LOW_RISK",
+                "market_info": {"liquidity": 80_000, "market_cap": 175_000},
+                "reasons": ["CONFIRMATION BLOCK: observation only"],
+                "confirmation": {"allow": False, "reasons": ["observation only"]},
+            },
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_confirmation_blocked_enabled": True,
+                "paper_exploration_confirmation_score_threshold": 45,
+                "paper_exploration_confirmation_min_edge_score": 45,
+                "paper_exploration_confirmation_size_usd": 5,
+                "paper_exploration_bad_sample_suppression_enabled": True,
+                "paper_exploration_confirmation_medium_risk_min_score": 68,
+                "paper_exploration_confirmation_medium_risk_min_edge_score": 60,
+                "paper_exploration_confirmation_min_liquidity_usd": 25_000,
+                "paper_exploration_confirmation_min_market_cap_usd": 50_000,
+            },
+            rug_result={"hard_block": False, "risk_label": "LOW_RISK"},
+            market_sanity={"allow": True, "liquidity": 80_000, "market_cap": 175_000},
+            buy_quote_analysis={"pass": True, "reason": "quote_passed"},
+            sell_quote_analysis={"pass": True, "reason": "quote_passed"},
+            edge_result={"paper_trade_worthy": False, "edge_score": 48},
+            position_size_usd=45,
+        )
+
+        decision = result["decision"]
+        self.assertTrue(decision["should_trade"])
+        self.assertEqual(decision["paper_lane"], "exploration")
+        self.assertEqual(decision["exploration"]["reason"], "confirmation_block_observation")
+
+    def test_paper_exploration_auto_pauses_after_negative_sample(self):
+        result = evaluate_paper_exploration(
+            decision={"should_trade": False, "score": 92, "threshold": 68, "reasons": []},
+            settings={
+                "paper_exploration_enabled": True,
+                "paper_exploration_score_threshold": 45,
+                "paper_exploration_size_usd": 5,
+                "paper_exploration_auto_pause_enabled": True,
+                "paper_exploration_auto_pause_min_closed": 5,
+                "paper_exploration_auto_pause_max_avg_pnl_pct": -10,
+                "paper_exploration_auto_pause_max_win_rate_pct": 20,
+            },
+            rug_result={"hard_block": False},
+            market_sanity={"allow": True},
+            buy_quote_analysis={"pass": True, "reason": "quote_passed"},
+            sell_quote_analysis={"pass": True, "reason": "quote_passed"},
+            edge_result={"edge_score": 80, "paper_trade_worthy": True},
+            position_size_usd=5,
+            paper_state={
+                "closed_trades": [
+                    {"paper_lane": "exploration", "pnl_pct": -50},
+                    {"paper_lane": "exploration", "pnl_pct": -45},
+                    {"paper_lane": "exploration", "pnl_pct": -30},
+                    {"paper_lane": "exploration", "pnl_pct": -20},
+                    {"paper_lane": "exploration", "pnl_pct": 5},
+                ]
+            },
+        )
+
+        self.assertFalse(result["decision"]["should_trade"])
+        self.assertEqual(result["decision"]["paper_lane"], "main")
+        self.assertEqual(result["decision"]["exploration"]["reason"], "auto_paused_negative_sample")
+
+    def test_market_radar_scores_rkc_style_hot_dex_pump_candidate(self):
+        candidates = normalize_market_radar_candidates([
+            {
+                "chainId": "solana",
+                "tokenAddress": "7HgfXftRBBqsYtAEYcqjGLQrNJLL6Tww9ek4rE3Apump",
+                "url": "https://dexscreener.com/solana/rkc",
+                "amount": 30,
+            },
+            {
+                "chainId": "ethereum",
+                "tokenAddress": "IgnoredEth",
+            },
+        ], source="dexscreener_top_boosts")
+        self.assertEqual(len(candidates), 1)
+
+        score = score_hot_market_candidate(
+            candidates[0],
+            {
+                "name": "Red Kitten Crew",
+                "symbol": "RKC",
+                "price": 0.0056,
+                "liquidity": 324_000,
+                "market_cap": 5_600_000,
+                "volume": 37_000_000,
+                "volume_h1": 1_500_000,
+                "price_change_h1": -16,
+                "price_change_h6": 184,
+                "tx_count": 438,
+                "buy_count": 247,
+                "sell_count": 191,
+                "twitter": "https://x.com/i/communities/2023810183579779572",
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+            },
+        )
+
+        self.assertTrue(score["allowed"])
+        self.assertGreaterEqual(score["score"], 70)
+        self.assertIn("hot_m5_activity", score["reasons"])
+
+    def test_market_radar_ingests_exact_rkc_without_wallet_signal_and_opens_paper_trade(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                self.last_mint = mint
+                return {
+                    "name": "Red Kitten Crew",
+                    "symbol": "RKC",
+                    "price": 0.0056,
+                    "liquidity": 324_000,
+                    "market_cap": 5_600_000,
+                    "volume": 37_000_000,
+                    "volume_h1": 1_500_000,
+                    "price_change_h1": -16,
+                    "price_change_h6": 184,
+                    "tx_count": 438,
+                    "buy_count": 247,
+                    "sell_count": 191,
+                    "twitter": "https://x.com/i/communities/2023810183579779572",
+                }
+
+        class FakeQuote:
+            def is_cooling_down(self):
+                return False
+
+            async def get_buy_quote(self, **_kwargs):
+                return {"ok": True, "out_amount": 1_000_000, "price_impact_pct": 0.1, "route_plan": [{"percent": 100}]}
+
+            async def get_sell_quote(self, **_kwargs):
+                return {"ok": True, "out_amount": 100_000, "price_impact_pct": 0.1, "route_plan": [{"percent": 100}]}
+
+            def analyze_quote(self, quote, max_price_impact_pct=8):
+                return {"pass": bool(quote and quote.get("ok")), "reason": "quote_passed", "price_impact_pct": 0.1}
+
+        class FakePaperTrader:
+            def __init__(self):
+                self.opened = []
+
+            def get_state(self):
+                return {"open_trades": [], "closed_trades": [], "failed_trades": []}
+
+            def open_trade(self, **kwargs):
+                self.opened.append(kwargs)
+                return {"status": "open", **kwargs}
+
+        store = RecordingStore()
+        paper = FakePaperTrader()
+        radar = MarketRadar(
+            market_checker=FakeMarketChecker(),
+            paper_trader=paper,
+            jupiter_quote=FakeQuote(),
+            store=store,
+            settings_loader=lambda: {
+                "market_radar_max_candidates_per_cycle": 1,
+                "market_radar_scan_candidates_per_cycle": 1,
+                "market_radar_max_entries_per_cycle": 1,
+                "market_radar_max_quotes_per_cycle": 2,
+                "market_radar_quote_cooldown_seconds": 0,
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_require_social_or_site": True,
+            },
+        )
+
+        async def fake_candidates():
+            return normalize_market_radar_candidates([
+                {
+                    "chainId": "solana",
+                    "tokenAddress": "7HgfXftRBBqsYtAEYcqjGLQrNJLL6Tww9ek4rE3Apump",
+                    "url": "https://dexscreener.com/solana/rkc",
+                    "amount": 30,
+                },
+            ], source="dexscreener_top_boosts")
+
+        radar.fetch_candidates = fake_candidates
+        with mock.patch("core.market_radar.load_status", return_value={"quotes": {"status": "quote_ok", "updated_at": time.time() - 999}}):
+            result = asyncio.run(radar.process_once())
+
+        self.assertEqual(result["opened"], 1)
+        self.assertEqual(paper.opened[0]["mint"], "7HgfXftRBBqsYtAEYcqjGLQrNJLL6Tww9ek4rE3Apump")
+        self.assertEqual(paper.opened[0]["paper_lane"], "market_radar")
+        self.assertEqual(store.decisions[0]["mint"], "7HgfXftRBBqsYtAEYcqjGLQrNJLL6Tww9ek4rE3Apump")
+        self.assertEqual(store.decisions[0]["paper_lane"], "market_radar")
+        self.assertIn(
+            "market_radar_open: hot_candidate_quote_passed",
+            store.decisions[0]["payload"]["rule_outcomes"]["scoring"]["reasons"],
+        )
+        hc = store.decisions[0]["payload"]["rule_outcomes"]["holder_cluster"]
+        self.assertEqual(hc["holder_risk_label"], "UNKNOWN")
+        holder_reasons_joined = " ".join(hc.get("holder_reasons") or [])
+        self.assertIn("market_radar_holder_check_disabled", holder_reasons_joined)
+        self.assertEqual(hc["linked_wallet_risk"]["risk_label"], "NOT_CHECKED")
+        self.assertEqual(hc["linked_wallet_risk"]["reason"], "no_linked_wallet_graph_source")
+        self.assertEqual(
+            hc["linked_wallet_risk"]["observed_wallet_cluster"]["lane"],
+            "market_radar",
+        )
+
+    def test_market_radar_holder_concentration_danger_blocks_quote(self):
+        class DangerHolderRpc:
+            async def rpc_call(self, method, params):
+                assert method == "getTokenLargestAccounts"
+                return {"result": {"value": [
+                    {"address": "A" * 32, "uiAmount": 60},
+                    {"address": "B" * 32, "uiAmount": 20},
+                    {"address": "C" * 32, "uiAmount": 20},
+                ]}}
+
+        class SpyQuote:
+            def __init__(self):
+                self.buy_calls = 0
+                self.cooling = False
+
+            def is_cooling_down(self):
+                return self.cooling
+
+            async def get_buy_quote(self, **_kwargs):
+                self.buy_calls += 1
+                return {"ok": True, "out_amount": 1_000_000, "price_impact_pct": 0.1, "route_plan": [{"percent": 100}]}
+
+            async def get_sell_quote(self, **_kwargs):
+                return {"ok": True, "out_amount": 100_000, "price_impact_pct": 0.1, "route_plan": [{"percent": 100}]}
+
+            def analyze_quote(self, quote, max_price_impact_pct=8):
+                return {"pass": bool(quote and quote.get("ok")), "reason": "quote_passed", "price_impact_pct": 0.1}
+
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                return {
+                    "name": "Red Kitten Crew",
+                    "symbol": "RKC",
+                    "price": 0.0056,
+                    "liquidity": 324_000,
+                    "market_cap": 5_600_000,
+                    "volume": 37_000_000,
+                    "volume_h1": 1_500_000,
+                    "price_change_h1": -16,
+                    "price_change_h6": 184,
+                    "tx_count": 438,
+                    "buy_count": 247,
+                    "sell_count": 191,
+                    "twitter": "https://x.com/i/communities/2023810183579779572",
+                }
+
+        spy = SpyQuote()
+        store = RecordingStore()
+        radar = MarketRadar(
+            market_checker=FakeMarketChecker(),
+            paper_trader=None,
+            jupiter_quote=spy,
+            store=store,
+            rpc=DangerHolderRpc(),
+            settings_loader=lambda: {
+                "market_radar_max_candidates_per_cycle": 1,
+                "market_radar_scan_candidates_per_cycle": 1,
+                "market_radar_max_entries_per_cycle": 1,
+                "market_radar_max_quotes_per_cycle": 2,
+                "market_radar_quote_cooldown_seconds": 0,
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_require_social_or_site": True,
+                "market_radar_holder_check_enabled": True,
+                "market_radar_max_holder_checks_per_cycle": 2,
+                "market_radar_holder_check_timeout_seconds": 3,
+            },
+        )
+
+        async def runner():
+            candidate = normalize_market_radar_candidates([
+                {
+                    "chainId": "solana",
+                    "tokenAddress": "7HgfXftRBBqsYtAEYcqjGLQrNJLL6Tww9ek4rE3Apump",
+                    "url": "https://dexscreener.com/solana/rkc",
+                    "amount": 30,
+                },
+            ], source="dexscreener_top_boosts")[0]
+            return await radar.process_candidate(candidate, radar.settings_loader())
+
+        result = asyncio.run(runner())
+        self.assertFalse(result.get("opened"))
+        self.assertEqual(result.get("skip_reason"), "market_radar_holder_concentration_danger")
+        self.assertEqual(result.get("skip_bucket"), "holder_concentration")
+        self.assertEqual(spy.buy_calls, 0)
+        row = store.decisions[0]["payload"]["rule_outcomes"]["holder_cluster"]
+        self.assertEqual(row["holder_risk_label"], "DANGER")
+
+    def test_market_radar_holder_pass_allows_quote_when_check_enabled(self):
+        class WideHolderRpc:
+            async def rpc_call(self, method, params):
+                return {"result": {"value": [
+                    {"address": f"H{i:03d}" + "x" * 26, "uiAmount": 10}
+                    for i in range(30)
+                ]}}
+
+        class QuoteSpy:
+            def __init__(self):
+                self.buy_calls = 0
+
+            def is_cooling_down(self):
+                return False
+
+            async def get_buy_quote(self, **_kwargs):
+                self.buy_calls += 1
+                return {"ok": True, "out_amount": 1_000_000, "price_impact_pct": 0.1, "route_plan": [{"percent": 100}]}
+
+            async def get_sell_quote(self, **_kwargs):
+                return {"ok": True, "out_amount": 100_000, "price_impact_pct": 0.1, "route_plan": [{"percent": 100}]}
+
+            def analyze_quote(self, quote, max_price_impact_pct=8):
+                return {"pass": bool(quote and quote.get("ok")), "reason": "quote_passed", "price_impact_pct": 0.1}
+
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                return {
+                    "name": "Wide",
+                    "symbol": "WIDE",
+                    "price": 0.0056,
+                    "liquidity": 324_000,
+                    "market_cap": 5_600_000,
+                    "volume": 37_000_000,
+                    "volume_h1": 1_500_000,
+                    "price_change_h1": -16,
+                    "price_change_h6": 184,
+                    "tx_count": 438,
+                    "buy_count": 247,
+                    "sell_count": 191,
+                    "twitter": "https://x.com/i/communities/2023810183579779572",
+                }
+
+        class FakePaperTrader:
+            def get_state(self):
+                return {"open_trades": [], "closed_trades": [], "failed_trades": []}
+
+            def open_trade(self, **_kwargs):
+                return {"status": "open", **_kwargs}
+
+        quote = QuoteSpy()
+        store = RecordingStore()
+        radar = MarketRadar(
+            market_checker=FakeMarketChecker(),
+            paper_trader=FakePaperTrader(),
+            jupiter_quote=quote,
+            store=store,
+            rpc=WideHolderRpc(),
+            settings_loader=lambda: {
+                "market_radar_max_candidates_per_cycle": 1,
+                "market_radar_scan_candidates_per_cycle": 1,
+                "market_radar_max_entries_per_cycle": 1,
+                "market_radar_max_quotes_per_cycle": 2,
+                "market_radar_quote_cooldown_seconds": 0,
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_require_social_or_site": True,
+                "market_radar_holder_check_enabled": True,
+                "market_radar_max_holder_checks_per_cycle": 2,
+                "market_radar_holder_check_timeout_seconds": 3,
+            },
+        )
+
+        async def runner():
+            cand = normalize_market_radar_candidates([
+                {"chainId": "solana", "tokenAddress": "7HgfXftRBBqsYtAEYcqjGLQrNJLL6Tww9ek4rE3Apump", "amount": 30},
+            ], source="dexscreener_top_boosts")[0]
+            with mock.patch("core.market_radar.load_status", return_value={"quotes": {"status": "quote_ok", "updated_at": time.time() - 999}}):
+                return await radar.process_candidate(cand, radar.settings_loader())
+
+        result = asyncio.run(runner())
+        self.assertTrue(result.get("opened"))
+        self.assertEqual(quote.buy_calls, 1)
+        hc = store.decisions[-1]["payload"]["rule_outcomes"]["holder_cluster"]
+        self.assertEqual(hc["holder_risk_label"], "PASS")
+
+    def test_market_radar_holder_and_linked_wallet_placeholders(self):
+        hc = market_radar_holder_cluster_placeholder()
+        self.assertEqual(hc["holder_concentration_risk"], "UNKNOWN")
+        self.assertIn("market_radar_holder_check_not_applicable_score_blocked", hc["holder_concentration_reasons"])
+        link = market_radar_linked_wallet_placeholder()
+        self.assertEqual(link["risk_label"], "NOT_CHECKED")
+        self.assertEqual(link["reason"], "no_linked_wallet_graph_source")
+        self.assertEqual(link["observed_wallet_cluster"]["lane"], "market_radar")
+
+    def test_market_radar_blocks_thin_or_quiet_candidates(self):
+        score = score_hot_market_candidate(
+            {"mint": "QuietPump111pump", "sources": ["dexscreener_latest_profiles"]},
+            {
+                "symbol": "QUIET",
+                "price": 0.00001,
+                "liquidity": 4_000,
+                "market_cap": 40_000,
+                "volume_h1": 2_000,
+                "tx_count": 4,
+                "buy_count": 2,
+                "sell_count": 2,
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+            },
+        )
+
+        self.assertFalse(score["allowed"])
+        self.assertIn("liquidity_below_hot_lane", score["blockers"])
+
+    def test_market_radar_quality_gate_blocks_low_liquidity_hot_feed_loser(self):
+        score = score_hot_market_candidate(
+            {"mint": "LowLiquidityHot111pump", "sources": ["dexscreener_latest_boosts", "dexscreener_top_boosts"]},
+            {
+                "symbol": "HOT",
+                "price": 0.00072,
+                "liquidity": 63_884,
+                "market_cap": 501_675,
+                "volume_h1": 691_162,
+                "tx_count": 437,
+                "buy_count": 205,
+                "sell_count": 232,
+                "price_change_h1": -34.01,
+                "price_change_h6": 776,
+                "twitter": "https://x.com/hot",
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_max_volume_liquidity_ratio": 8,
+                "market_radar_min_h1_price_change_pct": -25,
+                "market_radar_require_social_or_site": True,
+            },
+        )
+
+        self.assertFalse(score["allowed"])
+        self.assertIn("entry_liquidity_below_quality_gate", score["blockers"])
+        self.assertIn("collapsing_h1_momentum", score["blockers"])
+        self.assertIn("h1_volume_liquidity_anomaly", score["blockers"])
+
+    def test_market_radar_quality_gate_blocks_pre_entry_m5_decay(self):
+        score = score_hot_market_candidate(
+            {"mint": "M5Decay111pump", "sources": ["dexscreener_latest_boosts", "dexscreener_top_boosts"]},
+            {
+                "symbol": "DECAY",
+                "price": 0.0012,
+                "liquidity": 220_000,
+                "market_cap": 900_000,
+                "volume_h1": 450_000,
+                "tx_count": 180,
+                "buy_count": 105,
+                "sell_count": 75,
+                "price_change_m5": -18.0,
+                "price_change_h1": -12.0,
+                "price_change_h6": 240.0,
+                "twitter": "https://x.com/decay",
+                "telegram": "https://t.me/decay",
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_min_h1_price_change_pct": -25,
+                "market_radar_min_m5_price_change_pct": -12,
+                "market_radar_require_social_or_site": True,
+            },
+        )
+
+        self.assertFalse(score["allowed"])
+        self.assertIn("entry_m5_price_decay", score["blockers"])
+        self.assertNotIn("score_below_market_radar_threshold", score["blockers"])
+
+    def test_market_radar_quality_gate_blocks_one_sided_buy_flow(self):
+        score = score_hot_market_candidate(
+            {"mint": "OneSided111pump", "sources": ["dexscreener_latest_profiles", "dexscreener_top_boosts"]},
+            {
+                "symbol": "ONE",
+                "price": 0.001,
+                "liquidity": 140_000,
+                "market_cap": 1_000_000,
+                "volume_h1": 250_000,
+                "tx_count": 493,
+                "buy_count": 444,
+                "sell_count": 49,
+                "price_change_h1": 39.22,
+                "price_change_h6": 708,
+                "twitter": "https://x.com/one",
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_max_buy_ratio": 0.88,
+                "market_radar_min_h1_price_change_pct": -25,
+                "market_radar_require_social_or_site": True,
+            },
+        )
+
+        self.assertFalse(score["allowed"])
+        self.assertIn("one_sided_buy_flow", score["blockers"])
+
+    def test_market_radar_quality_gate_requires_social_proof_for_hot_feed(self):
+        score = score_hot_market_candidate(
+            {"mint": "NoSocial111pump", "sources": ["dexscreener_latest_profiles"]},
+            {
+                "symbol": "NOSOC",
+                "price": 0.001,
+                "liquidity": 180_000,
+                "market_cap": 1_200_000,
+                "volume_h1": 280_000,
+                "tx_count": 160,
+                "buy_count": 92,
+                "sell_count": 68,
+                "price_change_h1": 18,
+                "price_change_h6": 90,
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_require_social_or_site": True,
+            },
+        )
+
+        self.assertFalse(score["allowed"])
+        self.assertIn("missing_social_or_site_quality_gate", score["blockers"])
+
+    def test_market_radar_quality_gate_blocks_too_fresh_pair(self):
+        now_ms = int(time.time() * 1000)
+        score = score_hot_market_candidate(
+            {"mint": "TooFresh111pump", "sources": ["dexscreener_top_boosts"]},
+            {
+                "symbol": "FRESH",
+                "price": 0.001,
+                "liquidity": 180_000,
+                "market_cap": 1_200_000,
+                "volume_h1": 280_000,
+                "tx_count": 160,
+                "buy_count": 92,
+                "sell_count": 68,
+                "price_change_h1": 18,
+                "price_change_h6": 90,
+                "pair_created_at": now_ms - (8 * 60 * 1000),
+                "twitter": "https://x.com/fresh",
+                "telegram": "https://t.me/fresh",
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_min_pair_age_seconds": 30 * 60,
+                "market_radar_max_pair_age_seconds": 24 * 3600,
+            },
+        )
+
+        self.assertFalse(score["allowed"])
+        self.assertIn("pair_too_fresh_for_market_radar", score["blockers"])
+
+    def test_market_radar_quality_gate_allows_rkc_style_high_activity_fresh_pair(self):
+        now_ms = int(time.time() * 1000)
+        score = score_hot_market_candidate(
+            {"mint": "RkcFresh111pump", "sources": ["dexscreener_latest_boosts", "dexscreener_top_boosts"]},
+            {
+                "symbol": "RKC",
+                "price": 0.0056,
+                "liquidity": 324_000,
+                "market_cap": 5_600_000,
+                "volume": 37_000_000,
+                "volume_h1": 1_500_000,
+                "tx_count": 438,
+                "buy_count": 247,
+                "sell_count": 191,
+                "price_change_m5": 4.0,
+                "price_change_h1": -16,
+                "price_change_h6": 184,
+                "pair_created_at": now_ms - (8 * 60 * 1000),
+                "twitter": "https://x.com/i/communities/2023810183579779572",
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_min_h1_price_change_pct": -25,
+                "market_radar_min_m5_price_change_pct": -12,
+                "market_radar_min_pair_age_seconds": 30 * 60,
+                "market_radar_max_pair_age_seconds": 24 * 3600,
+                "market_radar_require_social_or_site": True,
+            },
+        )
+
+        self.assertTrue(score["allowed"])
+        self.assertIn("fresh_pair_high_activity_exception", score["reasons"])
+        self.assertNotIn("pair_too_fresh_for_market_radar", score["blockers"])
+
+    def test_market_radar_quality_gate_blocks_stale_resurrected_pair_without_fresh_strength(self):
+        old_pair_ms = int((time.time() - (7 * 24 * 3600)) * 1000)
+        score = score_hot_market_candidate(
+            {"mint": "StaleBoost111pump", "sources": ["dexscreener_latest_profiles", "dexscreener_latest_boosts", "dexscreener_top_boosts"]},
+            {
+                "symbol": "STALE",
+                "price": 0.001,
+                "liquidity": 180_000,
+                "market_cap": 1_200_000,
+                "volume_h1": 280_000,
+                "tx_count": 160,
+                "buy_count": 92,
+                "sell_count": 68,
+                "price_change_h1": -3,
+                "price_change_h6": 90,
+                "pair_created_at": old_pair_ms,
+                "twitter": "https://x.com/stale",
+                "telegram": "https://t.me/stale",
+            },
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_min_pair_age_seconds": 30 * 60,
+                "market_radar_max_pair_age_seconds": 24 * 3600,
+            },
+        )
+
+        self.assertFalse(score["allowed"])
+        self.assertIn("stale_pair_without_fresh_strength", score["blockers"])
+
+    def test_market_radar_respects_shared_quote_cooldown(self):
+        class FakeQuote:
+            def __init__(self):
+                self.calls = 0
+
+            def is_cooling_down(self):
+                return False
+
+            async def get_buy_quote(self, **_kwargs):
+                self.calls += 1
+                return {"ok": True, "out_amount": 100, "price_impact_pct": 0, "route_plan": [1]}
+
+            def analyze_quote(self, quote, max_price_impact_pct=8):
+                return {"pass": bool(quote and quote.get("ok")), "reason": "quote_passed", "price_impact_pct": 0}
+
+        quote = FakeQuote()
+        radar = MarketRadar(market_checker=None, paper_trader=None, jupiter_quote=quote)
+        with mock.patch(
+            "core.market_radar.load_status",
+            return_value={"quotes": {"status": "http_429", "updated_at": time.time()}},
+        ):
+            result = asyncio.run(radar.quote_route(
+                "HotMint111pump",
+                {
+                    "market_radar_max_quotes_per_cycle": 1,
+                    "market_radar_quote_cooldown_seconds": 300,
+                },
+            ))
+
+        self.assertEqual(result[2]["reason"], "shared_quote_cooldown_after_429")
+        self.assertEqual(quote.calls, 0)
+
+    def test_market_radar_scans_past_recent_candidates_to_find_fresh_candidate(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                return {
+                    "symbol": "HOT",
+                    "price": 0.001,
+                    "liquidity": 150_000,
+                    "market_cap": 900_000,
+                    "volume_h1": 350_000,
+                    "tx_count": 120,
+                    "buy_count": 75,
+                    "sell_count": 45,
+                    "price_change_h1": 12,
+                    "price_change_h6": 80,
+                    "twitter": "https://x.com/hot",
+                }
+
+        class FakeQuote:
+            def is_cooling_down(self):
+                return False
+
+            async def get_buy_quote(self, **_kwargs):
+                return {"ok": True, "out_amount": 1000, "price_impact_pct": 0, "route_plan": [{"percent": 100}]}
+
+            async def get_sell_quote(self, **_kwargs):
+                return {"ok": True, "out_amount": 100, "price_impact_pct": 0, "route_plan": [{"percent": 100}]}
+
+            def analyze_quote(self, quote, max_price_impact_pct=8):
+                return {"pass": bool(quote and quote.get("ok")), "reason": "quote_passed", "price_impact_pct": 0}
+
+        class FakePaperTrader:
+            def __init__(self):
+                self.opened = []
+
+            def get_state(self):
+                return {"open_trades": [], "closed_trades": [], "failed_trades": []}
+
+            def open_trade(self, **kwargs):
+                self.opened.append(kwargs)
+                return {"status": "open", **kwargs}
+
+        store = RecordingStore()
+        paper = FakePaperTrader()
+        radar = MarketRadar(
+            market_checker=FakeMarketChecker(),
+            paper_trader=paper,
+            jupiter_quote=FakeQuote(),
+            store=store,
+            settings_loader=lambda: {
+                "market_radar_max_candidates_per_cycle": 1,
+                "market_radar_scan_candidates_per_cycle": 5,
+                "market_radar_max_entries_per_cycle": 1,
+                "market_radar_max_quotes_per_cycle": 1,
+                "market_radar_quote_cooldown_seconds": 0,
+                "market_radar_mint_cooldown_seconds": 3600,
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+            },
+        )
+        radar.mark_seen("RecentMint111pump")
+
+        async def fake_candidates():
+            return [
+                {"mint": "RecentMint111pump", "sources": ["dexscreener_latest_profiles"]},
+                {"mint": "FreshHot111pump", "sources": ["dexscreener_latest_profiles"]},
+            ]
+
+        radar.fetch_candidates = fake_candidates
+        with mock.patch("core.market_radar.load_status", return_value={"quotes": {"status": "quote_ok", "updated_at": time.time() - 999}}):
+            result = asyncio.run(radar.process_once())
+
+        self.assertEqual(result["scanned"], 2)
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["opened"], 1)
+        self.assertEqual(paper.opened[0]["mint"], "FreshHot111pump")
+
+    def test_market_radar_quote_cooldown_skip_is_retryable_and_visible(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, _mint):
+                return {
+                    "symbol": "HOT",
+                    "price": 0.001,
+                    "liquidity": 120_000,
+                    "market_cap": 800_000,
+                    "volume_h1": 320_000,
+                    "tx_count": 100,
+                    "buy_count": 70,
+                    "sell_count": 30,
+                    "price_change_h1": 5,
+                    "price_change_h6": 75,
+                    "twitter": "https://x.com/hot",
+                }
+
+        class FakeQuote:
+            def __init__(self):
+                self.calls = 0
+
+            def is_cooling_down(self):
+                return False
+
+            async def get_buy_quote(self, **_kwargs):
+                self.calls += 1
+                return {"ok": True}
+
+        store = RecordingStore()
+        quote = FakeQuote()
+        radar = MarketRadar(market_checker=FakeMarketChecker(), paper_trader=None, jupiter_quote=quote, store=store)
+        with mock.patch(
+            "core.market_radar.load_status",
+            return_value={"quotes": {"status": "http_429", "updated_at": time.time()}},
+        ):
+            result = asyncio.run(radar.process_candidate(
+                {"mint": "CooldownHot111pump", "sources": ["dexscreener_latest_profiles"]},
+                {
+                    "market_radar_max_quotes_per_cycle": 1,
+                    "market_radar_quote_cooldown_seconds": 300,
+                    "market_radar_min_score": 70,
+                    "market_radar_min_liquidity_usd": 25_000,
+                    "market_radar_min_market_cap_usd": 75_000,
+                    "market_radar_max_market_cap_usd": 10_000_000,
+                    "market_radar_min_m5_tx_count": 40,
+                    "market_radar_min_h1_volume_usd": 100_000,
+                },
+            ))
+
+        self.assertFalse(result["opened"])
+        self.assertTrue(result["retry_soon"])
+        self.assertEqual(result["skip_reason"], "shared_quote_cooldown_after_429")
+        self.assertEqual(quote.calls, 0)
+        self.assertNotIn("CooldownHot111pump", radar.seen_mints)
+        decision = store.decisions[0]
+        self.assertIn("shared_quote_cooldown_after_429", decision["action_reason"])
+        self.assertTrue(decision["payload"]["market_radar"]["decision"]["quote_retryable"])
+
+    def test_market_radar_m5_decay_skip_is_recorded_without_quote(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, _mint):
+                return {
+                    "symbol": "DECAY",
+                    "price": 0.0012,
+                    "liquidity": 220_000,
+                    "market_cap": 900_000,
+                    "volume_h1": 450_000,
+                    "tx_count": 180,
+                    "buy_count": 105,
+                    "sell_count": 75,
+                    "price_change_m5": -18.0,
+                    "price_change_h1": -12.0,
+                    "price_change_h6": 240.0,
+                    "twitter": "https://x.com/decay",
+                }
+
+        class FakeQuote:
+            def __init__(self):
+                self.calls = 0
+
+            def is_cooling_down(self):
+                return False
+
+            async def get_buy_quote(self, **_kwargs):
+                self.calls += 1
+                return {"ok": True}
+
+        store = RecordingStore()
+        quote = FakeQuote()
+        radar = MarketRadar(market_checker=FakeMarketChecker(), paper_trader=None, jupiter_quote=quote, store=store)
+        result = asyncio.run(radar.process_candidate(
+            {"mint": "M5Decay111pump", "sources": ["dexscreener_latest_boosts"]},
+            {
+                "market_radar_max_quotes_per_cycle": 1,
+                "market_radar_quote_cooldown_seconds": 0,
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_entry_min_liquidity_usd": 100_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_entry_min_market_cap_usd": 250_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+                "market_radar_min_h1_price_change_pct": -25,
+                "market_radar_min_m5_price_change_pct": -12,
+            },
+        ))
+
+        self.assertFalse(result["opened"])
+        self.assertEqual(result["skip_reason"], "entry_m5_price_decay")
+        self.assertEqual(quote.calls, 0)
+        decision = store.decisions[0]
+        self.assertIn("entry_m5_price_decay", decision["action_reason"])
+        self.assertEqual(decision["payload"]["market_radar"]["decision"]["skip_reason"], "entry_m5_price_decay")
+        self.assertIn("entry_m5_price_decay", decision["payload"]["market_radar"]["score"]["blockers"])
+
+    def test_market_radar_records_structured_score_skip_reason(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, _mint):
+                return {
+                    "symbol": "QUIET",
+                    "price": 0.00001,
+                    "liquidity": 4_000,
+                    "market_cap": 40_000,
+                    "volume_h1": 2_000,
+                    "tx_count": 4,
+                    "buy_count": 2,
+                    "sell_count": 2,
+                }
+
+        store = RecordingStore()
+        radar = MarketRadar(market_checker=FakeMarketChecker(), paper_trader=None, jupiter_quote=None, store=store)
+        result = asyncio.run(radar.process_candidate(
+            {"mint": "QuietSkip111pump", "sources": ["dexscreener_latest_profiles"]},
+            {
+                "market_radar_min_score": 70,
+                "market_radar_min_liquidity_usd": 25_000,
+                "market_radar_min_market_cap_usd": 75_000,
+                "market_radar_max_market_cap_usd": 10_000_000,
+                "market_radar_min_m5_tx_count": 40,
+                "market_radar_min_h1_volume_usd": 100_000,
+            },
+        ))
+
+        self.assertFalse(result["opened"])
+        self.assertEqual(result["skip_reason"], "liquidity_below_hot_lane")
+        decision = store.decisions[0]
+        self.assertIn("liquidity_below_hot_lane", decision["action_reason"])
+        self.assertEqual(
+            decision["payload"]["market_radar"]["decision"]["skip_reason"],
+            "liquidity_below_hot_lane",
+        )
+
     def test_paper_exploration_does_not_override_strategy_or_confirmation_blocks(self):
         for decision in [
             {
@@ -1857,6 +2940,19 @@ class ScannerCandidateFilterTests(unittest.TestCase):
 
 
 class SettingsManagerTests(unittest.TestCase):
+    def test_default_market_radar_scan_depth_reaches_past_recent_candidates(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = settings_manager.SETTINGS_FILE
+            settings_manager.SETTINGS_FILE = Path(tmpdir) / "missing_bot_settings.json"
+            try:
+                loaded = settings_manager.load_settings()
+
+                self.assertEqual(loaded["market_radar_scan_candidates_per_cycle"], 120)
+                self.assertEqual(loaded["market_radar_max_candidates_per_cycle"], 8)
+                self.assertEqual(loaded["market_radar_max_quotes_per_cycle"], 1)
+            finally:
+                settings_manager.SETTINGS_FILE = original_file
+
     def test_save_settings_parses_string_booleans(self):
         with TemporaryDirectory() as tmpdir:
             original_file = settings_manager.SETTINGS_FILE
@@ -1903,12 +2999,22 @@ class SettingsManagerTests(unittest.TestCase):
                     "paper_exploration_confirmation_score_threshold": 71,
                     "paper_exploration_confirmation_min_edge_score": 61,
                     "paper_exploration_confirmation_size_usd": 6,
+                    "paper_exploration_bad_sample_suppression_enabled": "true",
+                    "paper_exploration_confirmation_medium_risk_min_score": 69,
+                    "paper_exploration_confirmation_medium_risk_min_edge_score": 62,
+                    "paper_exploration_confirmation_min_liquidity_usd": 26000,
+                    "paper_exploration_confirmation_min_market_cap_usd": 51000,
                 })
 
                 self.assertTrue(saved["paper_exploration_confirmation_blocked_enabled"])
                 self.assertEqual(saved["paper_exploration_confirmation_score_threshold"], 71)
                 self.assertEqual(saved["paper_exploration_confirmation_min_edge_score"], 61)
                 self.assertEqual(saved["paper_exploration_confirmation_size_usd"], 6)
+                self.assertTrue(saved["paper_exploration_bad_sample_suppression_enabled"])
+                self.assertEqual(saved["paper_exploration_confirmation_medium_risk_min_score"], 69)
+                self.assertEqual(saved["paper_exploration_confirmation_medium_risk_min_edge_score"], 62)
+                self.assertEqual(saved["paper_exploration_confirmation_min_liquidity_usd"], 26000)
+                self.assertEqual(saved["paper_exploration_confirmation_min_market_cap_usd"], 51000)
             finally:
                 settings_manager.SETTINGS_FILE = original_file
 
@@ -2556,6 +3662,163 @@ class ScannerRuntimeTests(unittest.TestCase):
         )
 
         self.assertTrue(result["allow"])
+
+    def test_wallet_main_quality_gate_blocks_weak_two_wallet_confirmation_trade(self):
+        scanner = Scanner([], None)
+        result = scanner.wallet_main_quality_gate(
+            signal_type="weighted_early_signal",
+            decision={"score": 77, "should_trade": True},
+            wallet_count=2,
+            wallet_quality={
+                "avg_score": 65,
+                "max_score": 70,
+                "wallet_scores": [
+                    {"stats": {"rapid_flip_count": 6}},
+                    {"stats": {"rapid_flip_count": 4}},
+                ],
+            },
+            rug_result={"risk_label": "MEDIUM_RISK"},
+            market_info={"liquidity": 15_263, "market_cap": 34_679},
+        )
+
+        self.assertFalse(result["allow"])
+        self.assertIn("two_wallet_requires_low_risk", result["reasons"])
+        self.assertIn("two_wallet_requires_strong_avg_quality", result["reasons"])
+        self.assertIn("two_wallet_rapid_flip_history", result["reasons"])
+        self.assertIn("weighted_signal_liquidity_below_main_gate", result["reasons"])
+
+    def test_wallet_main_quality_gate_allows_penguin_style_elite_solo_signal(self):
+        scanner = Scanner([], None)
+        result = scanner.wallet_main_quality_gate(
+            signal_type="weighted_early_signal",
+            decision={"score": 92, "should_trade": True},
+            wallet_count=1,
+            wallet_quality={
+                "avg_score": 95,
+                "max_score": 95,
+                "wallet_scores": [{"stats": {"rapid_flip_count": 0}}],
+            },
+            rug_result={"risk_label": "LOW_RISK"},
+            market_info={"liquidity": 286_664, "market_cap": 5_224_742},
+        )
+
+        self.assertTrue(result["allow"])
+        self.assertEqual(result["reasons"], [])
+
+    def test_scanner_blocks_weak_two_wallet_main_entry_before_swap_quote(self):
+        class FakeMarketChecker:
+            async def get_token_info(self, mint):
+                return {
+                    "price": 0.000034679,
+                    "market_cap": 34_679,
+                    "liquidity": 15_263,
+                    "volume": 250_000,
+                    "source": "dexscreener",
+                }
+
+            def liquidity_score(self, liquidity):
+                return 40
+
+            def volume_score(self, volume):
+                return 70
+
+        class FakeJupiterQuote:
+            def __init__(self):
+                self.buy_calls = 0
+
+            async def get_buy_quote(self, **kwargs):
+                self.buy_calls += 1
+                return {"ok": True, "out_amount": "1000", "routePlan": []}
+
+            async def get_sell_quote(self, **kwargs):
+                return {"ok": True, "routePlan": []}
+
+            def analyze_quote(self, quote, max_price_impact_pct):
+                return {"pass": True, "reason": "quote_passed", "price_impact_pct": 0.1}
+
+        class FakeRpc:
+            market_checker = FakeMarketChecker()
+
+            def __init__(self):
+                self.jupiter_quote = FakeJupiterQuote()
+
+        async def fake_dev_wallet(mint):
+            return "Dev111"
+
+        async def fake_token_inspection(rpc, mint):
+            return {
+                "token_standard": "spl_token",
+                "extensions": [],
+                "risk_label": "LOW",
+                "reasons": [],
+            }
+
+        async def fake_launch_info(mint):
+            return {"launch_age_seconds": 48}
+
+        rpc = FakeRpc()
+        scanner = Scanner(["WalletA", "WalletB"], rpc)
+        scanner.store = RecordingStore()
+        scanner.paper_trader = mock.Mock()
+        scanner.paper_trader.get_state.return_value = {"open_trades": [], "closed_trades": [], "failed_trades": []}
+        scanner.token_buys["WeakTwoWalletMint"] = [{"wallet": "WalletA"}, {"wallet": "WalletB"}]
+        scanner.find_dev_wallet = fake_dev_wallet
+        scanner.dev_analyzer.score_dev = lambda dev_wallet: {"score": 0, "label": "Unknown", "bonded_tokens": 0}
+        scanner.token_inspector.inspect_with_rpc = fake_token_inspection
+        scanner.token_launch_age.get_launch_info = fake_launch_info
+        scanner.token_age.get_age_seconds = lambda mint: 48
+        scanner.wallet_quality.score_wallets = lambda wallets: {
+            "avg_score": 65,
+            "max_score": 70,
+            "wallet_scores": [
+                {"stats": {"rapid_flip_count": 6}},
+                {"stats": {"rapid_flip_count": 4}},
+            ],
+        }
+        scanner.wallet_performance.score_wallets = lambda wallets: {"avg_score": 55, "max_score": 55}
+        scanner.wallet_performance.record_signal = lambda **kwargs: None
+        scanner.anti_rug.analyze = lambda **kwargs: {
+            "risk_label": "MEDIUM_RISK",
+            "risk_score": 6,
+            "warnings": [],
+            "penalties": [],
+            "hard_block": False,
+            "hard_block_reason": None,
+        }
+        scanner.scoring_engine.score_token = lambda **kwargs: {
+            "score": 77,
+            "threshold": 68,
+            "mode": "CONFIRMATION",
+            "should_trade": True,
+            "reasons": ["Good live wallet signal", "Early 2-wallet signal"],
+        }
+        scanner.social_signal.match_token = lambda **kwargs: {
+            "matched": False,
+            "score_bonus": 0,
+            "matched_keywords": [],
+            "matched_account": None,
+        }
+        scanner.edge_analyzer.analyze = lambda **kwargs: {
+            "edge_score": 70,
+            "edge_verdict": "TRADEABLE_EDGE",
+            "quote_worthy": True,
+            "paper_trade_worthy": True,
+            "positives": [],
+            "risks": [],
+        }
+        async def fake_holder_risk(mint):
+            return scanner.skipped_holder_cluster_risk("test skipped")
+        scanner.evaluate_holder_cluster_risk = fake_holder_risk
+        scanner.confirmation_filter.evaluate = lambda **kwargs: {"allow": True, "reasons": [], "warnings": []}
+
+        with mock.patch("core.scanner.add_alert"), mock.patch("core.scanner.update_token"):
+            asyncio.run(scanner._evaluate_signal_once("WeakTwoWalletMint"))
+
+        self.assertEqual(rpc.jupiter_quote.buy_calls, 0)
+        self.assertFalse(scanner.paper_trader.open_trade.called)
+        decision = scanner.store.decisions[0]
+        reasons = decision["payload"]["rule_outcomes"]["scoring"]["reasons"]
+        self.assertIn("WALLET MAIN QUALITY BLOCK: two_wallet_requires_low_risk", reasons)
 
     def test_scanner_holder_check_analyzes_largest_token_accounts(self):
         class FakeRpc:

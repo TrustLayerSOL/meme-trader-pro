@@ -7,6 +7,7 @@ This utility never edits tracked_wallets.json and never places trades.
 """
 
 import argparse
+import asyncio
 import json
 import sqlite3
 import sys
@@ -21,6 +22,11 @@ sys.path.insert(0, str(ROOT))
 
 from core.env_loader import load_env
 from core.json_store import atomic_write_json, read_json
+from core.market_radar import DEXSCREENER_LATEST_BOOSTS_URL
+from core.market_radar import DEXSCREENER_LATEST_PROFILES_URL
+from core.market_radar import DEXSCREENER_TOP_BOOSTS_URL
+from core.market_radar import normalize_market_radar_candidates
+from core.market_radar import merge_candidates
 from core.redaction import redact_secrets
 from core.rpc_provider import build_helius_rpc_providers
 from core.wallet_discovery import (
@@ -155,6 +161,86 @@ def load_winner_mints(min_pnl_pct, max_mints, db_path=SQLITE_DB):
     return rows
 
 
+def load_local_runner_mints(min_gain_pct, max_mints, min_snapshots=2, db_path=SQLITE_DB):
+    if not Path(db_path).exists():
+        return []
+
+    by_mint = {}
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            """
+            SELECT time, mint, price, liquidity, context, source
+            FROM token_snapshots
+            WHERE mint IS NOT NULL
+              AND mint != ''
+              AND price IS NOT NULL
+              AND price > 0
+            ORDER BY time ASC
+            """
+        ):
+            by_mint.setdefault(row["mint"], []).append(row)
+
+    runners = []
+    for mint, rows in by_mint.items():
+        if len(rows) < min_snapshots:
+            continue
+        first = float(rows[0]["price"])
+        high_row = max(rows, key=lambda item: float(item["price"] or 0))
+        high = float(high_row["price"])
+        if first <= 0 or high <= first:
+            continue
+        gain_pct = ((high / first) - 1) * 100
+        if gain_pct < min_gain_pct:
+            continue
+        runners.append({
+            "mint": mint,
+            "winner": True,
+            "reason": "local_skipped_runner",
+            "runner_gain_pct": round(gain_pct, 2),
+            "first_price": first,
+            "high_price": high,
+            "first_seen": rows[0]["time"],
+            "high_seen": high_row["time"],
+            "snapshot_count": len(rows),
+            "first_context": rows[0]["context"],
+            "high_context": high_row["context"],
+        })
+
+    runners.sort(key=lambda row: (row["runner_gain_pct"], row["snapshot_count"]), reverse=True)
+    return runners[:max_mints]
+
+
+async def fetch_dexscreener_candidate_mints(limit=100, timeout=8):
+    import aiohttp
+
+    timeout_cfg = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
+        async def fetch(url):
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+                return data if isinstance(data, list) else []
+
+        latest_profiles, latest_boosts, top_boosts = await asyncio.gather(
+            fetch(DEXSCREENER_LATEST_PROFILES_URL),
+            fetch(DEXSCREENER_LATEST_BOOSTS_URL),
+            fetch(DEXSCREENER_TOP_BOOSTS_URL),
+        )
+    candidates = merge_candidates([
+        normalize_market_radar_candidates(latest_profiles, "dexscreener_latest_profiles"),
+        normalize_market_radar_candidates(latest_boosts, "dexscreener_latest_boosts"),
+        normalize_market_radar_candidates(top_boosts, "dexscreener_top_boosts"),
+    ])
+    return [{
+        "mint": item["mint"],
+        "winner": True,
+        "reason": "dexscreener_trending_wallet_harvest",
+        "sources": item.get("sources", []),
+    } for item in candidates[:limit]]
+
+
 def load_mint_signatures(rpc, mint, signature_limit):
     result = rpc.call("getSignaturesForAddress", [mint, {"limit": signature_limit}])
     return result if isinstance(result, list) else []
@@ -225,6 +311,34 @@ def build_candidate_report(args):
     mint_rows = []
     if args.from_paper_winners:
         mint_rows.extend(load_winner_mints(args.min_winner_pnl_pct, args.max_winner_mints))
+    if args.from_local_runners:
+        mint_rows.extend(load_local_runner_mints(
+            args.min_runner_gain_pct,
+            args.max_runner_mints,
+            min_snapshots=args.min_runner_snapshots,
+        ))
+    if args.from_dexscreener_trending:
+        try:
+            mint_rows.extend(asyncio.run(fetch_dexscreener_candidate_mints(
+                limit=args.max_dexscreener_mints,
+                timeout=args.dexscreener_timeout,
+            )))
+        except Exception as exc:
+            mint_rows.append({
+                "mint": "",
+                "winner": False,
+                "reason": "dexscreener_fetch_failed",
+                "error": redact_secrets(str(exc))[:180],
+            })
+    deduped = []
+    seen_mints = set()
+    for row in mint_rows:
+        mint = row.get("mint") if isinstance(row, dict) else str(row)
+        if not mint or mint in seen_mints:
+            continue
+        seen_mints.add(mint)
+        deduped.append(row)
+    mint_rows = deduped
     for mint in args.mint or []:
         mint_rows.append({"mint": mint, "winner": True, "reason": "manual_cli_mint"})
 
@@ -245,9 +359,14 @@ def build_candidate_report(args):
         "local_hours": args.local_hours,
         "local_limit": args.local_limit,
         "from_paper_winners": args.from_paper_winners,
+        "from_local_runners": args.from_local_runners,
+        "from_dexscreener_trending": args.from_dexscreener_trending,
         "manual_mints": args.mint or [],
         "min_winner_pnl_pct": args.min_winner_pnl_pct,
         "max_winner_mints": args.max_winner_mints,
+        "min_runner_gain_pct": args.min_runner_gain_pct,
+        "max_runner_mints": args.max_runner_mints,
+        "max_dexscreener_mints": args.max_dexscreener_mints,
         "signature_limit": args.signature_limit,
         "max_transactions": args.max_transactions,
         "max_buyers_per_mint": args.max_buyers_per_mint,
@@ -271,6 +390,13 @@ def parse_args(argv=None):
     parser.add_argument("--from-paper-winners", action="store_true", help="Mine early buyers from winning paper trades.")
     parser.add_argument("--min-winner-pnl-pct", type=float, default=25, help="Minimum paper PnL percent for winner mining.")
     parser.add_argument("--max-winner-mints", type=int, default=5, help="Maximum winning mints to inspect.")
+    parser.add_argument("--from-local-runners", action="store_true", help="Mine early buyers from locally observed skipped runners.")
+    parser.add_argument("--min-runner-gain-pct", type=float, default=500, help="Minimum local snapshot high gain percent for runner mining.")
+    parser.add_argument("--max-runner-mints", type=int, default=10, help="Maximum local runner mints to inspect.")
+    parser.add_argument("--min-runner-snapshots", type=int, default=2, help="Minimum local snapshots required to qualify a runner.")
+    parser.add_argument("--from-dexscreener-trending", action="store_true", help="Mine early buyers from current Dexscreener trending/boosted Solana mints.")
+    parser.add_argument("--max-dexscreener-mints", type=int, default=25, help="Maximum Dexscreener trending mints to inspect.")
+    parser.add_argument("--dexscreener-timeout", type=int, default=8, help="Dexscreener fetch timeout in seconds.")
     parser.add_argument("--mint", action="append", help="Mint to inspect for early buyer evidence. Repeatable.")
     parser.add_argument("--signature-limit", type=int, default=40, help="Signatures to fetch per mint.")
     parser.add_argument("--max-transactions", type=int, default=20, help="Transactions to inspect per mint.")

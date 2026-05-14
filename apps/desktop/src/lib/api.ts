@@ -697,6 +697,9 @@ export type DecisionAnalyticsSummary = {
   expectancy_pnl?: number;
   attempt_to_open_rate?: number;
   decision_to_close_rate?: number;
+  skip_reasons?: Record<string, number>;
+  skip_buckets?: Record<string, number>;
+  open_reasons?: Record<string, number>;
   sample_ready: boolean;
 };
 
@@ -714,6 +717,63 @@ export type DecisionAnalyticsPayload = {
     minimum_labeled_social_outcomes?: number;
     current_labeled_social_outcomes?: number;
   };
+  notes?: string[];
+};
+
+export type MarketRadarReviewItem = {
+  decision_id?: string;
+  mint?: string;
+  symbol?: string | null;
+  updated_at?: number | string | null;
+  stage: "rejected" | "watch" | "quote_watch" | "paper_bought" | "closed" | "failed" | string;
+  action?: string | null;
+  reason?: string | null;
+  skip_bucket?: string | null;
+  quote_retryable?: boolean;
+  score?: number | string | null;
+  threshold?: number | string | null;
+  liquidity_usd?: number | null;
+  market_cap_usd?: number | null;
+  volume_h1?: number | null;
+  tx_count_m5?: number | null;
+  buy_ratio?: number | string | null;
+  sell_ratio?: number | string | null;
+  pair_age_seconds?: number | string | null;
+  blockers?: string[];
+  positives?: string[];
+  sources?: string[];
+  trade_status?: string | null;
+  pnl?: number | null;
+  pnl_pct?: number | string | null;
+  buy_quote_pass?: boolean | null;
+  sell_quote_pass?: boolean | null;
+  postmortem?: {
+    status?: string | null;
+    pnl?: number | null;
+    pnl_pct?: number | string | null;
+    entry_price?: number | null;
+    exit_price?: number | null;
+    entry_liquidity_usd?: number | null;
+    exit_liquidity_usd?: number | null;
+    liquidity_change_pct?: number | null;
+    entry_market_cap?: number | null;
+    exit_market_cap?: number | null;
+    market_cap_change_pct?: number | null;
+    position_size_usd?: number | null;
+    entry_reason?: string | null;
+    exit_reason?: string | null;
+    failure_reason?: string | null;
+    hold_seconds?: number | null;
+  };
+};
+
+export type MarketRadarReviewPayload = {
+  generated_at?: number;
+  mode: "MARKET_RADAR_REVIEW_ONLY" | string;
+  source?: string;
+  live_execution_locked: boolean;
+  summary: Record<string, number>;
+  items: MarketRadarReviewItem[];
   notes?: string[];
 };
 
@@ -987,6 +1047,10 @@ export function socialFreshnessApiPath() {
 
 export function decisionAnalyticsApiPath(limit = 5000) {
   return `/api/decision-analytics?limit=${encodeURIComponent(String(limit))}`;
+}
+
+export function marketRadarReviewApiPath(limit = 120) {
+  return `/api/market-radar-review?limit=${encodeURIComponent(String(limit))}`;
 }
 
 export function loadDecisionExplanation(decisionId: string) {

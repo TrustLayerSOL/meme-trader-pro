@@ -784,6 +784,8 @@ function selectedTradeCards(openTrades) {
 function renderReplayPanel(state) {
   const decisions = state.decisions || {};
   const decisionRows = decisions.items || [];
+  const paperReview = renderPaperReviewSection(state);
+  const marketRadarReview = renderMarketRadarReviewSection(state);
   if (decisionRows.length) {
     const filter = state.decisionFilter || "all";
     const filteredRows = decisionRows.filter((decision) => decisionMatchesFilter(decision, filter));
@@ -792,6 +794,8 @@ function renderReplayPanel(state) {
     }
     const selected = filteredRows.find((decision) => decision.decision_id === state.selectedDecisionId) || filteredRows[0] || null;
     $("intel-grid").innerHTML = `
+      ${paperReview}
+      ${marketRadarReview}
       <div class="intel-card trade-detail-section">
         <div class="trade-detail-title">
           <span>
@@ -802,6 +806,8 @@ function renderReplayPanel(state) {
         </div>
         <div class="decision-filter-row">
           ${decisionFilterButton("all", "All", filter)}
+          ${decisionFilterButton("co_main", "Co-Main", filter)}
+          ${decisionFilterButton("market_radar", "Market Radar", filter)}
           ${decisionFilterButton("bought", "Bought", filter)}
           ${decisionFilterButton("skipped", "Skipped", filter)}
           ${decisionFilterButton("exploration", "Exploration", filter)}
@@ -847,13 +853,162 @@ function renderReplayPanel(state) {
   const closed = trades.closed_trades || [];
   const failed = trades.failed_trades || [];
   const rows = closed.concat(failed).slice(-8).reverse();
-  $("intel-grid").innerHTML = rows.map((trade) => `
+  $("intel-grid").innerHTML = paperReview + marketRadarReview + (rows.map((trade) => `
     <div class="intel-card">
       <strong>${escapeHtml(trade.symbol || trade.name || shortMint(trade.token_mint || trade.mint))}</strong>
       <small>${escapeHtml(shortMint(trade.token_mint || trade.mint))}</small>
       <p>PNL ${pct(trade.total_pnl_pct || trade.pnl_pct)} | ${escapeHtml(trade.exit_reason || trade.failure_reason || trade.status || "recorded")}</p>
     </div>
-  `).join("") || `<div class="intel-card"><strong>No replay records</strong><p>Closed or failed paper trades will appear here.</p></div>`;
+  `).join("") || `<div class="intel-card"><strong>No replay records</strong><p>Closed or failed paper trades will appear here.</p></div>`);
+}
+
+function renderMarketRadarReviewSection(state) {
+  const review = state.marketRadarReview || {};
+  const summary = review.summary || {};
+  const items = review.items || [];
+  const stageCards = [
+    ["Rejected", summary.rejected || 0],
+    ["Watch", summary.watch || 0],
+    ["Quote Watch", summary.quote_watch || 0],
+    ["Paper Bought", summary.paper_bought || 0],
+    ["Closed", summary.closed || 0],
+    ["Failed", summary.failed || 0],
+  ];
+  return `
+    <div class="intel-card trade-detail-section market-radar-review-card">
+      <div class="trade-detail-title">
+        <span>
+          <strong>Market Radar Token Nursery</strong>
+          <small>Hot Dex/Pump candidates grouped by what happened next.</small>
+        </span>
+        <b>${Number(summary.total || 0)} seen</b>
+      </div>
+      <div class="nursery-stage-grid">
+        ${stageCards.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${Number(value || 0)}</strong></div>`).join("")}
+      </div>
+      <div class="nursery-list">
+        ${items.slice(0, 18).map(marketRadarNurseryRow).join("") || `<div class="ledger-empty">No Market Radar candidates yet.</div>`}
+      </div>
+      <div class="trade-detail-notes">
+        ${detailNote("Review Notes", (review.notes || []).slice(0, 3).join("; ") || "No Market Radar notes recorded.")}
+      </div>
+    </div>
+  `;
+}
+
+function marketRadarNurseryRow(item = {}) {
+  const postmortem = item.postmortem || {};
+  const hasPostmortem = ["closed", "failed"].includes(String(item.stage || ""));
+  const pnl = postmortem.pnl ?? item.pnl;
+  const pnlPct = postmortem.pnl_pct ?? item.pnl_pct;
+  const outcomeReason = postmortem.exit_reason || postmortem.failure_reason;
+  const reasonDetail = (item.blockers || []).slice(0, 2).join("; ") || (item.positives || []).slice(0, 2).join("; ") || item.skip_bucket || "-";
+  const postmortemDetail = [
+    outcomeReason,
+    postmortem.hold_seconds ? `${Math.round(Number(postmortem.hold_seconds))}s hold` : null,
+  ].filter(Boolean).join(" | ") || reasonDetail;
+  return `
+    <button type="button" class="ledger-row nursery-row ${escapeHtml(item.stage || "")}">
+      <span>
+        <strong>${escapeHtml(item.symbol || shortMint(item.mint))}</strong>
+        <small>${escapeHtml(shortMint(item.mint))}</small>
+      </span>
+      <span><small>Stage</small><strong>${escapeHtml(marketRadarStageLabel(item.stage || "-"))}</strong></span>
+      <span><small>${hasPostmortem ? "PnL" : "Score"}</small><strong>${hasPostmortem ? pnlMoney(pnl) : escapeHtml(item.score ?? "-")}</strong><small>${hasPostmortem ? pct(pnlPct) : ""}</small></span>
+      <span><small>Liquidity</small><strong>${money(postmortem.exit_liquidity_usd ?? item.liquidity_usd)}</strong><small>${postmortem.liquidity_change_pct == null ? "" : pct(postmortem.liquidity_change_pct)}</small></span>
+      <span><small>Market Cap</small><strong>${money(postmortem.exit_market_cap ?? item.market_cap_usd)}</strong><small>${postmortem.market_cap_change_pct == null ? "" : pct(postmortem.market_cap_change_pct)}</small></span>
+      <span><small>Reason</small><strong>${escapeHtml(hasPostmortem ? outcomeReason || item.reason || "-" : item.reason || "-")}</strong><small>${escapeHtml(hasPostmortem ? postmortemDetail : reasonDetail)}</small></span>
+    </button>
+  `;
+}
+
+function marketRadarStageLabel(stage) {
+  if (stage === "quote_watch") return "Quote Watch";
+  if (stage === "paper_bought") return "Paper Bought";
+  return String(stage || "-").split("_").map((part) => part ? `${part[0].toUpperCase()}${part.slice(1)}` : "").join(" ");
+}
+
+function renderPaperReviewSection(state) {
+  const review = state.paperReview || {};
+  const analytics = state.decisionAnalytics || {};
+  const lanes = review.lane_metrics || {};
+  const decisionLanes = review.decision_lane_report?.lanes || analytics.lanes || {};
+  const coMain = lanes.co_main || {};
+  const walletMain = lanes.main || {};
+  const marketRadar = lanes.market_radar || {};
+  const exploration = lanes.exploration || {};
+  const progressClosed = Number(coMain.closed_trades || 0);
+  const minimumClosed = Number(review.minimum_closed_trades || 50);
+  const progress = Math.max(0, Math.min(100, Math.round((progressClosed / Math.max(1, minimumClosed)) * 100)));
+  const readiness = review.co_main_meaningful_test_ready ? "READY" : "NOT READY";
+  const sampleLanes = review.sample_progress?.lanes || {};
+  const linAll = (review.decision_lineage || {}).all || {};
+  const laneSnippet = (label, key) => {
+    const row = sampleLanes[key] || {};
+    const closed = Number(row.closed_trades || 0);
+    const minPct = Math.min(100, Math.round(Number(row.to_minimum_pct || 0)));
+    const recPct = Math.min(100, Math.round(Number(row.to_recommended_pct || 0)));
+    return `${label} ${closed}/${minimumClosed} min (${minPct}%), rec ${recPct}%`;
+  };
+  const sampleStrip = sampleLanes.wallet_main ? [
+    laneSnippet("Co-main", "co_main"),
+    laneSnippet("Wallet main", "wallet_main"),
+    laneSnippet("MR", "market_radar"),
+    laneSnippet("Exploration", "exploration"),
+  ].join("; ") : "-";
+  const lineageNote = linAll.total
+    ? `${Math.round(Number(linAll.coverage_pct || 0))}% (${Number(linAll.with_decision_id || 0)}/${Number(linAll.total)})`
+    : "-";
+  return `
+    <div class="intel-card trade-detail-section paper-review-card">
+      <div class="trade-detail-title">
+        <span>
+          <strong>Paper Profitability Review</strong>
+          <small>${review.co_main_meaningful_test_ready ? "Co-main strategy sample ready" : "Collecting co-main sample across wallet-main and Market Radar"}</small>
+        </span>
+        <b>${readiness}</b>
+      </div>
+      <div class="paper-progress">
+        <div><span style="width:${progress}%"></span></div>
+        <small>${progressClosed} / ${minimumClosed} minimum co-main closed trades | ${review.recommended_closed_trades || 100} recommended</small>
+      </div>
+      <div class="trade-detail-grid">
+        ${paperLaneMetric("Co-Main Strategy", coMain)}
+        ${paperLaneMetric("Wallet Main", walletMain)}
+        ${paperLaneMetric("Market Radar Co-Main", marketRadar)}
+        ${paperLaneMetric("Exploration Lane", exploration)}
+      </div>
+      <div class="trade-detail-notes">
+        ${detailNote("Paper sample lanes (closed vs min/rec)", sampleStrip)}
+        ${detailNote("Decision ID lineage", lineageNote)}
+        ${detailNote("Readiness Gaps", (review.readiness_gaps || []).slice(0, 3).join("; ") || "No readiness gaps recorded.")}
+        ${detailNote("Decision Ledger Lanes", [
+          decisionLaneLine("Co-Main", decisionLanes.co_main),
+          decisionLaneLine("Wallet Main", decisionLanes.main),
+          decisionLaneLine("Market Radar", decisionLanes.market_radar),
+          decisionLaneLine("Exploration", decisionLanes.exploration),
+        ].filter(Boolean).join("; ") || "-")}
+      </div>
+    </div>
+  `;
+}
+
+function paperLaneMetric(label, lane = {}) {
+  return detailMetric(
+    label,
+    `${Number(lane.closed_trades || 0)} closed | ${money(lane.realized_pnl ?? lane.total_pnl ?? 0)} | ${pct(lane.win_rate || 0)} wins`,
+  );
+}
+
+function decisionLaneLine(label, lane = {}) {
+  if (!lane) return "";
+  const topSkip = topReasonLine(lane.skip_reasons);
+  return `${label}: ${Number(lane.candidate_decisions || 0)} seen, ${Number(lane.paper_opened || 0)} opened, ${Number(lane.skipped || 0)} skipped${topSkip !== "-" ? `, top skip ${topSkip}` : ""}`;
+}
+
+function topReasonLine(values = {}) {
+  const rows = Object.entries(values || {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 2);
+  return rows.length ? rows.map(([key, count]) => `${key} ${count}`).join(" | ") : "-";
 }
 
 function decisionFilterButton(value, label, activeFilter) {
@@ -867,6 +1022,8 @@ function decisionMatchesFilter(decision, filter) {
   const inputs = payload.inputs || {};
   const ruleOutcomes = payload.rule_outcomes || {};
   if (filter === "bought") return action.includes("opened") || action.includes("open_attempt");
+  if (filter === "co_main") return decision.paper_lane === "main" || decision.paper_lane === "market_radar";
+  if (filter === "market_radar") return decision.paper_lane === "market_radar";
   if (filter === "skipped") return action.includes("skip") || action.includes("blocked") || action === "runtime_skip";
   if (filter === "exploration") return decision.paper_lane === "exploration";
   if (filter === "quote_failed") return decision.buy_quote_pass === false || decision.sell_quote_pass === false;
@@ -910,6 +1067,7 @@ function decisionDetailSection(decision, state = {}) {
   const social = inputs.social_match?.reason || (inputs.social_match?.matched ? "matched" : "-");
   const risks = (ruleOutcomes.risk?.warnings || []).slice(0, 4).join("; ") || ruleOutcomes.risk?.hard_block_reason || "-";
   const scoreReasons = (ruleOutcomes.scoring?.reasons || []).slice(0, 4).join("; ") || "-";
+  const marketRadar = marketRadarSummary(payload.market_radar?.decision);
   return `
     <div class="decision-detail">
       <div class="trade-detail-title">
@@ -932,11 +1090,22 @@ function decisionDetailSection(decision, state = {}) {
         ${decisionAiSection(decision, state)}
         ${detailNote("Wallets", wallets)}
         ${detailNote("Social", social)}
+        ${detailNote("Market Radar", marketRadar)}
         ${detailNote("Risk Notes", risks)}
         ${detailNote("Score Notes", scoreReasons)}
       </div>
     </div>
   `;
+}
+
+function marketRadarSummary(decision = {}) {
+  const parts = [
+    decision.open_reason ? `open ${decision.open_reason}` : "",
+    decision.skip_reason ? `skip ${decision.skip_reason}` : "",
+    decision.skip_bucket || "",
+    decision.quote_retryable ? "retry soon" : "",
+  ].filter(Boolean);
+  return parts.join(" | ") || "-";
 }
 
 function decisionAiSection(decision, state = {}) {

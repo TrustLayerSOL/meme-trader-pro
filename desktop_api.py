@@ -29,6 +29,7 @@ from core.redaction import redact_secrets
 from core.rpc_provider import build_helius_rpc_providers
 from core.rpc_provider import check_helius_provider_health
 from core.runtime_status import DEFAULT_STATUS, load_status
+from core.settings_manager import load_settings as load_bot_settings
 from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from core.wallet_lifecycle import build_wallet_lifecycle_report
@@ -377,7 +378,7 @@ def summarize_runtime(runtime):
     scanner_fresh = scanner_age is not None and scanner_age <= FRESH_SECONDS
     components = []
     stale = []
-    for name in ("bot", "websocket", "scanner", "market", "quotes", "watchdog", "open_position_monitor", "wallet_discovery"):
+    for name in ("bot", "websocket", "scanner", "market", "quotes", "watchdog", "open_position_monitor", "wallet_discovery", "market_radar"):
         item = runtime.get(name, {}) if isinstance(runtime, dict) else {}
         item_age = age_seconds(item.get("updated_at")) if isinstance(item, dict) else None
         state = item.get("state") or item.get("status") or "unknown" if isinstance(item, dict) else "unknown"
@@ -481,15 +482,81 @@ def paper_trade_lane(trade):
     if trade.get("exploration") is True:
         lane = lane or "exploration"
     lane = str(lane or "main").lower()
-    return "exploration" if lane == "exploration" else "main"
+    if lane in {"exploration", "market_radar"}:
+        return lane
+    return "main"
+
+
+def trade_has_decision_id(trade):
+    trade = trade if isinstance(trade, dict) else {}
+    meta = trade.get("signal_metadata") if isinstance(trade.get("signal_metadata"), dict) else {}
+    did = trade.get("decision_id") or meta.get("decision_id")
+    return bool(str(did or "").strip())
+
+
+def _pct_cap_fraction(numerator, denominator):
+    if not denominator:
+        return 0.0
+    return min(100.0, round(100.0 * numerator / denominator, 1))
+
+
+def lane_sample_progress_row(closed_count, minimum_closed, recommended_closed):
+    minimum_closed = int(minimum_closed) if minimum_closed else 0
+    recommended_closed = int(recommended_closed) if recommended_closed else 0
+    closed_count = int(closed_count) if closed_count else 0
+    return {
+        "closed_trades": closed_count,
+        "to_minimum_pct": _pct_cap_fraction(closed_count, minimum_closed),
+        "to_recommended_pct": _pct_cap_fraction(closed_count, recommended_closed),
+        "meets_minimum": closed_count >= minimum_closed,
+        "meets_recommended": closed_count >= recommended_closed,
+    }
+
+
+def paper_decision_lineage_by_lane(paper):
+    """Counts open/closed/failed rows with canonical decision_id lineage."""
+    paper = paper if isinstance(paper, dict) else {}
+    lanes = {}
+    for lane in ("all", "main", "market_radar", "exploration"):
+        lanes[lane] = {"total": 0, "with_decision_id": 0}
+    for bucket in ("open_trades", "closed_trades", "failed_trades"):
+        rows = paper.get(bucket) if isinstance(paper.get(bucket), list) else []
+        for trade in rows:
+            if not isinstance(trade, dict):
+                continue
+            lane_key = paper_trade_lane(trade)
+            if lane_key not in lanes:
+                lane_key = "main"
+            has_id = trade_has_decision_id(trade)
+            for key in ("all", lane_key):
+                lanes[key]["total"] += 1
+                if has_id:
+                    lanes[key]["with_decision_id"] += 1
+    enriched = {}
+    for key, row in lanes.items():
+        total = row["total"]
+        with_id = row["with_decision_id"]
+        cov = 100.0 if total <= 0 else min(100.0, round(100.0 * with_id / total, 1))
+        enriched[key] = {
+            "total": total,
+            "with_decision_id": with_id,
+            "missing_decision_id": max(0, total - with_id),
+            "coverage_pct": cov,
+        }
+    return enriched
 
 
 def filter_paper_by_lane(paper, lane):
+    return filter_paper_by_lanes(paper, {lane})
+
+
+def filter_paper_by_lanes(paper, lanes):
     paper = paper if isinstance(paper, dict) else {}
+    lanes = {str(lane).lower() for lane in (lanes or [])}
     filtered = {"open_trades": [], "closed_trades": [], "failed_trades": []}
     for key in filtered:
         rows = paper.get(key) if isinstance(paper.get(key), list) else []
-        filtered[key] = [row for row in rows if paper_trade_lane(row) == lane]
+        filtered[key] = [row for row in rows if paper_trade_lane(row) in lanes]
     return filtered
 
 
@@ -504,32 +571,75 @@ def build_paper_review_payload(state=None):
     metrics = analyzer.analyze(paper)
     lane_metrics = {
         "main": analyzer.analyze(filter_paper_by_lane(paper, "main")),
+        "co_main": analyzer.analyze(filter_paper_by_lanes(paper, {"main", "market_radar"})),
         "exploration": analyzer.analyze(filter_paper_by_lane(paper, "exploration")),
+        "market_radar": analyzer.analyze(filter_paper_by_lane(paper, "market_radar")),
     }
     minimum_closed = 50
     recommended_closed = 100
-    main_meaningful_test_ready = lane_metrics["main"]["closed_trades"] >= minimum_closed
+    wallet_main_meaningful_test_ready = lane_metrics["main"]["closed_trades"] >= minimum_closed
+    co_main_meaningful_test_ready = lane_metrics["co_main"]["closed_trades"] >= minimum_closed
     exploration_sample_ready = lane_metrics["exploration"]["closed_trades"] >= minimum_closed
+    market_radar_main_meaningful_test_ready = lane_metrics["market_radar"]["closed_trades"] >= minimum_closed
+    market_radar_sample_ready = market_radar_main_meaningful_test_ready
     readiness_gaps = []
-    if not main_meaningful_test_ready:
-        readiness_gaps.append(f"Need at least {minimum_closed} closed main-strategy paper trades before this is a meaningful test.")
-    if metrics["failed_trades"] and metrics["closed_trades"] and metrics["failed_trades"] / max(1, metrics["closed_trades"]) > 0.25:
+    co_main_metrics = lane_metrics["co_main"]
+    if not co_main_meaningful_test_ready:
+        readiness_gaps.append(f"Need at least {minimum_closed} closed co-main paper trades across wallet-main and Market Radar before this is a meaningful test.")
+    if co_main_metrics["failed_trades"] and co_main_metrics["closed_trades"] and co_main_metrics["failed_trades"] / max(1, co_main_metrics["closed_trades"]) > 0.25:
         readiness_gaps.append("Failed trade rate is high enough to review quote/routing reliability.")
-    if metrics["profit_factor"] is None:
+    if co_main_metrics["profit_factor"] is None:
         readiness_gaps.append("Profit factor is not stable yet because there are not enough losses/wins to compare.")
-    if metrics["win_rate"] < 35 and metrics["closed_trades"] >= 10:
+    if co_main_metrics["win_rate"] < 35 and co_main_metrics["closed_trades"] >= 10:
         readiness_gaps.append("Win rate is below 35%; review entry quality before judging profitability.")
+
+    lineage = paper_decision_lineage_by_lane(paper)
+    lineage_all = lineage.get("all") or {}
+    if lineage_all.get("total", 0) >= 5 and lineage_all.get("coverage_pct", 100) < 100:
+        readiness_gaps.append(
+            "Paper lineage: {:.0f}% of paper rows ({}/{}) carry decision_id. "
+            "Open the bot once to hydrate JSON lineage or rebuild decisions from SQLite for full Replay joins.".format(
+                lineage_all.get("coverage_pct", 0),
+                lineage_all.get("with_decision_id", 0),
+                lineage_all.get("total", 0),
+            )
+        )
+
+    sample_progress = {
+        "minimum_closed_trades": minimum_closed,
+        "recommended_closed_trades": recommended_closed,
+        "lanes": {
+            "wallet_main": lane_sample_progress_row(
+                lane_metrics["main"]["closed_trades"], minimum_closed, recommended_closed,
+            ),
+            "market_radar": lane_sample_progress_row(
+                lane_metrics["market_radar"]["closed_trades"], minimum_closed, recommended_closed,
+            ),
+            "exploration": lane_sample_progress_row(
+                lane_metrics["exploration"]["closed_trades"], minimum_closed, recommended_closed,
+            ),
+            "co_main": lane_sample_progress_row(
+                lane_metrics["co_main"]["closed_trades"], minimum_closed, recommended_closed,
+            ),
+        },
+    }
 
     all_terminal = closed + failed
     return {
         "generated_at": time.time(),
         "mode": "PAPER_REVIEW_ONLY",
         "live_execution_locked": True,
-        "meaningful_test_ready": main_meaningful_test_ready and not readiness_gaps,
-        "main_meaningful_test_ready": main_meaningful_test_ready and not readiness_gaps,
+        "meaningful_test_ready": co_main_meaningful_test_ready and not readiness_gaps,
+        "main_meaningful_test_ready": co_main_meaningful_test_ready and not readiness_gaps,
+        "co_main_meaningful_test_ready": co_main_meaningful_test_ready and not readiness_gaps,
+        "wallet_main_meaningful_test_ready": wallet_main_meaningful_test_ready,
+        "market_radar_main_meaningful_test_ready": market_radar_main_meaningful_test_ready,
         "exploration_sample_ready": exploration_sample_ready,
+        "market_radar_sample_ready": market_radar_sample_ready,
         "minimum_closed_trades": minimum_closed,
         "recommended_closed_trades": recommended_closed,
+        "sample_progress": sample_progress,
+        "decision_lineage": lineage,
         "metrics": metrics,
         "lane_metrics": lane_metrics,
         "decision_lane_report": build_decision_lane_report_payload(state=state),
@@ -540,7 +650,8 @@ def build_paper_review_payload(state=None):
         "entry_reasons": reason_counts(closed, "entry_reason", "reason"),
         "wallet_label_exposure": wallet_label_exposure_for_trades(all_terminal, behavior),
         "next_review_actions": [
-            "Let paper mode keep running until there are at least 50 closed trades.",
+            "Let co-main paper mode keep running until wallet-main plus Market Radar have at least 50 closed trades.",
+            "Compare wallet-main and Market Radar separately before changing shared thresholds.",
             "Review worst trades by entry reason, wallet label, and exit reason.",
             "Tighten confirmation thresholds only after enough samples show repeated weak patterns.",
         ],
@@ -1869,6 +1980,204 @@ def build_decisions_payload(limit=80, mint=None, filter_name=None, lane=None):
     }
 
 
+MARKET_RADAR_NURSERY_STAGES = ("rejected", "watch", "quote_watch", "paper_bought", "closed", "failed")
+MARKET_RADAR_SOFT_WATCH_BLOCKERS = {"score_below_market_radar_threshold"}
+
+
+def market_radar_payload(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    return payload.get("market_radar") if isinstance(payload.get("market_radar"), dict) else {}
+
+
+def market_radar_score_payload(decision):
+    radar = market_radar_payload(decision)
+    return radar.get("score") if isinstance(radar.get("score"), dict) else {}
+
+
+def market_radar_market_info(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    return first_non_empty(
+        inputs.get("market_info") if isinstance(inputs.get("market_info"), dict) else None,
+        payload.get("market_info") if isinstance(payload.get("market_info"), dict) else None,
+        {},
+    ) or {}
+
+
+def market_radar_review_stage(decision):
+    action = str((decision or {}).get("final_action") or "").lower()
+    status = decision_report_trade_status(decision)
+    radar_action = decision_market_radar_action(decision)
+    score = market_radar_score_payload(decision)
+    quote_retryable = bool(radar_action.get("quote_retryable"))
+    skip_bucket = str(radar_action.get("skip_bucket") or "")
+    blockers = [str(item) for item in score.get("blockers") if item] if isinstance(score.get("blockers"), list) else []
+    score_allowed = bool(score.get("allowed"))
+    score_value = safe_float(first_non_empty((decision or {}).get("total_score"), score.get("score")), 0)
+    threshold = safe_float(first_non_empty((decision or {}).get("threshold"), score.get("threshold")), 70)
+    if status in {"failed", "buy_failed"} or "failed" in action:
+        return "failed"
+    if status in {"closed", "sold", "exited"}:
+        return "closed"
+    if status == "open" or "opened" in action:
+        return "paper_bought"
+    if score_allowed and (
+        quote_retryable
+        or skip_bucket == "quote_or_route"
+        or (decision or {}).get("buy_quote_pass") is False
+        or (decision or {}).get("sell_quote_pass") is False
+    ):
+        return "quote_watch"
+    if blockers and any(blocker not in MARKET_RADAR_SOFT_WATCH_BLOCKERS for blocker in blockers):
+        return "rejected"
+    if score_value >= max(0, threshold - 10):
+        return "watch"
+    return "rejected"
+
+
+def market_radar_market_number(row, *keys):
+    row = row if isinstance(row, dict) else {}
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return safe_float(value, None)
+    return None
+
+
+def market_radar_pct_change(start, end):
+    start = safe_float(start, None)
+    end = safe_float(end, None)
+    if start in (None, 0) or end is None:
+        return None
+    return round(((end - start) / start) * 100, 2)
+
+
+def market_radar_hold_seconds(entry_time, close_time):
+    entry_time = safe_float(entry_time, None)
+    close_time = safe_float(close_time, None)
+    if entry_time is None or close_time is None or close_time < entry_time:
+        return None
+    return round(close_time - entry_time, 2)
+
+
+def market_radar_postmortem(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
+    paper_outcome = result.get("paper_outcome") if isinstance(result.get("paper_outcome"), dict) else {}
+    entry_price = safe_float(first_non_empty(paper_outcome.get("entry_price"), result.get("entry_price"), decision.get("entry_price")), None)
+    exit_price = safe_float(first_non_empty(paper_outcome.get("exit_price"), result.get("exit_price"), decision.get("exit_price")), None)
+    entry_liquidity = safe_float(
+        first_non_empty(paper_outcome.get("entry_liquidity_usd"), result.get("entry_liquidity_usd"), decision.get("entry_liquidity_usd")),
+        None,
+    )
+    exit_liquidity = safe_float(
+        first_non_empty(paper_outcome.get("exit_liquidity_usd"), result.get("exit_liquidity_usd"), decision.get("exit_liquidity_usd")),
+        None,
+    )
+    entry_market_cap = safe_float(
+        first_non_empty(paper_outcome.get("entry_market_cap"), result.get("entry_market_cap"), decision.get("entry_market_cap")),
+        None,
+    )
+    exit_market_cap = safe_float(
+        first_non_empty(paper_outcome.get("exit_market_cap"), result.get("exit_market_cap"), decision.get("exit_market_cap")),
+        None,
+    )
+    entry_time = first_non_empty(paper_outcome.get("entry_time"), result.get("entry_time"), decision.get("entry_time"))
+    close_time = first_non_empty(paper_outcome.get("close_time"), paper_outcome.get("exit_time"), result.get("close_time"), result.get("exit_time"), decision.get("close_time"), decision.get("exit_time"))
+    return {
+        "status": decision_report_trade_status(decision) or None,
+        "pnl": decision_report_pnl(decision),
+        "pnl_pct": decision_report_pnl_pct(decision),
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "entry_liquidity_usd": entry_liquidity,
+        "exit_liquidity_usd": exit_liquidity,
+        "liquidity_change_pct": market_radar_pct_change(entry_liquidity, exit_liquidity),
+        "entry_market_cap": entry_market_cap,
+        "exit_market_cap": exit_market_cap,
+        "market_cap_change_pct": market_radar_pct_change(entry_market_cap, exit_market_cap),
+        "position_size_usd": safe_float(first_non_empty(paper_outcome.get("position_size_usd"), result.get("position_size_usd"), decision.get("position_size_usd")), None),
+        "entry_reason": first_non_empty(paper_outcome.get("entry_reason"), result.get("entry_reason"), decision.get("entry_reason")),
+        "exit_reason": first_non_empty(paper_outcome.get("exit_reason"), result.get("exit_reason"), decision.get("exit_reason")),
+        "failure_reason": first_non_empty(result.get("failure_reason"), decision.get("failure_reason"), paper_outcome.get("failure_reason")),
+        "hold_seconds": market_radar_hold_seconds(entry_time, close_time),
+    }
+
+
+def market_radar_review_item(decision):
+    decision = decision if isinstance(decision, dict) else {}
+    radar = market_radar_payload(decision)
+    radar_action = radar.get("decision") if isinstance(radar.get("decision"), dict) else {}
+    score = radar.get("score") if isinstance(radar.get("score"), dict) else {}
+    market_info = market_radar_market_info(decision)
+    reason = first_non_empty(
+        radar_action.get("open_reason"),
+        radar_action.get("skip_reason"),
+        decision.get("action_reason"),
+        "unrecorded",
+    )
+    return {
+        "decision_id": decision.get("decision_id"),
+        "mint": decision.get("mint"),
+        "symbol": market_info.get("symbol"),
+        "updated_at": decision.get("updated_at") or decision.get("created_at"),
+        "stage": market_radar_review_stage(decision),
+        "action": decision.get("final_action"),
+        "reason": reason,
+        "skip_bucket": radar_action.get("skip_bucket"),
+        "quote_retryable": bool(radar_action.get("quote_retryable")),
+        "score": first_non_empty(decision.get("total_score"), score.get("score")),
+        "threshold": first_non_empty(decision.get("threshold"), score.get("threshold")),
+        "liquidity_usd": market_radar_market_number(market_info, "liquidity", "liquidity_usd"),
+        "market_cap_usd": market_radar_market_number(market_info, "market_cap", "marketCap", "fdv"),
+        "volume_h1": market_radar_market_number(market_info, "volume_h1", "volume"),
+        "tx_count_m5": market_radar_market_number(market_info, "tx_count", "tx_count_m5"),
+        "buy_ratio": score.get("buy_ratio"),
+        "sell_ratio": score.get("sell_ratio"),
+        "pair_age_seconds": score.get("pair_age_seconds"),
+        "blockers": score.get("blockers") if isinstance(score.get("blockers"), list) else [],
+        "positives": score.get("reasons") if isinstance(score.get("reasons"), list) else [],
+        "sources": radar.get("sources") if isinstance(radar.get("sources"), list) else [],
+        "trade_status": decision_report_trade_status(decision) or None,
+        "pnl": decision_report_pnl(decision),
+        "pnl_pct": decision_report_pnl_pct(decision),
+        "buy_quote_pass": decision.get("buy_quote_pass"),
+        "sell_quote_pass": decision.get("sell_quote_pass"),
+        "postmortem": market_radar_postmortem(decision),
+    }
+
+
+def build_market_radar_review_payload(limit=120):
+    search_limit = max(int(limit), min(5000, int(limit) * 5))
+    decisions = [
+        decision
+        for decision in fetch_decision_rows(limit=search_limit)
+        if decision_report_lane(decision) == "market_radar" or bool(market_radar_payload(decision))
+    ]
+    decisions.sort(key=lambda row: safe_float(first_non_empty(row.get("updated_at"), row.get("created_at")), 0), reverse=True)
+    items = [market_radar_review_item(decision) for decision in decisions[:int(limit)]]
+    summary = {stage: 0 for stage in MARKET_RADAR_NURSERY_STAGES}
+    for item in items:
+        stage = item.get("stage") if item.get("stage") in summary else "rejected"
+        summary[stage] += 1
+    summary["total"] = len(items)
+    return {
+        "generated_at": time.time(),
+        "mode": "MARKET_RADAR_REVIEW_ONLY",
+        "source": "sqlite_decision_records",
+        "live_execution_locked": True,
+        "summary": summary,
+        "items": items,
+        "notes": [
+            "Token Nursery is a read-only review of Market Radar decision records.",
+            "Quote Watch means the candidate was close enough to inspect routes but quote budget, cooldown, or route checks blocked a paper entry.",
+            "Paper Bought, Closed, and Failed are paper-only states and never enable live execution.",
+        ],
+    }
+
+
 def openai_decision_explainer_model():
     load_desktop_env()
     return os.getenv("OPENAI_DECISION_EXPLAINER_MODEL") or "gpt-4.1-mini"
@@ -2019,6 +2328,8 @@ def decision_report_lane(decision):
         lane = str(lane or "").strip().lower()
         if lane == "exploration":
             return "exploration"
+        if lane == "market_radar":
+            return "market_radar"
         if lane in {"protected", "manual", "protected_manual", "manual_protected"}:
             return "protected_manual"
     return "main"
@@ -2064,7 +2375,33 @@ def empty_decision_lane_summary(label, minimum_closed=50):
         "sample_ready": False,
         "minimum_closed_trades": minimum_closed,
         "protected_positions": 0,
+        "skip_reasons": {},
+        "skip_buckets": {},
+        "open_reasons": {},
     }
+
+
+def increment_summary_counter(summary, field, key):
+    if not key:
+        return
+    bucket = summary.setdefault(field, {})
+    key = str(key)
+    bucket[key] = bucket.get(key, 0) + 1
+
+
+def decision_market_radar_action(decision):
+    payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+    radar = payload.get("market_radar") if isinstance(payload.get("market_radar"), dict) else {}
+    action = radar.get("decision") if isinstance(radar.get("decision"), dict) else {}
+    return action
+
+
+def strip_reason_prefix(reason):
+    reason = str(reason or "").strip()
+    for prefix in ("market_radar_skip:", "market_radar_open:"):
+        if reason.startswith(prefix):
+            return reason[len(prefix):].strip()
+    return reason
 
 
 def add_decision_to_lane_summary(summary, decision):
@@ -2075,6 +2412,7 @@ def add_decision_to_lane_summary(summary, decision):
     risk = rule_outcomes.get("risk") if isinstance(rule_outcomes.get("risk"), dict) else {}
     social = inputs.get("social_match") if isinstance(inputs.get("social_match"), dict) else {}
     status = decision_report_trade_status(decision)
+    radar_action = decision_market_radar_action(decision)
 
     summary["candidate_decisions"] += 1
     if decision.get("should_trade") or "open_attempt" in action:
@@ -2083,6 +2421,22 @@ def add_decision_to_lane_summary(summary, decision):
         summary["paper_opened"] += 1
     if "skip" in action or "blocked" in action or action == "runtime_skip" or decision.get("should_trade") is False:
         summary["skipped"] += 1
+        action_reason = str(decision.get("action_reason") or "")
+        is_market_radar = decision_report_lane(decision) == "market_radar" or bool(payload.get("market_radar"))
+        if radar_action.get("skip_reason"):
+            skip_reason = radar_action.get("skip_reason")
+        elif is_market_radar and action_reason.startswith("market_radar_skip:"):
+            skip_reason = strip_reason_prefix(action_reason)
+        elif is_market_radar:
+            skip_reason = None
+        else:
+            skip_reason = strip_reason_prefix(action_reason)
+        skip_bucket = radar_action.get("skip_bucket")
+        increment_summary_counter(summary, "skip_reasons", skip_reason)
+        increment_summary_counter(summary, "skip_buckets", skip_bucket)
+    if "opened" in action or "open_attempt" in action:
+        open_reason = radar_action.get("open_reason") or strip_reason_prefix(decision.get("action_reason"))
+        increment_summary_counter(summary, "open_reasons", open_reason)
     if decision.get("buy_quote_pass") is False or decision.get("sell_quote_pass") is False:
         summary["quote_failed"] += 1
     if risk.get("hard_block") or str(decision.get("risk_label") or "").upper() in {"DANGER", "EMERGENCY", "BLOCKED"}:
@@ -2127,7 +2481,9 @@ def build_decision_lane_report_payload(limit=5000, state=None):
     watchlist = state.get("watchlist") if isinstance(state.get("watchlist"), list) else []
     decisions = fetch_decision_rows(limit=limit)
     lanes = {
-        "main": empty_decision_lane_summary("Main Strategy"),
+        "co_main": empty_decision_lane_summary("Co-Main Strategy"),
+        "main": empty_decision_lane_summary("Wallet Main Strategy"),
+        "market_radar": empty_decision_lane_summary("Market Radar Co-Main"),
         "exploration": empty_decision_lane_summary("Exploration Lane"),
         "protected_manual": empty_decision_lane_summary("Protected / Manual", minimum_closed=0),
     }
@@ -2136,6 +2492,8 @@ def build_decision_lane_report_payload(limit=5000, state=None):
     for decision in decisions:
         lane = decision_report_lane(decision)
         add_decision_to_lane_summary(lanes[lane], decision)
+        if lane in {"main", "market_radar"}:
+            add_decision_to_lane_summary(lanes["co_main"], decision)
 
     for summary in lanes.values():
         finalize_decision_lane_summary(summary)
@@ -2148,7 +2506,8 @@ def build_decision_lane_report_payload(limit=5000, state=None):
         "total_decisions": len(decisions),
         "lanes": lanes,
         "notes": [
-            "Main and exploration lanes come from canonical decision records.",
+            "Co-main combines wallet-main and Market Radar decision records while preserving each lane separately.",
+            "Exploration remains separate and experimental.",
             "Protected/manual count comes from the manual watchlist until protected actions write decision records.",
         ],
     }
@@ -2226,7 +2585,9 @@ def build_decision_outcome_analytics_payload(limit=5000):
     decisions = fetch_decision_rows(limit=limit)
     overall = clone_decision_summary("All Decisions")
     lanes = {
-        "main": clone_decision_summary("Main Strategy"),
+        "co_main": clone_decision_summary("Co-Main Strategy"),
+        "main": clone_decision_summary("Wallet Main Strategy"),
+        "market_radar": clone_decision_summary("Market Radar Co-Main"),
         "exploration": clone_decision_summary("Exploration Lane"),
         "protected_manual": clone_decision_summary("Protected / Manual", minimum_closed=0),
     }
@@ -2240,7 +2601,10 @@ def build_decision_outcome_analytics_payload(limit=5000):
 
     for decision in decisions:
         add_to_summary(overall, decision)
-        add_to_summary(lanes[decision_report_lane(decision)], decision)
+        lane = decision_report_lane(decision)
+        add_to_summary(lanes[lane], decision)
+        if lane in {"main", "market_radar"}:
+            add_to_summary(lanes["co_main"], decision)
         social = decision_social_matched(decision)
         wallet = decision_wallet_confirmed(decision)
         if social:
@@ -3129,6 +3493,34 @@ def pick_settings(settings):
         "paper_exploration_score_threshold",
         "paper_exploration_min_edge_score",
         "paper_exploration_size_usd",
+        "paper_exploration_auto_pause_enabled",
+        "paper_exploration_auto_pause_min_closed",
+        "paper_exploration_auto_pause_max_avg_pnl_pct",
+        "paper_exploration_auto_pause_max_win_rate_pct",
+        "market_radar_enabled",
+        "market_radar_interval_seconds",
+        "market_radar_max_candidates_per_cycle",
+        "market_radar_scan_candidates_per_cycle",
+        "market_radar_max_entries_per_cycle",
+        "market_radar_max_quotes_per_cycle",
+        "market_radar_quote_cooldown_seconds",
+        "market_radar_mint_cooldown_seconds",
+        "market_radar_position_size_usd",
+        "market_radar_min_score",
+        "market_radar_min_liquidity_usd",
+        "market_radar_min_market_cap_usd",
+        "market_radar_max_market_cap_usd",
+        "market_radar_min_m5_tx_count",
+        "market_radar_min_h1_volume_usd",
+        "market_radar_min_buy_ratio",
+        "wallet_main_quality_gate_enabled",
+        "wallet_main_min_liquidity_usd",
+        "wallet_main_min_market_cap_usd",
+        "wallet_main_solo_min_score",
+        "wallet_main_solo_min_wallet_quality",
+        "wallet_main_two_wallet_min_avg_quality",
+        "wallet_main_two_wallet_min_max_quality",
+        "wallet_main_max_rapid_flips",
         "strategy_guard_enabled",
     )
     return {key: settings.get(key) for key in keys if key in settings}
@@ -3136,7 +3528,7 @@ def pick_settings(settings):
 
 def build_operator_config_payload(state=None):
     state = state or read_state_files()
-    settings = state.get("settings") if isinstance(state.get("settings"), dict) else {}
+    settings = load_bot_settings()
     runtime = summarize_runtime(state.get("runtime") or DEFAULT_STATUS.copy())
     return {
         "generated_at": time.time(),
@@ -3580,6 +3972,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/decision-analytics":
         limit = parse_int_query(query, "limit", 5000, 1, 10000)
         return json_response(build_decision_outcome_analytics_payload(limit=limit))
+    if path == "/api/market-radar-review":
+        limit = parse_int_query(query, "limit", 120, 1, 500)
+        return json_response(build_market_radar_review_payload(limit=limit))
     if path == "/api/events":
         limit = parse_int_query(query, "limit", 120, 1, 500)
         return json_response(build_event_feed_payload(limit=limit))

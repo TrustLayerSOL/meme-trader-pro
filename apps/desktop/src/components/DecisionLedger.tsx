@@ -5,6 +5,7 @@ import {
   decisionCatalystEvidenceSummary,
   decisionHolderClusterSummary,
   decisionMarketContextSummary,
+  decisionMarketRadarSummary,
   decisionPaperOutcomeSummary,
   decisionQuotePair,
   decisionQuoteReason,
@@ -25,6 +26,8 @@ const FILTERS: Array<{ value: DecisionFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "bought", label: "Bought" },
   { value: "skipped", label: "Skipped" },
+  { value: "co_main", label: "Co-Main" },
+  { value: "market_radar", label: "Market Radar" },
   { value: "exploration", label: "Exploration" },
   { value: "quote_failed", label: "Quote Failed" },
   { value: "hard_risk", label: "Hard Risk" },
@@ -198,6 +201,7 @@ function DecisionDetail({
         <DecisionNote label="Wallets" value={decisionWalletSummary(decision)} />
         <DecisionNote label="Social" value={decisionSocialSummary(decision)} />
         <DecisionNote label="Catalyst Evidence" value={decisionCatalystEvidenceSummary(decision)} />
+        <DecisionNote label="Market Radar" value={decisionMarketRadarSummary(decision)} />
         <DecisionNote label="Route Feasibility" value={decisionRouteFeasibilitySummary(decision)} />
         <DecisionNote label="Holder / Cluster" value={decisionHolderClusterSummary(decision)} />
         <DecisionNote label="Market Context" value={decisionMarketContextSummary(decision)} />

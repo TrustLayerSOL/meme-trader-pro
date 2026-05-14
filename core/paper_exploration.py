@@ -56,6 +56,107 @@ def _quote_was_checked(quote_analysis):
     return not any(marker in reason for marker in skipped_markers)
 
 
+def _risk_label(decision, rug_result):
+    for source in (decision or {}, rug_result or {}):
+        if not isinstance(source, dict):
+            continue
+        for key in ("risk_label", "token_risk_label", "mechanics_risk_label"):
+            value = source.get(key)
+            if value:
+                return str(value).upper()
+    return ""
+
+
+def _market_metric(decision, market_sanity, *keys):
+    sources = []
+    if isinstance(decision, dict):
+        sources.extend([
+            decision,
+            decision.get("market_info"),
+            decision.get("token_info"),
+            decision.get("scanner_market_info"),
+        ])
+    sources.append(market_sanity)
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            if key in source:
+                return safe_float(source.get(key), None)
+    return None
+
+
+def _suppressed_exploration(decision, enabled, reason, threshold, detail):
+    updated = _with_exploration(decision, enabled, False, reason, threshold, 0)
+    updated["should_trade"] = False
+    updated["paper_should_trade"] = False
+    updated["live_should_trade"] = False
+    updated["exploration"]["suppression"] = detail
+    updated["reasons"].append(
+        "PAPER EXPLORATION SUPPRESSED: repeat bad-sample pattern blocked from opening another paper trade"
+    )
+    return {
+        "decision": updated,
+        "position_size_usd": 0,
+    }
+
+
+def summarize_exploration_performance(paper_state):
+    closed = []
+    for trade in (paper_state or {}).get("closed_trades", []) or []:
+        if not isinstance(trade, dict):
+            continue
+        lane = trade.get("paper_lane") or (trade.get("signal_metadata") or {}).get("paper_lane")
+        if lane != "exploration":
+            continue
+        pnl_pct = safe_float(trade.get("total_pnl_pct", trade.get("pnl_pct")), None)
+        if pnl_pct is None:
+            continue
+        closed.append(pnl_pct)
+
+    if not closed:
+        return {
+            "closed": 0,
+            "wins": 0,
+            "losses": 0,
+            "avg_pnl_pct": 0,
+            "win_rate_pct": 0,
+        }
+
+    wins = len([pnl for pnl in closed if pnl > 0])
+    return {
+        "closed": len(closed),
+        "wins": wins,
+        "losses": len(closed) - wins,
+        "avg_pnl_pct": round(sum(closed) / len(closed), 4),
+        "win_rate_pct": round((wins / len(closed)) * 100, 4),
+    }
+
+
+def exploration_auto_pause_reason(settings, paper_state):
+    if not safe_bool(settings.get("paper_exploration_auto_pause_enabled"), True):
+        return None
+
+    stats = summarize_exploration_performance(paper_state)
+    min_closed = int(safe_float(settings.get("paper_exploration_auto_pause_min_closed"), 5))
+    max_avg_pnl = safe_float(settings.get("paper_exploration_auto_pause_max_avg_pnl_pct"), -10)
+    max_win_rate = safe_float(settings.get("paper_exploration_auto_pause_max_win_rate_pct"), 20)
+
+    if stats["closed"] < min_closed:
+        return None
+
+    if stats["avg_pnl_pct"] <= max_avg_pnl and stats["win_rate_pct"] <= max_win_rate:
+        return {
+            "reason": "auto_paused_negative_sample",
+            "stats": stats,
+            "min_closed": min_closed,
+            "max_avg_pnl_pct": max_avg_pnl,
+            "max_win_rate_pct": max_win_rate,
+        }
+    return None
+
+
 def _route_failed_observation(
     decision,
     settings,
@@ -119,6 +220,7 @@ def _route_failed_observation(
 def _confirmation_block_observation(
     decision,
     settings,
+    rug_result,
     market_sanity,
     buy_quote_analysis,
     sell_quote_analysis,
@@ -152,6 +254,77 @@ def _confirmation_block_observation(
     )
     if not (size > 0 and (score_eligible or edge_eligible)):
         return None
+
+    if safe_bool(settings.get("paper_exploration_bad_sample_suppression_enabled"), True):
+        risk_label = _risk_label(decision, rug_result)
+        medium_score_floor = safe_float(
+            settings.get("paper_exploration_confirmation_medium_risk_min_score"),
+            68.0,
+        )
+        medium_edge_floor = safe_float(
+            settings.get("paper_exploration_confirmation_medium_risk_min_edge_score"),
+            60.0,
+        )
+        liquidity = _market_metric(
+            decision,
+            market_sanity,
+            "liquidity",
+            "liquidity_usd",
+            "entry_liquidity_usd",
+        )
+        market_cap = _market_metric(decision, market_sanity, "market_cap", "marketCap", "fdv")
+        min_liquidity = safe_float(
+            settings.get("paper_exploration_confirmation_min_liquidity_usd"),
+            25_000.0,
+        )
+        min_market_cap = safe_float(
+            settings.get("paper_exploration_confirmation_min_market_cap_usd"),
+            50_000.0,
+        )
+
+        if risk_label and risk_label not in {"LOW_RISK", "PASS", "SAFE"}:
+            if score < medium_score_floor and edge_score < medium_edge_floor:
+                return _suppressed_exploration(
+                    decision,
+                    enabled,
+                    "bad_sample_suppressed_medium_risk_confirmation",
+                    score_threshold,
+                    {
+                        "risk_label": risk_label,
+                        "score": score,
+                        "edge_score": edge_score,
+                        "min_score": medium_score_floor,
+                        "min_edge_score": medium_edge_floor,
+                    },
+                )
+
+        if liquidity is not None and liquidity < min_liquidity:
+            return _suppressed_exploration(
+                decision,
+                enabled,
+                "bad_sample_suppressed_thin_confirmation",
+                score_threshold,
+                {
+                    "liquidity": liquidity,
+                    "min_liquidity": min_liquidity,
+                    "market_cap": market_cap,
+                    "min_market_cap": min_market_cap,
+                },
+            )
+
+        if market_cap is not None and market_cap < min_market_cap:
+            return _suppressed_exploration(
+                decision,
+                enabled,
+                "bad_sample_suppressed_small_cap_confirmation",
+                score_threshold,
+                {
+                    "liquidity": liquidity,
+                    "min_liquidity": min_liquidity,
+                    "market_cap": market_cap,
+                    "min_market_cap": min_market_cap,
+                },
+            )
 
     updated = _with_exploration(
         decision,
@@ -193,6 +366,7 @@ def evaluate_paper_exploration(
     sell_quote_analysis,
     edge_result,
     position_size_usd,
+    paper_state=None,
 ):
     settings = settings if isinstance(settings, dict) else {}
     decision = dict(decision or {})
@@ -217,6 +391,27 @@ def evaluate_paper_exploration(
             "position_size_usd": position_size_usd,
         }
 
+    auto_pause = exploration_auto_pause_reason(settings, paper_state)
+    if auto_pause:
+        updated = _with_exploration(
+            decision,
+            enabled,
+            False,
+            auto_pause["reason"],
+            threshold,
+            position_size_usd,
+        )
+        updated["exploration"]["auto_pause"] = auto_pause
+        updated["should_trade"] = False
+        updated["live_should_trade"] = False
+        updated["reasons"].append(
+            "PAPER EXPLORATION AUTO-PAUSED: exploration lane paper sample has negative expectancy"
+        )
+        return {
+            "decision": updated,
+            "position_size_usd": 0,
+        }
+
     if (rug_result or {}).get("hard_block"):
         return {
             "decision": _with_exploration(decision, enabled, False, "hard_risk_block", threshold, position_size_usd),
@@ -229,10 +424,17 @@ def evaluate_paper_exploration(
             "position_size_usd": position_size_usd,
         }
 
+    if decision.get("wallet_main_quality_block"):
+        return {
+            "decision": _with_exploration(decision, enabled, False, "wallet_main_quality_block", threshold, position_size_usd),
+            "position_size_usd": 0,
+        }
+
     if decision.get("confirmation") and not (decision.get("confirmation") or {}).get("allow", True):
         confirmation_observation = _confirmation_block_observation(
             decision=decision,
             settings=settings,
+            rug_result=rug_result,
             market_sanity=market_sanity,
             buy_quote_analysis=buy_quote_analysis,
             sell_quote_analysis=sell_quote_analysis,

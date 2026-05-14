@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-10
+Last updated: 2026-05-13
 
 ## Legend
 
@@ -10,9 +10,11 @@ Last updated: 2026-05-10
 
 ## Current Working Section
 
-<mark>Active roadmap area: Phase 2 / Phase 7 - Canonical Decision Ledger and measurable paper edge, with automated social/catalyst evidence feeding the ledger after Replay parity.</mark>
+<mark>Active roadmap area: **Phase A (Observability + analysis)** is now the highest priority, ahead of new strategy complexity. Continue extending the existing Decision Ledger, replay, and wallet foundations; do not refactor the system wholesale. The separate sports-betting quantitative project remains the cleaner long-term training ground for heavy statistics/ML; MemeTraderPro should stay evidence-driven and cautious.</mark>
 
-<mark>Current focus: Make the decision ledger the product backbone while cleaning canonical read paths. Every candidate should have one structured record covering signal inputs, risk/holder/quote checks, social/catalyst evidence, final action, and later paper outcome. GUI/API work should expose each panel's current source clearly before any source-of-truth migration or automated social collectors.</mark>
+<mark>Parallel ongoing work: Phase 2 / Phase 7 foundations—canonical Decision Ledger, measurable paper edge, paper-only Market Radar co-main discovery. Every candidate should have one structured record covering signal inputs, risk/holder/quote checks, social/catalyst evidence, final action, and later paper outcome.</mark>
+
+<mark>Current tuning note: Meme markets are noisy; meaningful sample sizes take time. Prefer observability, replay quality, post-mortem labels, no-trade logging, wallet intelligence, and market-regime tagging over new indicators, giant ML, or dashboard churn. Market Radar should increase discovery by scanning deeper through Dexscreener feed clutter, not by spending more quotes. Scan depth is 120 candidates per cycle, but processing stays capped at 8, paper entries at 1, and quote attempts at 1. The only age-gate exception is for RKC-style fresh runners with high liquidity, high H1 volume, strong M5 activity, balanced order flow, and social/site proof.</mark>
 
 ## Product Goal
 
@@ -62,6 +64,231 @@ Current strategic correction:
 - Favor exits and risk control over raw entry speed.
 - Do not trust stale state. Runtime health and data freshness must be visible.
 - Treat Token-2022 mechanics and authority controls as pre-entry risk inputs, not afterthoughts.
+- Observability before optimization: enough paper evidence and structured reasons before aggressive threshold tuning or large sweeps.
+
+## Phase A — Observability + Analysis (high priority)
+
+Goal: **make every paper trade maximally informative** for later review—without new strategy complexity or massive refactors.
+
+**Highest priority ordering (explicit):**
+
+1. Post-mortem system  
+2. Replay visibility  
+3. No-trade logging  
+4. Wallet intelligence expansion  
+5. Market regime tagging  
+6. Entry delay simulation  
+7. Exit attribution  
+
+Below: the same seven items **with verbatim taxonomies / field lists** as the product specification.
+
+Principles:
+
+- Extend existing decision records, SQLite, and replay surfaces; add small analysis modules and durable JSON under `data/` as needed.
+- Prefer structured reports and CLI-friendly outputs over new heavy UI.
+- Large-scale parameter sweeps and hindsight-style backtests belong in **Phase B** only under strict **no future information** rules.
+
+Deliverables:
+
+1. **Post-mortem classification system** (`analysis/trade_postmortem.py`, `analysis/trade_reason_codes.py`, `analysis/trade_classifier.py`, `data/postmortems/`)
+
+   For **every completed trade**, automatically classify (verbatim labels):
+
+   - winner / loser  
+   - rug event  
+   - momentum fade  
+   - weak cluster  
+   - late signal  
+   - liquidity collapse  
+   - holder concentration issue  
+   - delayed execution issue  
+   - stop-loss exit  
+   - take-profit exit  
+   - trailing-stop exit  
+   - social hype failure  
+   - volume exhaustion  
+   - fake breakout  
+
+   Track (verbatim fields):
+
+   - entry reason  
+   - exit reason  
+   - wallet cluster composition  
+   - wallet quality score  
+   - token age  
+   - liquidity at entry  
+   - holder concentration  
+   - social signal tags if available  
+   - market regime  
+   - entry delay estimate  
+   - slippage estimate  
+
+   Save **structured review records** for future analysis.
+
+2. **Replay visibility layer** (`analysis/replay_viewer.py`, `analysis/replay_summary.py`)
+
+   Goal: inspect **WHY** a signal triggered and **what happened afterward**. Expose (verbatim):
+
+   - triggering wallets  
+   - cluster timing  
+   - liquidity at signal  
+   - volume  
+   - token age  
+   - holder concentration  
+   - entry price  
+   - simulated fills  
+   - exit path  
+   - pnl path  
+   - replay notes  
+
+   This does **not** need a fancy UI yet—simple structured reports are fine.
+
+3. **“No trade” logging** (`analysis/rejection_logger.py`, `data/rejected_signals/`)
+
+   Log **why trades were rejected**. Example rejection reasons (verbatim):
+
+   - liquidity too low  
+   - wallet quality below threshold  
+   - cluster too slow  
+   - holder concentration too high  
+   - token too old  
+   - weak momentum  
+   - social mismatch  
+
+   Store (verbatim):
+
+   - rejection reason  
+   - signal context  
+   - what would have happened afterward if traded  
+
+   Goal: later determine whether filters protect the system or filter out winners.
+
+4. **Wallet intelligence expansion** (`wallets/wallet_score.py`, `wallets/wallet_relationships.py`, `wallets/wallet_profiles.py` — package may start under `core/` until stable)
+
+   Track (verbatim):
+
+   - wallet ROI  
+   - win rate  
+   - average hold duration  
+   - rug association score  
+   - wallet clustering relationships  
+   - repeated coordinated entries  
+   - wallet behavior profiles  
+
+   Goal: improve signal quality through behavioral intelligence, not random indicators.
+
+5. **Market regime tracking** (`analysis/market_regime.py`)
+
+   Tag overall market conditions during signals (verbatim examples):
+
+   - high volatility  
+   - dead market  
+   - strong runner environment  
+   - rug-heavy environment  
+   - low liquidity environment  
+
+   Goal: later analyze which strategies survive which regimes.
+
+6. **Entry delay simulation** (`replay/execution_delay_simulator.py`, or `analysis/` if no `replay/` package yet)
+
+   Simulate (verbatim):
+
+   - 500ms delay  
+   - 1s delay  
+   - 2s delay  
+   - 5s delay  
+
+   Goal: determine whether strategy survives realistic execution conditions.
+
+7. **Exit attribution** (`analysis/exit_attribution.py`)
+
+   Track which exits create profitability. Examples (verbatim):
+
+   - fixed TP  
+   - trailing stop  
+   - emergency exit  
+   - momentum continuation  
+   - timeout exit  
+
+   Goal: understand what actually drives profitability.
+
+Acceptance criteria:
+
+- New artifacts are append-only, versionable, and documented in `research/DATA_SOURCE_MAP.md` when they land.
+- Classifications and rejections are explainable from fields already on decisions/trades or explicitly stored alongside them.
+
+## Phase B — Historical Replay Engine (medium priority; not ahead of Phase A)
+
+Goal: build a **trustworthy historical replay environment** for later tuning and experimentation. This is **NOT** a simple hindsight backtester.
+
+The replay engine must attempt to recreate, **at the exact moment signals occurred**:
+
+- what the bot saw  
+- what conditions existed  
+- realistic execution assumptions  
+- realistic liquidity constraints  
+
+**Critical replay rules (verbatim):**
+
+- Never use future information.  
+- Replay engine should only use: **data available before signal timestamp** (strictly: at or before signal time; no peeking).  
+- **Do NOT:** use future candles  
+- **Do NOT:** use future liquidity  
+- **Do NOT:** use future wallet activity  
+- **Do NOT:** use hindsight  
+
+**Suggested structure:**
+
+- Code: `historical/replay_engine.py`, `historical/replay_runner.py`, `historical/replay_models.py`, `historical/replay_storage.py`, `historical/replay_metrics.py`, `historical/replay_reporter.py`, `historical/replay_config.py`, `historical/tuning_runner.py`, `historical/parameter_sweeper.py`, `historical/train_validation_split.py`  
+- Data: `data/historical_signals/`, `data/historical_prices/`, `data/historical_wallets/`, `data/replay_results/`, `data/tuning_results/`  
+
+The replay engine should simulate (verbatim):
+
+- smart wallet signals  
+- liquidity snapshots  
+- token age  
+- holder distribution  
+- volume  
+- realistic entry timing  
+- slippage  
+- priority fees  
+- delayed execution  
+- failed execution probability  
+- thin liquidity  
+
+**Do NOT assume perfect fills.**
+
+**Historical tuning runner (later; lower priority for now):** sweep (verbatim parameters):
+
+- cluster_wallets  
+- cluster_window_seconds  
+- wallet_quality_threshold  
+- min_liquidity  
+- token_age_limit  
+- take_profit_pct  
+- stop_loss_pct  
+- trailing_stop_pct  
+- max_hold_minutes  
+- position_size_pct  
+
+Must support (verbatim):
+
+- training split  
+- validation split  
+- untouched test split  
+
+Goal: evaluate whether strategies survive realistic replay conditions.
+
+**Priority summary (verbatim):**
+
+- **Highest priority:** post-mortem system, replay visibility, no-trade logging, wallet intelligence, market regime tracking (plus entry delay simulation and exit attribution as items 6–7 in Phase A above).  
+- **Medium priority:** historical replay engine.  
+- **Lower priority for now:** large-scale tuning, giant optimization sweeps, advanced ML.
+
+Acceptance criteria:
+
+- Replay reports document assumptions, data windows, and leakage checks.
+- Default remains: collect more paper + improve observability before trusting sweep results; need **significantly larger sample sizes** before aggressively tuning strategies.
 
 ## Phase 0 - Repo Control And Documentation
 
@@ -164,6 +391,12 @@ Deliverables:
 - [x] Native paper profitability review panel with readiness gaps, reason breakdowns, and wallet-label exposure.
 - [x] Paper-only Exploration Lane for safe near-miss candidates with smaller simulated size and separate review metrics.
 - [x] Exploration Lane is blocked from overriding confirmation, strategy guard, hard-risk, market-sanity, or quote gates and is explicitly marked non-live eligible.
+- [x] Exploration Lane auto-pauses after a small negative closed sample so a bad experimental lane does not keep burning paper samples.
+- [~] Paper-only Market Radar Co-Main lane polls Dexscreener latest profiles/boosts/top boosts, scores hot Solana tokens, writes decision records/snapshots, scans past cooldown candidates, contributes to combined co-main progress, and keeps its own outcomes separate from wallet-main/exploration.
+- [x] Market Radar Quality Gate V2 blocks hot-feed candidates with thin entry liquidity, weak entry market cap, poor liquidity-to-market-cap structure, abnormal volume versus liquidity, collapsing 1-hour momentum, one-sided flow, micro-transaction spam, too-fresh pairs, stale resurrected pairs without fresh strength, or missing social/site proof before spending quote budget.
+- [x] Market Radar Token Nursery review groups hot-feed decisions into rejected, watch, quote watch, paper bought, closed, and failed states in both Replay UIs.
+- [x] Market Radar decision payloads attach explicit holder-cluster `UNKNOWN` plus `linked_wallet_risk` `NOT_CHECKED` / `no_linked_wallet_graph_source` (scanner-parity placeholders) so the ledger never implies RPC holder or funder-graph coverage on the Dex-only lane.
+- [x] Market Radar optionally (off by default) calls Solana `getTokenLargestAccounts` after the score gate and before Jupiter quotes when `market_radar_holder_check_enabled` is true, with `market_radar_max_holder_checks_per_cycle` and `market_radar_holder_check_timeout_seconds` caps so concentrated supply can hard-block without spending quote budget.
 
 Acceptance criteria:
 
@@ -176,7 +409,10 @@ Next actions:
 
 - Let main paper mode collect at least 50 closed trades, with 100 preferred, before judging profitability.
 - Let Exploration Lane collect 50 closed trades for a first signal and 100-150 closed trades for useful wallet-discovery tuning.
+- Let Market Radar Co-Main collect its own closed paper sample under Quality Gate V2 before it influences shared co-main thresholds.
+- Use the Market Radar Token Nursery to review whether rejected/watch/quote-watch candidates are being blocked for sensible reasons before loosening thresholds again.
 - Use lane-specific readiness only; do not let exploration volume make the main strategy look validated.
+- Use combined co-main readiness for wallet-main plus Market Radar, while preserving lane-specific wallet-main and Market Radar readiness.
 - Harden native candidate filters for scanner skip/entry and paper lifecycle snapshot contexts.
 - Split desktop API routing/projectors into smaller modules before adding more mutation surfaces.
 - Build the canonical decision ledger from signal, social, wallet, risk, quote, and paper-result records.
@@ -325,7 +561,9 @@ Acceptance criteria:
 
 Next actions:
 
-- Add the first automated Reddit social collector and write its status into `/api/social/freshness`.
+- Compare wallet-main, Market Radar Co-Main, and Exploration outcomes only after each lane has enough closed paper trades to avoid overfitting.
+- Add PumpPortal/Mobula-style streaming discovery only if Dexscreener polling misses too many runners or creates too much lag.
+- Keep Reddit and broader social expansion gated behind outcome analytics.
 - Keep broader crypto and stablecoin data as market-regime context only, not an expanded trading universe.
 - Build daily summary from alerts, trades, watchdog events, and wallet performance.
 - Define replay input/output schema.
@@ -503,6 +741,8 @@ Next actions:
 
 ## Near-Term Priority Stack
 
+- [ ] **Phase A (top):** post-mortem classification, replay visibility reports, no-trade / rejection logging, wallet intelligence expansion, market regime tags, entry-delay simulation, exit attribution—see **Phase A** section above.
+- [ ] **Phase B (after Phase A):** historical replay engine with no-future-data rules; defer large tuning sweeps.
 - [~] Canonical decision ledger: every candidate gets one structured decision record.
 - [~] Scanner skip/main-entry/exploration-entry writes route through the ledger.
 - [~] Paper trade open/failed/exit records link back to `decision_id`.
@@ -552,6 +792,13 @@ Next actions:
 - [x] Added `core/catalyst_cards.py`, `data/catalyst_cards.json`, Data Store Catalyst Cards tab, freshness tracking, and unit coverage for catalyst-card generation.
 - [x] Added Token Console catalyst outcome column and per-token Catalyst detail tab.
 - [x] Added structured local social events with ticker/mint extraction, sentiment, bulk import, dashboard Social Catalyst Tracker, and unit coverage.
+
+### 2026-05-13
+
+- [x] Added **Phase A (Observability + Analysis)** and **Phase B (Historical Replay Engine)** roadmap sections after Operating Principles: ordered deliverables (post-mortem taxonomy, replay visibility, rejection logging, wallet intelligence expansion, regime tagging, execution-delay simulation, exit attribution); Phase B constrained by no-hindsight replay rules and explicit medium-priority deferral vs Phase A.
+- [x] Expanded Phase A/B sections with verbatim product taxonomies: classification labels, tracked fields, replay visibility rows, rejection examples/storage, wallet metrics, regime examples, delay steps, exit-attribution examples, replay simulation bullets, tuning-parameter list, splits, priority summary, and critical replay forbidden behaviors.
+
+- [x] Phase A scaffolding: `analysis/` post-mortem reason codes/classifier/post-mortem JSONL writer, rejection JSONL logger, `python -m analysis.run_postmortem_batch` batch export, DATA_SOURCE_MAP entries for append-only artifacts.
 
 ### 2026-05-09
 

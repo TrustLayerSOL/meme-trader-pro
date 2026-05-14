@@ -27,6 +27,8 @@ def parse_args(argv=None):
     parser.add_argument("--local-hours", type=float, default=6, help="Hours of local scanner events to mine.")
     parser.add_argument("--local-limit", type=int, default=5000, help="Maximum local scanner events per cycle.")
     parser.add_argument("--from-paper-winners", action="store_true", help="Also inspect recent winning paper mints with read-only RPC.")
+    parser.add_argument("--from-local-runners", action="store_true", help="Also inspect locally observed skipped runners with read-only RPC.")
+    parser.add_argument("--from-dexscreener-trending", action="store_true", help="Also inspect Dexscreener trending/boosted Solana mints with read-only RPC.")
     return parser.parse_args(argv)
 
 
@@ -36,6 +38,8 @@ def config_from_args(args):
         "local_hours": args.local_hours,
         "local_limit": args.local_limit,
         "from_paper_winners": args.from_paper_winners,
+        "from_local_runners": args.from_local_runners,
+        "from_dexscreener_trending": args.from_dexscreener_trending,
     }
 
 

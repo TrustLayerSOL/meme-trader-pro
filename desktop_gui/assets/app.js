@@ -24,6 +24,7 @@ const state = {
   readiness: null,
   winnerPatterns: null,
   decisions: null,
+  marketRadarReview: null,
   decisionFilter: "all",
   selectedDecisionId: "",
   decisionExplanation: null,

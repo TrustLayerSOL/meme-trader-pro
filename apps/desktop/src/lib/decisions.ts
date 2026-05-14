@@ -1,6 +1,6 @@
 import { shortMint } from "./format";
 
-export type DecisionFilter = "all" | "bought" | "skipped" | "exploration" | "quote_failed" | "hard_risk" | "social" | "wallet";
+export type DecisionFilter = "all" | "bought" | "skipped" | "co_main" | "market_radar" | "exploration" | "quote_failed" | "hard_risk" | "social" | "wallet";
 
 export type DecisionRecord = {
   decision_id?: string;
@@ -77,6 +77,15 @@ export type DecisionRecord = {
       buy?: RouteFeasibility;
       sell?: RouteFeasibility;
     };
+    market_radar?: {
+      decision?: {
+        action?: string | null;
+        open_reason?: string | null;
+        skip_reason?: string | null;
+        skip_bucket?: string | null;
+        quote_retryable?: boolean | null;
+      } & Record<string, unknown>;
+    } & Record<string, unknown>;
     social_matched?: boolean;
   } & Record<string, unknown>;
 } & Record<string, unknown>;
@@ -108,6 +117,8 @@ export function decisionMatchesFilter(decision: DecisionRecord, filter: Decision
 
   if (filter === "bought") return action.includes("opened") || action.includes("open_attempt");
   if (filter === "skipped") return action.includes("skip") || action.includes("blocked") || action === "runtime_skip";
+  if (filter === "co_main") return decision.paper_lane === "main" || decision.paper_lane === "market_radar";
+  if (filter === "market_radar") return decision.paper_lane === "market_radar" || Boolean(payload.market_radar);
   if (filter === "exploration") return decision.paper_lane === "exploration";
   if (filter === "quote_failed") return decision.buy_quote_pass === false || decision.sell_quote_pass === false;
   if (filter === "hard_risk") return Boolean(risk.hard_block || decision.risk_label === "DANGER" || decision.risk_label === "EMERGENCY");
@@ -221,6 +232,17 @@ export function decisionMarketContextSummary(decision: DecisionRecord): string {
     context.risk_regime || null,
     present(context.sol_price_change_pct) ? `SOL ${context.sol_price_change_pct}%` : null,
     stablecoinWarning === true ? "stablecoin warning" : stablecoinWarning === false ? "stablecoin ok" : null,
+  ]);
+}
+
+export function decisionMarketRadarSummary(decision: DecisionRecord): string {
+  const radar = decision.payload?.market_radar?.decision;
+  if (!radar) return "-";
+  return compactParts([
+    radar.open_reason ? `open ${radar.open_reason}` : null,
+    radar.skip_reason ? `skip ${radar.skip_reason}` : null,
+    radar.skip_bucket || null,
+    radar.quote_retryable ? "retry soon" : null,
   ]);
 }
 

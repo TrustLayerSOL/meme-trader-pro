@@ -40,7 +40,7 @@ export async function loadCoreState() {
     getJson("/api/overview"),
     getJson("/api/positions"),
   ]);
-  const [trades, watchlist, social, catalysts, readiness, winnerPatterns, decisions] = await Promise.all([
+  const [trades, watchlist, social, catalysts, readiness, winnerPatterns, decisions, paperReview, decisionAnalytics, marketRadarReview] = await Promise.all([
     getJson("/api/trades"),
     getJson("/api/watchlist"),
     getJson("/api/social"),
@@ -48,6 +48,9 @@ export async function loadCoreState() {
     getJson("/api/readiness"),
     getJson("/api/winner-patterns"),
     getJson("/api/decisions?limit=80"),
+    getJson("/api/paper-review"),
+    getJson("/api/decision-analytics?limit=5000"),
+    getJson("/api/market-radar-review?limit=120"),
   ]);
   return {
     overview,
@@ -59,6 +62,9 @@ export async function loadCoreState() {
     readiness,
     winnerPatterns,
     decisions,
+    paperReview,
+    decisionAnalytics,
+    marketRadarReview,
   };
 }
 

@@ -440,6 +440,37 @@ nav button:hover {
   margin: 0;
 }
 
+.paper-review-card {
+  grid-column: 1 / -1;
+}
+
+.market-radar-review-card {
+  grid-column: 1 / -1;
+}
+
+.paper-progress {
+  margin: 10px 0;
+}
+
+.paper-progress > div {
+  height: 8px;
+  border-radius: 999px;
+  background: #0a0f17;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.paper-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #5ee0a5, #c6f56f);
+}
+
+.paper-progress small {
+  display: block;
+  margin-top: 6px;
+}
+
 .portfolio-total-card p {
   color: var(--text);
   font-size: 24px;
@@ -457,6 +488,56 @@ nav button:hover {
   display: grid;
   gap: 8px;
   margin-top: 10px;
+}
+
+.nursery-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.nursery-stage-grid div {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  padding: 9px 10px;
+}
+
+.nursery-stage-grid span,
+.nursery-stage-grid strong {
+  display: block;
+}
+
+.nursery-stage-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.nursery-stage-grid strong {
+  margin-top: 4px;
+  font-size: 19px;
+}
+
+.nursery-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.nursery-row.closed,
+.nursery-row.paper_bought {
+  border-color: rgba(94, 224, 165, 0.4);
+}
+
+.nursery-row.failed,
+.nursery-row.rejected {
+  border-color: rgba(255, 95, 112, 0.35);
+}
+
+.nursery-row.watch,
+.nursery-row.quote_watch {
+  border-color: rgba(255, 204, 102, 0.34);
 }
 
 .ledger-row {

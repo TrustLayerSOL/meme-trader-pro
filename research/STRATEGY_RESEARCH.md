@@ -1,6 +1,6 @@
 # MemeTraderPro Strategy Research
 
-Last updated: 2026-04-29
+Last updated: 2026-05-13
 
 ## Strategic Lane
 
@@ -65,6 +65,22 @@ Prefer entries where at least four of these six are true:
 - `structure_score`: VWAP hold, higher low, drawdown control.
 - `distribution_score`: holders, top-wallet concentration, linked-wallet/bundle detection.
 - `exit_score`: liquidity depth, sell route reliability, projected price impact.
+
+## Implementation coverage (living map)
+
+Rough mapping from this note to shipped behavior — use Replay / Decision Ledger outcomes to prove lift, not the checklist alone.
+
+| Theme | Where it lives | Notes |
+| --- | --- | --- |
+| Post-launch confirmation bias | `core/scanner.py`, `core/settings_manager.py` & mode thresholds | Confirmation vs sniper via scoring + thresholds. |
+| Flow / liquidity / pair quality (hot-feed lane) | `core/market_radar.py`, `MarketRadar` gates | Dex-screener style scoring; Jupiter quotes for route when allowed. |
+| Wallet signal + performance memory | `core/scanner.py`, `core/scoring_engine.py`, `core/wallet_performance.py` | Main lane attribution. |
+| Risk + Token-2022 | `core/anti_rug.py`, `core/token_inspector.py`, scanner rug merge | Hard blocks recorded on decision payloads. |
+| Holder concentration | `core/holder_concentration.py`, `Scanner.evaluate_holder_cluster_risk`, `scanner.apply_holder_cluster_to_rug_result` | Quote-worthy RPC pass; danger hard-blocks paper. |
+| True linked-wallet / funder graph | `Scanner.wallet_cluster_risk_context` → `linked_wallet_risk` | Explicit `NOT_CHECKED` / `no_linked_wallet_graph_source` until a graph source ships. |
+| Market Radar lane: holder + linkage | `evaluate_market_radar_holder_cluster`, `market_radar_holder_cluster_placeholder`, `market_radar_linked_wallet_placeholder` | Default: no RPC (`UNKNOWN` placeholders). Opt-in bounded `getTokenLargestAccounts` before quotes; `DANGER` hard-blocks without Jupiter. Linkage stays `NOT_CHECKED` on the Dex-only lane. |
+| Exit / sizing / paper bookkeeping | `paper_trader.py`, `core/exit_advisor.py`, `ExecutionEngine` | Paper parity; exits before live. |
+| Decision lineage | `core/decision_ledger.py`, `core/paper_trade_decision_ids.py` | Canonical records + synthetic legacy IDs where needed. |
 
 ## Sources
 

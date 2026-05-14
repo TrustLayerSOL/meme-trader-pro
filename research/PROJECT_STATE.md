@@ -1,11 +1,28 @@
 # 🚀 MemeTraderPro – Updated Project State & Handoff
 
 ## Last Updated
-2026-05-09
+2026-05-13
+
+## Development direction (2026)
+
+- **North star:** The separate sports-betting quantitative project remains the cleaner infrastructure for heavy statistics; MemeTraderPro evolves **slowly**, evidence-first, without wholesale redesign.
+- **Detailed spec:** `research/BUILD_PLAN.md` **Phase A** and **Phase B** now paste the verbatim classification taxonomies, field lists, rejection examples, replay rules, tuning parameters, and priority summary agreed for implementation.
+- **Immediate priorities:** more closed paper-trade evidence and **richer reasoning** — post-mortem classification, replay visibility, **no-trade / rejection logging**, wallet intelligence expansion, market regime tagging, execution-delay sanity checks, exit attribution — see **`research/BUILD_PLAN.md` Phase A**.
+- **Later:** historical replay engine and tuning runners (**Phase B** in build plan)—only under strict **no future data** replay rules and after observability groundwork; not a shortcut past small samples.
+- **Explicitly defer for now:** big new strategy stacks, indicator soup, giant ML surfaces, sprawling dashboards, and aggressive optimization on thin samples.
+
+## Current Strategy State
+
+- Live execution remains locked.
+- Wallet-main remains the strongest paper lane so far.
+- Market Radar is paper-only and now uses Quality Gate V2 before quote checks: thin liquidity, weak entry market cap, poor liquidity-to-market-cap structure, abnormal H1 volume/liquidity, collapsing H1 momentum, one-sided flow, micro-transaction spam, normal too-fresh pairs, stale resurrected pairs, and missing social/site proof are blocked before a paper entry.
+- Market Radar has one narrow RKC-style fresh-runner exception: very fresh pairs can pass the age gate only when liquidity, market cap, H1 volume, M5 activity, balanced flow, and social/site proof are already strong. Scan depth is 120 while processed candidates, paper entries, and quote attempts remain capped.
+- Replay now includes a Market Radar Token Nursery so rejected, watch, quote-watch, paper-bought, closed, and failed hot-feed candidates can be reviewed without opening raw logs.
+- Exploration remains restricted after a negative early sample.
 
 ## Project Location
 ```bash
-~/Desktop/Jordan/meme_trader_pro
+~/Desktop/Jordan 2/meme_trader_pro
 ```
 
 ---
@@ -97,10 +114,21 @@ Completed on 2026-05-10:
 - Scanner websocket subscription ids are now mapped back to wallets, and per-wallet backpressure prevents a single noisy wallet from filling the entire transaction-processing queue.
 - Exploration Lane now has a paper-only route-failed observation mode for sample acceleration. Strong signals that fail route feasibility can be tracked as tiny `$5` exploration samples with `route_observation_only=true` and `live_should_trade=false`; main-lane readiness and live execution remain unaffected.
 
+Completed on 2026-05-12:
+
+- Missed-RKC root cause is understood: the system was wallet-first, so hot tokens on Dexscreener/Pump-style feeds could run without entering the decision ledger if no tracked wallet generated a signal.
+- A paper-only Market Radar Co-Main lane now polls Dexscreener latest profiles, latest boosts, and top boosts, scores hot Solana candidates, writes decision records/snapshots, and can open tiny paper trades under `paper_lane=market_radar`.
+- Market Radar is promoted to co-main reporting/readiness, but wallet-main and Market Radar remain separately measurable so a hot-feed experiment cannot hide wallet-main performance.
+- Market Radar now scans past recently-seen/cooldown candidates before giving up for the cycle, records structured open/skip reasons in the decision ledger, and reports skip buckets so quote cooldowns, low liquidity, low activity, and runtime precheck blocks are visible in Paper Review and Replay.
+- The Market Radar Token Nursery is backed by read-only SQLite decision records and is visible in both the React/Tauri Replay view and the static browser view.
+- Exploration Lane now has negative-sample auto-pause protection, and runtime exploration thresholds were tightened after the negative PnL sample.
+- The GitHub repo search for this new path found useful references: `Flotapponnier/pulse-sniper` for WebSocket fresh-token gating/dedup concepts, `Ziondido/DexscreenerAPI` for endpoint organization, `NadirAliOfficial/Solana-New-Pairs` for new-pair scoring concepts, and `hcrypto7/rug_token_checker` for Raydium/RugCheck risk ideas.
+
 Readiness estimate for a full-week high-quality paper run:
 
 - Current estimate: about 92/100 after SQLite-first trades/alerts, source-contract visibility, live scanner holder-risk decision wiring, hourly Reddit collector scheduling, lane-separated decision-ledger reporting, decision-outcome backfill support, fast open-position monitoring, Reddit hygiene, decision outcome analytics, provider/deep-watchdog pressure controls, and scanner per-wallet queue isolation.
 - Still below 95 because enough closed main/exploration paper trades are not collected yet, provider pressure controls need longer live observation, Reddit automation needs clean-run history with low duplicate/noise rates, and historical trades without `decision_id` cannot be joined safely.
+- Market Radar may improve sample speed. It now counts toward combined co-main paper progress, while its own lane still needs separate closed-trade evidence before changing shared thresholds.
 
 Manual social import remains useful for testing, but it is only a bridge. Future social automation must feed the decision ledger as evidence, not become a social-only trade trigger.
 
@@ -473,18 +501,20 @@ SOCIAL + cluster -> high conviction
 ```
 
 ## Phase 7: Discovery Scanner
-Status: Planned
+Status: Started
 
 Sources:
 ```txt
-Dexscreener new pairs
-Pump.fun launches
+Dexscreener latest token profiles
+Dexscreener latest/top boosts
+Pump.fun launches / streaming feed candidates (future)
 Raydium pools
 ```
 
 Goal:
 - Catch tokens before tracked wallets
-- Feed clean candidates into scoring engine
+- Feed clean candidates into scoring engine and decision ledger
+- Keep this as a paper-only Market Radar Co-Main lane until it has its own closed-trade evidence
 
 ## Phase 8: Momentum Engine
 Status: Planned

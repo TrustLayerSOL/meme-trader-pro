@@ -523,6 +523,85 @@ class Scanner:
             "name": name,
         }
 
+    def wallet_quality_rapid_flip_count(self, wallet_quality):
+        total = 0
+        for row in (wallet_quality or {}).get("wallet_scores", []) or []:
+            stats = row.get("stats") if isinstance(row, dict) else {}
+            total += int(self.first_number((stats or {}).get("rapid_flip_count")) or 0)
+        return total
+
+    def wallet_main_quality_gate(self, signal_type, decision, wallet_count, wallet_quality, rug_result, market_info):
+        if not self.settings.get("wallet_main_quality_gate_enabled", True):
+            return {"allow": True, "reasons": []}
+
+        decision = decision if isinstance(decision, dict) else {}
+        if not decision.get("should_trade", False):
+            return {"allow": True, "reasons": []}
+
+        wallet_count = int(wallet_count or 0)
+        if wallet_count > 2:
+            return {"allow": True, "reasons": []}
+
+        signal_type = str(signal_type or "")
+        if signal_type not in {"early_signal", "weighted_early_signal"}:
+            return {"allow": True, "reasons": []}
+
+        wallet_quality = wallet_quality if isinstance(wallet_quality, dict) else {}
+        rug_result = rug_result if isinstance(rug_result, dict) else {}
+        market_info = market_info if isinstance(market_info, dict) else {}
+
+        score = self.first_number(decision.get("score")) or 0
+        avg_quality = self.first_number(wallet_quality.get("avg_score")) or 0
+        max_quality = self.first_number(wallet_quality.get("max_score")) or 0
+        rapid_flips = self.wallet_quality_rapid_flip_count(wallet_quality)
+        risk_label = str(rug_result.get("risk_label") or "UNKNOWN").upper()
+        liquidity = self.first_number(market_info.get("liquidity"), market_info.get("liquidity_usd")) or 0
+        market_cap = self.market_cap_from_info(market_info) or 0
+
+        min_liquidity = self.first_number(self.settings.get("wallet_main_min_liquidity_usd")) or 100_000
+        min_market_cap = self.first_number(self.settings.get("wallet_main_min_market_cap_usd")) or 250_000
+        solo_min_score = self.first_number(self.settings.get("wallet_main_solo_min_score")) or 90
+        solo_min_quality = self.first_number(self.settings.get("wallet_main_solo_min_wallet_quality")) or 90
+        two_min_avg_quality = self.first_number(self.settings.get("wallet_main_two_wallet_min_avg_quality")) or 80
+        two_min_max_quality = self.first_number(self.settings.get("wallet_main_two_wallet_min_max_quality")) or 85
+        max_rapid_flips = self.first_number(self.settings.get("wallet_main_max_rapid_flips")) or 0
+
+        reasons = []
+        if risk_label != "LOW_RISK":
+            reasons.append("two_wallet_requires_low_risk" if wallet_count == 2 else "solo_requires_low_risk")
+        if liquidity < min_liquidity:
+            reasons.append("weighted_signal_liquidity_below_main_gate")
+        if market_cap and market_cap < min_market_cap:
+            reasons.append("weighted_signal_market_cap_below_main_gate")
+
+        if wallet_count <= 1:
+            if score < solo_min_score:
+                reasons.append("solo_requires_elite_score")
+            if max_quality < solo_min_quality:
+                reasons.append("solo_requires_elite_wallet_quality")
+        elif wallet_count == 2:
+            if avg_quality < two_min_avg_quality:
+                reasons.append("two_wallet_requires_strong_avg_quality")
+            if max_quality < two_min_max_quality:
+                reasons.append("two_wallet_requires_strong_top_wallet")
+            if rapid_flips > max_rapid_flips:
+                reasons.append("two_wallet_rapid_flip_history")
+
+        return {
+            "allow": not reasons,
+            "reasons": reasons,
+            "metrics": {
+                "score": score,
+                "wallet_count": wallet_count,
+                "avg_wallet_quality": avg_quality,
+                "max_wallet_quality": max_quality,
+                "rapid_flip_count": rapid_flips,
+                "risk_label": risk_label,
+                "liquidity_usd": liquidity,
+                "market_cap": market_cap,
+            },
+        }
+
     def record_token_snapshot(self, snapshot):
         try:
             self.store.insert_token_snapshot(snapshot)
@@ -846,6 +925,9 @@ class Scanner:
         if not market_sanity.get("allow", True):
             return False, "market_sanity_block"
 
+        if decision.get("wallet_main_quality_block"):
+            return False, "wallet_main_quality_block"
+
         if (decision.get("strategy_guard") or {}).get("action") == "BLOCK":
             return False, "strategy_guard_block"
 
@@ -1113,6 +1195,21 @@ class Scanner:
                 if message not in decision["reasons"]:
                     decision["reasons"].append(message)
 
+        wallet_main_quality = self.wallet_main_quality_gate(
+            signal_type=signal_type,
+            decision=decision,
+            wallet_count=wallet_count,
+            wallet_quality=wallet_quality,
+            rug_result=rug_result,
+            market_info=market_info,
+        )
+        decision["wallet_main_quality_gate"] = wallet_main_quality
+        if not wallet_main_quality["allow"]:
+            decision["should_trade"] = False
+            decision["wallet_main_quality_block"] = True
+            for reason in wallet_main_quality["reasons"]:
+                decision["reasons"].append(f"WALLET MAIN QUALITY BLOCK: {reason}")
+
         print("⚡ PRE-SCORE:", decision["score"])
         print("🧬 EDGE:", edge_result["edge_verdict"], edge_result["edge_score"])
         print("🧯 STRATEGY GUARD:", strategy_guard_result["action"], strategy_guard_result["reason"])
@@ -1314,6 +1411,7 @@ class Scanner:
             sell_quote_analysis=sell_quote_analysis,
             edge_result=edge_result,
             position_size_usd=position_size_usd,
+            paper_state=self.paper_trader.get_state() if self.paper_trader else None,
         )
         decision = exploration_result["decision"]
         position_size_usd = exploration_result["position_size_usd"]
@@ -1386,6 +1484,19 @@ class Scanner:
             print("⚠️ No paper trader available.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="no_paper_trader")
             self.update_decision_runtime_skip(decision_id, "no_paper_trader")
+            try:
+                from analysis.rejection_hooks import maybe_log_scanner_runtime_skip
+
+                maybe_log_scanner_runtime_skip(
+                    mint=mint,
+                    decision_id=decision_id,
+                    reason="no_paper_trader",
+                    decision=decision,
+                    settings=self.settings,
+                    extra={"edge_score": edge_result.get("edge_score")},
+                )
+            except Exception:
+                pass
             self.record_token_snapshot({
                 "time": time.time(),
                 "timestamp": time.time(),
@@ -1409,6 +1520,19 @@ class Scanner:
             print("⚠️ No market data, skipping trade.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="no_market_data")
             self.update_decision_runtime_skip(decision_id, "no_market_data")
+            try:
+                from analysis.rejection_hooks import maybe_log_scanner_runtime_skip
+
+                maybe_log_scanner_runtime_skip(
+                    mint=mint,
+                    decision_id=decision_id,
+                    reason="no_market_data",
+                    decision=decision,
+                    settings=self.settings,
+                    extra={"edge_score": edge_result.get("edge_score")},
+                )
+            except Exception:
+                pass
             self.record_token_snapshot({
                 "time": time.time(),
                 "timestamp": time.time(),
@@ -1432,6 +1556,19 @@ class Scanner:
             print("⚠️ Invalid entry price, skipping trade.")
             increment_component("scanner", "paper_trade_skips", last_skip_reason="invalid_entry_price")
             self.update_decision_runtime_skip(decision_id, "invalid_entry_price")
+            try:
+                from analysis.rejection_hooks import maybe_log_scanner_runtime_skip
+
+                maybe_log_scanner_runtime_skip(
+                    mint=mint,
+                    decision_id=decision_id,
+                    reason="invalid_entry_price",
+                    decision=decision,
+                    settings=self.settings,
+                    extra={"edge_score": edge_result.get("edge_score")},
+                )
+            except Exception:
+                pass
             self.record_token_snapshot({
                 "time": time.time(),
                 "timestamp": time.time(),
@@ -1630,6 +1767,7 @@ class Scanner:
             "exploration": decision.get("paper_lane") == "exploration",
             "main_strategy_should_trade": decision.get("main_strategy_should_trade"),
             "exploration_result": decision.get("exploration"),
+            "wallet_main_quality_gate": decision.get("wallet_main_quality_gate"),
             "score_reasons": decision["reasons"],
             "edge_score": edge_result.get("edge_score"),
             "edge_verdict": edge_result.get("edge_verdict"),
@@ -1653,6 +1791,14 @@ class Scanner:
             payload["decision_id"] = decision_id
         except Exception as exc:
             print("⚠️ Decision ledger write failed:", exc)
+
+        if decision_id and not decision.get("should_trade"):
+            try:
+                from analysis.rejection_hooks import maybe_log_scanner_strategy_skip
+
+                maybe_log_scanner_strategy_skip(payload, decision, decision_id, self.settings)
+            except Exception:
+                pass
 
         snapshot_context = (
             "scanner_entry_candidate"
@@ -1725,6 +1871,7 @@ class Scanner:
             "exploration": decision.get("paper_lane") == "exploration",
             "main_strategy_should_trade": decision.get("main_strategy_should_trade"),
             "exploration_result": decision.get("exploration"),
+            "wallet_main_quality_gate": decision.get("wallet_main_quality_gate"),
             "score_reasons": decision["reasons"],
             "edge_score": edge_result.get("edge_score"),
             "edge_verdict": edge_result.get("edge_verdict"),

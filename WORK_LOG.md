@@ -2,23 +2,24 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-10
+Last updated: 2026-05-13
 
 ## Current Work
 
-<mark>Active section: Phase 2 / Phase 7 - Canonical Decision Ledger.</mark>
+<mark>Active section: Phase 2 / Phase 7 - Canonical Decision Ledger plus paper-only co-main Market Radar Lane.</mark>
 
 Current implementation target:
 
 - Build the canonical decision ledger so every scanned candidate has one durable record of inputs, rule outcomes, final action, and later paper result.
+- Promote hot-market discovery to a co-main paper strategy so tokens trending on Dexscreener/Pump-style surfaces can be tested beside wallet-main, while keeping both lanes separately measurable.
 
-Lead-agent active plan for 2026-05-09:
+Lead-agent active plan for 2026-05-13:
 
-1. Keep the desktop API execution-locked and session-token protected.
-2. Tighten roadmap/docs around measurable edge, canonical truth, and fast-vs-deep protection split.
-3. Add a SQLite-backed decision-ledger foundation with deterministic tests.
-4. Start routing scanner and paper-trade lifecycle records toward decision ids without changing live execution behavior.
-5. Keep GUI work focused on exposing canonical state clearly.
+1. Keep live execution locked while paper lanes collect cleaner evidence.
+2. Exclude the single PENGUINZ outlier from strategy-readiness summaries until it is proven repeatable.
+3. Suppress repeat bad-sample exploration entries that are medium-risk, weak-score/weak-edge, or thin on liquidity/market cap.
+4. Keep wallet-main, Market Radar, exploration, and manual/protected results lane-separated.
+5. Continue using the decision ledger and Portfolio review as the main measurement surface.
 
 Safety carryover:
 
@@ -31,7 +32,137 @@ Safety carryover:
 Highest-value active workstreams:
 
 - Canonical decision ledger and lane-separated paper metrics.
+- Paper-trade sample quality: block obvious bad exploration samples instead of collecting more polluted tiny losses.
+- Wallet supply refresh: use local runners and Dexscreener trending/boosted mints to seed a larger paper-watch wallet universe, then promote/demote by paper evidence.
 - Automated social/catalyst ingestion that feeds the decision ledger instead of manual-only imports.
+
+2026-05-13 update - Broad paper-watch wallet expansion:
+
+Changed files:
+
+- `core/wallet_discovery.py`
+- `core/wallet_discovery_scheduler.py`
+- `utils/discover_candidate_wallets.py`
+- `utils/run_wallet_discovery_scheduler.py`
+- `tests/test_core_logic.py`
+- `data/candidate_wallets.json`
+- `data/paper_watch_wallets.json`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Shifted wallet discovery from only mining tracked-wallet local events to a broader runner-first harvest.
+- Added local skipped-runner mining: tokens seen locally in `token_snapshots` that later ran hard are selected as wallet-discovery bait.
+- Added Dexscreener trending/boosted wallet harvest using current Solana token-profile/boost feeds.
+- Lowered paper-watch entry policy from repeat-only to discovery mode: one early buy on a verified runner can enter `paper_watch`; trusted promotion still requires repeat paper outcome evidence.
+- Kept demotion/removal review-based. Bad wallets are flagged through lifecycle metrics after enough paper entries; they are not blindly deleted.
+- Increased the wallet discovery scheduler to mine 24 hours of local events, local runners, paper winners, and Dexscreener trending mints every 15 minutes.
+
+Runtime result:
+
+- Candidate wallet report expanded to `309` candidates.
+- Untracked candidate wallets: `240`.
+- Already tracked wallets reviewed: `69`.
+- Review summary: `3` promotion-review candidates, `237` paper-watch candidates, `14` demotion-review tracked wallets.
+- Paper-watch list expanded from `1` wallet to `381` total wallets after merging new runner wallets with existing paper-watch state.
+- Restarted the paper bot/scanner and wallet discovery scheduler.
+- Runtime now shows `899` observed/subscribed wallets: `518` tracked plus `381` paper-watch.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic.CandidateWalletDiscoveryTests tests.test_core_logic.WalletLifecycleTests tests.test_core_logic.WalletDiscoverySchedulerTests` passed 18 tests.
+- `./trading_env/bin/python -m py_compile core/wallet_discovery.py core/wallet_discovery_scheduler.py utils/discover_candidate_wallets.py utils/run_wallet_discovery_scheduler.py` passed.
+- Confirmed runtime reports bot/scanner/websocket online and subscribed to `899` wallets.
+
+Remaining risk:
+
+- Expanding observed wallets increases event volume. Backpressure is active, but scanner throughput should be watched for stale heartbeats or heavy wallet backlog drops.
+- Promotion to trusted should remain evidence-gated until paper-watch wallets have enough closed trade outcomes.
+
+2026-05-13 update - Paper metrics without PENGUINZ outlier:
+
+- Current strategy summary excluding the one `Nietzschean Penguin` / PENGUINZ trade: 38 total trades, 29 closed, 2 open, 7 failed.
+- Closed PnL excluding PENGUINZ: `-$280.93`.
+- Open unrealized PnL excluding PENGUINZ: about `-$1.98`.
+- Closed win rate excluding PENGUINZ: `3.4%`.
+- New-created/early scanner side remains the weak side: the open trades are still medium-risk exploration confirmation-block observations, both about `-20%`.
+- The excluded PENGUINZ outlier remains separately tracked at about `+$797.21`; do not use it to declare edge until similar winners repeat.
+
+2026-05-13 update - Bad-sample exploration suppressor:
+
+Changed files:
+
+- `core/paper_exploration.py`
+- `core/settings_manager.py`
+- `tests/test_core_logic.py`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added a paper-only bad-sample suppressor for confirmation-blocked exploration trades.
+- The suppressor blocks medium-risk confirmation-observation samples unless they clear stricter score/edge floors.
+- It also blocks confirmation-observation samples with thin liquidity or too-small market cap when that market data is available.
+- Main-lane paper entries and live execution are not loosened.
+- Added persistent settings:
+  - `paper_exploration_bad_sample_suppression_enabled`
+  - `paper_exploration_confirmation_medium_risk_min_score`
+  - `paper_exploration_confirmation_medium_risk_min_edge_score`
+  - `paper_exploration_confirmation_min_liquidity_usd`
+  - `paper_exploration_confirmation_min_market_cap_usd`
+
+Verification:
+
+- Added failing tests first for the medium-risk confirmation-block sample pattern.
+- `./trading_env/bin/python -m unittest tests.test_core_logic` passed 159 tests.
+- `./trading_env/bin/python -m py_compile core/paper_exploration.py core/settings_manager.py` passed.
+- Restarted the paper bot/scanner so the new suppressor is active.
+
+Remaining risk:
+
+- Existing open exploration trades were not force-closed; the suppressor prevents new repeat samples but does not rewrite history.
+- More cleanup may be needed after 50-100 new closed samples under the stricter gate.
+
+2026-05-13 update - Market Radar throughput and RKC-style fresh-runner exception:
+
+- Rechecked live Market Radar after the no-new-buy stall. The lane was healthy and using zero Jupiter quotes, but recent rejects were overwhelmingly thin/quiet tokens: mostly `liquidity_below_hot_lane` and `entry_liquidity_below_quality_gate`.
+- Added a narrow fresh-pair exception for RKC-style runners. Very fresh pairs can now pass the age gate only when they already have high liquidity, market cap inside the meme window, heavy 1-hour volume, strong M5 activity, balanced buy/sell flow, social/site proof, and no M5/H1 decay block.
+- Kept normal too-fresh/thin launches blocked; the exception does not loosen quote or buy budgets.
+- Increased Market Radar scan depth from 40 to 120 candidates per cycle while keeping processed candidates at 8, paper entries at 1, and quote attempts at 1. This lets the lane scan past recently-seen feed clutter without adding Jupiter pressure.
+- Restarted the paper bot with the full environment loaded. Live execution remains locked; one `memetrader_bot` process is running.
+- Verified with `./trading_env/bin/python -m unittest tests.test_core_logic -k market_radar`, targeted settings tests, desktop Market Radar API tests, and Python compile checks.
+
+2026-05-12 update - Wallet-main winner traits and RKC regression:
+
+- Reviewed the two positive wallet-main/co-main paper outcomes against the losing main-lane trades.
+- Key finding: quote pass alone is not predictive. The clean full-metadata winner had elite live wallet quality, low risk, deep liquidity, strong score, and no rapid-flip wallet behavior; the losing 1-2 wallet entries passed quotes but had weaker wallet quality, medium risk or sub-elite solo quality, thin liquidity/tiny market cap, and rapid-flip history.
+- Added a wallet-main quality gate before swap quotes. Weak one/two-wallet main entries are now blocked from main-lane paper buys unless they meet conservative winner-like traits: low risk, stronger liquidity/market cap, elite solo score/quality or strong two-wallet average/top quality, and no rapid-flip history.
+- Added an exact RKC regression for `7HgfXftRBBqsYtAEYcqjGLQrNJLL6Tww9ek4rE3Apump`: a hot Dexscreener Solana candidate with no wallet signal must enter Market Radar, write a decision, and open a paper-only `market_radar` trade when market and quote gates pass.
+- Restarted the paper bot and desktop API so the new gate is active in the running app. Duplicate old bot process was removed; one `memetrader_bot` process is now running.
+- Verified with `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker`, `./trading_env/bin/python -m unittest tests.test_desktop_api`, and `npm --prefix apps/desktop test -- --run`.
+
+2026-05-12 update - Market Radar postmortem detail:
+
+- Extended the Market Radar Token Nursery API rows with a `postmortem` block for closed/failed paper-only radar outcomes.
+- Postmortem detail now exposes entry/exit price, entry/exit liquidity, liquidity change %, entry/exit market cap, market-cap change %, PnL/PnL %, position size, exit/failure reason, and derived hold seconds from the decision result/paper outcome.
+- React/Tauri Replay and the static browser Replay panel now show closed/failed radar rows as outcome rows: PnL in the score column, exit liquidity/market cap plus change %, and the exit/failure reason in the reason column.
+- Verified with `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_market_radar_review_groups_token_nursery_stages tests.test_desktop_api.DesktopApiTests.test_market_radar_review_stage_requires_quote_worthy_candidate_for_quote_watch`, `npm --prefix apps/desktop test -- --run`, and `node tests/test_desktop_gui_chart.mjs`.
+
+2026-05-12 update - Market Radar entry decay gate:
+
+- Added a paper-only Market Radar quality gate for fresh 5-minute price decay.
+- New setting: `market_radar_min_m5_price_change_pct`, default `-12.0`.
+- When Dex/Pump market data includes `price_change_m5` below the threshold, Market Radar now blocks before quotes with `entry_m5_price_decay`.
+- Missing 5-minute price-change data does not block by itself, preserving RKC-style hot runners that pass liquidity, market-cap, activity, and social/site gates.
+- Verified `entry_m5_price_decay` is written into the Market Radar decision payload and skips quote calls.
+- `./trading_env/bin/python -m unittest tests.test_core_logic -k market_radar` passed 13 tests.
+2026-05-12 update - Reddit social collector conservative run:
+- Ran `./trading_env/bin/python -m social.reddit_collector --subreddit SolanaMemeCoins --subreddit memecoins --limit 5`.
+- Live Reddit fetches failed with DNS resolution errors for both subreddits, so `fetched_count` and `stored_count` stayed at 0 and `trade_triggered` remained `false`.
+- Rebuilt catalyst cards with `./trading_env/bin/python -m core.catalyst_cards`, which saved `data/catalyst_cards.json` with 6 cards.
+- Verified social freshness through `desktop_api.build_social_freshness_payload()`: overall `FAIL`, rows = manual social import `STALE`, catalyst cards `FRESH`, Reddit collector `ERROR`.
+- No execution settings were changed and live trading stayed disabled.
 - Fast open-position monitor vs slower deep watchdog architecture split.
 - Desktop app launch/session reliability and stale-state visibility.
 - Selected-token chart polish and trade-stream candle pipeline.
@@ -70,10 +201,115 @@ Why this matters:
 2. Keep broader crypto and stablecoin data as market-regime context only; do not expand the trade universe beyond memecoin candidates until paper edge is proven.
 3. Continue canonical read-path migration only where a table, backfill, and parity guard exist; wallet stats and social remain JSON-first for now.
 4. Let the main strategy collect at least 50 closed trades, with 100 preferred, before judging main-strategy profitability.
-5. Let Exploration Lane collect at least 50 closed paper trades for a first read, with 100-150 preferred for wallet promotion/demotion tuning.
-6. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
+5. Keep Exploration Lane conservative after the negative sample; it is now auto-paused when a small closed sample has poor expectancy.
+6. Let Market Radar Co-Main collect hot Dex/Pump-style paper samples separately from wallet-main and exploration trades.
+7. Keep the desktop API execution-locked; only token-protected metadata mutations are allowed.
 
 ## Completed Work
+
+### 2026-05-12 - Market Radar Token Nursery Review
+
+What changed:
+
+- Added a read-only `/api/market-radar-review` endpoint that turns canonical Market Radar decision records into a Token Nursery: rejected, watch, quote watch, paper bought, closed, and failed.
+- Added the Token Nursery to both Replay surfaces: the React/Tauri desktop Replay view and the static browser view at `http://127.0.0.1:8765/`.
+- Added React Decision Ledger filters for Co-Main and Market Radar parity with the static browser view.
+- Kept the feature review-only: it reads SQLite decision records and never mutates settings, trades, or live execution gates.
+- Tightened nursery stage classification so quality-gate rejects with `buy_quote_pass=false` / `sell_quote_pass=false` no longer appear as Quote Watch unless the candidate actually passed Market Radar scoring and then hit quote/route budget or route failure.
+
+Why:
+
+- Market Radar Quality Gate V2 reduced bad hot-feed entries, but the operator still needed a quick way to see whether candidates were being rejected for the right reasons or getting stuck at quote/route checks.
+- This makes the new co-main route auditable before more threshold tuning.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_market_radar_review_groups_token_nursery_stages` passed.
+- `npm --prefix apps/desktop test -- --run src/lib/api.test.ts src/lib/decisions.test.ts` passed.
+- `npm --prefix apps/desktop test -- --run` passed 47 tests.
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_market_radar_review_groups_token_nursery_stages tests.test_desktop_api.DesktopApiTests.test_paper_review_includes_decision_lane_report tests.test_desktop_api.DesktopApiTests.test_decision_lane_report_counts_market_radar_skip_reasons tests.test_desktop_api.DesktopApiTests.test_decision_outcome_analytics_groups_labeled_edges` passed 4 tests.
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker` passed 267 tests.
+- `node tests/test_desktop_gui_chart.mjs` passed.
+- Browser sanity check confirmed Replay shows `Paper Profitability Review`, `Market Radar Token Nursery`, and `Decision Ledger` after restarting the local desktop API.
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_market_radar_review_groups_token_nursery_stages tests.test_desktop_api.DesktopApiTests.test_paper_review_includes_decision_lane_report tests.test_desktop_api.DesktopApiTests.test_decision_lane_report_counts_market_radar_skip_reasons` passed after the stage-classification fix.
+
+### 2026-05-12 - Market Radar Quality Gate V2
+
+What changed:
+
+- Root-caused the negative Market Radar sample: the lane was rewarding hot-feed visibility even when candidates had thin entry liquidity, collapsing 1-hour momentum, abnormal 1-hour volume versus liquidity, one-sided buy flow, or no social/site proof.
+- Added a stricter paper-only Market Radar quality gate before any quote is spent.
+- New blockers include `entry_liquidity_below_quality_gate`, `entry_market_cap_below_quality_gate`, `liquidity_market_cap_ratio_too_low`, `h1_volume_liquidity_anomaly`, `collapsing_h1_momentum`, `one_sided_buy_flow`, `one_sided_sell_flow`, `micro_tx_volume_anomaly`, `pair_too_fresh_for_market_radar`, `stale_pair_without_fresh_strength`, and `missing_social_or_site_quality_gate`.
+- Dexscreener source bonus is capped to the strongest single source instead of stacking every source, so a candidate cannot pass just because it appeared in multiple Dex feeds.
+- Kept RKC-style runners eligible: high liquidity, acceptable market cap, strong activity, non-collapsing short-term momentum, balanced buy/sell flow, and social/site evidence still pass.
+- Added clean-room GitHub research inputs from SolClaw, Dexscreener meme analysis, Pump.fun token tracking, Pump.fun/Bonk.fun lifecycle bots, j33t-intel, MemeTrans, and SolRPDS.
+
+Verification:
+
+- Added failing tests first for the known Market Radar loser shape, one-sided buy-flow failures, missing social/site proof, too-fresh pairs, and stale resurrected pairs.
+- `./trading_env/bin/python -m unittest tests.test_core_logic -k market_radar_quality_gate` passed 5 tests after implementation.
+- `./trading_env/bin/python -m unittest tests.test_core_logic -k market_radar` passed 11 tests.
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker` passed 264 tests.
+- `npm test -- --run` passed 46 desktop React tests.
+- `node tests/test_desktop_gui_chart.mjs` passed.
+
+### 2026-05-12 - Market Radar Throughput And Skip Visibility
+
+What changed:
+
+- Fixed the Market Radar cycle bottleneck where the loop could inspect only the first `market_radar_max_candidates_per_cycle` rows and process zero candidates if those rows were already in cooldown.
+- Added `market_radar_scan_candidates_per_cycle` so the lane can scan deeper through Dexscreener candidates while still capping actual evaluations, quote attempts, and paper entries.
+- Added structured Market Radar decision evidence: open reason, skip reason, skip bucket, quote retryability, buy/sell route quote payloads, and visible action reasons.
+- Quote cooldown/budget skips are now marked retryable and deferred briefly instead of putting the mint into the full six-hour candidate cooldown.
+- Paper Review, Decision Outcome Analytics, React/Tauri Replay, and the static browser Replay view now surface Market Radar skip/open reason summaries.
+
+Verification:
+
+- Added failing tests first for scanning past recent candidates, visible quote-cooldown skips, structured score-skip reasons, Market Radar skip-reason API aggregation, and React decision formatting.
+- `./trading_env/bin/python -m unittest tests.test_core_logic -k market_radar` passed 6 tests.
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_decision_lane_report_counts_market_radar_skip_reasons tests.test_desktop_api.DesktopApiTests.test_paper_review_includes_decision_lane_report tests.test_desktop_api.DesktopApiTests.test_decision_outcome_analytics_groups_labeled_edges tests.test_desktop_api.DesktopApiTests.test_decisions_route_reads_canonical_decision_records` passed 4 tests.
+- `npm test -- --run src/lib/decisions.test.ts src/components/DecisionLedger.test.tsx` passed 6 tests.
+- `node tests/test_desktop_gui_chart.mjs` passed.
+
+### 2026-05-12 - Market Radar Lane And Exploration Pause
+
+What changed:
+
+- Root-caused the missed RKC/Red Kitten Crew opportunity: the bot was wallet-first, so a token could run hard on Dexscreener/Pump-style feeds without ever entering our decision pipeline if no tracked wallet triggered it.
+- Added a paper-only `market_radar` lane that polls Dexscreener latest profiles, latest boosts, and top boosts, filters Solana tokens, scores hot candidates by liquidity, market cap, 5-minute activity, 1-hour volume, buy ratio, momentum, source, and social/site presence, then records skip/entry decisions.
+- Market Radar only checks Jupiter route quotes after a candidate is close to paper-entry quality, keeping the earlier Swap API pressure fix intact.
+- Added `market_radar` metrics to Paper Review, Decision Lane Report, Decision Outcome Analytics, and runtime health so it can be judged separately from the main wallet strategy.
+- Added a dedicated Market Radar quote budget and 5-minute quote cooldown so the new lane records weaker candidates without swap quotes and cannot recreate the Swap API pressure problem.
+- Tightened the underperforming Exploration Lane: if the lane has at least five closed samples and both average PnL and win rate are poor, it auto-pauses instead of continuing to add negative paper trades.
+- Raised the live runtime exploration thresholds back up after the negative sample and left live execution locked.
+- GitHub research agent found the most relevant clean-room references for this path: `Flotapponnier/pulse-sniper`, `Ziondido/DexscreenerAPI`, `NadirAliOfficial/Solana-New-Pairs`, and `hcrypto7/rug_token_checker`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker` passed 257 tests after co-main regression coverage was added.
+- `./trading_env/bin/python -m py_compile core/market_radar.py core/paper_exploration.py core/settings_manager.py infra/market_checker.py main.py core/scanner.py desktop_api.py` passed.
+
+### 2026-05-12 - Market Radar Promoted To Co-Main Reporting
+
+What changed:
+
+- Promoted Market Radar from a purely experimental lane to a co-main paper strategy in reporting/readiness.
+- Added combined `co_main` metrics for wallet-main plus Market Radar while preserving separate `main` and `market_radar` lane metrics for comparison.
+- Decision Lane Report and Decision Outcome Analytics now include `co_main`, `main`, `market_radar`, `exploration`, and `protected_manual`.
+- React/Tauri Paper Review now shows Co-Main Strategy, Wallet Main, Market Radar Co-Main, and Exploration Lane cards.
+- Static desktop GUI Replay now shows the same co-main Paper Profitability Review and Market Radar filters at `http://127.0.0.1:8765/`.
+- Live execution remains locked; this is a measurement/reporting promotion, not a live-buy promotion.
+
+Verification:
+
+- Added regression coverage for paper-review co-main metrics, decision-lane co-main aggregation, and decision-analytics co-main aggregation.
+- `npm --prefix apps/desktop test -- --run` passed 45 tests after the Paper Review UI update.
+- Browser verification confirmed the visible Replay panel shows Co-Main Strategy, Wallet Main, Market Radar Co-Main, Exploration Lane, and Decision Ledger Lanes.
+
+Remaining:
+
+- Let Market Radar collect enough closed samples before changing shared co-main thresholds.
+- Add PumpPortal/Mobula-style streaming only if Dexscreener polling misses too many fast runners or creates too much lag.
 
 ### 2026-05-10 - Paper Sample Acceleration Lane
 
@@ -3235,7 +3471,7 @@ What changed:
 
 Verification:
 
-- Confirmed repo is a git repository at `/Users/dianeposs/Desktop/Jordan/meme_trader_pro`.
+- Confirmed repo is a git repository at `/Users/dianeposs/Desktop/Jordan 2/meme_trader_pro`.
 - Confirmed workflow docs render as Markdown.
 
 Remaining:
@@ -3435,7 +3671,7 @@ Remaining:
 ## Notes
 
 - Current local dashboard URL: `http://127.0.0.1:8501/`
-- Current repo path: `/Users/dianeposs/Desktop/Jordan/meme_trader_pro`
+- Current repo path: `/Users/dianeposs/Desktop/Jordan 2/meme_trader_pro`
 - Current product lane: confirmation trading and protection cockpit, not blind launch sniping.
 
 ### 2026-05-06 - Native Scanner Tape Visibility
@@ -3739,7 +3975,7 @@ What changed:
 Verification:
 
 - `node --check desktop_gui/assets/app.js && node --check desktop_gui/assets/render.js && node --check desktop_gui/assets/api.js && trading_env/bin/python -m py_compile desktop_api.py`
-- Browser verification confirmed `file:///Users/dianeposs/Desktop/Jordan/meme_trader_pro/desktop_gui/index.html` redirects to `http://127.0.0.1:8765/`.
+- Browser verification confirmed `file:///Users/dianeposs/Desktop/Jordan 2/meme_trader_pro/desktop_gui/index.html` redirects to `http://127.0.0.1:8765/`.
 - Browser verification confirmed the served app shows the styled workstation, connected status, current position, axes, snapshots, and PnL.
 
 Remaining:
@@ -4077,3 +4313,66 @@ Guardrails kept:
 - Main-lane and live-quality thresholds were not lowered.
 - Hard-risk, market-sanity, strategy-guard, route feasibility, and quote-budget controls remain active.
 - Exploration samples remain tiny `$5` paper-only observations.
+
+### 2026-05-13 - Reddit Social Collector Run
+
+Changed files:
+
+- `data/catalyst_cards.json`
+- `data/social_state.json`
+- `data/runtime_status.json`
+- `/Users/dianeposs/.codex/automations/reddit-social-collector/memory.md`
+
+What ran:
+
+- Ran `python3 -m social.reddit_collector --subreddit SolanaMemeCoins --subreddit memecoins --limit 5`.
+- Rebuilt catalyst cards with `python3 -m core.catalyst_cards`.
+- Queried the desktop API helper for social freshness and lock status.
+
+Results:
+
+- Fetched count: `0`
+- Stored count: `0`
+- Collector errors: `2`
+- Error detail: both subreddits hit Reddit DNS resolution failure (`nodename nor servname provided, or not known`).
+- Catalyst cards rebuilt to `12` cards.
+- Freshness overall: `FAIL`
+- Freshness rows: `Manual Social Import = OLD`, `Catalyst Cards = FRESH`, `Reddit Collector = ERROR`
+- Live execution stayed locked: `true`
+- Trade triggering stayed false: `false`
+
+Verification:
+
+- Confirmed the collector summary reported `trade_triggered: false`.
+- Confirmed `build_social_freshness_payload()` and `build_health_payload()` both still report `live_execution_locked: true`.
+
+Remaining risk:
+
+- Reddit collection is still blocked by local DNS resolution, so no new social events were imported this run.
+
+### 2026-05-13 - Dock App Launcher Corrected
+
+Changed files:
+
+- `apps/desktop/src-tauri/src/main.rs`
+- `WORK_LOG.md`
+
+What changed:
+
+- Confirmed `/Applications/MemeTraderPro.app` could attach to an API process whose session did not match the expected desktop app session.
+- Found `/Users/dianeposs/Desktop/Jordan/meme_trader_pro` is currently a symlink to `/Users/dianeposs/Desktop/Jordan 2/meme_trader_pro`, which is why process tools show the physical `Jordan 2` path.
+- Patched the Tauri launcher so it prefers the canonical project path and rejects a running API when the session token/process identity does not match.
+- If a mismatched API owns `127.0.0.1:8765`, the dock app now terminates that API and starts its own matching desktop API from the project repo.
+- Rebuilt the Tauri desktop app and replaced `/Applications/MemeTraderPro.app`.
+
+Verification:
+
+- `cargo test` in `apps/desktop/src-tauri` passed 5 tests.
+- `npm run check` passed.
+- `npm test` passed 47 React/TypeScript tests.
+- `npm run build` produced a new `MemeTraderPro.app`.
+- Relaunched `/Applications/MemeTraderPro.app`; the app is running and `http://127.0.0.1:8765/api/runtime` reports `online`.
+
+Remaining:
+
+- The project path should be cleaned up later so there is one clear real folder instead of a symlinked `Jordan/meme_trader_pro` path pointing to `Jordan 2/meme_trader_pro`.

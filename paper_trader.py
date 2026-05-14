@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 
 from core.json_store import locked_update_json
 from core.decision_ledger import build_trade_result
+from core.paper_trade_decision_ids import (
+    synthetic_decision_payload_from_trade,
+    synthetic_trade_decision_id,
+    trade_decision_id,
+)
 from execution.execution_engine import ExecutionEngine
 from core.wallet_performance import WalletPerformanceTracker
 from core.exit_advisor import ExitAdvisor
@@ -137,6 +142,35 @@ class PaperTrader:
             merged.append(trade)
             seen.add(key)
         return merged
+
+    def hydrate_missing_trade_decision_lineage(self, state):
+        """Mutate ``state`` so every trade has decision_id / signal_metadata.decision_id."""
+        if not isinstance(state, dict):
+            return 0
+        hydrated = 0
+        for bucket in ("open_trades", "closed_trades", "failed_trades"):
+            rows = state.get(bucket)
+            if not isinstance(rows, list):
+                continue
+            for trade in rows:
+                if not isinstance(trade, dict):
+                    continue
+                if trade_decision_id(trade):
+                    continue
+                decision_id = synthetic_trade_decision_id(trade, bucket)
+                metadata = dict(trade.get("signal_metadata") or {})
+                metadata.setdefault("signal_type", metadata.get("signal_type") or "legacy_paper_trade")
+                metadata["decision_id"] = decision_id
+                trade["signal_metadata"] = metadata
+                trade["decision_id"] = decision_id
+                try:
+                    self.store.upsert_decision(
+                        synthetic_decision_payload_from_trade(trade, bucket, decision_id)
+                    )
+                except Exception as exc:
+                    print("⚠️ Legacy decision upsert failed:", exc)
+                hydrated += 1
+        return hydrated
 
     def merge_state_for_save(self, current, updated):
         if not isinstance(current, dict):
@@ -453,6 +487,12 @@ class PaperTrader:
                 for trade in state.get(key, [])
                 if isinstance(trade, dict)
             ]
+
+        lineage_linked = self.hydrate_missing_trade_decision_lineage(state)
+        if lineage_linked:
+            print(
+                f"🔗 Linked {lineage_linked} paper trade(s) without decision_id to synthetic ledger ids."
+            )
 
         return state
 

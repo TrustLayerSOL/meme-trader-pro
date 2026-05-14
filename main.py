@@ -7,8 +7,10 @@ from infra.rpc_client import SolanaRPC
 from paper_trader import PaperTrader
 from infra.market_checker import MarketChecker
 from execution.jupiter_quote import JupiterQuoteEngine
+from core.market_radar import run_market_radar_loop
 from core.open_position_monitor import run_open_position_monitor
 from core.runtime_status import update_component
+from core.settings_manager import load_settings
 
 
 def runtime_interval(name, default, minimum=0.2):
@@ -88,6 +90,12 @@ async def heartbeat(paper_trader, interval=30):
 
 async def main():
     price_interval = runtime_interval("MEMETRADER_PRICE_INTERVAL_SECONDS", 1.0)
+    settings = load_settings()
+    market_radar_interval = runtime_interval(
+        "MEMETRADER_MARKET_RADAR_INTERVAL_SECONDS",
+        settings.get("market_radar_interval_seconds", 120),
+        minimum=30,
+    )
     tracked_wallets = load_wallets()
     paper_watch_wallets = load_paper_watch_wallets()
     print(f"✅ Loaded {len(tracked_wallets)} tracked wallets")
@@ -119,6 +127,13 @@ async def main():
                 paper_trader=paper_trader,
                 market_checker=market_checker,
                 interval=price_interval,
+            ),
+            run_market_radar_loop(
+                market_checker=market_checker,
+                paper_trader=paper_trader,
+                jupiter_quote=jupiter_quote,
+                interval=market_radar_interval,
+                rpc=rpc,
             ),
             heartbeat(paper_trader, interval=30),
         )

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { candidateFeedApiPath, candidateWalletsApiPath, decisionAnalyticsApiPath, decisionExplanationApiPath, decisionLedgerApiPath, desktopApiUrl, eventFeedApiPath, fetchJson, importSocialPost, loadDecisionExplanation, OVERVIEW_REFRESH_MS, postJson, protectedAmountApiPath, protectedTokenApiPath, SELECTED_TOKEN_REFRESH_MS, setDesktopApiToken, socialFreshnessApiPath, socialImportApiPath, tokenApiPaths, walletDetailApiPath, walletLifecycleApiPath, walletReviewApplyApiPath, walletReviewDecisionApiPath, winnerPatternsApiPath } from "./api";
+import { candidateFeedApiPath, candidateWalletsApiPath, decisionAnalyticsApiPath, decisionExplanationApiPath, decisionLedgerApiPath, desktopApiUrl, eventFeedApiPath, fetchJson, importSocialPost, loadDecisionExplanation, marketRadarReviewApiPath, OVERVIEW_REFRESH_MS, postJson, protectedAmountApiPath, protectedTokenApiPath, SELECTED_TOKEN_REFRESH_MS, setDesktopApiToken, socialFreshnessApiPath, socialImportApiPath, tokenApiPaths, walletDetailApiPath, walletLifecycleApiPath, walletReviewApplyApiPath, walletReviewDecisionApiPath, winnerPatternsApiPath } from "./api";
 
 describe("desktop API helper", () => {
   it("builds localhost API URLs without touching live execution routes", () => {
@@ -48,6 +48,12 @@ describe("desktop API helper", () => {
     expect(decisionAnalyticsApiPath()).toBe("/api/decision-analytics?limit=5000");
     expect(decisionAnalyticsApiPath(250)).toBe("/api/decision-analytics?limit=250");
     expect(desktopApiUrl(decisionAnalyticsApiPath(250)).toString()).toBe("http://127.0.0.1:8765/api/decision-analytics?limit=250");
+  });
+
+  it("builds Market Radar review read-only paths", () => {
+    expect(marketRadarReviewApiPath()).toBe("/api/market-radar-review?limit=120");
+    expect(marketRadarReviewApiPath(25)).toBe("/api/market-radar-review?limit=25");
+    expect(desktopApiUrl(marketRadarReviewApiPath(25)).toString()).toBe("http://127.0.0.1:8765/api/market-radar-review?limit=25");
   });
 
   it("builds encoded decision explanation read-only paths", () => {

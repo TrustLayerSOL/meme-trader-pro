@@ -64,6 +64,7 @@ def quote_details(payload, side):
         quote.get("route_plan"),
         quote.get("routePlan"),
     )
+    route_plan_rows = route_plan_summary(route_plan)
     return {
         "pass": first_present(payload.get(f"{side}_quote_pass"), analysis.get("pass")),
         "reason": first_present(payload.get(f"{side}_quote_reason"), analysis.get("reason"), quote.get("reason")),
@@ -73,14 +74,14 @@ def quote_details(payload, side):
             quote.get("price_impact_pct"),
             quote.get("priceImpactPct"),
         ),
-        "route_count": first_present(payload.get(f"{side}_quote_route_count"), quote.get("route_count")),
+        "route_count": first_present(payload.get(f"{side}_quote_route_count"), quote.get("route_count"), len(route_plan_rows) if route_plan_rows else None),
         "input_mint": first_present(payload.get(f"{side}_quote_input_mint"), quote.get("input_mint")),
         "output_mint": first_present(payload.get(f"{side}_quote_output_mint"), quote.get("output_mint")),
         "in_amount_raw": first_present(payload.get(f"{side}_quote_in_amount_raw"), quote.get("in_amount_raw")),
         "out_amount": first_present(payload.get(f"{side}_quote_out_amount"), quote.get("out_amount")),
         "slippage_bps": payload.get(f"{side}_quote_slippage_bps"),
         "max_price_impact_pct": payload.get(f"{side}_quote_max_price_impact_pct"),
-        "route_plan": route_plan_summary(route_plan),
+        "route_plan": route_plan_rows,
     }
 
 
@@ -270,6 +271,7 @@ def build_decision_record(payload):
                     "reason": payload.get("strategy_guard_reason"),
                     "stats": payload.get("strategy_guard_stats"),
                 },
+                "wallet_main_quality": payload.get("wallet_main_quality_gate"),
                 "holder_cluster": holder_cluster_outcome(payload),
                 "exploration": payload.get("exploration_result"),
             },
@@ -281,6 +283,7 @@ def build_decision_record(payload):
                 "buy": quote_details(payload, "buy"),
                 "sell": quote_details(payload, "sell"),
             },
+            "market_radar": payload.get("market_radar"),
             "action": {
                 "should_trade": should_trade,
                 "final_action": action,

@@ -13,6 +13,7 @@ use std::{
 
 const API_HOST: &str = "127.0.0.1";
 const API_PORT: u16 = 8765;
+const CANONICAL_REPO_PATH: &str = "/Users/dianeposs/Desktop/Jordan/meme_trader_pro";
 
 #[derive(Serialize)]
 struct ApiLaunchStatus {
@@ -138,11 +139,41 @@ fn api_health_ok() -> bool {
 }
 
 fn local_repo_root() -> Result<PathBuf, String> {
+    if let Ok(root) = std::env::var("MTP_REPO_ROOT") {
+        let candidate = PathBuf::from(root);
+        if candidate.join("desktop_api.py").exists() && candidate.join("trading_env").exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let canonical = PathBuf::from(CANONICAL_REPO_PATH);
+    if canonical.join("desktop_api.py").exists() && canonical.join("trading_env").exists() {
+        return Ok(canonical);
+    }
+
     if let Ok(root) = find_repo_root(Path::new(env!("CARGO_MANIFEST_DIR"))) {
         return Ok(root);
     }
     let exe = std::env::current_exe().map_err(|error| format!("current executable unavailable: {error}"))?;
     find_repo_root(&exe)
+}
+
+fn terminate_process(process_id: u32) {
+    let _ = Command::new("/bin/kill")
+        .arg(process_id.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn wait_for_api_shutdown() {
+    for _ in 0..20 {
+        if api_health_session().is_none() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn spawn_desktop_api(repo_root: &Path, api_token: &str) -> Result<(), String> {
@@ -189,16 +220,19 @@ fn ensure_desktop_api() -> ApiLaunchStatus {
             .as_ref()
             .filter(|session| session_matches_health(session, &health))
             .and_then(|session| session.token.clone());
-        return ApiLaunchStatus {
-            running: true,
-            started: false,
-            detail: if api_token.is_some() {
-                "desktop API already running with matching session".to_string()
-            } else {
-                "desktop API already running, but session token did not match process".to_string()
-            },
-            api_token,
-        };
+        if api_token.is_some() {
+            return ApiLaunchStatus {
+                running: true,
+                started: false,
+                detail: "desktop API already running with matching session".to_string(),
+                api_token,
+            };
+        }
+
+        if let Some(process_id) = health.process_id {
+            terminate_process(process_id);
+            wait_for_api_shutdown();
+        }
     }
 
     let api_token = generate_api_token();
@@ -251,6 +285,14 @@ mod tests {
 
         assert!(root.join("desktop_api.py").exists());
         assert!(root.join("trading_env").exists());
+    }
+
+    #[test]
+    fn local_repo_root_prefers_canonical_project_path() {
+        let root = local_repo_root().expect("repo root");
+
+        assert!(root.ends_with("meme_trader_pro"));
+        assert!(!root.to_string_lossy().contains("Jordan 2"));
     }
 
     #[test]

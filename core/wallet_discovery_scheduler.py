@@ -22,14 +22,21 @@ PAPER_TRADES = ROOT / "data" / "paper_trades.json"
 
 
 DEFAULT_DISCOVERY_CONFIG = {
-    "local_hours": 6,
-    "local_limit": 5000,
-    "from_paper_winners": False,
+    "local_hours": 24,
+    "local_limit": 20000,
+    "from_paper_winners": True,
+    "from_local_runners": True,
+    "from_dexscreener_trending": True,
     "min_winner_pnl_pct": 25,
     "max_winner_mints": 3,
-    "signature_limit": 30,
-    "max_transactions": 15,
-    "max_buyers_per_mint": 20,
+    "min_runner_gain_pct": 500,
+    "max_runner_mints": 10,
+    "min_runner_snapshots": 2,
+    "max_dexscreener_mints": 25,
+    "dexscreener_timeout": 8,
+    "signature_limit": 40,
+    "max_transactions": 20,
+    "max_buyers_per_mint": 50,
     "rpc_timeout": 12,
     "mint": [],
 }

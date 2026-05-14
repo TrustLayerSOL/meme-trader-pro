@@ -5,10 +5,10 @@ from collections import defaultdict
 DEFAULT_REVIEW_POLICY = {
     "mode": "REVIEW_ONLY",
     "paper_watch": {
-        "min_score": 70,
-        "min_early_buy_events": 3,
+        "min_score": 52,
+        "min_early_buy_events": 1,
         "min_winner_mints": 1,
-        "max_sell_ratio": 0.65,
+        "max_sell_ratio": 0.75,
     },
     "promotion_review": {
         "min_score": 82,

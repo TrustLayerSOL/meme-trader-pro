@@ -3,6 +3,7 @@ import {
   decisionCatalystEvidenceSummary,
   decisionHolderClusterSummary,
   decisionMarketContextSummary,
+  decisionMarketRadarSummary,
   decisionMatchesFilter,
   decisionPaperOutcomeSummary,
   decisionQuotePair,
@@ -61,6 +62,10 @@ describe("decision ledger helpers", () => {
     expect(decisionMatchesFilter(hardRisk, "hard_risk")).toBe(true);
     expect(decisionMatchesFilter(social, "social")).toBe(true);
     expect(decisionMatchesFilter(baseDecision, "wallet")).toBe(true);
+    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "market_radar" }, "market_radar")).toBe(true);
+    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "market_radar" }, "co_main")).toBe(true);
+    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "main" }, "co_main")).toBe(true);
+    expect(decisionMatchesFilter({ ...baseDecision, paper_lane: "exploration" }, "co_main")).toBe(false);
   });
 
   it("keeps selected decision valid when filters change", () => {
@@ -135,5 +140,24 @@ describe("decision ledger helpers", () => {
     expect(decisionCatalystEvidenceSummary(richDecision)).toBe("matched | @alpha | keywords launch | 1 event | 1 card | confidence 0.91");
     expect(decisionMarketContextSummary(richDecision)).toBe("risk_off | SOL -3.2% | stablecoin ok");
     expect(decisionPaperOutcomeSummary(richDecision)).toBe("closed | exploration | PnL 74% | entry 0.001 | exit 0.0018 | size $25 | fees $0.18 | target_profit");
+  });
+
+  it("formats Market Radar skip and open reasons", () => {
+    const radarDecision: DecisionRecord = {
+      ...baseDecision,
+      paper_lane: "market_radar",
+      payload: {
+        ...baseDecision.payload,
+        market_radar: {
+          decision: {
+            skip_reason: "shared_quote_cooldown_after_429",
+            skip_bucket: "quote_or_route",
+            quote_retryable: true,
+          },
+        },
+      },
+    };
+
+    expect(decisionMarketRadarSummary(radarDecision)).toBe("skip shared_quote_cooldown_after_429 | quote_or_route | retry soon");
   });
 });

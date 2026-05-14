@@ -20,6 +20,7 @@ import {
   fetchJson,
   importSocialPost,
   loadTokenState,
+  marketRadarReviewApiPath,
   OVERVIEW_REFRESH_MS,
   SELECTED_TOKEN_REFRESH_MS,
   setDesktopApiToken,
@@ -44,6 +45,8 @@ import {
   type WalletLifecyclePayload,
   type FreshnessPayload,
   type LogsPayload,
+  type MarketRadarReviewItem,
+  type MarketRadarReviewPayload,
   type OperatorConfigPayload,
   type PositionDetailPayload,
   type ReadinessPayload,
@@ -125,9 +128,30 @@ type PaperReviewPayload = {
   live_execution_locked: boolean;
   meaningful_test_ready: boolean;
   main_meaningful_test_ready?: boolean;
+  co_main_meaningful_test_ready?: boolean;
+  wallet_main_meaningful_test_ready?: boolean;
+  market_radar_main_meaningful_test_ready?: boolean;
   exploration_sample_ready?: boolean;
+  market_radar_sample_ready?: boolean;
   minimum_closed_trades: number;
   recommended_closed_trades: number;
+  sample_progress?: {
+    minimum_closed_trades: number;
+    recommended_closed_trades: number;
+    lanes: Record<string, {
+      closed_trades: number;
+      to_minimum_pct: number;
+      to_recommended_pct: number;
+      meets_minimum: boolean;
+      meets_recommended: boolean;
+    }>;
+  };
+  decision_lineage?: Record<string, {
+    total: number;
+    with_decision_id: number;
+    missing_decision_id: number;
+    coverage_pct: number;
+  }>;
   open_trades: number;
   metrics: {
     open_trades: number;
@@ -174,6 +198,9 @@ type PaperReviewPayload = {
       avg_pnl_pct?: number | null;
       sample_ready: boolean;
       protected_positions?: number;
+      skip_reasons?: Record<string, number>;
+      skip_buckets?: Record<string, number>;
+      open_reasons?: Record<string, number>;
     }>;
   };
   readiness_gaps: string[];
@@ -223,6 +250,7 @@ export function App() {
   const [events, setEvents] = useState<EventFeedPayload | null>(null);
   const [decisions, setDecisions] = useState<DecisionLedgerPayload | null>(null);
   const [decisionAnalytics, setDecisionAnalytics] = useState<DecisionAnalyticsPayload | null>(null);
+  const [marketRadarReview, setMarketRadarReview] = useState<MarketRadarReviewPayload | null>(null);
   const [socialFreshnessAttempted, setSocialFreshnessAttempted] = useState(false);
   const [tokenError, setTokenError] = useState<string>("");
   const [workArea, setWorkArea] = useState<WorkArea>("cockpit");
@@ -263,10 +291,11 @@ export function App() {
           fetchJson<EventFeedPayload>(eventFeedApiPath()),
           fetchJson<DecisionLedgerPayload>(decisionLedgerApiPath()),
           fetchJson<DecisionAnalyticsPayload>(decisionAnalyticsApiPath()),
+          fetchJson<MarketRadarReviewPayload>(marketRadarReviewApiPath()),
           fetchJson<SocialFreshnessPayload>(socialFreshnessApiPath()),
         ]);
         if (cancelled) return;
-        const [readinessResult, freshnessResult, tradesResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult, decisionsResult, decisionAnalyticsResult, socialFreshnessResult] = optional;
+        const [readinessResult, freshnessResult, tradesResult, paperReviewResult, winnerPatternsResult, watchlistResult, walletsResult, candidateWalletsResult, walletLifecycleResult, walletApplyResult, operatorConfigResult, logsResult, candidatesResult, eventsResult, decisionsResult, decisionAnalyticsResult, marketRadarReviewResult, socialFreshnessResult] = optional;
         setOverview(overviewPayload);
         const nextPositions = positionsPayload.positions || [];
         setPositions(nextPositions);
@@ -293,6 +322,7 @@ export function App() {
         if (eventsResult.status === "fulfilled") setEvents(eventsResult.value);
         if (decisionsResult.status === "fulfilled") setDecisions(decisionsResult.value);
         if (decisionAnalyticsResult.status === "fulfilled") setDecisionAnalytics(decisionAnalyticsResult.value);
+        if (marketRadarReviewResult.status === "fulfilled") setMarketRadarReview(marketRadarReviewResult.value);
         setSocialFreshnessAttempted(true);
         if (socialFreshnessResult.status === "fulfilled") {
           setSocialFreshness(socialFreshnessResult.value);
@@ -412,6 +442,7 @@ export function App() {
   const freshnessLoaded = freshness !== null;
   const tradesLoaded = trades !== null;
   const decisionsLoaded = decisions !== null;
+  const marketRadarReviewLoaded = marketRadarReview !== null;
   const selectedTokenLoading = Boolean(selectedMint && !tokenDetail && !tokenError);
   const socialFreshnessLoaded = socialFreshnessAttempted || Boolean(freshness?.social);
   const socialFreshnessPayload = socialFreshness || freshness?.social || null;
@@ -644,6 +675,7 @@ export function App() {
 
       {workArea === "replay" ? <section className="detail-grid wide replay-grid">
         <PaperReviewPanel review={paperReview} analytics={decisionAnalytics} loaded={tradesLoaded} />
+        <MarketRadarReviewPanel review={marketRadarReview} loaded={marketRadarReviewLoaded} onSelectMint={setSelectedMint} />
         <DecisionLedger decisions={decisions} loaded={decisionsLoaded} onSelectMint={setSelectedMint} />
         {decisionsLoaded && !(decisions?.items || []).length ? (
           <>
@@ -961,30 +993,96 @@ function formatScore(value?: number | null) {
   return Number(value).toFixed(1);
 }
 
+function topReasonLine(values?: Record<string, number>) {
+  const rows = Object.entries(values || {}).sort((a, b) => b[1] - a[1]).slice(0, 2);
+  return rows.length ? rows.map(([key, count]) => `${key} ${count}`).join(" | ") : "-";
+}
+
+function SampleReadinessStrip({ review }: { review: PaperReviewPayload }) {
+  const sp = review.sample_progress;
+  if (!sp?.lanes) return null;
+  const minimum = sp.minimum_closed_trades ?? review.minimum_closed_trades;
+  const lanes: Array<[string, string]> = [
+    ["Co-main", "co_main"],
+    ["Wallet main", "wallet_main"],
+    ["Market radar", "market_radar"],
+    ["Exploration", "exploration"],
+  ];
+  return (
+    <div className="sample-readiness-strip">
+      <div className="sample-readiness-strip-title">Paper sample targets (closed)</div>
+      <div className="sample-readiness-lanes">
+        {lanes.map(([label, key]) => {
+          const row = sp.lanes[key];
+          if (!row) return null;
+          return (
+            <div key={key} className="sample-readiness-lane">
+              <div className="sample-readiness-lane-head">
+                <span>{label}</span>
+                <strong>
+                  {row.closed_trades} / {minimum}
+                  {row.meets_minimum ? " ✓" : ""}
+                </strong>
+              </div>
+              <div className="sample-rec-bar minimal" aria-hidden="true">
+                <span style={{ width: `${Math.min(100, row.to_minimum_pct)}%` }} />
+              </div>
+              <small className="muted">
+                Recommended {review.recommended_closed_trades}: {Math.min(100, Math.round(row.to_recommended_pct))}%
+              </small>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DecisionLineageLine({ lineage }: { lineage?: PaperReviewPayload["decision_lineage"] }) {
+  const agg = lineage?.all;
+  if (!agg?.total) return null;
+  return (
+    <div className={`lineage-chip ${agg.coverage_pct >= 99.9 ? "" : "lineage-chip-warn"}`}>
+      <span>Decision ID lineage:</span>
+      <strong>{pct(agg.coverage_pct)}</strong>
+      <span className="muted">
+        ({agg.with_decision_id}/{agg.total} rows; missing {agg.missing_decision_id})
+      </span>
+    </div>
+  );
+}
+
 function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPayload | null; analytics: DecisionAnalyticsPayload | null; loaded: boolean }) {
   const metrics = review?.metrics;
+  const coMainLane = review?.lane_metrics?.co_main;
   const mainLane = review?.lane_metrics?.main;
+  const marketRadarLane = review?.lane_metrics?.market_radar;
   const explorationLane = review?.lane_metrics?.exploration;
   const decisionReport = review?.decision_lane_report;
+  const decisionCoMain = decisionReport?.lanes?.co_main;
   const decisionMain = decisionReport?.lanes?.main;
+  const decisionMarketRadar = decisionReport?.lanes?.market_radar;
   const decisionExploration = decisionReport?.lanes?.exploration;
   const decisionProtected = decisionReport?.lanes?.protected_manual;
-  const progress = metrics ? Math.min(100, Math.round((metrics.closed_trades / review.minimum_closed_trades) * 100)) : 0;
+  const progressClosed = coMainLane?.closed_trades ?? metrics?.closed_trades ?? 0;
+  const progress = review ? Math.min(100, Math.round((progressClosed / review.minimum_closed_trades) * 100)) : 0;
   return (
     <div className="panel paper-review-panel">
       <div className="paper-review-head">
         <div>
           <h2>Paper Profitability Review</h2>
-          <p className="muted">{review?.main_meaningful_test_ready ? "Main strategy sample ready" : "Collecting main-strategy sample before judging profitability"}</p>
+          <p className="muted">{review?.co_main_meaningful_test_ready ? "Co-main strategy sample ready" : "Collecting co-main sample across wallet-main and Market Radar"}</p>
         </div>
-        <span className={review?.main_meaningful_test_ready ? "good-pill" : "warn-pill"}>{review?.main_meaningful_test_ready ? "READY" : "NOT READY"}</span>
+        <span className={review?.co_main_meaningful_test_ready ? "good-pill" : "warn-pill"}>{review?.co_main_meaningful_test_ready ? "READY" : "NOT READY"}</span>
       </div>
       {!loaded || !review || !metrics ? <LoadingState title="Loading paper review" detail="Analyzing paper trades, exits, failures, and wallet labels." rows={4} /> : (
         <>
           <div className="paper-progress">
             <div><span style={{ width: `${progress}%` }} /></div>
-            <small>{metrics.closed_trades} / {review.minimum_closed_trades} minimum closed trades | {review.recommended_closed_trades} recommended</small>
+            <small>{progressClosed} / {review.minimum_closed_trades} minimum co-main closed trades | {review.recommended_closed_trades} recommended</small>
           </div>
+          <SampleReadinessStrip review={review} />
+          <DecisionLineageLine lineage={review.decision_lineage} />
           <div className="mini-grid">
             <div><span>Closed</span><strong>{metrics.closed_trades}</strong></div>
             <div><span>Failed</span><strong>{metrics.failed_trades}</strong></div>
@@ -995,9 +1093,19 @@ function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPa
           </div>
           <div className="lane-grid">
             <div>
-              <span>Main Strategy</span>
+              <span>Co-Main Strategy</span>
+              <strong>{coMainLane?.closed_trades ?? 0} closed</strong>
+              <small>{money(coMainLane?.realized_pnl ?? 0)} realized | {pct(coMainLane?.win_rate ?? 0)} wins</small>
+            </div>
+            <div>
+              <span>Wallet Main</span>
               <strong>{mainLane?.closed_trades ?? 0} closed</strong>
               <small>{money(mainLane?.realized_pnl ?? 0)} realized | {pct(mainLane?.win_rate ?? 0)} wins</small>
+            </div>
+            <div>
+              <span>Market Radar Co-Main</span>
+              <strong>{marketRadarLane?.closed_trades ?? 0} closed</strong>
+              <small>{money(marketRadarLane?.realized_pnl ?? 0)} realized | {pct(marketRadarLane?.win_rate ?? 0)} wins</small>
             </div>
             <div>
               <span>Exploration Lane</span>
@@ -1010,9 +1118,20 @@ function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPa
               <strong>Decision Ledger Lanes</strong>
               <div className="lane-grid decision-lane-grid">
                 <div>
-                  <span>Main Decisions</span>
+                  <span>Co-Main Decisions</span>
+                  <strong>{decisionCoMain?.candidate_decisions ?? 0} seen</strong>
+                  <small>{decisionCoMain?.paper_opened ?? 0} opened | {decisionCoMain?.skipped ?? 0} skipped | {decisionCoMain?.quote_failed ?? 0} quote fail | {pct(decisionCoMain?.win_rate ?? 0)} wins</small>
+                </div>
+                <div>
+                  <span>Wallet Main Decisions</span>
                   <strong>{decisionMain?.candidate_decisions ?? 0} seen</strong>
                   <small>{decisionMain?.paper_opened ?? 0} opened | {decisionMain?.skipped ?? 0} skipped | {decisionMain?.quote_failed ?? 0} quote fail | {pct(decisionMain?.win_rate ?? 0)} wins</small>
+                </div>
+                <div>
+                  <span>Market Radar Decisions</span>
+                  <strong>{decisionMarketRadar?.candidate_decisions ?? 0} seen</strong>
+                  <small>{decisionMarketRadar?.paper_opened ?? 0} opened | {decisionMarketRadar?.skipped ?? 0} skipped | {decisionMarketRadar?.quote_failed ?? 0} quote fail | {pct(decisionMarketRadar?.win_rate ?? 0)} wins</small>
+                  <small>Top skips: {topReasonLine(decisionMarketRadar?.skip_reasons)}</small>
                 </div>
                 <div>
                   <span>Exploration Decisions</span>
@@ -1040,7 +1159,103 @@ function PaperReviewPanel({ review, analytics, loaded }: { review: PaperReviewPa
   );
 }
 
+function marketRadarStageLabel(stage: string) {
+  if (stage === "quote_watch") return "Quote Watch";
+  if (stage === "paper_bought") return "Paper Bought";
+  return stage.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function MarketRadarReviewPanel({ review, loaded, onSelectMint }: { review: MarketRadarReviewPayload | null; loaded: boolean; onSelectMint: (mint: string) => void }) {
+  const items = review?.items || [];
+  const summary = review?.summary || {};
+  const stageCards: Array<[string, number]> = [
+    ["Rejected", summary.rejected ?? 0],
+    ["Watch", summary.watch ?? 0],
+    ["Quote Watch", summary.quote_watch ?? 0],
+    ["Paper Bought", summary.paper_bought ?? 0],
+    ["Closed", summary.closed ?? 0],
+    ["Failed", summary.failed ?? 0],
+  ];
+  return (
+    <div className="panel market-radar-review-panel">
+      <div className="paper-review-head">
+        <div>
+          <h2>Market Radar Token Nursery</h2>
+          <p className="muted">Hot Dex/Pump candidates grouped by what happened next.</p>
+        </div>
+        <span className="neutral-pill">{summary.total ?? 0} seen</span>
+      </div>
+      {!loaded || !review ? <LoadingState title="Loading Market Radar review" detail="Reading Market Radar decision records." rows={3} /> : (
+        <>
+          <div className="nursery-stage-grid">
+            {stageCards.map(([label, value]) => (
+              <div key={label}>
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="nursery-table-head" aria-hidden="true">
+            <span>Token</span>
+            <span>Stage</span>
+            <span>Score</span>
+            <span>Liquidity</span>
+            <span>Market Cap</span>
+            <span>Reason</span>
+          </div>
+          <div className="nursery-row-list">
+            {items.slice(0, 24).map((item) => (
+              <MarketRadarReviewRow key={item.decision_id || item.mint || item.reason || item.stage} item={item} onSelectMint={onSelectMint} />
+            ))}
+            {!items.length ? <EmptyState title="No Market Radar candidates" detail="The nursery will populate after Market Radar writes decision records." /> : null}
+          </div>
+          <ReviewList title="Review Notes" rows={review.notes || []} empty="No Market Radar notes recorded." />
+        </>
+      )}
+    </div>
+  );
+}
+
+function MarketRadarReviewRow({ item, onSelectMint }: { item: MarketRadarReviewItem; onSelectMint: (mint: string) => void }) {
+  const score = item.score === null || item.score === undefined ? "-" : `${item.score}`;
+  const threshold = item.threshold === null || item.threshold === undefined ? "-" : `${item.threshold}`;
+  const blockers = (item.blockers || []).slice(0, 2).join("; ");
+  const positives = (item.positives || []).slice(0, 2).join("; ");
+  const postmortem = item.postmortem || {};
+  const hasPostmortem = ["closed", "failed"].includes(String(item.stage));
+  const pnl = postmortem.pnl ?? item.pnl;
+  const pnlPct = postmortem.pnl_pct ?? item.pnl_pct;
+  const pnlPctValue = numberOrNull(pnlPct);
+  const outcomeReason = postmortem.exit_reason || postmortem.failure_reason;
+  const detail = blockers || positives || item.skip_bucket || "-";
+  const reasonDetail = hasPostmortem
+    ? [outcomeReason, postmortem.hold_seconds ? `${Math.round(Number(postmortem.hold_seconds))}s hold` : null].filter(Boolean).join(" | ") || detail
+    : detail;
+  return (
+    <button type="button" className={`nursery-row ${item.stage}`} onClick={() => item.mint && onSelectMint(item.mint)}>
+      <span>
+        <strong>{item.symbol || shortMint(item.mint || "")}</strong>
+        <small>{shortMint(item.mint || "")}</small>
+      </span>
+      <span><strong className={`decision-pill ${marketRadarStageTone(item.stage)}`}>{marketRadarStageLabel(item.stage)}</strong></span>
+      <span><strong>{hasPostmortem ? pnlMoney(pnl) : score}</strong><small>{hasPostmortem ? `${pct(pnlPctValue)} PnL` : `threshold ${threshold}`}</small></span>
+      <span><strong>{money(postmortem.exit_liquidity_usd ?? item.liquidity_usd)}</strong><small>{postmortem.liquidity_change_pct == null ? `${item.tx_count_m5 ?? "-"} tx m5` : `${pct(postmortem.liquidity_change_pct)} liq`}</small></span>
+      <span><strong>{money(postmortem.exit_market_cap ?? item.market_cap_usd)}</strong><small>{postmortem.market_cap_change_pct == null ? `h1 vol ${money(item.volume_h1)}` : `${pct(postmortem.market_cap_change_pct)} MC`}</small></span>
+      <span className="decision-reason"><strong>{hasPostmortem ? outcomeReason || item.reason || "-" : item.reason || "-"}</strong><small>{reasonDetail}</small></span>
+    </button>
+  );
+}
+
+function marketRadarStageTone(stage: string): string {
+  if (stage === "closed" || stage === "paper_bought") return "good";
+  if (stage === "failed" || stage === "rejected") return "bad";
+  if (stage === "quote_watch" || stage === "watch") return "warn";
+  return "neutral";
+}
+
 function DecisionAnalyticsBlock({ analytics }: { analytics: DecisionAnalyticsPayload }) {
+  const coMain = analytics.lanes?.co_main;
+  const marketRadar = analytics.lanes?.market_radar;
   const social = analytics.groups?.social_catalyst;
   const walletOnly = analytics.groups?.wallet_only;
   const quoteFailed = analytics.groups?.quote_failed;
@@ -1048,6 +1263,16 @@ function DecisionAnalyticsBlock({ analytics }: { analytics: DecisionAnalyticsPay
     <div className="review-block">
       <strong>Decision Outcome Analytics</strong>
       <div className="lane-grid decision-lane-grid">
+        <div>
+          <span>Co-Main</span>
+          <strong>{coMain?.closed_trades ?? 0} closed</strong>
+          <small>{pct(coMain?.win_rate ?? 0)} wins | {money(coMain?.total_pnl ?? 0)} PnL | {coMain?.candidate_decisions ?? 0} decisions</small>
+        </div>
+        <div>
+          <span>Market Radar</span>
+          <strong>{marketRadar?.closed_trades ?? 0} closed</strong>
+          <small>{pct(marketRadar?.win_rate ?? 0)} wins | {money(marketRadar?.total_pnl ?? 0)} PnL | {marketRadar?.candidate_decisions ?? 0} decisions</small>
+        </div>
         <div>
           <span>Social Catalyst</span>
           <strong>{social?.closed_trades ?? 0} closed</strong>
@@ -1335,6 +1560,11 @@ function pnlMoney(value: unknown): string {
   if (absolute >= 1_000_000) return `${sign}$${(absolute / 1_000_000).toFixed(2)}M`;
   if (absolute >= 1_000) return `${sign}$${(absolute / 1_000).toFixed(2)}K`;
   return `${sign}$${absolute.toFixed(2)}`;
+}
+
+function numberOrNull(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function pnlTone(value: unknown): string {

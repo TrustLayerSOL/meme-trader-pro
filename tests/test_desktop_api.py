@@ -147,6 +147,7 @@ class DesktopApiTests(unittest.TestCase):
                     {"mint": "MintWin", "wallets": ["WalletWin"], "total_pnl": 40, "total_pnl_pct": 40, "entry_reason": "cluster_score_pass", "exit_reason": "target_profit"},
                     {"mint": "MintLoss", "wallets": ["WalletTrap"], "total_pnl": -20, "total_pnl_pct": -20, "entry_reason": "weighted_early_signal", "exit_reason": "hard_stop_loss"},
                     {"mint": "MintExplore", "wallets": ["WalletScout"], "total_pnl": 5, "total_pnl_pct": 50, "entry_reason": "paper_exploration", "exit_reason": "target_profit", "paper_lane": "exploration", "exploration": True},
+                    {"mint": "MintRadar", "wallets": [], "total_pnl": 3, "total_pnl_pct": 30, "entry_reason": "market_radar_hot", "exit_reason": "target_profit", "paper_lane": "market_radar"},
                 ],
                 "failed_trades": [
                     {"mint": "MintFail", "wallets": ["WalletTrap"], "failure_reason": "quote_failed"},
@@ -163,18 +164,49 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(payload["live_execution_locked"])
         self.assertFalse(payload["meaningful_test_ready"])
         self.assertEqual(payload["minimum_closed_trades"], 50)
-        self.assertEqual(payload["metrics"]["closed_trades"], 3)
+        self.assertEqual(payload["metrics"]["closed_trades"], 4)
         self.assertEqual(payload["metrics"]["failed_trades"], 1)
-        self.assertEqual(payload["metrics"]["win_rate"], 66.67)
+        self.assertEqual(payload["metrics"]["win_rate"], 75.0)
         self.assertEqual(payload["lane_metrics"]["main"]["closed_trades"], 2)
         self.assertEqual(payload["lane_metrics"]["main"]["realized_pnl"], 20)
+        self.assertEqual(payload["lane_metrics"]["co_main"]["closed_trades"], 3)
+        self.assertEqual(payload["lane_metrics"]["co_main"]["realized_pnl"], 23)
         self.assertEqual(payload["lane_metrics"]["exploration"]["closed_trades"], 1)
         self.assertEqual(payload["lane_metrics"]["exploration"]["total_pnl"], 5)
-        self.assertEqual(payload["exit_reasons"]["target_profit"], 2)
+        self.assertEqual(payload["lane_metrics"]["market_radar"]["closed_trades"], 1)
+        self.assertEqual(payload["lane_metrics"]["market_radar"]["total_pnl"], 3)
+        self.assertFalse(payload["co_main_meaningful_test_ready"])
+        self.assertFalse(payload["wallet_main_meaningful_test_ready"])
+        self.assertFalse(payload["market_radar_main_meaningful_test_ready"])
+        self.assertEqual(payload["exit_reasons"]["target_profit"], 3)
         self.assertEqual(payload["failure_reasons"]["quote_failed"], 1)
         self.assertEqual(payload["wallet_label_exposure"]["paper-profitable"], 1)
         self.assertEqual(payload["wallet_label_exposure"]["follower-trap"], 2)
-        self.assertIn("Need at least 50 closed main-strategy paper trades", payload["readiness_gaps"][0])
+        self.assertIn("Need at least 50 closed co-main paper trades", payload["readiness_gaps"][0])
+        self.assertEqual(payload["sample_progress"]["lanes"]["wallet_main"]["closed_trades"], 2)
+        self.assertEqual(payload["sample_progress"]["lanes"]["co_main"]["closed_trades"], 3)
+        self.assertEqual(payload["sample_progress"]["lanes"]["market_radar"]["closed_trades"], 1)
+        self.assertEqual(payload["sample_progress"]["lanes"]["exploration"]["closed_trades"], 1)
+        self.assertFalse(payload["sample_progress"]["lanes"]["market_radar"]["meets_minimum"])
+        self.assertEqual(payload["decision_lineage"]["all"]["total"], 6)
+        self.assertEqual(payload["decision_lineage"]["all"]["with_decision_id"], 0)
+        self.assertEqual(payload["decision_lineage"]["main"]["total"], 4)
+        self.assertTrue(any("Paper lineage" in gap for gap in payload["readiness_gaps"]))
+
+    def test_paper_review_omits_lineage_gap_when_trades_linked(self):
+        payload = desktop_api.build_paper_review_payload({
+            "paper": {
+                "open_trades": [],
+                "closed_trades": [
+                    {"mint": f"M{i}", "paper_lane": "main", "total_pnl": 0.1, "decision_id": f"dec_{i}"}
+                    for i in range(12)
+                ],
+                "failed_trades": [],
+            },
+            "wallet_behavior": {"wallets": {}},
+        })
+        self.assertFalse(any("Paper lineage" in gap for gap in payload["readiness_gaps"]))
+        self.assertEqual(payload["decision_lineage"]["all"]["coverage_pct"], 100.0)
 
     def test_paper_review_main_readiness_is_not_satisfied_by_exploration_only(self):
         payload = desktop_api.build_paper_review_payload({
@@ -197,9 +229,231 @@ class DesktopApiTests(unittest.TestCase):
 
         self.assertTrue(payload["exploration_sample_ready"])
         self.assertFalse(payload["main_meaningful_test_ready"])
+        self.assertFalse(payload["co_main_meaningful_test_ready"])
         self.assertFalse(payload["meaningful_test_ready"])
+        self.assertEqual(payload["lane_metrics"]["co_main"]["closed_trades"], 0)
         self.assertEqual(payload["lane_metrics"]["main"]["closed_trades"], 0)
         self.assertEqual(payload["lane_metrics"]["exploration"]["closed_trades"], 50)
+
+    def test_market_radar_review_groups_token_nursery_stages(self):
+        rows = [
+            {
+                "decision_id": "dec_rejected",
+                "mint": "RejectMint",
+                "updated_at": 10,
+                "final_action": "skip",
+                "paper_lane": "market_radar",
+                "total_score": 42,
+                "threshold": 70,
+                "buy_quote_pass": False,
+                "sell_quote_pass": False,
+                "payload": {
+                    "market_info": {"symbol": "REJ", "liquidity": 25_000, "market_cap": 80_000},
+                    "market_radar": {
+                        "score": {"allowed": False, "score": 42, "threshold": 70, "blockers": ["entry_liquidity_below_quality_gate"]},
+                        "decision": {"skip_reason": "entry_liquidity_below_quality_gate", "skip_bucket": "liquidity"},
+                        "sources": ["latest_profiles"],
+                    },
+                },
+            },
+            {
+                "decision_id": "dec_watch",
+                "mint": "WatchMint",
+                "updated_at": 20,
+                "final_action": "skip",
+                "paper_lane": "market_radar",
+                "total_score": 64,
+                "threshold": 70,
+                "buy_quote_pass": None,
+                "sell_quote_pass": None,
+                "payload": {
+                    "market_info": {"symbol": "WATCH", "liquidity": 130_000, "market_cap": 500_000},
+                    "market_radar": {
+                        "score": {"allowed": False, "score": 64, "threshold": 70, "blockers": ["score_below_market_radar_threshold"]},
+                        "decision": {"skip_reason": "score_below_market_radar_threshold", "skip_bucket": "score"},
+                    },
+                },
+            },
+            {
+                "decision_id": "dec_quote",
+                "mint": "QuoteMint",
+                "updated_at": 30,
+                "final_action": "skip",
+                "paper_lane": "market_radar",
+                "total_score": 78,
+                "threshold": 70,
+                "buy_quote_pass": False,
+                "sell_quote_pass": False,
+                "payload": {
+                    "market_info": {"symbol": "QUOTE", "liquidity": 220_000, "market_cap": 900_000},
+                    "market_radar": {
+                        "score": {"allowed": True, "score": 78, "threshold": 70, "blockers": []},
+                        "decision": {"skip_reason": "market_radar_quote_cooldown", "skip_bucket": "quote_or_route", "quote_retryable": True},
+                    },
+                },
+            },
+            {
+                "decision_id": "dec_open",
+                "mint": "OpenMint",
+                "updated_at": 40,
+                "final_action": "paper_opened",
+                "paper_lane": "market_radar",
+                "total_score": 82,
+                "threshold": 70,
+                "buy_quote_pass": True,
+                "sell_quote_pass": True,
+                "trade_status": "open",
+                "payload": {
+                    "market_info": {"symbol": "OPEN", "liquidity": 300_000, "market_cap": 1_200_000},
+                    "market_radar": {
+                        "score": {"allowed": True, "score": 82, "threshold": 70, "blockers": []},
+                        "decision": {"open_reason": "hot_candidate_quote_passed"},
+                    },
+                },
+            },
+            {
+                "decision_id": "dec_closed",
+                "mint": "ClosedMint",
+                "updated_at": 50,
+                "final_action": "paper_opened",
+                "paper_lane": "market_radar",
+                "total_score": 88,
+                "threshold": 70,
+                "trade_status": "closed",
+                "pnl": 12,
+                "pnl_pct": 45,
+                "result": {
+                    "trade_status": "closed",
+                    "pnl": 12,
+                    "pnl_pct": 45,
+                    "entry_time": 100,
+                    "close_time": 220,
+                    "exit_reason": "target_profit",
+                    "paper_outcome": {
+                        "entry_price": 0.001,
+                        "exit_price": 0.00145,
+                        "entry_liquidity_usd": 200_000,
+                        "exit_liquidity_usd": 260_000,
+                        "entry_market_cap": 1_000_000,
+                        "exit_market_cap": 1_450_000,
+                        "position_size_usd": 25,
+                        "entry_reason": "market_radar_hot_candidate",
+                        "exit_reason": "target_profit",
+                    },
+                },
+                "payload": {
+                    "market_info": {"symbol": "CLOSED", "liquidity": 350_000, "market_cap": 1_500_000},
+                    "market_radar": {"score": {"allowed": True, "score": 88, "threshold": 70}, "decision": {}},
+                },
+            },
+            {
+                "decision_id": "dec_failed",
+                "mint": "FailedMint",
+                "updated_at": 60,
+                "final_action": "open_attempt_failed",
+                "paper_lane": "market_radar",
+                "total_score": 75,
+                "threshold": 70,
+                "trade_status": "failed",
+                "result": {
+                    "trade_status": "failed",
+                    "failure_reason": "buy_quote_429",
+                    "paper_outcome": {
+                        "position_size_usd": 25,
+                        "entry_reason": "market_radar_hot_candidate",
+                    },
+                },
+                "payload": {
+                    "market_info": {"symbol": "FAILED", "liquidity": 180_000, "market_cap": 700_000},
+                    "market_radar": {"score": {"allowed": True, "score": 75, "threshold": 70}, "decision": {}},
+                },
+            },
+            {"decision_id": "dec_main", "mint": "MainMint", "paper_lane": "main", "payload": {}},
+        ]
+
+        with mock.patch.object(desktop_api, "fetch_decision_rows", return_value=rows):
+            payload = desktop_api.build_market_radar_review_payload(limit=100)
+
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertEqual(payload["mode"], "MARKET_RADAR_REVIEW_ONLY")
+        self.assertEqual(payload["summary"]["total"], 6)
+        self.assertEqual(payload["summary"]["rejected"], 1)
+        self.assertEqual(payload["summary"]["watch"], 1)
+        self.assertEqual(payload["summary"]["quote_watch"], 1)
+        self.assertEqual(payload["summary"]["paper_bought"], 1)
+        self.assertEqual(payload["summary"]["closed"], 1)
+        self.assertEqual(payload["summary"]["failed"], 1)
+        self.assertEqual(payload["items"][0]["mint"], "FailedMint")
+        self.assertEqual(payload["items"][0]["stage"], "failed")
+        self.assertEqual(payload["items"][0]["postmortem"]["failure_reason"], "buy_quote_429")
+        self.assertEqual(payload["items"][1]["stage"], "closed")
+        self.assertEqual(payload["items"][1]["postmortem"]["exit_reason"], "target_profit")
+        self.assertEqual(payload["items"][1]["postmortem"]["entry_price"], 0.001)
+        self.assertEqual(payload["items"][1]["postmortem"]["exit_price"], 0.00145)
+        self.assertEqual(payload["items"][1]["postmortem"]["liquidity_change_pct"], 30.0)
+        self.assertEqual(payload["items"][1]["postmortem"]["market_cap_change_pct"], 45.0)
+        self.assertEqual(payload["items"][1]["postmortem"]["hold_seconds"], 120.0)
+        self.assertEqual(payload["items"][2]["stage"], "paper_bought")
+        self.assertEqual(payload["items"][3]["stage"], "quote_watch")
+        self.assertEqual(payload["items"][4]["reason"], "score_below_market_radar_threshold")
+        self.assertEqual(payload["items"][5]["liquidity_usd"], 25000)
+        self.assertEqual(payload["items"][5]["stage"], "rejected")
+
+    def test_market_radar_review_stage_requires_quote_worthy_candidate_for_quote_watch(self):
+        base = {
+            "final_action": "skip",
+            "paper_lane": "market_radar",
+            "total_score": 76,
+            "threshold": 70,
+            "buy_quote_pass": False,
+            "sell_quote_pass": False,
+        }
+
+        not_allowed_quote_bucket = {
+            **base,
+            "payload": {
+                "market_radar": {
+                    "score": {"allowed": False, "score": 76, "threshold": 70, "blockers": ["entry_liquidity_below_quality_gate"]},
+                    "decision": {"skip_reason": "market_radar_quote_cooldown", "skip_bucket": "quote_or_route", "quote_retryable": True},
+                }
+            },
+        }
+        allowed_quote_bucket = {
+            **base,
+            "payload": {
+                "market_radar": {
+                    "score": {"allowed": True, "score": 76, "threshold": 70, "blockers": []},
+                    "decision": {"skip_reason": "market_radar_quote_cooldown", "skip_bucket": "quote_or_route", "quote_retryable": True},
+                }
+            },
+        }
+        near_score_only = {
+            **base,
+            "buy_quote_pass": None,
+            "sell_quote_pass": None,
+            "total_score": 64,
+            "payload": {
+                "market_radar": {
+                    "score": {"allowed": False, "score": 64, "threshold": 70, "blockers": ["score_below_market_radar_threshold"]},
+                    "decision": {"skip_reason": "score_below_market_radar_threshold", "skip_bucket": "score"},
+                }
+            },
+        }
+        near_hard_blocker = {
+            **base,
+            "total_score": 69,
+            "payload": {
+                "market_radar": {
+                    "score": {"allowed": False, "score": 69, "threshold": 70, "blockers": ["one_sided_sell_flow", "score_below_market_radar_threshold"]},
+                    "decision": {"skip_reason": "one_sided_sell_flow", "skip_bucket": "order_flow"},
+                }
+            },
+        }
+
+        self.assertEqual(desktop_api.market_radar_review_stage(not_allowed_quote_bucket), "rejected")
+        self.assertEqual(desktop_api.market_radar_review_stage(allowed_quote_bucket), "quote_watch")
+        self.assertEqual(desktop_api.market_radar_review_stage(near_score_only), "watch")
+        self.assertEqual(desktop_api.market_radar_review_stage(near_hard_blocker), "rejected")
 
     def test_winner_pattern_review_extracts_repeatable_big_winner_traits(self):
         payload = desktop_api.build_winner_pattern_payload({
@@ -918,6 +1172,28 @@ class DesktopApiTests(unittest.TestCase):
                 "pnl_pct": -40,
                 "exit_reason": "hard_stop_loss",
             })
+            radar_id = store.upsert_decision(build_decision_record({
+                "decision_id": "dec_radar_win",
+                "timestamp": 126,
+                "mint": "MintRadar",
+                "type": "market_radar_hot",
+                "paper_lane": "market_radar",
+                "should_trade": True,
+                "buy_quote_pass": True,
+                "sell_quote_pass": True,
+                "score_reasons": ["hot market radar"],
+            }))
+            store.update_decision_action(radar_id, {
+                "final_action": "paper_opened",
+                "paper_lane": "market_radar",
+                "reason": "market radar paper entry opened",
+            })
+            store.update_decision_result(radar_id, {
+                "trade_status": "closed",
+                "pnl": 8,
+                "pnl_pct": 30,
+                "exit_reason": "target_profit",
+            })
 
             with mock.patch.object(desktop_api, "DB_FILE", db_path):
                 report = desktop_api.build_decision_lane_report_payload(state={
@@ -925,13 +1201,18 @@ class DesktopApiTests(unittest.TestCase):
                 })
 
         self.assertEqual(report["source"], "sqlite_decision_records")
-        self.assertEqual(report["total_decisions"], 3)
+        self.assertEqual(report["total_decisions"], 4)
         self.assertEqual(report["lanes"]["main"]["candidate_decisions"], 2)
         self.assertEqual(report["lanes"]["main"]["paper_opened"], 1)
         self.assertEqual(report["lanes"]["main"]["quote_failed"], 1)
         self.assertEqual(report["lanes"]["main"]["closed_trades"], 1)
         self.assertEqual(report["lanes"]["main"]["win_rate"], 100.0)
         self.assertEqual(report["lanes"]["main"]["total_pnl"], 12.5)
+        self.assertEqual(report["lanes"]["market_radar"]["closed_trades"], 1)
+        self.assertEqual(report["lanes"]["market_radar"]["total_pnl"], 8)
+        self.assertEqual(report["lanes"]["co_main"]["candidate_decisions"], 3)
+        self.assertEqual(report["lanes"]["co_main"]["closed_trades"], 2)
+        self.assertEqual(report["lanes"]["co_main"]["total_pnl"], 20.5)
         self.assertEqual(report["lanes"]["exploration"]["closed_trades"], 1)
         self.assertEqual(report["lanes"]["exploration"]["win_rate"], 0.0)
         self.assertEqual(report["lanes"]["exploration"]["total_pnl"], -4)
@@ -960,6 +1241,49 @@ class DesktopApiTests(unittest.TestCase):
 
         self.assertEqual(payload["decision_lane_report"]["source"], "sqlite_decision_records")
         self.assertEqual(payload["decision_lane_report"]["lanes"]["main"]["skipped"], 1)
+
+    def test_decision_lane_report_counts_market_radar_skip_reasons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = desktop_api.Path(tmp) / "memetrader.db"
+            store = EventStore(db_path)
+            store.upsert_decision(build_decision_record({
+                "decision_id": "dec_radar_quote_skip",
+                "timestamp": 126,
+                "mint": "MintRadarSkip",
+                "type": "market_radar_hot",
+                "paper_lane": "market_radar",
+                "should_trade": False,
+                "buy_quote_pass": False,
+                "sell_quote_pass": False,
+                "score_reasons": ["market_radar_skip: shared_quote_cooldown_after_429"],
+                "market_radar": {
+                    "decision": {
+                        "skip_reason": "shared_quote_cooldown_after_429",
+                        "skip_bucket": "quote_or_route",
+                        "quote_retryable": True,
+                    },
+                },
+            }))
+            store.upsert_decision(build_decision_record({
+                "decision_id": "dec_old_radar_skip",
+                "timestamp": 125,
+                "mint": "MintOldRadarSkip",
+                "type": "market_radar_hot",
+                "paper_lane": "market_radar",
+                "should_trade": False,
+                "buy_quote_pass": False,
+                "sell_quote_pass": False,
+                "score_reasons": ["hot_m5_activity"],
+            }))
+
+            with mock.patch.object(desktop_api, "DB_FILE", db_path):
+                report = desktop_api.build_decision_lane_report_payload()
+
+        radar = report["lanes"]["market_radar"]
+        self.assertEqual(radar["skipped"], 2)
+        self.assertEqual(radar["skip_reasons"]["shared_quote_cooldown_after_429"], 1)
+        self.assertNotIn("hot_m5_activity", radar["skip_reasons"])
+        self.assertEqual(radar["skip_buckets"]["quote_or_route"], 1)
 
     def test_decision_lane_report_normalizes_protected_and_result_lanes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1039,6 +1363,19 @@ class DesktopApiTests(unittest.TestCase):
                 "sell_quote_pass": False,
                 "score_reasons": ["exit liquidity blocked"],
             }))
+            radar_id = store.upsert_decision(build_decision_record({
+                "decision_id": "dec_radar_win",
+                "timestamp": 126,
+                "mint": "MintRadar",
+                "type": "market_radar_hot",
+                "paper_lane": "market_radar",
+                "should_trade": True,
+                "buy_quote_pass": True,
+                "sell_quote_pass": True,
+                "score_reasons": ["hot market radar"],
+            }))
+            store.update_decision_action(radar_id, {"final_action": "paper_opened", "paper_lane": "market_radar"})
+            store.update_decision_result(radar_id, {"trade_status": "closed", "pnl": 6, "pnl_pct": 60})
 
             with mock.patch.object(desktop_api, "DB_FILE", db_path):
                 payload = desktop_api.build_decision_outcome_analytics_payload(limit=100)
@@ -1049,6 +1386,9 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(payload["groups"]["wallet_only"]["closed_trades"], 1)
         self.assertEqual(payload["groups"]["wallet_only"]["total_pnl"], -10)
         self.assertEqual(payload["groups"]["quote_failed"]["candidate_decisions"], 1)
+        self.assertEqual(payload["lanes"]["market_radar"]["closed_trades"], 1)
+        self.assertEqual(payload["lanes"]["co_main"]["closed_trades"], 3)
+        self.assertEqual(payload["lanes"]["co_main"]["total_pnl"], 16)
         self.assertFalse(payload["social_expansion_gate"]["allowed"])
         self.assertIn("labeled social outcomes", payload["social_expansion_gate"]["reason"])
 

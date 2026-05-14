@@ -1,6 +1,6 @@
 # Open Source Repo Review
 
-Last updated: 2026-05-09
+Last updated: 2026-05-12
 
 Reviewed:
 
@@ -129,9 +129,162 @@ Immediate priority remains:
 - runtime/job progress visibility,
 - continued paper-first execution safety.
 
+## 2026-05-12 Hot Market Radar Search
+
+Context:
+
+- RKC/Red Kitten Crew was missed because the app was wallet-first. It had no broad hot Dex/Pump discovery lane, so a token could run hard without entering the decision ledger.
+- The new path should add discovery breadth without diluting the core product: every hot-feed candidate must be paper-only, lane-labeled, risk checked, decision-recorded, and measured both as Market Radar Co-Main and separately from wallet-main.
+
+### Best Reference: Flotapponnier/pulse-sniper
+
+Repo: `https://github.com/Flotapponnier/pulse-sniper`
+
+Why it matters:
+
+- Fresh-token feed architecture, WebSocket reconnect/resubscribe discipline, and SQLite dedup keyed by chain/address.
+- Quality gate pattern: score new tokens before acting, using holder concentration, pool growth, trending, and trader composition concepts.
+- Good model for future streaming discovery if polling Dexscreener is too slow.
+
+Use clean-room concepts only:
+
+- Dedup hot candidates before they create repeated paper decisions.
+- Keep a quality gate before quote checks.
+- Track rejected tokens too, because misses matter as much as buys.
+
+### Useful Endpoint Reference: Ziondido/DexscreenerAPI
+
+Repo: `https://github.com/Ziondido/DexscreenerAPI`
+
+Why it matters:
+
+- Clear organization of Dexscreener token profiles, latest boosts, top boosts, token orders, and pair endpoints.
+- Confirms that latest profiles/boosts/top boosts are reasonable starter surfaces for a light Market Radar Lane.
+
+Use clean-room concepts only:
+
+- Keep endpoint access thin and local to our Python service.
+- Do not add a TypeScript dependency just to call simple public endpoints.
+
+### Useful Scoring Reference: NadirAliOfficial/Solana-New-Pairs
+
+Repo: `https://github.com/NadirAliOfficial/Solana-New-Pairs`
+
+Why it matters:
+
+- Python new-pair scoring direction aligns with our current stack.
+- Useful concepts: liquidity, transaction count, holder distribution, liquidity-lock checks, historical performance, and weighted scoring.
+
+Caution:
+
+- The repo includes a `.env` file in its tree. Treat it as a reference only and do not copy config patterns.
+
+### Useful Risk Reference: hcrypto7/rug_token_checker
+
+Repo: `https://github.com/hcrypto7/rug_token_checker`
+
+Why it matters:
+
+- Raydium new-token detection plus RugCheck-style safety evaluation.
+- Useful future input for Market Radar risk: creator, safety score, holder balances, and Raydium liquidity-pool detection.
+
+Use clean-room concepts only:
+
+- Feed rug/risk evidence into decision records.
+- Keep it as a gate and label, not a live-buy trigger.
+
+### Decision For MemeTraderPro
+
+Implemented now:
+
+- Dexscreener polling-based Market Radar Lane, paper-only.
+- Co-main paper review and outcome analytics for wallet-main plus `market_radar`, while preserving separate lane stats.
+- Exploration Lane auto-pause after poor early paper outcomes.
+
+Future only if needed:
+
+- Add WebSocket/PumpPortal/Mobula-style discovery after we prove Dexscreener polling misses too many high-quality runners.
+- Add deeper Raydium/Pump launch listeners only under the same decision-ledger and paper-only rules.
+
 ## Additional Open Source Search
 
 The user asked whether searching for more open-source options is useful. Answer: yes, but only selectively. Most public "meme trading bot" repos are either too sniper-focused, too promotional, poorly licensed, incomplete, or designed around live private-key execution. The useful layer is lower-level infrastructure and specific algorithms.
+
+## 2026-05-12 Broad Meme/Solana Search
+
+### wagmi97/SolClaw
+
+Repo: `https://github.com/wagmi97/SolClaw`
+
+Why it matters:
+
+- Very relevant product reference: Solana memecoin algo IDE, token nursery, live chart, order-book tape, paper trading, performance tab, and AI-assisted strategy knob control.
+- Clean-room concepts for this project: a token nursery split into New / Heating Up / Watch / Rejected / Paper Bought, visible paper-performance review, and operator-adjustable strategy knobs that still write auditable settings.
+
+### wagmi97/Meme-Radar
+
+Repo: `https://github.com/wagmi97/Meme-Radar`
+
+Why it matters:
+
+- Mostly Reddit meme-stock trend tracking, not Solana trading.
+- Useful for social catalyst hygiene: scan cadence, evidence posts/comments, rising/fading attention, sentiment terms, and trend charts.
+- Not directly useful for execution or Solana token risk.
+
+### Immutal0/dexscreener-analysis-bot-meme
+
+Repo: `https://github.com/Immutal0/dexscreener-analysis-bot-meme`
+
+Why it matters:
+
+- Direct Market Radar reference: Dexscreener-based meme analysis with volume, liquidity, security/rugcheck, Solana/Base token discovery, and anomaly-style filters.
+- Clean-room concepts now mapped into Market Radar Quality Gate V2: liquidity quality, volume/liquidity anomaly detection, social proof, and route/risk gating before entry.
+
+### boluwatifee4/pump.fun-Token-tracker
+
+Repo: `https://github.com/boluwatifee4/pump.fun-Token-tracker`
+
+Why it matters:
+
+- Pump.fun-specific tracker for price movement, trading activity, bonding curve progress, whale activity, bot-like behavior, unique buyers, and top-holder concentration.
+- Best future use: add a Pump Lifecycle lane or evidence panel, not a live sniper path.
+
+### chainstacklabs/pumpfun-bonkfun-bot
+
+Repo: `https://github.com/chainstacklabs/pumpfun-bonkfun-bot`
+
+Why it matters:
+
+- Apache-2.0 Python reference for Pump.fun / LetsBonk lifecycle mechanics, bonding curve completion, PumpSwap migration, listener patterns, and RPC rate-limit discipline.
+- Clean-room use only: lifecycle state, migration detection, and listener/backtest architecture.
+
+### petershepherd/j33t-intel
+
+Repo: `https://github.com/petershepherd/j33t-intel`
+
+Why it matters:
+
+- Solana meme-token intelligence reference with risk/potential scoring direction: rug score, potential score, coordinated wallets, dev-sell status, and liquidity-lock style evidence.
+- Future fit: enrich decision records and the GUI risk panel.
+
+### MemeTrans / SolRPDS / SOLMEMES
+
+References:
+
+- MemeTrans paper: `https://arxiv.org/abs/2602.13480`
+- SolRPDS: `https://github.com/DeFiLabX/SolRPDS`
+- SOLMEMES dataset: `https://huggingface.co/datasets/rucyfer/solmemes`
+
+Why they matter:
+
+- These are research/data references rather than trading bots.
+- Useful concepts: launch context, trading activity, holder concentration, time-series behavior, liquidity add/remove history, bundle-linked wallets, and rug-pull labels.
+- Future fit: offline backtests and decision-ledger feature expansion.
+
+Implemented from this research:
+
+- Market Radar Quality Gate V2 blocks thin liquidity, weak market cap, poor liquidity-to-market-cap structure, abnormal H1 volume versus liquidity, collapsing H1 momentum, one-sided flow, micro-transaction spam, too-fresh pairs, stale resurrected pairs without fresh strength, and missing social/site proof before spending quote budget.
+- Dex source bonuses are capped to the strongest single source, so latest profile + boost + top boost stacking cannot override weak quality signals.
 
 ## Strongest Candidate: Chainstack Pump.fun / Bonk.fun Bot
 

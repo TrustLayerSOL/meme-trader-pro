@@ -37,10 +37,27 @@ def tx_window(pair, window="m5"):
     return row if isinstance(row, dict) else {}
 
 
+def volume_window(pair, window):
+    volume = pair.get("volume") if isinstance(pair, dict) else {}
+    return float(volume.get(window) or 0) if isinstance(volume, dict) else 0
+
+
+def price_change_window(pair, window):
+    changes = pair.get("priceChange") if isinstance(pair, dict) else {}
+    value = changes.get(window) if isinstance(changes, dict) else None
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def extract_dexscreener_pair_metadata(pair):
     pair = pair if isinstance(pair, dict) else {}
     info = pair.get("info") if isinstance(pair.get("info"), dict) else {}
     m5_txns = tx_window(pair, "m5")
+    h1_txns = tx_window(pair, "h1")
+    h6_txns = tx_window(pair, "h6")
+    h24_txns = tx_window(pair, "h24")
     buys = int(float(m5_txns.get("buys") or 0))
     sells = int(float(m5_txns.get("sells") or 0))
     return {
@@ -51,6 +68,23 @@ def extract_dexscreener_pair_metadata(pair):
         "tx_count": buys + sells,
         "buy_count": buys,
         "sell_count": sells,
+        "tx_count_m5": buys + sells,
+        "buy_count_m5": buys,
+        "sell_count_m5": sells,
+        "tx_count_h1": int(float(h1_txns.get("buys") or 0)) + int(float(h1_txns.get("sells") or 0)),
+        "buy_count_h1": int(float(h1_txns.get("buys") or 0)),
+        "sell_count_h1": int(float(h1_txns.get("sells") or 0)),
+        "tx_count_h6": int(float(h6_txns.get("buys") or 0)) + int(float(h6_txns.get("sells") or 0)),
+        "tx_count_h24": int(float(h24_txns.get("buys") or 0)) + int(float(h24_txns.get("sells") or 0)),
+        "volume_m5": volume_window(pair, "m5"),
+        "volume_h1": volume_window(pair, "h1"),
+        "volume_h6": volume_window(pair, "h6"),
+        "volume_h24": volume_window(pair, "h24"),
+        "price_change_m5": price_change_window(pair, "m5"),
+        "price_change_h1": price_change_window(pair, "h1"),
+        "price_change_h6": price_change_window(pair, "h6"),
+        "price_change_h24": price_change_window(pair, "h24"),
+        "pair_created_at": pair.get("pairCreatedAt"),
     }
 
 
