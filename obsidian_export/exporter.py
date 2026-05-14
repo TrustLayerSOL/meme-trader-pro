@@ -1,0 +1,422 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from obsidian_export.config import ObsidianExportConfig
+from obsidian_export.dashboard_notes import render_dashboard_notes
+from obsidian_export.daily_report import daily_report_filename, render_daily_report
+from obsidian_export.markdown import GENERATED_MARKER, as_dict, slugify, yaml_frontmatter
+from obsidian_export.signal_note import (
+    paper_trade_filename,
+    postmortem_filename,
+    rejected_signal_filename,
+    render_paper_trade_note,
+    render_postmortem_note,
+    render_rejected_signal_note,
+    render_signal_note,
+    signal_filename,
+)
+from obsidian_export.wallet_note import render_wallet_note, wallet_filename
+
+
+FOLDERS = [
+    "Wallets",
+    "Signals",
+    "RejectedSignals",
+    "PaperTrades",
+    "Postmortems",
+    "DailyReports",
+    "Dashboards",
+]
+
+
+class ObsidianExporter:
+    def __init__(self, config: ObsidianExportConfig):
+        self.config = config
+
+    @property
+    def root(self) -> Path:
+        return self.config.vault_path / self.config.root_folder
+
+    def ensure_folders(self) -> None:
+        for folder in FOLDERS:
+            (self.root / folder).mkdir(parents=True, exist_ok=True)
+
+    def write_note(self, relative_path: str, frontmatter: dict[str, Any], generated_body: str) -> Path:
+        path = self.root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else None
+        path.write_text(merge_generated_note(existing, frontmatter, generated_body), encoding="utf-8")
+        return path
+
+    def write_rendered_note(self, relative_path: str, rendered_note: str) -> Path:
+        frontmatter, body = split_rendered_note(rendered_note)
+        return self.write_note(relative_path, frontmatter, body)
+
+    def export(self) -> dict[str, Any]:
+        self.ensure_folders()
+        snapshot = load_snapshot(self.config)
+        stats = {"vault_path": str(self.config.vault_path), "root": str(self.root), "written": 0, "folders": FOLDERS}
+
+        signals_by_wallet = index_signals_by_wallet(snapshot.get("signals") or [])
+        postmortems_by_wallet = index_postmortems_by_wallet(snapshot.get("postmortems") or [])
+        rows = snapshot.get("wallet_rows") if isinstance(snapshot.get("wallet_rows"), list) else []
+        for row in rows:
+            wallet = row.get("wallet")
+            if not wallet:
+                continue
+            note = render_wallet_note(
+                row,
+                recent_signals=signals_by_wallet.get(str(wallet), []),
+                postmortems=postmortems_by_wallet.get(str(wallet), []),
+            )
+            self.write_rendered_note(f"Wallets/{wallet_filename(str(wallet))}", note)
+            stats["written"] += 1
+
+        for row in snapshot.get("signals") or []:
+            self.write_rendered_note(f"Signals/{signal_filename(row)}", render_signal_note(row))
+            stats["written"] += 1
+
+        for row in snapshot.get("rejections") or []:
+            self.write_rendered_note(
+                f"RejectedSignals/{rejected_signal_filename(row)}",
+                render_rejected_signal_note(row),
+            )
+            stats["written"] += 1
+
+        for row in snapshot.get("paper_trades") or []:
+            self.write_rendered_note(f"PaperTrades/{paper_trade_filename(row)}", render_paper_trade_note(row))
+            stats["written"] += 1
+
+        for row in snapshot.get("postmortems") or []:
+            self.write_rendered_note(f"Postmortems/{postmortem_filename(row)}", render_postmortem_note(row))
+            stats["written"] += 1
+
+        report_date = datetime.now(timezone.utc).date().isoformat()
+        self.write_rendered_note(
+            f"DailyReports/{daily_report_filename(report_date)}",
+            render_daily_report(snapshot, report_date=report_date),
+        )
+        stats["written"] += 1
+
+        for relative_path, content in render_dashboard_notes().items():
+            self.write_rendered_note(relative_path, content)
+            stats["written"] += 1
+
+        return stats
+
+
+def merge_generated_note(existing: str | None, frontmatter: dict[str, Any], generated_body: str) -> str:
+    manual = _manual_section(existing)
+    body = generated_body.strip()
+    if body.startswith(GENERATED_MARKER):
+        body = body[len(GENERATED_MARKER) :].strip()
+    elif GENERATED_MARKER in body:
+        body = body.replace(GENERATED_MARKER, "", 1).strip()
+
+    manual_section = manual.strip()
+    if not manual_section:
+        manual_section = "## Manual Notes\n\n"
+
+    return f"{yaml_frontmatter(frontmatter)}\n\n{manual_section.rstrip()}\n\n{GENERATED_MARKER}\n\n{body.rstrip()}\n"
+
+
+def split_rendered_note(rendered_note: str) -> tuple[dict[str, Any], str]:
+    text = rendered_note.strip()
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}, text
+    raw_fm = text[4:end].strip()
+    body = text[end + 4 :].strip()
+    return parse_simple_frontmatter(raw_fm), body
+
+
+def parse_simple_frontmatter(raw: str) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    lines = raw.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip() or ":" not in line:
+            index += 1
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if value == "":
+            values = []
+            index += 1
+            while index < len(lines) and lines[index].startswith("  - "):
+                values.append(_parse_scalar(lines[index][4:].strip()))
+                index += 1
+            data[key] = values
+            continue
+        data[key] = _parse_scalar(value)
+        index += 1
+    return data
+
+
+def _parse_scalar(value: str) -> Any:
+    if value in {"null", "None"}:
+        return None
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    if value.startswith('"') and value.endswith('"'):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value.strip('"')
+    if value == "[]":
+        return []
+    try:
+        if "." in value:
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value
+
+
+def _manual_section(existing: str | None) -> str:
+    if not existing:
+        return ""
+    text = existing
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        if end >= 0:
+            text = text[end + 4 :]
+    if GENERATED_MARKER in text:
+        text = text.split(GENERATED_MARKER, 1)[0]
+    return text.strip()
+
+
+def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
+    data_dir = Path(config.data_dir)
+    wallet_quant = read_json(data_dir / "wallet_quant_report.json", {})
+    outcome_ledger = read_json(data_dir / "wallet_outcome_ledger.json", {})
+    performance = read_json(data_dir / "wallet_performance.json", {})
+    candidate_wallets = read_json(data_dir / "candidate_wallets.json", {})
+    paper = read_json(data_dir / "paper_trades.json", {})
+    replay_visibility = read_json(data_dir / "replay_visibility_report.json", {})
+
+    signals = read_jsonl(data_dir / "signal_contexts" / "contexts.jsonl", limit=config.max_signals)
+    rejections = read_jsonl(data_dir / "rejected_signals" / "rejections.jsonl", limit=config.max_rejected_signals)
+    postmortems = read_jsonl(data_dir / "postmortems" / "paper_closed.jsonl", limit=config.max_postmortems)
+    paper_trades = collect_paper_trades(paper, limit=config.max_paper_trades)
+
+    wallet_rows = merge_wallet_rows(wallet_quant, outcome_ledger, performance)
+    if config.max_wallets is not None:
+        wallet_rows = wallet_rows[: config.max_wallets]
+
+    return {
+        "wallet_rows": wallet_rows,
+        "signals": signals,
+        "rejections": rejections,
+        "paper_trades": paper_trades,
+        "postmortems": postmortems,
+        "candidate_wallets": candidate_wallets,
+        "replay_visibility": replay_visibility,
+    }
+
+
+def merge_wallet_rows(
+    wallet_quant: dict[str, Any],
+    outcome_ledger: dict[str, Any],
+    performance: dict[str, Any],
+) -> list[dict[str, Any]]:
+    quant_rows = wallet_quant.get("wallets") if isinstance(wallet_quant.get("wallets"), list) else []
+    outcome_wallets = outcome_ledger.get("wallets") if isinstance(outcome_ledger.get("wallets"), dict) else {}
+    performance_wallets = performance.get("wallets") if isinstance(performance.get("wallets"), dict) else {}
+    rows = []
+    seen = set()
+    for row in quant_rows:
+        if not isinstance(row, dict):
+            continue
+        wallet = row.get("wallet")
+        if not wallet:
+            continue
+        merged = dict(row)
+        outcome = outcome_wallets.get(wallet) if isinstance(outcome_wallets.get(wallet), dict) else {}
+        perf = performance_wallets.get(wallet) if isinstance(performance_wallets.get(wallet), dict) else {}
+        for key in (
+            "runner_participation",
+            "rug_participation",
+            "runner_participation_rate",
+            "rug_participation_rate",
+            "known_outcomes",
+            "accepted_signals",
+            "rejected_signals",
+            "total_signals",
+            "confidence",
+            "market_regime_breakdown",
+        ):
+            if key in outcome:
+                merged[key] = outcome[key]
+        if "last_seen" in perf:
+            merged["last_seen"] = perf["last_seen"]
+        if "score" in perf and "score" not in merged:
+            merged["score"] = perf["score"]
+        rows.append(merged)
+        seen.add(str(wallet))
+
+    for wallet, perf in performance_wallets.items():
+        if wallet in seen or not isinstance(perf, dict):
+            continue
+        row = {"wallet": wallet, "tier": "observed", "last_seen": perf.get("last_seen"), "score": perf.get("score")}
+        row.update(perf)
+        rows.append(row)
+
+    rows.sort(key=_wallet_sort_key, reverse=True)
+    return rows
+
+
+def _wallet_sort_key(row: dict[str, Any]) -> tuple[float, float, float]:
+    recommendation_rank = {
+        "PROMOTION_REVIEW": 50.0,
+        "DEMOTION_REVIEW": 40.0,
+        "KEEP_TRUSTED": 30.0,
+        "HOLD_MORE_DATA": 20.0,
+    }.get(str(as_dict(row.get("recommendation")).get("action")), 0.0)
+    behavior_score = as_dict(row.get("behavior_score")).get("score")
+    confidence = as_dict(row.get("confidence")).get("score")
+    try:
+        score = float(behavior_score if behavior_score is not None else confidence if confidence is not None else 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    try:
+        signals = float(row.get("signal_count") or row.get("total_signals") or row.get("signals") or 0)
+    except (TypeError, ValueError):
+        signals = 0.0
+    return recommendation_rank, score, signals
+
+
+def collect_paper_trades(paper: dict[str, Any], *, limit: int) -> list[dict[str, Any]]:
+    rows = []
+    for key in ("open_trades", "closed_trades", "failed_trades"):
+        section = paper.get(key)
+        if not isinstance(section, list):
+            continue
+        for row in section:
+            if isinstance(row, dict):
+                copy = dict(row)
+                if not copy.get("status"):
+                    copy["status"] = key.removesuffix("_trades")
+                rows.append(copy)
+    rows.sort(key=lambda row: float(row.get("entry_time") or row.get("time") or row.get("close_time") or 0), reverse=True)
+    return rows[:limit]
+
+
+def index_signals_by_wallet(signals: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for signal in signals:
+        wallets = []
+        triggering = signal.get("triggering_wallets")
+        if isinstance(triggering, list):
+            for item in triggering:
+                if isinstance(item, dict):
+                    wallet = item.get("wallet") or item.get("address")
+                else:
+                    wallet = item
+                if wallet:
+                    wallets.append(str(wallet))
+        for wallet in signal.get("wallets") if isinstance(signal.get("wallets"), list) else []:
+            if isinstance(wallet, dict):
+                wallet = wallet.get("wallet") or wallet.get("address")
+            if wallet:
+                wallets.append(str(wallet))
+        for wallet in dict.fromkeys(wallets):
+            index.setdefault(wallet, []).append(signal)
+    return index
+
+
+def index_postmortems_by_wallet(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        tracked = as_dict(row.get("tracked"))
+        wallets = tracked.get("wallet cluster composition") if isinstance(tracked.get("wallet cluster composition"), list) else []
+        for wallet in wallets:
+            if wallet:
+                index.setdefault(str(wallet), []).append(row)
+    return index
+
+
+def read_json(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def read_jsonl(path: Path, *, limit: int) -> list[dict[str, Any]]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    rows = []
+    selected = lines[-limit:] if limit else []
+    for line in selected:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            rows.append(payload)
+    rows.reverse()
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Export MemeTraderPro research state into an Obsidian vault.")
+    parser.add_argument("--vault", type=Path, default=None, help="Override OBSIDIAN_VAULT_PATH")
+    parser.add_argument("--data-dir", type=Path, default=Path("data"), help="MemeTraderPro data directory")
+    parser.add_argument("--max-wallets", type=int, default=None, help="Limit wallet notes for a manual run")
+    parser.add_argument("--daily", action="store_true", help="Accepted alias for the standard export including daily report")
+    ns = parser.parse_args(argv)
+
+    try:
+        config = ObsidianExportConfig.from_env() if ns.vault is None else ObsidianExportConfig(vault_path=ns.vault)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if ns.max_wallets is not None:
+        config = ObsidianExportConfig(
+            vault_path=config.vault_path,
+            root_folder=config.root_folder,
+            data_dir=ns.data_dir,
+            max_wallets=ns.max_wallets,
+            max_signals=config.max_signals,
+            max_rejected_signals=config.max_rejected_signals,
+            max_paper_trades=config.max_paper_trades,
+            max_postmortems=config.max_postmortems,
+        )
+    else:
+        config = ObsidianExportConfig(
+            vault_path=config.vault_path,
+            root_folder=config.root_folder,
+            data_dir=ns.data_dir,
+            max_wallets=config.max_wallets,
+            max_signals=config.max_signals,
+            max_rejected_signals=config.max_rejected_signals,
+            max_paper_trades=config.max_paper_trades,
+            max_postmortems=config.max_postmortems,
+        )
+
+    stats = ObsidianExporter(config).export()
+    print(json.dumps(stats, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
