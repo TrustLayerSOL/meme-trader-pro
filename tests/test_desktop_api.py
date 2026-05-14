@@ -795,6 +795,40 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"wallets": []})
         build_payload.assert_called_once_with(limit=12)
 
+    def test_wallet_quant_payload_is_review_only(self):
+        payload = desktop_api.build_wallet_quant_payload({
+            "tracked_wallets": [{"trackedWalletAddress": "TrustedA"}],
+            "paper_watch_wallets": {"wallets": ["WalletA", "WalletB"]},
+            "wallet_performance": {
+                "wallets": {
+                    "WalletA": {"paper_entries": 8, "wins": 6, "losses": 2, "total_pnl": 42.0},
+                    "WalletB": {"paper_entries": 7, "wins": 1, "losses": 6, "total_pnl": -28.0},
+                }
+            },
+            "wallet_behavior": {
+                "wallets": {
+                    "WalletA": {"rolling": {"30d": {"expectancy": 5.25}}},
+                    "WalletB": {"rolling": {"30d": {"expectancy": -4.0}}},
+                }
+            },
+        })
+
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertEqual(payload["mode"], "WALLET_QUANT_REVIEW_ONLY")
+        self.assertEqual(payload["counts"]["trusted"], 1)
+        self.assertEqual(payload["counts"]["paper_watch"], 2)
+        self.assertEqual(payload["recommendation_counts"]["PROMOTION_REVIEW"], 1)
+        self.assertEqual(payload["recommendation_counts"]["DEMOTION_REVIEW"], 1)
+
+    def test_wallet_quant_route_honors_limit(self):
+        with mock.patch.object(desktop_api, "build_wallet_quant_payload", return_value={"wallets": [], "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/wallet-quant?limit=12")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with(limit=12)
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({

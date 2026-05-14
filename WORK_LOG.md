@@ -61,6 +61,56 @@ Next step:
 
 - Implement Wallet Quant Report V1: metric aggregation, tier recommendation, report builder, API endpoint, and wallet-first UI/report surface.
 
+2026-05-14 update - Wallet Quant Report V1 foundation:
+
+Changed files:
+
+- `core/wallet_quant.py`
+- `utils/build_wallet_quant_report.py`
+- `tests/test_wallet_quant.py`
+- `desktop_api.py`
+- `tests/test_desktop_api.py`
+- `research/DATA_SOURCE_MAP.md`
+- `docs/superpowers/plans/2026-05-14-wallet-quant-tracker.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added the first Quant Wallet Tracker metric module.
+- Added review-only tier recommendation actions: `PROMOTION_REVIEW`, `DEMOTION_REVIEW`, `KEEP_TRUSTED`, and `HOLD_MORE_DATA`.
+- Added behavior-focused wallet rows with tier, signal count, paper-watch sample size, win/loss counts, expectancy, rolling 7d/30d entries, 30d win rate, hold-time fields, closed/failed trade counts, exit/failure reasons, labels, sample quality, and recommendation reasons.
+- Added `utils/build_wallet_quant_report.py`, which writes `data/wallet_quant_report.json`.
+- Added read-only desktop API route `/api/wallet-quant`.
+- Restarted the desktop API so the endpoint is live.
+
+Current report snapshot:
+
+- Wallets in report: `7,438`.
+- Trusted wallets: `518`.
+- Paper-watch wallets: `6,920`.
+- Current recommendation counts: `7,437` hold-more-data, `1` demotion-review, `0` promotion-review.
+
+Interpretation:
+
+- The system now has a much larger wallet pool, but almost all wallets need more clean evidence before promotion.
+- The first demotion-review wallet is a trusted wallet with five closed paper outcomes, all losses, negative expectancy, and copy-bait/follower-trap style labels.
+- This confirms the refocus was needed: the public/trusted list should not be assumed good.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_wallet_quant tests.test_desktop_api tests.test_core_logic tests.test_market_checker` passed 256 tests.
+- Python compile check passed.
+- `data/wallet_quant_report.json` parsed as valid JSON.
+- `git diff --check` passed.
+- `npm --prefix apps/desktop run check` passed.
+- Live `GET /api/wallet-quant?limit=3` returned `WALLET_QUANT_REVIEW_ONLY`, `live_execution_locked=true`, and the expected wallet counts.
+
+Remaining risk / next step:
+
+- Non-wallet GUI tabs still exist. Next pass should hide/freeze them or visually move them behind a legacy/admin area.
+- Wallet metrics are still composed from existing JSON behavior/performance sources; later work should add canonical SQLite wallet outcome tables.
+
 2026-05-14 update - File integrity and GitHub audit after external upgrade:
 
 Changed files:

@@ -10,6 +10,15 @@
 
 ---
 
+## Current Execution Status
+
+- [x] Task 1 roadmap refocus completed.
+- [x] Task 2 wallet metric model completed.
+- [x] Task 3 wallet quant report builder completed.
+- [x] Task 4 desktop API wallet quant endpoint completed.
+- [ ] Task 5 freeze non-wallet navigation.
+- [~] Task 6 final verification partially completed: Python tests, compile checks, JSON validation, TypeScript check, report builder, and live endpoint verification passed.
+
 ## File Structure
 
 - Modify `research/BUILD_PLAN.md` to make Wallet Quant Tracker the active roadmap and freeze unrelated lanes.

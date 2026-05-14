@@ -33,6 +33,7 @@ from core.settings_manager import load_settings as load_bot_settings
 from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from core.wallet_lifecycle import build_wallet_lifecycle_report
+from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
 
 
@@ -3490,6 +3491,23 @@ def build_wallet_lifecycle_payload(state=None, limit=80):
     }
 
 
+def build_wallet_quant_payload(state=None, limit=80):
+    state = state or read_state_files()
+    report = build_wallet_quant_report(
+        tracked_wallets=state.get("tracked_wallets", []),
+        paper_watch_wallets=state.get("paper_watch_wallets", {"wallets": []}),
+        performance=state.get("wallet_performance") if isinstance(state.get("wallet_performance"), dict) else {"wallets": {}},
+        behavior=state.get("wallet_behavior") if isinstance(state.get("wallet_behavior"), dict) else {"wallets": {}},
+    )
+    rows = report.get("wallets", [])
+    return {
+        **report,
+        "read_only": True,
+        "count": min(len(rows), int(limit)),
+        "wallets": rows[:limit],
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4083,6 +4101,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-lifecycle":
         limit = parse_int_query(query, "limit", 80, 1, 250)
         return json_response(build_wallet_lifecycle_payload(limit=limit))
+    if path == "/api/wallet-quant":
+        limit = parse_int_query(query, "limit", 80, 1, 500)
+        return json_response(build_wallet_quant_payload(limit=limit))
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

@@ -66,12 +66,31 @@ New operating stance:
 
 Next implementation target:
 
-1. Create `core/wallet_quant.py`.
-2. Create `utils/build_wallet_quant_report.py`.
-3. Create `tests/test_wallet_quant.py`.
-4. Generate `data/wallet_quant_report.json`.
-5. Add a read-only `/api/wallet-quant` endpoint.
-6. Simplify the GUI/reporting surface around wallet funnel, rankings, promotion queue, demotion queue, and wallet detail.
+1. Simplify the GUI/reporting surface around wallet funnel, rankings, promotion queue, demotion queue, and wallet detail.
+2. Hide/freeze non-wallet tabs or move them into a legacy/admin area.
+3. Add stronger wallet outcome metrics from SQLite events/trades/token snapshots.
+4. Add wallet tier history once recommendations are stable.
+
+Completed for Wallet Quant Tracker V1:
+
+- Created `core/wallet_quant.py`.
+- Created `utils/build_wallet_quant_report.py`.
+- Created `tests/test_wallet_quant.py`.
+- Generated `data/wallet_quant_report.json`.
+- Added read-only `/api/wallet-quant` endpoint.
+- Restarted desktop API so the endpoint is live.
+
+Latest wallet quant snapshot:
+
+- Total wallets: `7,438`.
+- Trusted: `518`.
+- Paper-watch: `6,920`.
+- Recommendations: `7,437` hold-more-data, `1` demotion-review, `0` promotion-review.
+
+Important interpretation:
+
+- There is now a large enough observation pool to evaluate, but the report shows very little promotion-grade evidence yet.
+- One currently trusted wallet is already flagged for demotion review based on repeated losing paper outcomes and bad behavior labels.
 
 ## Previous Change
 
