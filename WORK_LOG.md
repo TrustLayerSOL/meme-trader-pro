@@ -43,6 +43,42 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-14 update - Outcome Labels And Review-Only Wallet Recommendations:
+
+Changed files:
+
+- `research/outcome_labeler.py`
+- `research/signal_schema.py`
+- `wallets/wallet_promotion_engine.py`
+- `wallets/wallet_outcome_ledger.py`
+- `tests/test_outcome_labeler.py`
+- `tests/test_wallet_promotion_engine.py`
+- `tests/test_wallet_outcome_ledger.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added consistent later-token outcome labels: `runner`, `rug`, `dead`, `loser`, `open`, and `unknown`.
+- Added classification reasons, label confidence, max favorable excursion, and liquidity-change fields where data exists.
+- Moved wallet promotion/demotion recommendation policy into `wallets.wallet_promotion_engine`.
+- Kept recommendations review-only and blocked promotion review until a wallet has at least `20` known outcomes.
+- Regenerated the local wallet outcome ledger from current data: `4,747` unified records across `28` wallets.
+- Current generated recommendation counts: `28` hold-more-data, `0` promotion-review, `0` demotion-review.
+
+Verification:
+
+- Added failing tests before implementation for outcome labeling, promotion policy, and labeled-outcome known-count handling.
+- Focused tests passed: `./trading_env/bin/python -m unittest tests.test_outcome_labeler tests.test_wallet_promotion_engine tests.test_wallet_outcome_ledger tests.test_research_signal_schema`.
+
+Remaining risk / next step:
+
+- This improves measurement quality, not profitability. Next step is a baseline comparison report between `data/wallet_quant_report.json` and `data/wallet_outcome_ledger.json`.
+
 2026-05-14 update - Wallet Outcome Ledger V1:
 
 Changed files:

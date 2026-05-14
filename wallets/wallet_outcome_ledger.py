@@ -4,6 +4,8 @@ import time
 from collections import Counter, defaultdict
 from typing import Any
 
+from wallets.wallet_promotion_engine import recommend_from_ledger_row
+
 
 def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -67,11 +69,13 @@ def market_number(record: dict[str, Any], key: str) -> float | None:
 def outcome_flags(record: dict[str, Any]) -> dict[str, bool]:
     outcome = as_dict(record.get("later_token_outcome"))
     status = str(outcome.get("status") or "").lower()
+    outcome_type = str(outcome.get("outcome_type") or "").lower()
+    known_types = {"runner", "rug", "dead", "loser"}
     return {
-        "known": status not in {"", "unknown", "pending", "open"},
-        "runner": bool(outcome.get("runner")) or status == "runner",
-        "rug": bool(outcome.get("rug")) or status == "rug",
-        "dead": bool(outcome.get("dead")) or status == "dead",
+        "known": outcome_type in known_types or status not in {"", "unknown", "pending", "open"},
+        "runner": bool(outcome.get("runner")) or outcome_type == "runner" or status == "runner",
+        "rug": bool(outcome.get("rug")) or outcome_type == "rug" or status == "rug",
+        "dead": bool(outcome.get("dead")) or outcome_type == "dead" or status == "dead",
     }
 
 
@@ -129,7 +133,7 @@ def wallet_outcome_row(wallet: str, records: list[dict[str, Any]]) -> dict[str, 
     promotion_score = max(0.0, max(0.0, avg_pnl or 0.0) + runner_rate * 35)
     demotion_score = max(0.0, rug_rate * 55 + max(0.0, -(avg_pnl or 0.0)))
 
-    return {
+    row = {
         "wallet": wallet,
         "review_only": True,
         "total_signals": total,
@@ -149,19 +153,22 @@ def wallet_outcome_row(wallet: str, records: list[dict[str, Any]]) -> dict[str, 
         "promotion_score": round(promotion_score, 4),
         "demotion_score": round(demotion_score, 4),
         "confidence": conf,
-        "recommendation": recommendation(promotion_score, demotion_score, conf),
     }
+    row["recommendation"] = recommend_from_ledger_row(row)
+    return row
 
 
 def recommendation(promotion_score: float, demotion_score: float, conf: dict[str, Any]) -> dict[str, Any]:
-    sample = conf.get("sample_quality")
-    if sample in {"none", "thin"}:
-        return {"action": "HOLD_MORE_DATA", "reasons": ["sample below usable threshold"]}
-    if demotion_score >= 35 and demotion_score > promotion_score:
-        return {"action": "DEMOTION_REVIEW", "reasons": ["negative/rug outcome pressure exceeds promotion evidence"]}
-    if promotion_score >= 35 and promotion_score > demotion_score:
-        return {"action": "PROMOTION_REVIEW", "reasons": ["positive outcome pressure with usable sample"]}
-    return {"action": "HOLD_MORE_DATA", "reasons": ["ledger evidence is not decisive"]}
+    row = {
+        "known_outcomes": 20 if conf.get("sample_quality") not in {"none", "thin"} else 0,
+        "runner_participation_rate": 1.0 if promotion_score > demotion_score else 0.0,
+        "rug_participation_rate": 1.0 if demotion_score > promotion_score else 0.0,
+        "average_pnl_after_signal": promotion_score - demotion_score,
+        "promotion_score": promotion_score,
+        "demotion_score": demotion_score,
+        "confidence": conf,
+    }
+    return recommend_from_ledger_row(row)
 
 
 def build_wallet_outcome_ledger(records: list[dict[str, Any]]) -> dict[str, Any]:

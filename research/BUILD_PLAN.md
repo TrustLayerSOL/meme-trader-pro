@@ -174,7 +174,7 @@ Deliverables:
 - [~] Canonical decision ledger schema for every candidate: detected token, wallet/social inputs, token/holder/mechanics risk, quote/liquidity checks, rule outcomes, final action, and later paper/live-safe result.
 - [~] Canonical signal context schema for wallet-triggered candidates and no-trade rows. `core/signal_context.py` now builds review-only V2 contexts for scanner/Market Radar skip paths; successful paper entries still need the same schema wired end-to-end.
 - [~] Unified signal outcome schema for accepted trades, failed trades, rejected signals, skipped signals, and future replay evaluations. `research/signal_schema.py` creates comparable records but runtime persistence is not wired yet.
-- [~] Wallet-outcome ledger. `wallets/wallet_outcome_ledger.py` and `utils/build_wallet_outcome_ledger.py` generate a review-only JSON ledger from current paper trades and rejection rows, but outcome labels and confidence scoring still need hardening.
+- [~] Wallet-outcome ledger. `wallets/wallet_outcome_ledger.py` and `utils/build_wallet_outcome_ledger.py` generate a review-only JSON ledger from current paper trades and rejection rows. `research/outcome_labeler.py` now classifies later outcomes and `wallets/wallet_promotion_engine.py` now owns review-only promotion/demotion recommendations. Runtime persistence and baseline comparison still need hardening.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -190,7 +190,7 @@ Next actions:
 - Continue wiring `core/decision_ledger.py` and SQLite-backed decision records before adding more disconnected GUI panels.
 - Harden scanner skips, main paper entries, exploration entries, failed buys, exits, and postmortems around `decision_id`.
 - Persist unified signal outcome records for accepted paper trades and rejected signals into a review-only ledger.
-- Make promotion/demotion scoring consume `data/wallet_outcome_ledger.json` only as review evidence until validated.
+- Compare the wallet-outcome ledger against `data/wallet_quant_report.json` so the project can see where older wallet score evidence agrees or conflicts with later outcome evidence.
 - Choose the canonical source of truth for each data class.
 - Define minimum SQLite tables and backfill existing JSON.
 

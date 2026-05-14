@@ -20,6 +20,40 @@ Next action:
 
 ## Entries
 
+### 2026-05-14 - Outcome Labels And Review-Only Wallet Recommendations
+
+Date: 2026-05-14
+
+Hypothesis: Wallet promotion/demotion evidence is more trustworthy when later token outcomes are labeled consistently and recommendation policy is isolated from raw ledger aggregation.
+
+Files changed:
+
+- `research/outcome_labeler.py`
+- `research/signal_schema.py`
+- `wallets/wallet_promotion_engine.py`
+- `wallets/wallet_outcome_ledger.py`
+- `tests/test_outcome_labeler.py`
+- `tests/test_wallet_promotion_engine.py`
+- `tests/test_wallet_outcome_ledger.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Data used: Synthetic unit-test records plus current local paper trades and rejected-signal rows normalized through `research.signal_schema`.
+
+Sample size: Local builder generated `4,747` unified records across `28` wallets at the time of this run. This is still a research ledger, not proof of edge.
+
+Baseline result: Later token outcomes were copied mostly as raw status/PnL fields. Promotion/demotion recommendation logic lived inside the ledger module and used looser score thresholds.
+
+New result: Later outcomes are labeled as `runner`, `rug`, `dead`, `loser`, `open`, or `unknown` with classification reasons. Wallet recommendation policy now lives in `wallets.wallet_promotion_engine`, remains review-only, and requires at least `20` known outcomes before promotion review.
+
+Conclusion: Wallet evidence is now easier to audit and less likely to promote a wallet from one-off or thin evidence. Current generated recommendations are `28` hold-more-data, `0` promotion-review, and `0` demotion-review.
+
+Next action: Build a baseline comparison report between `data/wallet_quant_report.json` and `data/wallet_outcome_ledger.json` to identify agreement, conflict, and missing evidence by wallet.
+
 ### 2026-05-14 - Research Governance And Unified Signal Outcome Schema
 
 Date: 2026-05-14

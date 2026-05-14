@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 from core.signal_context import build_signal_context
+from research.outcome_labeler import label_later_token_outcome
 
 
 UNIFIED_SIGNAL_OUTCOME_VERSION = 1
@@ -47,7 +48,11 @@ def normalize_decision(decision: dict[str, Any] | None, rejection_reason: str | 
     }
 
 
-def normalize_later_outcome(outcome: dict[str, Any] | None, trade: dict[str, Any] | None = None) -> dict[str, Any]:
+def normalize_later_outcome(
+    outcome: dict[str, Any] | None,
+    trade: dict[str, Any] | None = None,
+    signal_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     outcome = dict(outcome) if isinstance(outcome, dict) else {}
     trade = as_dict(trade)
     if not outcome:
@@ -61,7 +66,7 @@ def normalize_later_outcome(outcome: dict[str, Any] | None, trade: dict[str, Any
         outcome.setdefault("entry_time", trade.get("entry_time"))
         outcome.setdefault("exit_time", first_present(trade.get("close_time"), trade.get("exit_time")))
         outcome.setdefault("hold_seconds", hold_seconds(trade))
-    return outcome
+    return label_later_token_outcome(outcome=outcome, trade=trade, signal_context=signal_context)
 
 
 def hold_seconds(trade: dict[str, Any]) -> float | None:
@@ -111,7 +116,7 @@ def build_signal_outcome_record(
         "wallets": wallets,
         "signal_context": signal_context,
         "decision": decision_row,
-        "later_token_outcome": normalize_later_outcome(later_token_outcome, trade),
+        "later_token_outcome": normalize_later_outcome(later_token_outcome, trade, signal_context),
         "replay_assumptions": replay_assumptions(signal_context),
         "research_safety": {
             "decision_time_safe": True,
@@ -191,4 +196,3 @@ def build_record_from_trade(trade: dict[str, Any]) -> dict[str, Any]:
         trade=trade,
         source="paper_trade",
     )
-

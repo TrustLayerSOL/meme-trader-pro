@@ -61,9 +61,11 @@ The first wallet-outcome ledger builder exists and generates `data/wallet_outcom
 
 This is still review-only. It does not promote wallets into trading logic.
 
+Later token outcomes now receive review labels such as `runner`, `rug`, `dead`, `loser`, `open`, or `unknown`. Wallet promotion/demotion recommendations now come from a separate review-only engine with a minimum known-outcome sample threshold.
+
 ## Next Milestone
 
-Harden the wallet-outcome ledger and compare it against the previous wallet quant report baseline.
+Compare the wallet-outcome ledger against the previous wallet quant report baseline and begin a controlled baseline report.
 
 That ledger should measure:
 

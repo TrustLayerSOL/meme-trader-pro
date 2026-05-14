@@ -46,6 +46,50 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
+Added later outcome labels and a review-only wallet recommendation engine.
+
+Files changed:
+
+- `research/outcome_labeler.py`
+- `research/signal_schema.py`
+- `wallets/wallet_promotion_engine.py`
+- `wallets/wallet_outcome_ledger.py`
+- `tests/test_outcome_labeler.py`
+- `tests/test_wallet_promotion_engine.py`
+- `tests/test_wallet_outcome_ledger.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Behavior:
+
+- Later token outcomes now get consistent review labels: `runner`, `rug`, `dead`, `loser`, `open`, or `unknown`.
+- Outcome labels include classification reasons and confidence fields.
+- The wallet ledger counts known outcomes from labels, not only raw status strings.
+- Wallet promotion/demotion recommendation policy now lives in `wallets.wallet_promotion_engine`.
+- Recommendations are still review-only and require at least `20` known outcomes before promotion review.
+
+Current generated ledger:
+
+- Records: `4,747`.
+- Wallets: `28`.
+- Recommendation counts: `28` hold-more-data.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_outcome_labeler tests.test_wallet_promotion_engine tests.test_wallet_outcome_ledger tests.test_research_signal_schema` passed 13 tests.
+
+Next implementation target:
+
+1. Build a baseline comparison report between `data/wallet_quant_report.json` and `data/wallet_outcome_ledger.json`.
+2. Surface agreement/conflict/missing-evidence per wallet.
+3. Keep the report review-only until enough forward data exists.
+
+## Previous Change
+
 Added Wallet Outcome Ledger V1.
 
 Files changed:

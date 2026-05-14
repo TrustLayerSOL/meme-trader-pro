@@ -74,6 +74,21 @@ class WalletOutcomeLedgerTests(unittest.TestCase):
         self.assertGreater(row["demotion_score"], 0)
         self.assertGreater(row["promotion_score"], 0)
 
+    def test_labeled_outcome_counts_as_known_even_when_source_status_is_unknown(self):
+        row = wallet_outcome_row(
+            "WalletA",
+            [
+                build_signal_outcome_record(
+                    signal_context=context(["WalletA"], "A"),
+                    decision={"should_trade": True},
+                    later_token_outcome={"status": "unknown", "pnl_pct": 40},
+                ),
+            ],
+        )
+
+        self.assertEqual(row["known_outcomes"], 1)
+        self.assertEqual(row["runner_participation"], 1)
+
     def test_empty_ledger_is_valid_review_artifact(self):
         ledger = build_wallet_outcome_ledger([])
 
