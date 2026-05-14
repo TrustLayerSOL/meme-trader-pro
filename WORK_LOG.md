@@ -43,6 +43,37 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-14 update - Obsidian Wallet Candidate Review Export:
+
+Changed files:
+
+- `obsidian_export/candidate_note.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/dashboard_notes.py`
+- `obsidian_export/README.md`
+- `tests/test_obsidian_export.py`
+- `ROADMAP.md`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added generated Obsidian review notes for `data/wallet_candidate_audit.json`.
+- Export now writes `MemeTraderPro/WalletCandidateReviews/` notes with wallet link, recommendation action, audit status, evidence gates, outcome evidence, recommendation reasons, and audit notes.
+- The Obsidian dashboard now includes a Wallet Candidate Audit Queue Dataview section.
+- Wallet-list apply remains blocked by generated audit state; this export is review-only.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_obsidian_export`
+- `./trading_env/bin/python -m py_compile obsidian_export/*.py tests/test_obsidian_export.py`
+- Smoke export to `/tmp/mtp_obsidian_candidate_smoke` wrote `619` generated notes, including candidate review notes.
+
+Remaining risk / next step:
+
+- Obsidian is still an external review surface, not source of truth. Next step is either exporting to the operator's actual vault path or tightening the approved-decision path against these candidate review packets.
+
 2026-05-14 update - Wallet Candidate Audit Report:
 
 Changed files:

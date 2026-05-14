@@ -33,6 +33,16 @@ SORT status ASC, confidence_score DESC
 LIMIT 50
 ```
 
+## Wallet Candidate Audit Queue
+
+```dataview
+TABLE recommendation_action, audit_status, known_outcomes, source_coverage, promotion_score, demotion_score
+FROM "MemeTraderPro/WalletCandidateReviews"
+WHERE type = "wallet_candidate_review"
+SORT recommendation_action DESC, known_outcomes DESC
+LIMIT 50
+```
+
 ## High Rug Association
 
 ```dataview

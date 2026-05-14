@@ -12,6 +12,7 @@ Obsidian is not the source of truth. The source of truth remains the MemeTraderP
 - `data/paper_trades.json`
 - `data/postmortems/paper_closed.jsonl`
 - `data/candidate_wallets.json`
+- `data/wallet_candidate_audit.json`
 - `data/replay_visibility_report.json`
 
 ## Setup
@@ -47,6 +48,7 @@ The exporter writes generated notes under:
 ```text
 MemeTraderPro/
   Wallets/
+  WalletCandidateReviews/
   Signals/
   RejectedSignals/
   PaperTrades/

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from obsidian_export.dashboard_notes import render_dashboard_notes
+from obsidian_export.candidate_note import render_wallet_candidate_note, wallet_candidate_filename
 from obsidian_export.exporter import GENERATED_MARKER, merge_generated_note
 from obsidian_export.signal_note import render_signal_note
 from obsidian_export.wallet_note import render_wallet_note, wallet_filename
@@ -104,6 +105,8 @@ old generated body
         index = notes["Dashboards/MemeTraderPro Intelligence Dashboard.md"]
 
         self.assertIn("Top Wallets By Confidence", index)
+        self.assertIn("Wallet Candidate Audit Queue", index)
+        self.assertIn('FROM "MemeTraderPro/WalletCandidateReviews"', index)
         self.assertIn('FROM "MemeTraderPro/Wallets"', index)
         self.assertIn("Pending Review Wallets", index)
         self.assertIn("High Rug Association", index)
@@ -128,6 +131,46 @@ old generated body
                 Path(tmp) / "MemeTraderPro" / "Wallets" / "WAL-WalletABC123.md",
             )
             self.assertTrue(path.exists())
+
+    def test_wallet_candidate_note_exposes_review_gates_and_links_wallet(self):
+        candidate = {
+            "wallet": "WalletABC123",
+            "recommendation_action": "PROMOTION_REVIEW",
+            "audit_status": "HUMAN_REVIEW_REQUIRED",
+            "review_only": True,
+            "wallet_list_apply_allowed": False,
+            "comparison_status": "LEDGER_STRONGER_SIGNAL",
+            "evidence_gates": {
+                "known_outcome_sample_passed": True,
+                "minimum_known_outcomes": 20,
+                "source_coverage": 0.86,
+            },
+            "evidence": {
+                "total_signals": 28,
+                "known_outcomes": 24,
+                "runner_participation": 14,
+                "rug_participation": 0,
+                "dead_participation": 2,
+                "runner_participation_rate": 0.58,
+                "rug_participation_rate": 0.0,
+                "average_pnl_after_signal": 74.2,
+                "promotion_score": 94.5,
+                "demotion_score": 0,
+                "recommendation_reasons": ["runner-heavy known outcomes"],
+            },
+            "audit_notes": ["review recommendation has enough known outcomes for human audit"],
+        }
+
+        note = render_wallet_candidate_note(candidate)
+
+        self.assertEqual(wallet_candidate_filename(candidate), "WREV-PROMOTION_REVIEW-WalletABC123.md")
+        self.assertIn("type: wallet_candidate_review", note)
+        self.assertIn("wallet_address: WalletABC123", note)
+        self.assertIn("recommendation_action: PROMOTION_REVIEW", note)
+        self.assertIn("wallet_list_apply_allowed: false", note)
+        self.assertIn("[[WAL-WalletABC123|WalletABC123]]", note)
+        self.assertIn("runner-heavy known outcomes", note)
+        self.assertIn("review recommendation has enough known outcomes", note)
 
 
 if __name__ == "__main__":

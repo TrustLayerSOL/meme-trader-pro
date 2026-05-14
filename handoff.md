@@ -46,51 +46,46 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
-Added Wallet Candidate Audit Report.
+Added Obsidian Wallet Candidate Review export.
 
 Files changed:
 
-- `wallets/wallet_candidate_audit.py`
-- `utils/build_wallet_candidate_audit.py`
-- `tests/test_wallet_candidate_audit.py`
+- `obsidian_export/candidate_note.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/dashboard_notes.py`
+- `obsidian_export/README.md`
+- `tests/test_obsidian_export.py`
 - `ROADMAP.md`
-- `EXPERIMENT_LOG.md`
 - `research/BUILD_PLAN.md`
-- `research/DATA_SOURCE_MAP.md`
 - `WORK_LOG.md`
 - `handoff.md`
 
 Behavior:
 
-- `utils/build_wallet_candidate_audit.py` reads `data/wallet_outcome_ledger.json` and `data/wallet_baseline_comparison.json`.
-- It writes `data/wallet_candidate_audit.json`.
-- The report includes only snapshot-linked promotion/demotion candidates.
-- It summarizes sample gates, known outcomes, source coverage, runner/rug/dead counts, average PnL, confidence, recommendation reasons, and baseline comparison status.
-- Wallet-list apply is explicitly blocked in the report.
+- `obsidian_export.exporter` now reads `data/wallet_candidate_audit.json`.
+- It writes generated candidate review notes under `MemeTraderPro/WalletCandidateReviews/`.
+- Each review note links to the wallet note and exposes recommendation action, audit status, evidence gates, outcome evidence, recommendation reasons, and audit notes.
+- The Obsidian dashboard now includes a Wallet Candidate Audit Queue Dataview section.
+- Wallet-list apply remains blocked by generated audit state; this is review/export only.
 - Live execution remains locked.
 
-Current generated audit:
+Verification:
 
-- Candidates: `14`.
-- Promotion review: `1`.
-- Demotion review: `13`.
-- Human review required: `14`.
-- Insufficient evidence: `0`.
+- `./trading_env/bin/python -m unittest tests.test_obsidian_export`
+- `./trading_env/bin/python -m py_compile obsidian_export/*.py tests/test_obsidian_export.py`
+- Smoke export to `/tmp/mtp_obsidian_candidate_smoke` wrote `619` notes including candidate review notes.
 
 Interpretation:
 
 - The system now has a separate audit layer between generated recommendations and any future wallet-list action.
-- The next step is a human-readable export/review workflow. Do not let wallet-list apply consume these candidates directly yet.
-
-Verification:
-
-- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_audit` passed 2 tests.
+- The human-readable export/review surface now exists through Obsidian generated notes.
+- Do not let wallet-list apply consume generated candidates directly; approved decisions still need to be explicitly recorded and validated.
 
 Next implementation target:
 
-1. Add a human-readable wallet audit export.
-2. Include the exact evidence fields needed for operator review.
-3. Keep wallet-list apply disconnected until explicit review thresholds and operator approvals exist.
+1. Validate saved wallet-review decisions against the current candidate audit report.
+2. Reject stale or non-candidate decisions before dry-run/apply.
+3. Keep wallet-list apply disconnected from raw recommendations unless explicit operator approvals exist.
 
 ## Previous Change
 

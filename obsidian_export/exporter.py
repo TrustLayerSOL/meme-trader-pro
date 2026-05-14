@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from obsidian_export.config import ObsidianExportConfig
+from obsidian_export.candidate_note import render_wallet_candidate_note, wallet_candidate_filename
 from obsidian_export.dashboard_notes import render_dashboard_notes
 from obsidian_export.daily_report import daily_report_filename, render_daily_report
 from obsidian_export.markdown import GENERATED_MARKER, as_dict, slugify, yaml_frontmatter
@@ -26,6 +27,7 @@ from obsidian_export.wallet_note import render_wallet_note, wallet_filename
 
 FOLDERS = [
     "Wallets",
+    "WalletCandidateReviews",
     "Signals",
     "RejectedSignals",
     "PaperTrades",
@@ -76,6 +78,17 @@ class ObsidianExporter:
                 postmortems=postmortems_by_wallet.get(str(wallet), []),
             )
             self.write_rendered_note(f"Wallets/{wallet_filename(str(wallet))}", note)
+            stats["written"] += 1
+
+        candidate_audit = as_dict(snapshot.get("wallet_candidate_audit"))
+        candidate_rows = candidate_audit.get("candidates") if isinstance(candidate_audit.get("candidates"), list) else []
+        for row in candidate_rows:
+            if not isinstance(row, dict) or not row.get("wallet"):
+                continue
+            self.write_rendered_note(
+                f"WalletCandidateReviews/{wallet_candidate_filename(row)}",
+                render_wallet_candidate_note(row),
+            )
             stats["written"] += 1
 
         for row in snapshot.get("signals") or []:
@@ -204,6 +217,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
     outcome_ledger = read_json(data_dir / "wallet_outcome_ledger.json", {})
     performance = read_json(data_dir / "wallet_performance.json", {})
     candidate_wallets = read_json(data_dir / "candidate_wallets.json", {})
+    wallet_candidate_audit = read_json(data_dir / "wallet_candidate_audit.json", {})
     paper = read_json(data_dir / "paper_trades.json", {})
     replay_visibility = read_json(data_dir / "replay_visibility_report.json", {})
 
@@ -223,6 +237,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
         "paper_trades": paper_trades,
         "postmortems": postmortems,
         "candidate_wallets": candidate_wallets,
+        "wallet_candidate_audit": wallet_candidate_audit,
         "replay_visibility": replay_visibility,
     }
 

@@ -71,9 +71,11 @@ Signal observations can now be linked to later token snapshots inside a bounded 
 
 Snapshot-linked promotion/demotion candidates now flow into `data/wallet_candidate_audit.json`, a review-only audit report that explicitly blocks wallet-list apply.
 
+Wallet candidate audit rows now export into Obsidian as generated review notes under `MemeTraderPro/WalletCandidateReviews/`. These notes expose the candidate evidence gates and recommendation reasons for human review while preserving MemeTraderPro data files as the source of truth.
+
 ## Next Milestone
 
-Add an explicit human review/export workflow for wallet audit candidates before any wallet-list action consumes them.
+Tighten the approved-decision workflow against the candidate audit/export records so wallet-list changes can only come from reviewed candidates with durable operator decisions.
 
 That ledger should measure:
 
