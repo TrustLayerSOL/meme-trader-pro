@@ -501,8 +501,16 @@ export type EventFeedPayload = {
 };
 
 export type PositionDetailPayload = {
+  generated_at?: number;
   mint: string;
   snapshot_count: number;
+  position_source?: string | null;
+  position_source_detail?: string | null;
+  snapshot_source?: string | null;
+  snapshot_source_detail?: string | null;
+  source_contract?: Record<string, string | null | undefined> | null;
+  mixed_market_fields?: boolean;
+  mixed_market_fields_note?: string | null;
   position?: {
     source?: string;
     label?: string;
@@ -617,6 +625,31 @@ export type FreshnessPayload = {
   };
 };
 
+export type SocialFreshnessRow = {
+  source: string;
+  label?: string;
+  status: string;
+  age_seconds?: number | null;
+  age?: string;
+  fresh_seconds?: number | null;
+  event_count?: number;
+  enabled?: boolean;
+  last_success_at?: number | null;
+  last_error?: string | null;
+  collector_type?: string;
+  detail?: string;
+};
+
+export type SocialFreshnessPayload = {
+  generated_at?: number;
+  mode?: string;
+  live_execution_locked?: boolean;
+  overall?: string;
+  counts?: Record<string, number>;
+  rows?: SocialFreshnessRow[];
+  detail?: string;
+};
+
 export type TradeRecord = {
   mint?: string;
   token_mint?: string;
@@ -675,6 +708,8 @@ export type TradeRecord = {
 };
 
 export type TradesPayload = {
+  source?: string | null;
+  source_detail?: string | null;
   open_trades: TradeRecord[];
   closed_trades: TradeRecord[];
   failed_trades: TradeRecord[];

@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 
 ## Current Work
 
@@ -35,6 +35,45 @@ Highest-value active workstreams:
 - Paper-trade sample quality: block obvious bad exploration samples instead of collecting more polluted tiny losses.
 - Wallet supply refresh: use local runners and Dexscreener trending/boosted mints to seed a larger paper-watch wallet universe, then promote/demote by paper evidence.
 - Automated social/catalyst ingestion that feeds the decision ledger instead of manual-only imports.
+
+2026-05-14 update - File integrity and GitHub audit after external upgrade:
+
+Changed files:
+
+- `.gitignore`
+- `apps/desktop/src/components/DecisionLedger.tsx`
+- `apps/desktop/src/lib/api.ts`
+- `apps/desktop/src/lib/decisions.ts`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Audited Git/GitHub state after the external upgrade work. The active branch is `phase6-protection-exits` and is synced with `origin/phase6-protection-exits`; GitHub default `main` has one newer README-only commit and the local `main` branch is behind it.
+- Confirmed GitHub repo `TrustLayerSOL/meme-trader-pro` is reachable, public, and the current user has admin permission. No open pull requests were present.
+- Found real SQLite corruption in `data/memetrader.db`. Backed up the malformed database and sidecars under `data/archives/db_repair_20260514_020339/`, recovered the database with SQLite `.recover --ignore-freelist`, verified the recovered database with `PRAGMA integrity_check`, and replaced the active DB with the verified recovered copy.
+- Restored the React Decision Ledger detail rows for catalyst evidence, route feasibility, holder/cluster context, market context, Market Radar, paper outcome, and OpenAI advisory text. These helper summaries existed in `apps/desktop/src/lib/decisions.ts` but were no longer rendered, causing a regression test failure.
+- Updated shared desktop API TypeScript contracts for social freshness, position-detail source contracts, and trade ledger source metadata.
+- Added `data/rejected_signals/` to `.gitignore` because it is runtime-generated local state.
+- Restarted desktop API, bot, watchdog, and wallet-discovery screens after DB recovery. Live execution remains locked.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic tests.test_desktop_api tests.test_market_checker` passed 250 tests.
+- Python compile check for repo `.py` files passed.
+- JSON parse check passed with `json_files_checked errors 0`.
+- `sqlite3 data/memetrader.db 'PRAGMA integrity_check;'` and post-restart `PRAGMA quick_check` returned `ok`.
+- `npm --prefix apps/desktop run check` passed.
+- `npm --prefix apps/desktop test -- --run` passed 41 tests.
+- `npm --prefix apps/desktop run build` completed and produced the macOS app and DMG bundle.
+- Desktop API `/api/runtime` returned `online` with bot, websocket, scanner, market, quotes, watchdog, open-position monitor, wallet discovery, and Market Radar fresh.
+- Desktop API `/api/trades` returned `source: sqlite_trades` and `live_execution_locked: true`.
+
+Remaining risk:
+
+- `main` and `phase6-protection-exits` are not the same branch. Upload/push confusion should be resolved by intentionally merging or opening a PR from `phase6-protection-exits` into `main`, rather than pushing random local files.
+- Social freshness remains failed/stale because manual/catalyst/social collector inputs are old or errored; this is not a file-integrity failure but should be handled as a separate collector-health task.
+- Runtime freshness still reports the old compatibility file `data/live_state.json` as old. Canonical root `live_state.json` is fresh.
 
 2026-05-13 update - Broad paper-watch wallet expansion:
 

@@ -1,11 +1,17 @@
 import { useMemo, useState } from "react";
 import {
+  decisionCatalystEvidenceSummary,
+  decisionHolderClusterSummary,
   decisionMatchesFilter,
   decisionMarketSummary,
+  decisionMarketContextSummary,
+  decisionMarketRadarSummary,
   decisionOutcomeSummary,
+  decisionPaperOutcomeSummary,
   decisionQuoteDetail,
   decisionQuotePair,
   decisionQuoteReason,
+  decisionRouteFeasibilitySummary,
   decisionRiskDetail,
   decisionRiskNotes,
   decisionScoreNotes,
@@ -149,6 +155,13 @@ function DecisionDetail({ decision }: { decision: DecisionRecord | null }) {
         <DecisionNote label="Risk Detail" value={decisionRiskDetail(decision)} />
         <DecisionNote label="Risk Notes" value={decisionRiskNotes(decision)} />
         <DecisionNote label="Score Notes" value={decisionScoreNotes(decision)} />
+        <DecisionNote label="Catalyst Evidence" value={decisionCatalystEvidenceSummary(decision)} />
+        <DecisionNote label="Route Feasibility" value={decisionRouteFeasibilitySummary(decision)} />
+        <DecisionNote label="Holder / Cluster" value={decisionHolderClusterSummary(decision)} />
+        <DecisionNote label="Market Context" value={decisionMarketContextSummary(decision)} />
+        <DecisionNote label="Market Radar" value={decisionMarketRadarSummary(decision)} />
+        <DecisionNote label="Paper Outcome" value={decisionPaperOutcomeSummary(decision)} />
+        <DecisionNote label="OpenAI Advisory" value="Explain Decision: Advisory only; use as review support, not trade execution." />
       </div>
     </div>
   );

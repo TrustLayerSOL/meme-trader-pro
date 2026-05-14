@@ -275,14 +275,14 @@ export function decisionPaperOutcomeSummary(decision: DecisionRecord): string {
   const result = decision.result || {};
   const outcome = (result.paper_outcome || {}) as Record<string, unknown>;
   return compactParts([
-    result.trade_status || null,
-    outcome.paper_lane || null,
+    typeof result.trade_status === "string" ? result.trade_status : null,
+    typeof outcome.paper_lane === "string" ? outcome.paper_lane : null,
     present(result.pnl_pct) ? `PnL ${result.pnl_pct}%` : null,
     present(outcome.entry_price) ? `entry ${outcome.entry_price}` : null,
     present(outcome.exit_price) ? `exit ${outcome.exit_price}` : null,
     present(outcome.position_size_usd) ? `size $${outcome.position_size_usd}` : null,
     present(outcome.fees_usd) ? `fees $${outcome.fees_usd}` : null,
-    result.exit_reason || null,
+    typeof result.exit_reason === "string" ? result.exit_reason : null,
   ]);
 }
 
