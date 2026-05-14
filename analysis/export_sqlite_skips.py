@@ -48,8 +48,44 @@ def _compact_from_row(row: sqlite3.Row) -> Dict[str, Any]:
     reasons = scoring.get("reasons") if isinstance(scoring.get("reasons"), list) else []
 
     risk = ro.get("risk") if isinstance(ro.get("risk"), dict) else {}
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+
+    try:
+        from core.signal_context import build_signal_context
+    except Exception:
+        signal_context = {}
+    else:
+        source_payload = {
+            "mint": row["mint"],
+            "signal_type": row["signal_type"],
+            "paper_lane": row["paper_lane"],
+            "timestamp": candidate.get("timestamp") or row["updated_at"],
+            "wallets": inputs.get("wallets"),
+            "wallet_count": inputs.get("wallet_count"),
+            "weighted_wallet_score": inputs.get("weighted_wallet_score"),
+            "wallet_quality": inputs.get("wallet_quality"),
+            "wallet_performance": inputs.get("wallet_performance"),
+            "market_info": inputs.get("market_info"),
+            "holder_concentration_risk": (ro.get("holder_cluster") or {}).get("holder_risk_label")
+            if isinstance(ro.get("holder_cluster"), dict)
+            else None,
+            "risk_label": row["risk_label"],
+            "hard_block": risk.get("hard_block"),
+            "hard_block_reason": risk.get("hard_block_reason"),
+            "score_reasons": reasons,
+            "total_score": row["total_score"],
+            "score_threshold": row["threshold"],
+            "edge_score": row["edge_score"],
+        }
+        signal_context = build_signal_context(
+            source_payload,
+            {"decision_id": row["decision_id"], "paper_lane": row["paper_lane"]},
+            source="sqlite_skip_export",
+        )
 
     out = {
+        **signal_context,
         "mint": row["mint"],
         "signal_type": row["signal_type"],
         "paper_lane": row["paper_lane"],

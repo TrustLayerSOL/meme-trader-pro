@@ -12,6 +12,11 @@ class WalletQuantTests(unittest.TestCase):
                 "labels": ["paper-profitable"],
                 "rolling": {"7d": {"entries": 2}, "30d": {"expectancy": 5.25, "median_hold_seconds": 90}},
                 "postmortem": {"avg_hold_seconds": 120, "failed_trades": 1},
+                "runner_mints": ["Runner1", "Runner2"],
+                "rug_mints": ["Rug1"],
+                "entry_timing": {"avg_seconds_after_launch": 44, "quality": 0.72},
+                "preferred_liquidity": {"min": 4000, "max": 26000},
+                "avg_conviction_size_usd": 37.5,
                 "signal_count": 12,
             },
             current_tier="paper_watch",
@@ -23,6 +28,26 @@ class WalletQuantTests(unittest.TestCase):
         self.assertEqual(row["median_hold_seconds_30d"], 90)
         self.assertEqual(row["avg_hold_seconds"], 120)
         self.assertEqual(row["failed_trades"], 1)
+        self.assertEqual(row["behavior_profile"]["wallet_roi"], 5.25)
+        self.assertEqual(row["behavior_profile"]["participation_frequency_in_runners"], 2)
+        self.assertEqual(row["behavior_profile"]["participation_frequency_in_rugs"], 1)
+        self.assertEqual(row["behavior_profile"]["average_entry_timing_quality"], 0.72)
+        self.assertEqual(row["behavior_profile"]["preferred_liquidity_range"]["min"], 4000)
+        self.assertEqual(row["behavior_profile"]["average_conviction_sizing"], 37.5)
+
+    def test_profile_keeps_unknown_metrics_explicit_instead_of_guessing(self):
+        row = wallet_quant_row(
+            wallet="WalletUnknown",
+            performance={},
+            behavior={},
+            current_tier="candidate",
+        )
+
+        profile = row["behavior_profile"]
+        self.assertIsNone(profile["wallet_roi"])
+        self.assertIsNone(profile["average_entry_timing_quality"])
+        self.assertEqual(profile["rug_association_score"], 0.0)
+        self.assertEqual(profile["data_completeness"]["known_fields"], 0)
 
     def test_demote_negative_wallet_with_sample(self):
         row = wallet_quant_row(

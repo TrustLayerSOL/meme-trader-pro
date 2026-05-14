@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Refocus MemeTraderPro into a Quant Wallet Tracker with clean wallet metrics, tiering, reporting, and reduced product noise.
+**Goal:** Refocus MemeTraderPro into a Quant Wallet Tracker with clean wallet metrics, tiering, reporting, reduced product noise, replayable signal contexts, and no-trade analysis.
 
 **Architecture:** Freeze non-wallet product lanes at the roadmap/UI level first, then add a wallet quant report generator that composes existing wallet JSON and SQLite evidence into one reviewable artifact. Keep live execution locked and avoid deleting useful data paths until the wallet report replaces them.
 
@@ -16,8 +16,39 @@
 - [x] Task 2 wallet metric model completed.
 - [x] Task 3 wallet quant report builder completed.
 - [x] Task 4 desktop API wallet quant endpoint completed.
-- [ ] Task 5 freeze non-wallet navigation.
-- [~] Task 6 final verification partially completed: Python tests, compile checks, JSON validation, TypeScript check, report builder, and live endpoint verification passed.
+- [x] Task 5 Quant Wallet Tracker V2 context layer completed.
+- [x] Task 6 replay visibility foundation completed.
+- [ ] Task 7 freeze non-wallet navigation.
+- [~] Task 8 final verification partially completed: Python tests, compile checks, JSON validation, TypeScript check, report builder, and live endpoint verification passed.
+
+## V2 Addendum - Signal Context And Replay Visibility
+
+**Purpose:** Make every wallet signal and no-trade decision more observable, explainable, and replayable before adding strategy complexity.
+
+**Completed V2 files:**
+
+- `wallets/wallet_metrics.py`
+- `wallets/wallet_profiles.py`
+- `wallets/wallet_relationships.py`
+- `wallets/wallet_score.py`
+- `core/signal_context.py`
+- `core/replay_visibility.py`
+- `analysis/signal_context_logger.py`
+- `utils/build_replay_visibility_report.py`
+- `tests/test_signal_context.py`
+- `tests/test_replay_visibility.py`
+
+**Completed V2 behavior:**
+
+- Wallet quant rows include explicit behavioral profiles and data-completeness counts.
+- Rejected scanner and Market Radar paths produce V2 signal contexts.
+- Rejection rows now include richer context for later filter calibration.
+- Replay visibility reports expose trigger, market, risk, execution assumptions, market regime, and replay notes.
+- Live execution remains locked; all V2 outputs are review-only.
+
+**Next V2 task:**
+
+Wire `core.signal_context.build_signal_context` into successful paper entries and closed paper outcomes so passed, skipped, and entered candidates can be compared under one schema.
 
 ## File Structure
 

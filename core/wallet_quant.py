@@ -3,6 +3,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from wallets.wallet_metrics import build_wallet_behavior_profile
+from wallets.wallet_relationships import summarize_wallet_relationships
+from wallets.wallet_score import behavior_score
+
 
 PROMOTION_MIN_ENTRIES = 6
 PROMOTION_MIN_WIN_RATE = 55.0
@@ -85,6 +89,9 @@ def wallet_quant_row(
         "labels": [str(label) for label in labels],
         "sample_quality": sample_quality(entries),
     }
+    row["behavior_profile"] = build_wallet_behavior_profile(performance, behavior)
+    row["wallet_relationships"] = summarize_wallet_relationships(behavior)
+    row["behavior_score"] = behavior_score({"metrics": row["behavior_profile"]})
     row["recommendation"] = recommend_wallet_tier(row)
     return row
 

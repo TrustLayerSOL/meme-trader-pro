@@ -6,13 +6,13 @@ Last updated: 2026-05-14
 
 ## Current Work
 
-<mark>Active section: Quant Wallet Tracker V1.</mark>
+<mark>Active section: Quant Wallet Tracker V2.</mark>
 
 Current implementation target:
 
-- Refocus the product around wallet discovery, wallet behavior measurement, paper-watch evidence, and promotion/demotion quality.
+- Refocus the product around wallet discovery, wallet behavior measurement, paper-watch evidence, signal context capture, rejection analysis, and replay visibility.
 - Freeze broad cockpit, chart, social, protection, Market Radar, AI explanation, marketing, and live-execution work unless it directly supports wallet evaluation.
-- Build a Wallet Quant Report so the operator can evaluate wallets by repeatable behavior instead of raw PnL or one-off trades.
+- Build a Wallet Quant Tracker V2 data loop so every wallet signal, paper outcome, and rejected signal becomes explainable and replayable.
 
 Lead-agent active plan for 2026-05-14:
 
@@ -20,7 +20,7 @@ Lead-agent active plan for 2026-05-14:
 2. Treat wallet tracking as the primary product and feedback loop.
 3. Treat runner discovery as wallet intake, not as a separate strategy center.
 4. Define wallet metrics, tiers, and recommendation reasons.
-5. Build `data/wallet_quant_report.json` and then expose it in the API/UI.
+5. Expand `data/wallet_quant_report.json`, `data/signal_contexts/`, `data/rejected_signals/`, and `data/replay_visibility_report.json` around wallet-quality evidence.
 
 Safety carryover:
 
@@ -32,11 +32,63 @@ Safety carryover:
 
 Highest-value active workstreams:
 
-- Wallet Quant Report V1.
+- Wallet Quant Tracker V2 report/context layer.
 - Wallet tiering: candidate, paper-watch, promotion-review, trusted, demotion-review, blocked.
 - Wallet metrics: early entry, runner capture, drawdown after entry, hold time, round-trip rate, rug exposure, dead-token rate, sample quality, recency decay.
+- Signal context capture for every scanner/Market Radar skip path currently wired.
+- Replay visibility reports for rejected/no-trade decisions.
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
+
+2026-05-14 update - Quant Wallet Tracker V2 context and replay foundation:
+
+Changed files:
+
+- `.gitignore`
+- `wallets/__init__.py`
+- `wallets/wallet_metrics.py`
+- `wallets/wallet_profiles.py`
+- `wallets/wallet_relationships.py`
+- `wallets/wallet_score.py`
+- `core/wallet_quant.py`
+- `core/signal_context.py`
+- `core/replay_visibility.py`
+- `analysis/signal_context_logger.py`
+- `analysis/rejection_hooks.py`
+- `analysis/export_sqlite_skips.py`
+- `utils/build_replay_visibility_report.py`
+- `tests/test_wallet_quant.py`
+- `tests/test_signal_context.py`
+- `tests/test_replay_visibility.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added Wallet Quant Tracker V2 behavioral profile fields without treating missing data as known evidence.
+- Added review-only wallet profile helpers for ROI, win rate, average hold duration, rug association, entry timing, average PnL multiple, runner/rug participation, preferred token age, preferred liquidity range, conviction sizing, relationships, coordinated entries, and behavior score.
+- Added canonical signal context construction for scanner and Market Radar skip paths, including triggering wallets, cluster timing, market/liquidity/token-age context, holder/risk context, execution assumptions, scoring tails, and market-regime tags.
+- Added append-only signal-context logging at `data/signal_contexts/contexts.jsonl`; this is runtime-generated and ignored by git.
+- Enriched no-trade/rejection rows so future filter calibration can review complete context instead of only prose reasons.
+- Added Replay Visibility review report builder from rejection rows at `data/replay_visibility_report.json`.
+- Kept all changes review-only and paper-safe. No live trading, buy/sell, auto-sell, or execution gates were enabled.
+
+Generated local reports:
+
+- `data/wallet_quant_report.json` regenerated with `7,855` wallets.
+- `data/replay_visibility_report.json` generated from the latest `500` rejection/no-trade rows.
+
+Verification:
+
+- Added failing V2 tests first, then implemented the minimal passing layer.
+- `./trading_env/bin/python -m unittest tests.test_wallet_quant tests.test_signal_context tests.test_replay_visibility tests.test_rejection_hooks tests.test_export_sqlite_skips` passed 24 tests.
+
+Remaining risk / next step:
+
+- Signal context logging is currently wired into scanner/Market Radar rejected-signal paths and SQLite skip export. The next high-leverage step is wiring the same context builder into successful paper entries and closed paper outcomes so entered trades and no-trades share one replayable schema.
+- Wallet profile metrics still depend on JSON wallet performance/behavior sources. A later SQLite wallet-outcome table should become canonical after enough forward data exists.
 
 2026-05-14 update - Quant Wallet Tracker refocus:
 

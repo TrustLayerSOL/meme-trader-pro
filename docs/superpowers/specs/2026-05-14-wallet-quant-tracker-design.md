@@ -190,6 +190,9 @@ Near-term sources:
 New target artifact:
 
 - `data/wallet_quant_report.json`
+- `data/signal_contexts/contexts.jsonl`
+- `data/rejected_signals/rejections.jsonl`
+- `data/replay_visibility_report.json`
 
 Later canonical tables:
 
@@ -197,6 +200,34 @@ Later canonical tables:
 - `wallet_token_outcomes`
 - `wallet_quant_scores`
 - `wallet_tier_history`
+- `signal_contexts`
+- `signal_outcomes`
+
+## V2 Observability Direction
+
+Quant Wallet Tracker V2 should maximize information captured from every signal before it tries to optimize thresholds.
+
+Every signal context should include:
+
+- triggering wallets
+- wallet scores/labels when known
+- cluster timing
+- token age
+- liquidity, market cap, price, and volume
+- holder concentration and hard-risk flags
+- estimated slippage and execution delay assumptions
+- score reasons
+- market-regime tags
+
+Every no-trade row should preserve:
+
+- rejection reason
+- full signal context
+- wallet context
+- liquidity state
+- current placeholder for later counterfactual outcome
+
+Replay is review-only until it can prove it uses only pre-signal information for the simulated decision. Future outcome labels can be attached later, but they must not influence the reconstructed entry decision.
 
 ## UI Direction
 
@@ -233,6 +264,8 @@ The next iteration is successful when:
 - Irrelevant lanes are frozen in docs and UI navigation.
 - Wallet metrics are defined in one place.
 - A wallet quant report exists and can be regenerated.
+- No-trade/rejected signals carry structured signal context.
+- A replay visibility report exists for rejected signals.
 - The system can show how many wallets are in each tier.
 - The system can explain why a wallet is promoted, held, demoted, or blocked.
 - PnL is treated as one metric, not the primary product proof.

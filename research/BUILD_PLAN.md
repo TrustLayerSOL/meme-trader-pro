@@ -10,9 +10,9 @@ Last updated: 2026-05-14
 
 ## Current Working Section
 
-<mark>Active roadmap area: Quant Wallet Tracker V1.</mark>
+<mark>Active roadmap area: Quant Wallet Tracker V2.</mark>
 
-<mark>Current focus: Build a private wallet intelligence system that discovers wallets from runners, tracks repeat behavior, creates paper-watch evidence, promotes useful wallets, demotes noisy wallets, and gives the operator clean data-evaluation views.</mark>
+<mark>Current focus: Maximize information captured from every wallet signal, no-trade decision, and paper outcome so the system becomes explainable, replayable, and measurable before adding complexity.</mark>
 
 ## Product Goal
 
@@ -37,6 +37,9 @@ Primary next iteration:
 3. Add a wallet quant endpoint and operator view.
 4. Use runner-token discovery only as wallet intake.
 5. Freeze unrelated lanes until wallet edge is measured.
+6. Store replayable signal contexts for triggered and rejected signals.
+7. Build no-trade/rejection reports that show whether filters protect the system or block winners.
+8. Tag market regime so wallet performance can be compared across dead, runner-heavy, rug-heavy, and volatile periods.
 
 PnL is useful but not the main proof yet. The first proof is a clean data loop: discovery -> observation -> outcome -> score -> tier change.
 
@@ -162,6 +165,7 @@ Deliverables:
 - [~] Lock-backed JSON writes for key runtime state; paper trades, wallet performance, settings, candidate ledger, social imports, runtime status, and watchlist now use locked/atomic paths.
 - [x] Open paper trades dedupe by active mint during locked state merges to reduce duplicate bot-instance opens.
 - [~] Canonical decision ledger schema for every candidate: detected token, wallet/social inputs, token/holder/mechanics risk, quote/liquidity checks, rule outcomes, final action, and later paper/live-safe result.
+- [~] Canonical signal context schema for wallet-triggered candidates and no-trade rows. `core/signal_context.py` now builds review-only V2 contexts for scanner/Market Radar skip paths; successful paper entries still need the same schema wired end-to-end.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -245,16 +249,23 @@ Deliverables:
 - [x] Cockpit wallet-confidence summary surfaced in native Cockpit.
 - [x] Fresh wallet evidence can now be expanded through the paper-only Exploration Lane while keeping main strategy stats separate.
 - [~] Wallet detail page in GUI/dashboard. Native Wallets tab shows selected wallet outcomes and postmortem summaries; deeper drilldown can still improve.
+- [x] Wallet Quant Report V1 foundation.
+- [x] Wallet Quant Tracker V2 behavior profile helpers for ROI, win rate, average hold duration, rug association, entry timing quality, average PnL multiple, runner/rug participation, preferred token age, preferred liquidity range, conviction sizing, relationships, coordinated entries, and review-only behavior score.
+- [~] Signal context capture for wallet-triggered no-trade paths. Scanner and Market Radar skips now store structured contexts; successful paper entries still need the same schema.
+- [~] Market regime tagging. Initial tags exist for strong runner, low liquidity, rug-heavy, dead market, high volatility, and unknown; thresholds should be calibrated after more forward data.
 
 Acceptance criteria:
 
 - A wallet is not promoted to copy/live consideration without paper sample evidence.
-- Wallet stats include win rate, median hold time, drawdown after entry, realized/paper PnL, and exit behavior.
+- Wallet stats include win rate, median hold time, drawdown after entry, realized/paper PnL, exit behavior, runner/rug participation, entry timing, liquidity preference, and known/unknown data completeness.
 - The UI explains whether the wallet is a leader, exit signal, trap, or unproven source.
+- Rejected and accepted wallet signals can be compared using the same signal-context schema.
 
 Next actions:
 
-- Use wallet confidence/postmortem context to tune confirmation-mode paper entry thresholds.
+- Wire `core.signal_context.build_signal_context` into successful paper entries and closed paper outcomes.
+- Build a wallet-outcome table or JSONL ledger that links wallet -> signal context -> paper entry/skip -> later token outcome.
+- Use no-trade rows to find filters that protect the system versus filters that reject later winners.
 - Add dev-adjacent behavior attribution only after the data source is reliable enough to avoid false blame.
 
 ## Phase 5 - Token Risk And Mechanics Inspection
@@ -342,6 +353,7 @@ Deliverables:
 - [x] Trade Postmortem.
 - [~] Performance analyzer and replay analyzer modules.
 - [ ] Candidate review queue.
+- [~] Replay visibility report for skipped/no-trade rows. `core/replay_visibility.py` and `utils/build_replay_visibility_report.py` expose triggering wallets, wallet scores, cluster composition, liquidity state, execution assumptions, market regime, and replay notes from rejection rows.
 - [ ] Replay lab for passed/skipped/entered tokens.
 - [ ] Strategy comparison report for confirmation rules.
 - [ ] Daily operator summary.
@@ -357,7 +369,8 @@ Next actions:
 
 - Add decision-ledger views to dashboard/desktop GUI.
 - Build daily summary from alerts, trades, watchdog events, and wallet performance.
-- Define replay input/output schema.
+- Wire replay visibility into successful paper entries so passed/skipped/entered tokens can be compared under one schema.
+- Add causal replay slices that use only pre-signal data for entry decisions and only later data for labeled outcomes.
 
 ## Phase 8 - Execution Safety And Gated Live Trading
 

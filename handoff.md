@@ -12,10 +12,10 @@ Use this repo as the real working copy:
 
 ## Most Recent User Direction
 
-- Refocus the project into a Quant Wallet Tracker.
+- Refocus the project into Quant Wallet Tracker V2.
 - Cut out broad trading-cockpit noise: charts, GUI polish, social/catalyst automation, manual protection expansion, Market Radar as its own strategy, AI explanations, marketing, and live execution work.
 - Keep a clean way to evaluate wallet data.
-- Define the right wallet data points and build the feedback loop before worrying about PnL.
+- Define the right wallet data points, signal contexts, no-trade logging, and replay visibility before worrying about PnL.
 
 ## Current Status
 
@@ -24,9 +24,9 @@ Use this repo as the real working copy:
 - Paper bot/scanner, watchdog, and wallet discovery are running in `screen` sessions from `/Users/dianeposs/Desktop/Jordan 2/meme_trader_pro`.
 - Runtime health reports bot, websocket, scanner, market, quotes, watchdog, open-position monitor, wallet discovery, and Market Radar fresh.
 - Runtime currently reports 518 tracked wallets, 5719 paper-watch wallets, and 6237 observed wallets.
-- Active Git branch is `phase6-protection-exits`, synced with `origin/phase6-protection-exits`.
+- Active Git branch is `phase6-protection-exits`. It has local commits beyond `origin/phase6-protection-exits`; push/PR should be intentional.
 - GitHub default branch is `main`; `origin/main` has one newer README-only commit that local `main` does not have.
-- Product focus is now Quant Wallet Tracker V1.
+- Product focus is now Quant Wallet Tracker V2.
 - `docs/superpowers/specs/2026-05-14-wallet-quant-tracker-design.md` defines the refocus.
 - `docs/superpowers/plans/2026-05-14-wallet-quant-tracker.md` is the implementation plan.
 - `research/BUILD_PLAN.md` now marks Quant Wallet Tracker V1 as the active roadmap.
@@ -45,6 +45,57 @@ Use this repo as the real working copy:
 Interpretation: without PENGUINZ, the current paper data does not prove edge. The immediate priority is cleaner sample collection, not declaring profitability.
 
 ## Latest Change
+
+Added Quant Wallet Tracker V2 context and replay foundation.
+
+Files changed:
+
+- `.gitignore`
+- `wallets/__init__.py`
+- `wallets/wallet_metrics.py`
+- `wallets/wallet_profiles.py`
+- `wallets/wallet_relationships.py`
+- `wallets/wallet_score.py`
+- `core/wallet_quant.py`
+- `core/signal_context.py`
+- `core/replay_visibility.py`
+- `analysis/signal_context_logger.py`
+- `analysis/rejection_hooks.py`
+- `analysis/export_sqlite_skips.py`
+- `utils/build_replay_visibility_report.py`
+- `tests/test_wallet_quant.py`
+- `tests/test_signal_context.py`
+- `tests/test_replay_visibility.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Behavior:
+
+- Wallet quant rows now include explicit behavior profiles: ROI, win rate, average hold duration, rug association, entry timing quality, average PnL multiple, runner/rug participation, preferred token age, preferred liquidity range, conviction sizing, data completeness, relationship summary, coordinated entries, and review-only behavior score.
+- Rejected scanner and Market Radar paths now build V2 signal contexts with triggering wallets, cluster timing, market state, holder/risk context, execution assumptions, score reasons, and market-regime tags.
+- No-trade rows are richer and replay-friendly.
+- `data/signal_contexts/contexts.jsonl` is now the runtime-generated signal-context append log.
+- `data/replay_visibility_report.json` is generated from recent rejection rows for review.
+- Live execution remains locked. This is analysis/reporting only.
+
+Generated local reports:
+
+- `data/wallet_quant_report.json`: 7,855 wallets.
+- `data/replay_visibility_report.json`: 500 recent no-trade/rejection records.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_wallet_quant tests.test_signal_context tests.test_replay_visibility tests.test_rejection_hooks tests.test_export_sqlite_skips` passed 24 tests.
+
+Next implementation target:
+
+1. Wire the same V2 signal context into successful paper entries and closed paper outcomes.
+2. Build one wallet-outcome ledger that links wallet -> signal context -> paper entry/skip -> later outcome.
+3. Use no-trade rows to identify filters that are protecting the system versus filters that are blocking winners.
+
+## Previous Change
 
 Refocused the product around Quant Wallet Tracking.
 

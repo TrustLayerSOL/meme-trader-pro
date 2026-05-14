@@ -17,8 +17,11 @@ def rejection_log_enabled(settings: Optional[Dict[str, Any]] = None) -> bool:
 
 
 def _compact_market_radar_context(payload: Dict[str, Any], decision_summary: Dict[str, Any]) -> Dict[str, Any]:
+    from core.signal_context import build_signal_context
+
     mi = payload.get("market_info") if isinstance(payload.get("market_info"), dict) else {}
-    return {
+    ctx = build_signal_context(payload, decision_summary, source="market_radar")
+    ctx.update({
         "mint": payload.get("mint"),
         "signal_type": payload.get("type") or "market_radar_hot",
         "total_score": payload.get("total_score"),
@@ -34,7 +37,8 @@ def _compact_market_radar_context(payload: Dict[str, Any], decision_summary: Dic
         "score_reasons_tail": (payload.get("score_reasons") or [])[-6:]
         if isinstance(payload.get("score_reasons"), list)
         else [],
-    }
+    })
+    return ctx
 
 
 def _pick_scanner_rejection_reason(decision: Dict[str, Any], payload: Dict[str, Any]) -> str:
@@ -51,8 +55,11 @@ def _pick_scanner_rejection_reason(decision: Dict[str, Any], payload: Dict[str, 
 
 
 def _compact_scanner_context(payload: Dict[str, Any], decision: Dict[str, Any]) -> Dict[str, Any]:
+    from core.signal_context import build_signal_context
+
     mi = payload.get("market_info") if isinstance(payload.get("market_info"), dict) else {}
-    return {
+    ctx = build_signal_context(payload, decision, source="scanner")
+    ctx.update({
         "mint": payload.get("mint"),
         "signal_type": payload.get("type"),
         "should_trade": decision.get("should_trade"),
@@ -66,7 +73,19 @@ def _compact_scanner_context(payload: Dict[str, Any], decision: Dict[str, Any]) 
         "liquidity": mi.get("liquidity"),
         "market_cap": mi.get("market_cap"),
         "reasons_tail": (decision.get("reasons") or [])[-8:],
-    }
+    })
+    return ctx
+
+
+def _try_record_signal_context(ctx: Dict[str, Any]) -> None:
+    try:
+        from analysis.signal_context_logger import record_signal_context
+    except Exception:
+        return
+    try:
+        record_signal_context(ctx)
+    except Exception:
+        return
 
 
 def maybe_log_market_radar_skip(
@@ -84,6 +103,7 @@ def maybe_log_market_radar_skip(
 
     reason = decision_summary.get("skip_reason") or "market_radar_skip"
     ctx = _compact_market_radar_context(payload, decision_summary)
+    _try_record_signal_context(ctx)
     try:
         record_rejection(
             str(reason)[:500],
@@ -114,6 +134,7 @@ def maybe_log_scanner_strategy_skip(
 
     reason = _pick_scanner_rejection_reason(decision, payload)
     ctx = _compact_scanner_context(payload, decision)
+    _try_record_signal_context(ctx)
     try:
         record_rejection(
             reason,
@@ -151,6 +172,7 @@ def maybe_log_scanner_runtime_skip(
     }
     if isinstance(extra, dict):
         ctx.update({k: v for k, v in extra.items() if k not in ctx})
+    _try_record_signal_context(ctx)
     try:
         record_rejection(
             reason,
@@ -180,6 +202,7 @@ def maybe_log_market_radar_runtime_skip(
         payload,
         {"skip_reason": reason, "skip_bucket": "runtime_precheck"},
     )
+    _try_record_signal_context(ctx)
     try:
         record_rejection(
             str(reason)[:500],
