@@ -46,6 +46,66 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
+Added snapshot-linked signal outcomes.
+
+Files changed:
+
+- `research/outcome_linker.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_outcome_linker.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Behavior:
+
+- `research.outcome_linker` links wallet-performance signal observations to later SQLite `token_snapshots`.
+- It uses snapshots after the signal timestamp inside a bounded evaluation window.
+- Linked results are stored only in `later_token_outcome`.
+- Signal context and decision fields remain decision-time safe.
+- This does not enable live trading or wallet-list apply behavior.
+
+Current generated ledger after snapshot linking:
+
+- Records: `5,766`.
+- Wallets: `251`.
+- Known outcomes: `1,617`.
+- Runner labels: `269`.
+- Rug labels: `54`.
+- Dead labels: `441`.
+- Recommendation counts: `13` demotion-review, `1` promotion-review, `237` hold-more-data.
+
+Current generated baseline comparison after snapshot linking:
+
+- Total wallets: `7,875`.
+- Quant report wallets: `7,855`.
+- Outcome ledger wallets: `251`.
+- Overlap: `231`.
+- Quant-only: `7,624`.
+- Ledger-only: `20`.
+- Comparison counts: `14` ledger-stronger signals, `1` quant signal unconfirmed, `216` hold-more-data overlaps, `7,624` quant-only, `20` ledger-only.
+
+Interpretation:
+
+- The project now has a usable research bridge from wallet signal observation to later token behavior.
+- Generated promotion/demotion rows are still review-only and should not feed wallet-list apply until an audit report explains the evidence behind each candidate.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_outcome_linker tests.test_wallet_signal_backfill` passed 5 tests.
+
+Next implementation target:
+
+1. Build a candidate audit report for snapshot-linked promotion/demotion rows.
+2. Show evidence per candidate: sample size, runner/rug/dead counts, average PnL, confidence, and source coverage.
+3. Keep wallet-list apply disconnected until audit thresholds are reviewed.
+
+## Previous Change
+
 Added wallet-performance signal backfill into the unified outcome ledger.
 
 Files changed:

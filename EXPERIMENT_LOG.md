@@ -20,6 +20,37 @@ Next action:
 
 ## Entries
 
+### 2026-05-14 - Snapshot-Linked Signal Outcomes
+
+Date: 2026-05-14
+
+Hypothesis: Wallet signal observations become more useful when they are linked to later token snapshots as separated evaluation labels, while preserving the original decision-time context.
+
+Files changed:
+
+- `research/outcome_linker.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_outcome_linker.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Data used: Current local `data/wallet_performance.json` signal rows and SQLite `token_snapshots`.
+
+Sample size: Local builder generated `5,766` unified records across `251` wallets. Snapshot linking produced `1,617` known outcomes: `269` runner labels, `54` rug labels, and `441` dead labels.
+
+Baseline result: Wallet-performance signal rows increased observation coverage, but later outcomes stayed unknown.
+
+New result: `research.outcome_linker` links signal mints to later token snapshots inside a bounded evaluation window and stores the result only in `later_token_outcome`.
+
+Conclusion: The system now has a measurable bridge from wallet signal observation to later token behavior. Recommendations remain review-only. The current generated ledger shows `13` demotion-review wallets and `1` promotion-review wallet, all requiring human/audit review before any wallet-list action.
+
+Next action: Build an audit report for snapshot-linked promotion/demotion candidates before allowing wallet-list apply logic to consume them.
+
 ### 2026-05-14 - Wallet Performance Signal Backfill
 
 Date: 2026-05-14

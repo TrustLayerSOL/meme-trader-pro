@@ -67,9 +67,11 @@ The first baseline comparison report exists and generates `data/wallet_baseline_
 
 The wallet outcome ledger now also backfills wallet-performance signal observations. These rows increase wallet observation coverage without pretending to know later outcomes.
 
+Signal observations can now be linked to later token snapshots inside a bounded evaluation window. The linked outcome stays separated under `later_token_outcome`; decision fields remain signal-time only.
+
 ## Next Milestone
 
-Expand known-outcome coverage so signal-observation rows can eventually be evaluated against later token behavior without using future information in decision fields.
+Audit snapshot-linked promotion/demotion candidates and decide what minimum evidence should be required before wallet-list actions can consume them.
 
 That ledger should measure:
 

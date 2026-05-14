@@ -43,6 +43,39 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-14 update - Snapshot-Linked Signal Outcomes:
+
+Changed files:
+
+- `research/outcome_linker.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_outcome_linker.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added `research.outcome_linker` to link wallet-performance signal observations to later SQLite `token_snapshots`.
+- The linker uses snapshots after the signal timestamp inside a bounded evaluation window.
+- Future snapshot data is stored only as `later_token_outcome`; signal context and decision fields stay decision-time safe.
+- Regenerated the local wallet outcome ledger: `5,766` unified records across `251` wallets.
+- Snapshot linking produced `1,617` known outcomes: `269` runner labels, `54` rug labels, and `441` dead labels.
+- Current generated recommendation counts: `13` demotion-review, `1` promotion-review, `237` hold-more-data.
+
+Verification:
+
+- Added failing tests before implementation for snapshot outcome linking and builder integration.
+- Focused tests passed: `./trading_env/bin/python -m unittest tests.test_outcome_linker tests.test_wallet_signal_backfill`.
+
+Remaining risk / next step:
+
+- Snapshot-linked outcomes are a stronger research signal, but still need audit before wallet-list apply logic consumes them. Next step is an audit report for the generated promotion/demotion candidates.
+
 2026-05-14 update - Wallet Performance Signal Backfill:
 
 Changed files:
