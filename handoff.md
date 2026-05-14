@@ -46,6 +46,45 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
+Added Wallet Outcome Ledger V1.
+
+Files changed:
+
+- `wallets/wallet_outcome_ledger.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_wallet_outcome_ledger.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Behavior:
+
+- `utils/build_wallet_outcome_ledger.py` reads current paper trades plus recent rejected-signal rows.
+- It normalizes them through `research.signal_schema`.
+- It writes `data/wallet_outcome_ledger.json`.
+- The ledger aggregates wallet-level total signals, accepted/rejected counts, known outcomes, runner/rug/dead participation, average PnL, average liquidity, average token age, cluster duration, market-regime breakdown, confidence, promotion score, demotion score, and recommendation.
+- This is review-only and does not affect trading.
+
+Current generated ledger:
+
+- Records: `4,084`.
+- Wallets: `28`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_wallet_outcome_ledger` passed 3 tests.
+
+Next implementation target:
+
+1. Harden later token outcome labels.
+2. Add baseline comparison between wallet quant report and wallet-outcome ledger.
+3. Make promotion/demotion engine consume ledger evidence as review-only input.
+
+## Previous Change
+
 Added research governance and the first unified signal outcome schema layer.
 
 Files changed:

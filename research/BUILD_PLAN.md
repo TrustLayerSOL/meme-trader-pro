@@ -34,14 +34,15 @@ Primary next iteration:
 
 1. Govern research changes with `RESEARCH_RULES.md`, `SIGNAL_REGISTRY.md`, and `EXPERIMENT_LOG.md`.
 2. Unify accepted-trade and rejected-signal records around one outcome schema.
-3. Define canonical wallet metrics.
-4. Build `data/wallet_quant_report.json`.
-5. Add a wallet quant endpoint and operator view.
-6. Use runner-token discovery only as wallet intake.
-7. Freeze unrelated lanes until wallet edge is measured.
-8. Store replayable signal contexts for triggered and rejected signals.
-9. Build no-trade/rejection reports that show whether filters protect the system or block winners.
-10. Tag market regime so wallet performance can be compared across dead, runner-heavy, rug-heavy, and volatile periods.
+3. Build a wallet-outcome ledger from unified records.
+4. Define canonical wallet metrics.
+5. Build `data/wallet_quant_report.json`.
+6. Add a wallet quant endpoint and operator view.
+7. Use runner-token discovery only as wallet intake.
+8. Freeze unrelated lanes until wallet edge is measured.
+9. Store replayable signal contexts for triggered and rejected signals.
+10. Build no-trade/rejection reports that show whether filters protect the system or block winners.
+11. Tag market regime so wallet performance can be compared across dead, runner-heavy, rug-heavy, and volatile periods.
 
 PnL is useful but not the main proof yet. The first proof is a clean data loop: discovery -> observation -> outcome -> score -> tier change.
 
@@ -173,6 +174,7 @@ Deliverables:
 - [~] Canonical decision ledger schema for every candidate: detected token, wallet/social inputs, token/holder/mechanics risk, quote/liquidity checks, rule outcomes, final action, and later paper/live-safe result.
 - [~] Canonical signal context schema for wallet-triggered candidates and no-trade rows. `core/signal_context.py` now builds review-only V2 contexts for scanner/Market Radar skip paths; successful paper entries still need the same schema wired end-to-end.
 - [~] Unified signal outcome schema for accepted trades, failed trades, rejected signals, skipped signals, and future replay evaluations. `research/signal_schema.py` creates comparable records but runtime persistence is not wired yet.
+- [~] Wallet-outcome ledger. `wallets/wallet_outcome_ledger.py` and `utils/build_wallet_outcome_ledger.py` generate a review-only JSON ledger from current paper trades and rejection rows, but outcome labels and confidence scoring still need hardening.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -188,6 +190,7 @@ Next actions:
 - Continue wiring `core/decision_ledger.py` and SQLite-backed decision records before adding more disconnected GUI panels.
 - Harden scanner skips, main paper entries, exploration entries, failed buys, exits, and postmortems around `decision_id`.
 - Persist unified signal outcome records for accepted paper trades and rejected signals into a review-only ledger.
+- Make promotion/demotion scoring consume `data/wallet_outcome_ledger.json` only as review evidence until validated.
 - Choose the canonical source of truth for each data class.
 - Define minimum SQLite tables and backfill existing JSON.
 
@@ -273,7 +276,7 @@ Next actions:
 
 - Wire `core.signal_context.build_signal_context` into successful paper entries and closed paper outcomes.
 - Use `research.signal_schema.build_signal_outcome_record` as the comparable accepted/rejected record adapter.
-- Build a wallet-outcome table or JSONL ledger that links wallet -> signal context -> paper entry/skip -> later token outcome.
+- Harden `data/wallet_outcome_ledger.json`: improve later outcome labels, sample-quality gates, and baseline comparisons.
 - Use no-trade rows to find filters that protect the system versus filters that reject later winners.
 - Add dev-adjacent behavior attribution only after the data source is reliable enough to avoid false blame.
 

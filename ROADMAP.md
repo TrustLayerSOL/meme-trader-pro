@@ -55,9 +55,15 @@ Every record should follow:
 wallet(s) -> signal context -> trade/skip decision -> later token outcome
 ```
 
+## Current Milestone Status
+
+The first wallet-outcome ledger builder exists and generates `data/wallet_outcome_ledger.json` from unified accepted-trade and rejected-signal records.
+
+This is still review-only. It does not promote wallets into trading logic.
+
 ## Next Milestone
 
-Build a persistent wallet-outcome ledger that aggregates unified signal outcome records by wallet.
+Harden the wallet-outcome ledger and compare it against the previous wallet quant report baseline.
 
 That ledger should measure:
 
@@ -80,4 +86,3 @@ Live execution remains frozen until:
 - replay assumptions include slippage, latency, liquidity, and failed fills,
 - wallet scores show reliability across enough samples,
 - every model/filter change is compared against a previous baseline.
-

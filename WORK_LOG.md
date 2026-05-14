@@ -34,6 +34,7 @@ Highest-value active workstreams:
 
 - Research governance for signals, filters, scores, replay, and experiments.
 - Unified signal outcome schema for accepted trades and rejected signals.
+- Wallet-outcome ledger from unified accepted/rejected records.
 - Wallet Quant Tracker V2 report/context layer.
 - Wallet tiering: candidate, paper-watch, promotion-review, trusted, demotion-review, blocked.
 - Wallet metrics: early entry, runner capture, drawdown after entry, hold time, round-trip rate, rug exposure, dead-token rate, sample quality, recency decay.
@@ -41,6 +42,37 @@ Highest-value active workstreams:
 - Replay visibility reports for rejected/no-trade decisions.
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
+
+2026-05-14 update - Wallet Outcome Ledger V1:
+
+Changed files:
+
+- `wallets/wallet_outcome_ledger.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_wallet_outcome_ledger.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added a review-only wallet-outcome ledger that aggregates unified accepted-trade, failed-trade, and rejected-signal records by wallet.
+- The ledger tracks total signals, accepted signals, rejected signals, known outcomes, runner/rug/dead participation, average PnL after signal, average liquidity, average token age, average cluster duration, market-regime breakdown, confidence, promotion score, demotion score, and recommendation.
+- Added a builder utility that normalizes current paper trades and rejection rows through `research.signal_schema`, then writes `data/wallet_outcome_ledger.json`.
+- Generated the local ledger from current data: `4,084` unified records across `28` wallets.
+- Kept the ledger review-only. It does not promote wallets automatically and does not affect trading logic.
+
+Verification:
+
+- Added failing tests before implementing `wallets.wallet_outcome_ledger`.
+- `./trading_env/bin/python -m unittest tests.test_wallet_outcome_ledger` passed 3 tests.
+
+Remaining risk / next step:
+
+- Later token outcome labels are still basic. The next grounded step is to harden outcome labeling and then make the promotion/demotion engine consume the ledger as review-only evidence.
 
 2026-05-14 update - Research governance and unified signal outcome schema:
 
