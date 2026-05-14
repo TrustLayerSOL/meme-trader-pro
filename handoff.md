@@ -46,6 +46,56 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
+Added Wallet Quant Baseline Comparison.
+
+Files changed:
+
+- `wallets/wallet_baseline_comparison.py`
+- `utils/build_wallet_baseline_comparison.py`
+- `tests/test_wallet_baseline_comparison.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Behavior:
+
+- `utils/build_wallet_baseline_comparison.py` reads `data/wallet_quant_report.json` and `data/wallet_outcome_ledger.json`.
+- It writes `data/wallet_baseline_comparison.json`.
+- It compares older quant-report recommendations against newer unified outcome-ledger recommendations.
+- It classifies rows as agreement, conflict, quant signal unconfirmed, quant-only, ledger-only, ledger-stronger signal, or hold-more-data.
+- This is review-only and does not affect trading or wallet-list apply logic.
+
+Current generated comparison:
+
+- Total wallets: `7,855`.
+- Quant report wallets: `7,855`.
+- Outcome ledger wallets: `28`.
+- Overlap: `28`.
+- Quant-only: `7,827`.
+- Ledger-only: `0`.
+- Comparison counts: `7,827` quant-only, `27` hold-more-data, `1` quant signal unconfirmed.
+
+Interpretation:
+
+- The older wallet quant report covers many wallets, but most have no unified outcome-ledger row yet.
+- One older demotion signal is not confirmed by the stricter outcome ledger because it has only `5` known outcomes.
+- Next work should expand unified outcome coverage before trusting wallet promotion/demotion recommendations.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_wallet_baseline_comparison` passed 4 tests.
+
+Next implementation target:
+
+1. Expand unified outcome ledger coverage for quant-only wallets.
+2. Backfill accepted/rejected records from existing wallet performance/behavior evidence where decision-time safety is preserved.
+3. Keep all promotion/demotion outputs review-only.
+
+## Previous Change
+
 Added later outcome labels and a review-only wallet recommendation engine.
 
 Files changed:

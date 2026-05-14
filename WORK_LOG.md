@@ -43,6 +43,37 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-14 update - Wallet Quant Baseline Comparison:
+
+Changed files:
+
+- `wallets/wallet_baseline_comparison.py`
+- `utils/build_wallet_baseline_comparison.py`
+- `tests/test_wallet_baseline_comparison.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added a review-only comparison report that checks `data/wallet_quant_report.json` against `data/wallet_outcome_ledger.json`.
+- The report classifies each wallet as agreement, conflict, unconfirmed quant signal, quant-only, ledger-only, ledger-stronger signal, or hold-more-data.
+- Generated the local comparison report at `data/wallet_baseline_comparison.json`.
+- Current generated comparison: `7,855` total wallets, `7,855` quant rows, `28` ledger rows, `28` overlap, `7,827` quant-only, `0` ledger-only.
+- Current comparison counts: `7,827` quant-only, `27` hold-more-data overlaps, `1` quant signal unconfirmed.
+
+Verification:
+
+- Added failing tests before implementation for agreement, unconfirmed quant signal, quant-only/ledger-only counts, and hold-more-data status.
+- Focused comparison tests passed: `./trading_env/bin/python -m unittest tests.test_wallet_baseline_comparison`.
+
+Remaining risk / next step:
+
+- The comparison shows the outcome ledger only covers a tiny slice of the broader wallet universe. Next step is expanding unified outcome coverage for quant-only wallets before trusting promotion/demotion decisions.
+
 2026-05-14 update - Outcome Labels And Review-Only Wallet Recommendations:
 
 Changed files:

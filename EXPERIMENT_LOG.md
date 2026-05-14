@@ -20,6 +20,36 @@ Next action:
 
 ## Entries
 
+### 2026-05-14 - Wallet Quant Baseline Comparison
+
+Date: 2026-05-14
+
+Hypothesis: Older wallet quant recommendations should be checked against the unified outcome ledger before they are trusted for promotion or demotion decisions.
+
+Files changed:
+
+- `wallets/wallet_baseline_comparison.py`
+- `utils/build_wallet_baseline_comparison.py`
+- `tests/test_wallet_baseline_comparison.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Data used: Current local `data/wallet_quant_report.json` and `data/wallet_outcome_ledger.json`.
+
+Sample size: `7,855` wallet quant rows, `28` wallet outcome ledger rows, `28` overlapping wallets.
+
+Baseline result: The older wallet quant report could recommend review actions without showing whether the newer unified outcome ledger agreed, disagreed, or lacked evidence.
+
+New result: `data/wallet_baseline_comparison.json` now classifies each wallet as agreement, conflict, unconfirmed quant signal, quant-only, ledger-only, ledger-stronger signal, or hold-more-data.
+
+Conclusion: Current coverage is thin. The generated comparison found `7,827` quant-only wallets, `28` overlapping wallets, `27` hold-more-data overlaps, and `1` unconfirmed quant demotion signal. That means the next work should expand unified outcome coverage, not promote/demote from the old quant report alone.
+
+Next action: Backfill or wire more accepted/rejected wallet signals into the unified outcome ledger so the comparison can cover the broader wallet universe.
+
 ### 2026-05-14 - Outcome Labels And Review-Only Wallet Recommendations
 
 Date: 2026-05-14

@@ -63,9 +63,11 @@ This is still review-only. It does not promote wallets into trading logic.
 
 Later token outcomes now receive review labels such as `runner`, `rug`, `dead`, `loser`, `open`, or `unknown`. Wallet promotion/demotion recommendations now come from a separate review-only engine with a minimum known-outcome sample threshold.
 
+The first baseline comparison report exists and generates `data/wallet_baseline_comparison.json` from the older wallet quant report plus the newer outcome ledger. It highlights agreement, conflict, unconfirmed quant signals, quant-only wallets, and ledger-only wallets.
+
 ## Next Milestone
 
-Compare the wallet-outcome ledger against the previous wallet quant report baseline and begin a controlled baseline report.
+Expand unified outcome coverage so more of the `data/wallet_quant_report.json` wallet universe has comparable ledger evidence.
 
 That ledger should measure:
 
