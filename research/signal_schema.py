@@ -148,6 +148,43 @@ def build_record_from_rejection(row: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def build_record_from_wallet_signal(signal: dict[str, Any]) -> dict[str, Any]:
+    signal = as_dict(signal)
+    ctx = build_signal_context(
+        {
+            "mint": first_present(signal.get("mint"), signal.get("token_mint")),
+            "signal_type": signal.get("signal_type"),
+            "timestamp": first_present(signal.get("time"), signal.get("timestamp")),
+            "wallets": signal.get("wallets"),
+            "token_age_seconds": signal.get("token_age_seconds"),
+            "total_score": signal.get("score"),
+            "market_info": signal.get("market_info"),
+            "score_reasons": signal.get("reasons"),
+        },
+        {
+            "action": "wallet_signal_observed",
+            "should_trade": False,
+            "reason": "wallet performance signal observation",
+            "score": signal.get("score"),
+            "signal_type": signal.get("signal_type"),
+            "timestamp": first_present(signal.get("time"), signal.get("timestamp")),
+        },
+        source="wallet_performance_signal",
+    )
+    return build_signal_outcome_record(
+        signal_context=ctx,
+        decision={
+            "action": "wallet_signal_observed",
+            "should_trade": False,
+            "reason": "wallet performance signal observation",
+            "timestamp": first_present(signal.get("time"), signal.get("timestamp")),
+        },
+        later_token_outcome={"status": "unknown"},
+        rejection_reason="wallet performance signal observation",
+        source="wallet_performance_signal",
+    )
+
+
 def build_trade_signal_context(trade: dict[str, Any]) -> dict[str, Any]:
     trade = as_dict(trade)
     metadata = as_dict(trade.get("signal_metadata"))

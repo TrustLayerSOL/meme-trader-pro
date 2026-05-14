@@ -20,6 +20,37 @@ Next action:
 
 ## Entries
 
+### 2026-05-14 - Wallet Performance Signal Backfill
+
+Date: 2026-05-14
+
+Hypothesis: The unified outcome ledger should include wallet signal observations even when later token outcomes are unknown, so coverage gaps are visible instead of hidden.
+
+Files changed:
+
+- `research/signal_schema.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_research_signal_schema.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Data used: Current local `data/wallet_performance.json` signal rows, plus existing paper trades and rejected-signal rows.
+
+Sample size: Local builder generated `5,762` unified records across `251` wallets after adding wallet-performance signal observations.
+
+Baseline result: The wallet outcome ledger had `4,747` records across `28` wallets. The baseline comparison had only `28` overlapping wallets and `7,827` quant-only wallets.
+
+New result: The wallet outcome ledger has `5,762` records across `251` wallets. The baseline comparison now has `231` overlapping wallets, `7,624` quant-only wallets, and `20` ledger-only wallets.
+
+Conclusion: Observation coverage improved substantially, but known-outcome coverage did not. Added wallet-performance signal rows are intentionally labeled with unknown later outcomes until a real outcome source is attached.
+
+Next action: Link signal observations to later token outcomes by mint/time where the data exists, while preserving the decision-time boundary.
+
 ### 2026-05-14 - Wallet Quant Baseline Comparison
 
 Date: 2026-05-14

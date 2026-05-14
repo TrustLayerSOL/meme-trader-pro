@@ -46,6 +46,62 @@ Interpretation: without PENGUINZ, the current paper data does not prove edge. Th
 
 ## Latest Change
 
+Added wallet-performance signal backfill into the unified outcome ledger.
+
+Files changed:
+
+- `research/signal_schema.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_research_signal_schema.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+Behavior:
+
+- `research.signal_schema.build_record_from_wallet_signal` converts wallet-performance signal rows into unified signal outcome records.
+- `utils/build_wallet_outcome_ledger.py` now includes `data/wallet_performance.json` signal observations.
+- These backfilled rows are decision-time context only. They do not claim a win, loss, rug, or runner outcome.
+- Later outcome stays `unknown` until a valid later token outcome source is attached.
+
+Current generated ledger after backfill:
+
+- Records: `5,762`.
+- Wallets: `251`.
+- Recommendation counts: `251` hold-more-data.
+
+Current generated baseline comparison after backfill:
+
+- Total wallets: `7,875`.
+- Quant report wallets: `7,855`.
+- Outcome ledger wallets: `251`.
+- Overlap: `231`.
+- Quant-only: `7,624`.
+- Ledger-only: `20`.
+- Comparison counts: `7,624` quant-only, `230` hold-more-data, `20` ledger-only, `1` quant signal unconfirmed.
+
+Interpretation:
+
+- Coverage improved from `28` ledger wallets to `251`.
+- This is still not proof of wallet edge because most added rows have unknown later outcomes.
+- Next work should link signal observations to later token outcomes by mint/time without leaking future information into decision fields.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_research_signal_schema tests.test_wallet_signal_backfill` passed 5 tests.
+
+Next implementation target:
+
+1. Add a safe outcome linker for signal observations.
+2. Use token snapshots or paper outcomes only as separated evaluation labels.
+3. Keep decision fields locked to data available at signal time.
+
+## Previous Change
+
 Added Wallet Quant Baseline Comparison.
 
 Files changed:

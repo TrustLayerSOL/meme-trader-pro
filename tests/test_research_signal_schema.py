@@ -1,6 +1,7 @@
 import unittest
 
 from research.signal_schema import (
+    build_record_from_wallet_signal,
     build_record_from_rejection,
     build_record_from_trade,
     build_signal_outcome_record,
@@ -89,6 +90,26 @@ class ResearchSignalSchemaTests(unittest.TestCase):
         self.assertEqual(record["later_token_outcome"]["pnl_pct"], -20)
         self.assertEqual(record["signal_context"]["market"]["token_age_seconds"], 60)
         self.assertTrue(record["research_safety"]["future_outcome_separated"])
+
+    def test_wallet_signal_adapter_preserves_decision_time_context_without_claiming_outcome(self):
+        signal = {
+            "mint": "MintB",
+            "wallets": ["WalletC"],
+            "score": 12,
+            "should_trade": False,
+            "signal_type": "early_signal",
+            "time": 123,
+            "token_age_seconds": 88,
+        }
+
+        record = build_record_from_wallet_signal(signal)
+
+        self.assertEqual(record["record_type"], "rejected_signal")
+        self.assertEqual(record["source"], "wallet_performance_signal")
+        self.assertEqual(record["wallets"][0]["wallet"], "WalletC")
+        self.assertEqual(record["signal_context"]["market"]["token_age_seconds"], 88)
+        self.assertEqual(record["later_token_outcome"]["outcome_type"], "unknown")
+        self.assertFalse(record["decision"]["should_trade"])
 
 
 if __name__ == "__main__":

@@ -43,6 +43,38 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-14 update - Wallet Performance Signal Backfill:
+
+Changed files:
+
+- `research/signal_schema.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_research_signal_schema.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- `handoff.md`
+
+What changed:
+
+- Added `build_record_from_wallet_signal` to normalize `data/wallet_performance.json` signal observations into the unified signal outcome schema.
+- Updated `utils/build_wallet_outcome_ledger.py` to include wallet-performance signal rows.
+- These records preserve decision-time wallet/mint/score/token-age context, but keep later token outcome as `unknown`.
+- Regenerated the local wallet outcome ledger: `5,762` unified records across `251` wallets.
+- Regenerated the baseline comparison: `231` overlapping wallets, `7,624` quant-only wallets, `20` ledger-only wallets, and `1` unconfirmed quant demotion signal.
+
+Verification:
+
+- Added failing tests before implementation for wallet signal schema adaptation and builder backfill coverage.
+- Focused tests passed: `./trading_env/bin/python -m unittest tests.test_research_signal_schema tests.test_wallet_signal_backfill`.
+
+Remaining risk / next step:
+
+- This expands observation coverage, not known outcome proof. Next step is linking signal observations to later token outcomes by mint/time where valid data exists.
+
 2026-05-14 update - Wallet Quant Baseline Comparison:
 
 Changed files:

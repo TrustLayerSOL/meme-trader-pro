@@ -65,9 +65,11 @@ Later token outcomes now receive review labels such as `runner`, `rug`, `dead`, 
 
 The first baseline comparison report exists and generates `data/wallet_baseline_comparison.json` from the older wallet quant report plus the newer outcome ledger. It highlights agreement, conflict, unconfirmed quant signals, quant-only wallets, and ledger-only wallets.
 
+The wallet outcome ledger now also backfills wallet-performance signal observations. These rows increase wallet observation coverage without pretending to know later outcomes.
+
 ## Next Milestone
 
-Expand unified outcome coverage so more of the `data/wallet_quant_report.json` wallet universe has comparable ledger evidence.
+Expand known-outcome coverage so signal-observation rows can eventually be evaluated against later token behavior without using future information in decision fields.
 
 That ledger should measure:
 
