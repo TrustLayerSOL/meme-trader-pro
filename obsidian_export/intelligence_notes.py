@@ -24,6 +24,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/MemeTraderPro Research Command Center.md": render_command_center(snapshot, anomaly, drift),
         "Dashboards/MemeTraderPro Anomaly Radar.md": render_anomaly_radar(snapshot, anomaly),
         "Dashboards/MemeTraderPro Drift Monitor.md": render_drift_monitor(drift),
+        "Dashboards/Wallet Cycle Report.md": render_wallet_cycle_report(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -106,6 +107,9 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     frontmatter = _frontmatter("research_command_center")
     replay_review = as_dict(snapshot.get("wallet_replay_review"))
     replay_summary = as_dict(replay_review.get("summary"))
+    cycle = as_dict(snapshot.get("wallet_cycle_report"))
+    cycle_counts = as_dict(cycle.get("counts"))
+    cycle_queue = as_dict(cycle.get("review_queue"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -120,6 +124,9 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Wallet-score drift rows: {len(drift["wallet_score_drift"])}
 - Wallet replay reviewable wallets: {replay_summary.get("reviewable_wallets") or 0}
 - Wallet replay low-coverage wallets: {replay_summary.get("low_coverage_wallets") or 0}
+- Active paper-watch wallets: {cycle_counts.get("active_paper_watch_wallets") or 0}
+- Blocked paper-watch wallets: {cycle_counts.get("blocked_paper_watch_wallets") or 0}
+- Pending wallet demotions: {cycle_queue.get("demotion_review") or 0}
 
 ## Review First
 
@@ -133,6 +140,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 
 - [[MemeTraderPro Anomaly Radar]]
 - [[MemeTraderPro Drift Monitor]]
+- [[Wallet Cycle Report]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -165,6 +173,67 @@ def render_wallet_replay_review(snapshot: dict[str, Any]) -> str:
         )
     frontmatter = _frontmatter("wallet_replay_ecosystem_review")
     return _note(frontmatter, f"{report}\n")
+
+
+def render_wallet_cycle_report(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_cycle_report"))
+    counts = as_dict(report.get("counts"))
+    queue = as_dict(report.get("review_queue"))
+    decisions = as_dict(report.get("review_decisions"))
+    replay = as_dict(report.get("replay"))
+    latest_apply = as_dict(report.get("latest_apply"))
+    latest_summary = as_dict(latest_apply.get("summary"))
+    attention = report.get("attention") if isinstance(report.get("attention"), list) else []
+    pending = as_dict(report.get("pending_candidates"))
+    demotions = [row for row in pending.get("demotion_review") or [] if isinstance(row, dict)]
+    promotions = [row for row in pending.get("promotion_review") or [] if isinstance(row, dict)]
+    frontmatter = _frontmatter("wallet_cycle_report")
+    body = f"""# Wallet Cycle Report
+
+{GENERATED_MARKER}
+
+## Core Counts
+
+- Tracked wallets: {_count(counts.get("tracked_wallets"))}
+- Active paper-watch wallets: {_count(counts.get("active_paper_watch_wallets"))}
+- Blocked paper-watch wallets: {_count(counts.get("blocked_paper_watch_wallets"))}
+- Bad wallets: {_count(counts.get("bad_wallets"))}
+
+## Review Queue
+
+- Pending promotion reviews: {_count(queue.get("promotion_review"))}
+- Pending demotion reviews: {_count(queue.get("demotion_review"))}
+- Resolved reviews: {_count(queue.get("resolved"))}
+- Approved promotions: {_count(decisions.get("approved_promotion"))}
+- Approved demotions: {_count(decisions.get("approved_demotion"))}
+
+## Replay Coverage
+
+- Replay events: {_count(replay.get("events"))}
+- Replay wallets: {_count(replay.get("wallets"))}
+- Co-entry pairs: {_count(replay.get("co_entry_pairs"))}
+- Repeated pairs: {_count(replay.get("repeated_pair_count"))}
+
+## Attention
+
+{bullet_list([str(item) for item in attention] or ["No attention flags"])}
+
+## Latest Apply
+
+- Promoted: {_count(latest_summary.get("promoted"))}
+- Demoted: {_count(latest_summary.get("demoted"))}
+- Skipped: {_count(latest_summary.get("skipped"))}
+- Backup: `{latest_apply.get("backup_dir") or "none"}`
+
+## Pending Demotion Reviews
+
+{_cycle_candidate_table(demotions)}
+
+## Pending Promotion Reviews
+
+{_cycle_candidate_table(promotions)}
+"""
+    return _note(frontmatter, body)
 
 
 def render_anomaly_radar(snapshot: dict[str, Any], anomaly: dict[str, Any]) -> str:
@@ -424,6 +493,31 @@ def _candidate_table(rows: list[dict[str, Any]]) -> str:
             for row in rows[:25]
         ],
     )
+
+
+def _cycle_candidate_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No rows."
+    return table(
+        ["Wallet", "Action", "Known", "Score", "Status"],
+        [
+            [
+                wikilink(wallet_candidate_stem(row), short_id(row.get("wallet"))),
+                row.get("recommendation_action") or "",
+                _count(row.get("known_outcomes")),
+                compact_number(row.get("score") or 0),
+                row.get("audit_status") or "",
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _count(value: Any) -> str:
+    try:
+        return f"{int(float(value or 0)):,}"
+    except (TypeError, ValueError):
+        return "0"
 
 
 def _rejected_winner_table(rows: list[dict[str, Any]]) -> str:

@@ -5352,3 +5352,35 @@ Verification:
 Remaining:
 
 - Next step is bridging replay recommendations into the candidate/paper-watch review flow so the apply gate can decide safely without bypassing stale-audit protection.
+
+### 2026-05-15 - Wallet Cycle Report Review Surface
+
+Changed files:
+
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added read-only `/api/wallet-cycle` for the wallet feedback-loop health report.
+- Added the wallet-cycle report into the Obsidian export snapshot.
+- Added generated Obsidian note `MemeTraderPro/Dashboards/Wallet Cycle Report.md`.
+- Linked wallet-cycle counts and the dashboard from the MemeTraderPro Research Command Center.
+- Kept the report review-only. It does not promote, demote, trade, or mutate wallet lists.
+
+Verification:
+
+- Focused desktop API and Obsidian export regression tests passed.
+- `tests.test_desktop_api`, `tests.test_obsidian_export`, and `tests.test_wallet_cycle_report` passed.
+- Python compile check passed for the changed API/export/report files.
+- `utils/build_wallet_cycle_report.py` regenerated the local ignored report successfully.
+- `/api/wallet-cycle` returned `200`, `read_only=true`, `live_execution_locked=true`, and current wallet-cycle counts.
+
+Remaining:
+
+- Next step is to export/review the wallet-cycle note in Obsidian and use the pending demotion queue to decide whether the last weak wallets should be removed.

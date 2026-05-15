@@ -361,10 +361,21 @@ old generated body
                     "summary": {"reviewable_wallets": 2, "low_coverage_wallets": 7, "co_entry_pairs": 3},
                     "operator_report_markdown": "# Wallet Replay Ecosystem Review\n\nReview-only.\n\n## Reviewable Wallets\n\n- `WalletGOOD`",
                 },
+                "wallet_cycle_report": {
+                    "counts": {
+                        "tracked_wallets": 523,
+                        "active_paper_watch_wallets": 12175,
+                        "blocked_paper_watch_wallets": 10,
+                        "bad_wallets": 10,
+                    },
+                    "review_queue": {"promotion_review": 0, "demotion_review": 5},
+                    "attention": ["demotion_reviews_pending"],
+                },
             }
         )
 
         command = notes["Dashboards/MemeTraderPro Research Command Center.md"]
+        cycle = notes["Dashboards/Wallet Cycle Report.md"]
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
@@ -381,6 +392,11 @@ old generated body
         self.assertIn("Signal Lineage", lineage)
         self.assertIn("Daily Research Workflow", workflow)
         self.assertIn("Wallet Replay Ecosystem Review", command)
+        self.assertIn("Wallet Cycle Report", command)
+        self.assertIn("Tracked wallets", cycle)
+        self.assertIn("12,175", cycle)
+        self.assertIn("demotion_reviews_pending", cycle)
+        self.assertIn("type: wallet_cycle_report", cycle)
         self.assertIn("reviewable wallets: 2", command)
         self.assertIn("WalletGOOD", replay)
         self.assertIn("type: wallet_replay_ecosystem_review", replay)

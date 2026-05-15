@@ -35,6 +35,7 @@ from core.wallet_discovery import normalize_tracked_wallets
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
+from wallets.wallet_cycle_report import build_wallet_cycle_report
 from wallets.wallet_replay_review import build_wallet_replay_review
 
 
@@ -54,6 +55,7 @@ CANDIDATE_WALLETS_FILE = ROOT / "data" / "candidate_wallets.json"
 PAPER_WATCH_WALLETS_FILE = ROOT / "data" / "paper_watch_wallets.json"
 WALLET_REVIEW_DECISIONS_FILE = ROOT / "data" / "wallet_review_decisions.json"
 WALLET_REPLAY_SCORECARD_FILE = ROOT / "data" / "wallet_replay_scorecard.json"
+WALLET_CYCLE_REPORT_FILE = ROOT / "data" / "wallet_cycle_report.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
     "bot": LOG_DIR / "bot.log",
@@ -248,6 +250,7 @@ def read_state_files():
         "paper_watch_wallets": read_json(PAPER_WATCH_WALLETS_FILE, {"wallets": []}),
         "wallet_review_decisions": read_json(WALLET_REVIEW_DECISIONS_FILE, {"decisions": []}),
         "wallet_replay_scorecard": read_json(WALLET_REPLAY_SCORECARD_FILE, {}),
+        "wallet_cycle_report": read_json(WALLET_CYCLE_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -3519,6 +3522,31 @@ def build_wallet_replay_review_payload(state=None, limit=80):
     )
 
 
+def build_wallet_cycle_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("wallet_cycle_report")
+    if isinstance(existing, dict) and existing.get("mode") == "WALLET_CYCLE_REPORT_REVIEW_ONLY":
+        return {
+            **existing,
+            "read_only": True,
+            "source": "wallet_cycle_report_json",
+            "source_detail": str(WALLET_CYCLE_REPORT_FILE.relative_to(ROOT)),
+        }
+    return {
+        **build_wallet_cycle_report(
+            tracked_wallets=state.get("tracked_wallets", []),
+            paper_watch_wallets=state.get("paper_watch_wallets", {"wallets": []}),
+            bad_wallets=read_json(ROOT / "data" / "bad_wallets.json", []),
+            candidate_audit=read_json(ROOT / "data" / "wallet_candidate_audit.json", {}),
+            wallet_replay_scorecard=state.get("wallet_replay_scorecard") if isinstance(state.get("wallet_replay_scorecard"), dict) else {},
+            review_decisions=state.get("wallet_review_decisions", {"decisions": []}),
+            wallet_list_update_audit=read_json(ROOT / "data" / "wallet_list_update_audit.json", {"updates": []}),
+        ),
+        "read_only": True,
+        "source": "wallet_cycle_report_computed",
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4118,6 +4146,8 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-replay-review":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_replay_review_payload(limit=limit))
+    if path == "/api/wallet-cycle":
+        return json_response(build_wallet_cycle_payload())
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":
