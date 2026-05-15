@@ -407,6 +407,42 @@ class WalletLifecycleTests(unittest.TestCase):
         self.assertEqual(report["wallets"][0]["status"], "paper_watch")
         self.assertFalse(report["wallets"][0]["live_trade_driver"])
 
+    def test_bad_wallet_cannot_reenter_paper_watch_from_candidate_sync(self):
+        report = sync_paper_watch_wallets(
+            current_wallets=[],
+            candidate_report={
+                "candidates": [{
+                    "wallet": "BadCandidate",
+                    "review": {"action": "PAPER_WATCH"},
+                    "score": 91,
+                    "early_buy_events": 9,
+                    "winner_mints": 4,
+                }]
+            },
+            performance={"wallets": {}},
+            bad_wallets=["BadCandidate"],
+            generated_at=100,
+        )
+
+        rows = {row["wallet"]: row for row in report["wallets"]}
+        self.assertEqual(report["summary"]["paper_watch_wallets"], 1)
+        self.assertEqual(rows["BadCandidate"]["status"], "demote_review")
+        self.assertFalse(rows["BadCandidate"]["live_trade_driver"])
+        self.assertEqual(report["summary"]["active_paper_watch_wallets"], 0)
+
+    def test_existing_bad_paper_watch_wallet_stays_demoted_on_sync(self):
+        report = sync_paper_watch_wallets(
+            current_wallets=[{"wallet": "BadWatch", "status": "paper_watch"}],
+            candidate_report={"candidates": []},
+            performance={"wallets": {}},
+            bad_wallets=["BadWatch"],
+            generated_at=100,
+        )
+
+        self.assertEqual(report["wallets"][0]["wallet"], "BadWatch")
+        self.assertEqual(report["wallets"][0]["status"], "demote_review")
+        self.assertEqual(report["summary"]["active_paper_watch_wallets"], 0)
+
     def test_lifecycle_report_flags_promotions_and_demotions(self):
         report = build_wallet_lifecycle_report(
             tracked_wallets={"TrackedBad": {}, "TrackedGood": {}},

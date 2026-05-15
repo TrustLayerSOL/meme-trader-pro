@@ -22,6 +22,7 @@ from core.wallet_lifecycle import sync_paper_watch_wallets
 CANDIDATE_WALLETS = ROOT / "data" / "candidate_wallets.json"
 PAPER_WATCH_WALLETS = ROOT / "data" / "paper_watch_wallets.json"
 WALLET_PERFORMANCE = ROOT / "data" / "wallet_performance.json"
+BAD_WALLETS = ROOT / "data" / "bad_wallets.json"
 
 
 def build_report():
@@ -29,6 +30,7 @@ def build_report():
         current_wallets=read_json(PAPER_WATCH_WALLETS, {"wallets": []}).get("wallets", []),
         candidate_report=read_json(CANDIDATE_WALLETS, {"candidates": []}),
         performance=read_json(WALLET_PERFORMANCE, {"wallets": {}}),
+        bad_wallets=read_json(BAD_WALLETS, []),
     )
 
 

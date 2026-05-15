@@ -176,24 +176,51 @@ def candidate_should_enter_paper_watch(candidate, policy=None):
     return action in policy["paper_watch"]["candidate_actions"]
 
 
-def sync_paper_watch_wallets(current_wallets=None, candidate_report=None, performance=None, generated_at=None, policy=None):
+def normalize_wallet_set(rows):
+    wallets = set()
+    for row in rows or []:
+        wallet = wallet_key(row)
+        if wallet:
+            wallets.add(str(wallet))
+    return wallets
+
+
+def sync_paper_watch_wallets(current_wallets=None, candidate_report=None, performance=None, generated_at=None, policy=None, bad_wallets=None):
     policy = policy or DEFAULT_LIFECYCLE_POLICY
     generated_at = generated_at or time.time()
     performance = performance if isinstance(performance, dict) else {}
     perf_wallets = performance.get("wallets") if isinstance(performance.get("wallets"), dict) else {}
+    blocked_wallets = normalize_wallet_set(bad_wallets)
 
     rows = {}
     for row in current_wallets or []:
         wallet = wallet_key(row)
         if not wallet:
             continue
-        rows[str(wallet)] = dict(row) if isinstance(row, dict) else {"wallet": str(wallet)}
+        next_row = dict(row) if isinstance(row, dict) else {"wallet": str(wallet)}
+        if str(wallet) in blocked_wallets:
+            next_row["status"] = "demote_review"
+            next_row["live_trade_driver"] = False
+            next_row.setdefault("blocked_reason", "bad_wallet_list")
+        rows[str(wallet)] = next_row
 
     for candidate in (candidate_report or {}).get("candidates") or []:
         if not isinstance(candidate, dict) or not candidate_should_enter_paper_watch(candidate, policy=policy):
             continue
         wallet = candidate.get("wallet")
         if not wallet:
+            continue
+        if str(wallet) in blocked_wallets:
+            rows.setdefault(str(wallet), {
+                "wallet": str(wallet),
+                "status": "demote_review",
+                "source": "bad_wallet_list",
+                "added_at": generated_at,
+                "score_at_add": candidate.get("score"),
+                "review_action_at_add": (candidate.get("review") or {}).get("action"),
+                "live_trade_driver": False,
+                "blocked_reason": "bad_wallet_list",
+            })
             continue
         rows.setdefault(str(wallet), {
             "wallet": str(wallet),
@@ -216,6 +243,9 @@ def sync_paper_watch_wallets(current_wallets=None, candidate_report=None, perfor
         next_row = dict(row)
         next_row.setdefault("wallet", wallet)
         next_row.setdefault("status", "paper_watch")
+        if wallet in blocked_wallets:
+            next_row["status"] = "demote_review"
+            next_row.setdefault("blocked_reason", "bad_wallet_list")
         next_row["live_trade_driver"] = False
         next_row["lifecycle"] = lifecycle
         wallet_rows.append(next_row)
@@ -231,6 +261,8 @@ def sync_paper_watch_wallets(current_wallets=None, candidate_report=None, perfor
         "live_execution_locked": True,
         "summary": {
             "paper_watch_wallets": len(wallet_rows),
+            "active_paper_watch_wallets": len([row for row in wallet_rows if row.get("status") != "demote_review"]),
+            "blocked_bad_wallets": len([row for row in wallet_rows if row.get("blocked_reason") == "bad_wallet_list"]),
             "promotion_review": len([row for row in wallet_rows if row["lifecycle"]["action"] == "PROMOTE_TO_TRUSTED_REVIEW"]),
             "demote_review": len([row for row in wallet_rows if row["lifecycle"]["action"] == "DEMOTE_OFF_WATCH_REVIEW"]),
         },

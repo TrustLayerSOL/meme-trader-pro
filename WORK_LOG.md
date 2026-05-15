@@ -44,6 +44,38 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Bad-Wallet Reentry Guard:
+
+Changed files:
+
+- `core/wallet_lifecycle.py`
+- `utils/sync_paper_watch_wallets.py`
+- `tests/test_core_logic.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Paper-watch sync now reads `data/bad_wallets.json` and prevents bad/demoted wallets from re-entering active paper-watch observation through future candidate syncs.
+- Existing paper-watch rows that are in the bad-wallet list are preserved as evidence rows with `status=demote_review`, `live_trade_driver=false`, and `blocked_reason=bad_wallet_list`.
+- Candidate wallets that are already bad-listed are retained as blocked evidence rows instead of being promoted back into active observation.
+- Rebuilt `data/paper_watch_wallets.json`; current summary is `12,094` total rows, `12,084` active paper-watch rows, and `10` blocked bad-wallet rows.
+
+Verification:
+
+- Added failing tests first for candidate re-entry blocking and existing bad paper-watch preservation.
+- `./trading_env/bin/python utils/sync_paper_watch_wallets.py --write`
+- `./trading_env/bin/python utils/build_wallet_candidate_audit.py`
+- `./trading_env/bin/python utils/apply_wallet_review.py`
+- `./trading_env/bin/python -m unittest tests.test_core_logic.WalletLifecycleTests tests.test_core_logic.WalletListApplyTests tests.test_desktop_api tests.test_wallet_candidate_audit` (`107` tests)
+- `./trading_env/bin/python -m py_compile core/wallet_lifecycle.py utils/sync_paper_watch_wallets.py core/wallet_list_apply.py`
+
+Remaining risk / next step:
+
+- This protects the paper-watch sync lane, but running processes may need a normal reload/restart before they drop the newly blocked wallets from in-memory subscriptions.
+- Next step is a wallet-cycle report that shows promoted, active, demoted, blocked, and pending-review counts in one operator-facing artifact.
+
 2026-05-15 update - Bottom 10 Paper-Watch Wallet Demotions:
 
 Changed files:

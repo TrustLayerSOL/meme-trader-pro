@@ -201,6 +201,7 @@ Next actions:
 - Backfill historical replay events from local unified records, then expand to larger external historical slices only after leakage checks pass.
 - Use the wallet replay scorecard and candidate audit to identify wallets and co-entry pairs with enough known/fillable replay coverage for deeper review.
 - Continue cycling weak paper-watch wallets to `demote_review` only through approved decisions plus candidate-audit evidence; do not remove evidence rows silently.
+- Keep `data/bad_wallets.json` as a re-entry guard for paper-watch sync so demoted wallets cannot become active observation wallets again without fresh review logic.
 - Rerun wallet outcome/replay reports after tracked-wallet changes so the next review cycle measures the refreshed wallet set.
 - Reduce unknown-liquidity and unknown-window replay events by improving decision-time market context and later snapshot coverage before treating replay results as strategy evidence.
 - Choose the canonical source of truth for each data class.
