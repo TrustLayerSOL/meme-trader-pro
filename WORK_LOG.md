@@ -5160,3 +5160,31 @@ Verification:
 Remaining:
 
 - Next step is running the export app/script and reviewing the generated note in Obsidian during the next operator review cycle.
+
+### 2026-05-15 - Conservative Replay-Based Wallet Decisions
+
+Changed files:
+
+- `wallets/wallet_replay_review.py`
+- `tests/test_wallet_replay_scorecard.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added conservative machine recommendations to the wallet replay review payload.
+- Recommendations are review-only and never auto-apply wallet-list mutations.
+- Current rules:
+  - `PROMOTION_REVIEW` requires at least 10 known 15m outcomes, at least 10 fillable events, runner rate >= 60%, and no observed 15m rug outcomes.
+  - `DEMOTION_REVIEW` requires at least 10 known 15m outcomes plus rug/negative replay pressure.
+  - all other reviewable wallets remain `HOLD_MORE_DATA`.
+- Current local replay review with limit 50 recommends 4 promotion reviews, 1 demotion review, and 45 hold-more-data rows.
+
+Verification:
+
+- Added a failing test first for conservative machine recommendations.
+- Focused wallet replay recommendation test passed.
+
+Remaining:
+
+- These recommendations should guide review while Obsidian is unreliable. They should not be treated as automatic wallet-list changes.

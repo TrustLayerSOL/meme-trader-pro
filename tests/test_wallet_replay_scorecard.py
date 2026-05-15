@@ -166,6 +166,51 @@ class WalletReplayScorecardTests(unittest.TestCase):
         self.assertIn("## Repeated Co-Entry Pairs", markdown)
         self.assertIn("WalletPartner", markdown)
 
+    def test_replay_review_adds_conservative_machine_recommendations(self):
+        promotion_events = [
+            event(
+                ["WalletPromote"],
+                mint=f"Promote{i}",
+                windows={
+                    "30s": {"outcome_type": "runner"},
+                    "2m": {"outcome_type": "runner"},
+                    "5m": {"outcome_type": "runner"},
+                    "15m": {"outcome_type": "runner"},
+                },
+            )
+            for i in range(12)
+        ]
+        demotion_events = [
+            event(
+                ["WalletDemote"],
+                mint=f"Demote{i}",
+                windows={
+                    "30s": {"outcome_type": "rug"},
+                    "2m": {"outcome_type": "rug"},
+                    "5m": {"outcome_type": "rug"},
+                    "15m": {"outcome_type": "rug"},
+                },
+            )
+            for i in range(10)
+        ]
+        hold_events = [event(["WalletHold"], mint=f"Hold{i}") for i in range(5)]
+
+        review = build_wallet_replay_review(
+            build_wallet_replay_scorecard(promotion_events + demotion_events + hold_events),
+            limit=20,
+            min_known_events=5,
+            min_fillable_events=5,
+        )
+        decisions = {row["wallet"]: row["recommended_decision"] for row in review["decision_recommendations"]}
+
+        self.assertEqual(decisions["WalletPromote"]["action"], "PROMOTION_REVIEW")
+        self.assertEqual(decisions["WalletDemote"]["action"], "DEMOTION_REVIEW")
+        self.assertEqual(decisions["WalletHold"]["action"], "HOLD_MORE_DATA")
+        self.assertFalse(decisions["WalletPromote"]["auto_apply"])
+        self.assertEqual(review["decision_summary"]["promotion_review"], 1)
+        self.assertEqual(review["decision_summary"]["demotion_review"], 1)
+        self.assertIn("Best Educated Decisions", review["operator_report_markdown"])
+
 
 if __name__ == "__main__":
     unittest.main()
