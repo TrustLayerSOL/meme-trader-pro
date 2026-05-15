@@ -25,6 +25,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/MemeTraderPro Anomaly Radar.md": render_anomaly_radar(snapshot, anomaly),
         "Dashboards/MemeTraderPro Drift Monitor.md": render_drift_monitor(drift),
         "Dashboards/Wallet Cycle Report.md": render_wallet_cycle_report(snapshot),
+        "Dashboards/Wallet Candidate Quality.md": render_wallet_candidate_quality(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -110,6 +111,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     cycle = as_dict(snapshot.get("wallet_cycle_report"))
     cycle_counts = as_dict(cycle.get("counts"))
     cycle_queue = as_dict(cycle.get("review_queue"))
+    quality = as_dict(snapshot.get("wallet_candidate_quality_report"))
+    quality_summary = as_dict(quality.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -127,6 +130,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Active paper-watch wallets: {cycle_counts.get("active_paper_watch_wallets") or 0}
 - Blocked paper-watch wallets: {cycle_counts.get("blocked_paper_watch_wallets") or 0}
 - Pending wallet demotions: {cycle_queue.get("demotion_review") or 0}
+- Active candidate-quality rows: {quality_summary.get("active_candidates") or 0}
+- Strong candidate observations: {quality_summary.get("strong_observation") or 0}
 
 ## Review First
 
@@ -141,6 +146,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[MemeTraderPro Anomaly Radar]]
 - [[MemeTraderPro Drift Monitor]]
 - [[Wallet Cycle Report]]
+- [[Wallet Candidate Quality]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -152,6 +158,33 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 ## Not Raw Data
 
 This page is the queue. Use folder tables only after an anomaly or experiment points there.
+"""
+    return _note(frontmatter, body)
+
+
+def render_wallet_candidate_quality(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_candidate_quality_report"))
+    summary = as_dict(report.get("summary"))
+    rows = [row for row in report.get("ranked_candidates") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("wallet_candidate_quality_report")
+    body = f"""# Wallet Candidate Quality
+
+{GENERATED_MARKER}
+
+Review-only ranking of candidate wallets by current evidence quality. This does not promote, demote, or trade wallets.
+
+## Summary
+
+- Active candidates: {_count(summary.get("active_candidates"))}
+- Blocked candidates: {_count(summary.get("blocked_candidates"))}
+- Strong observations: {_count(summary.get("strong_observation"))}
+- Paper-watch review: {_count(summary.get("paper_watch_review"))}
+- Hold review: {_count(summary.get("hold_review"))}
+- Reject review: {_count(summary.get("reject_review"))}
+
+## Top Ranked Candidates
+
+{_candidate_quality_table(rows)}
 """
     return _note(frontmatter, body)
 
@@ -507,6 +540,25 @@ def _cycle_candidate_table(rows: list[dict[str, Any]]) -> str:
                 _count(row.get("known_outcomes")),
                 compact_number(row.get("score") or 0),
                 row.get("audit_status") or "",
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _candidate_quality_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No ranked candidate rows currently surfaced."
+    return table(
+        ["Wallet", "Quality", "Recommendation", "Winners", "Early", "Risk"],
+        [
+            [
+                str(row.get("wallet") or ""),
+                compact_number(row.get("quality_score") or 0, 6),
+                row.get("recommended_observation") or "",
+                _count(row.get("winner_mints")),
+                _count(row.get("early_buy_events")),
+                ", ".join(str(item) for item in row.get("risk_flags") or []) or "none",
             ]
             for row in rows[:25]
         ],

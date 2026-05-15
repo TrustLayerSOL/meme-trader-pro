@@ -847,6 +847,36 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_wallet_candidate_quality_payload_is_review_only(self):
+        payload = desktop_api.build_wallet_candidate_quality_payload({
+            "candidate_wallets": {
+                "candidates": [
+                    {"wallet": "WalletA", "score": 60, "winner_mints": 2, "early_buy_events": 8, "last_seen": desktop_api.time.time()},
+                    {"wallet": "WalletBad", "score": 99, "winner_mints": 9, "last_seen": desktop_api.time.time()},
+                ],
+            },
+            "paper_watch_wallets": {"wallets": []},
+            "bad_wallets": ["WalletBad"],
+            "wallet_behavior": {"wallets": {}},
+            "wallet_candidate_quality_report": {},
+        })
+
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertEqual(payload["mode"], "WALLET_CANDIDATE_QUALITY_REVIEW_ONLY")
+        self.assertEqual(payload["summary"]["active_candidates"], 1)
+        self.assertEqual(payload["summary"]["blocked_candidates"], 1)
+        self.assertEqual(payload["ranked_candidates"][0]["wallet"], "WalletA")
+
+    def test_wallet_candidate_quality_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_wallet_candidate_quality_payload", return_value={"mode": "WALLET_CANDIDATE_QUALITY_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/wallet-candidate-quality?limit=12")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with(limit=12)
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({

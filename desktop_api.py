@@ -35,6 +35,7 @@ from core.wallet_discovery import normalize_tracked_wallets
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
+from wallets.wallet_candidate_quality import build_wallet_candidate_quality_report
 from wallets.wallet_cycle_report import build_wallet_cycle_report
 from wallets.wallet_replay_review import build_wallet_replay_review
 
@@ -56,6 +57,8 @@ PAPER_WATCH_WALLETS_FILE = ROOT / "data" / "paper_watch_wallets.json"
 WALLET_REVIEW_DECISIONS_FILE = ROOT / "data" / "wallet_review_decisions.json"
 WALLET_REPLAY_SCORECARD_FILE = ROOT / "data" / "wallet_replay_scorecard.json"
 WALLET_CYCLE_REPORT_FILE = ROOT / "data" / "wallet_cycle_report.json"
+WALLET_CANDIDATE_QUALITY_REPORT_FILE = ROOT / "data" / "wallet_candidate_quality_report.json"
+BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
     "bot": LOG_DIR / "bot.log",
@@ -248,9 +251,11 @@ def read_state_files():
         "wallet_behavior": read_json(WALLET_BEHAVIOR_FILE, {"wallets": {}}),
         "candidate_wallets": read_json(CANDIDATE_WALLETS_FILE, {"candidates": []}),
         "paper_watch_wallets": read_json(PAPER_WATCH_WALLETS_FILE, {"wallets": []}),
+        "bad_wallets": read_json(BAD_WALLETS_FILE, []),
         "wallet_review_decisions": read_json(WALLET_REVIEW_DECISIONS_FILE, {"decisions": []}),
         "wallet_replay_scorecard": read_json(WALLET_REPLAY_SCORECARD_FILE, {}),
         "wallet_cycle_report": read_json(WALLET_CYCLE_REPORT_FILE, {}),
+        "wallet_candidate_quality_report": read_json(WALLET_CANDIDATE_QUALITY_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -3547,6 +3552,35 @@ def build_wallet_cycle_payload(state=None):
     }
 
 
+def build_wallet_candidate_quality_payload(state=None, limit=80):
+    state = state or read_state_files()
+    existing = state.get("wallet_candidate_quality_report")
+    if isinstance(existing, dict) and existing.get("mode") == "WALLET_CANDIDATE_QUALITY_REVIEW_ONLY":
+        rows = existing.get("ranked_candidates") if isinstance(existing.get("ranked_candidates"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "source": "wallet_candidate_quality_report_json",
+            "source_detail": str(WALLET_CANDIDATE_QUALITY_REPORT_FILE.relative_to(ROOT)),
+            "count": min(len(rows), int(limit)),
+            "ranked_candidates": rows[:limit],
+        }
+    report = build_wallet_candidate_quality_report(
+        candidate_wallets=state.get("candidate_wallets") if isinstance(state.get("candidate_wallets"), dict) else {"candidates": []},
+        paper_watch_wallets=state.get("paper_watch_wallets") if isinstance(state.get("paper_watch_wallets"), dict) else {"wallets": []},
+        bad_wallets=state.get("bad_wallets", []),
+        wallet_behavior=state.get("wallet_behavior") if isinstance(state.get("wallet_behavior"), dict) else {"wallets": {}},
+        limit=limit,
+    )
+    rows = report.get("ranked_candidates") if isinstance(report.get("ranked_candidates"), list) else []
+    return {
+        **report,
+        "read_only": True,
+        "source": "wallet_candidate_quality_report_computed",
+        "count": min(len(rows), int(limit)),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4148,6 +4182,9 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_wallet_replay_review_payload(limit=limit))
     if path == "/api/wallet-cycle":
         return json_response(build_wallet_cycle_payload())
+    if path == "/api/wallet-candidate-quality":
+        limit = parse_int_query(query, "limit", 80, 1, 500)
+        return json_response(build_wallet_candidate_quality_payload(limit=limit))
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

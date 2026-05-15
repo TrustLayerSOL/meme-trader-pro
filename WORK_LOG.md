@@ -44,6 +44,44 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Wallet Candidate Quality Report:
+
+Changed files:
+
+- `wallets/wallet_candidate_quality.py`
+- `utils/build_wallet_candidate_quality_report.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_candidate_quality.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a review-only candidate-quality report for broad wallet intake triage.
+- The report ranks active candidate wallets by current evidence quality using candidate score, runner overlap, early-entry evidence, unique mint coverage, recency, paper-watch status, sell-heavy risk, and behavior labels.
+- Bad-listed wallets are excluded from ranked candidates and preserved in `blocked_candidates` so broad discovery can stay open without silently re-admitting known weak wallets.
+- Generated `data/wallet_candidate_quality_report.json`.
+- Current local report counts: `1,866` active candidates, `15` blocked candidates, `6` strong observations, `200` paper-watch review rows, `85` hold-review rows, and `1,575` reject-review rows.
+- Added read-only `/api/wallet-candidate-quality` and Obsidian `MemeTraderPro/Dashboards/Wallet Candidate Quality.md`.
+
+Verification:
+
+- Added failing tests first for ranking, bad-wallet blocking, report writing, read-only API routing, and Obsidian note rendering.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_quality`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_quality_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_quality_route_is_read_only`
+- `./trading_env/bin/python -m unittest tests.test_obsidian_export.ObsidianExportTests.test_intelligence_notes_surface_anomalies_drift_lineage_and_workflow`
+- `./trading_env/bin/python utils/build_wallet_candidate_quality_report.py`
+
+Remaining risk / next step:
+
+- This is a triage layer, not proof of wallet edge.
+- Next step is to feed the strongest candidate-quality rows into the existing wallet review decision workflow only after checking replay/outcome coverage, then continue shrinking unknown liquidity/outcome buckets.
+
 2026-05-15 update - Wallet Cycle Report:
 
 Changed files:
