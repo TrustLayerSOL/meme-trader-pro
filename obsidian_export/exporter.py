@@ -83,7 +83,8 @@ class ObsidianExporter:
 
         candidate_audit = as_dict(snapshot.get("wallet_candidate_audit"))
         candidate_rows = candidate_audit.get("candidates") if isinstance(candidate_audit.get("candidates"), list) else []
-        for row in candidate_rows:
+        resolved_candidate_rows = candidate_audit.get("resolved_candidates") if isinstance(candidate_audit.get("resolved_candidates"), list) else []
+        for row in list(candidate_rows) + list(resolved_candidate_rows):
             if not isinstance(row, dict) or not row.get("wallet"):
                 continue
             self.write_rendered_note(

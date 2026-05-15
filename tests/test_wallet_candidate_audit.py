@@ -59,6 +59,48 @@ class WalletCandidateAuditTests(unittest.TestCase):
         self.assertFalse(candidate["evidence_gates"]["known_outcome_sample_passed"])
         self.assertIn("known outcome sample below audit threshold", candidate["audit_notes"])
 
+    def test_applied_promotion_moves_to_resolved_candidates(self):
+        report = build_wallet_candidate_audit(
+            outcome_ledger={
+                "wallets": {
+                    "WalletA": self.ledger_row("WalletA", "PROMOTION_REVIEW"),
+                    "WalletB": self.ledger_row("WalletB", "DEMOTION_REVIEW"),
+                }
+            },
+            baseline_comparison={"wallets": []},
+            review_decisions={
+                "decisions": [
+                    {"wallet": "WalletA", "decision": "approve_promotion", "approved": True},
+                ]
+            },
+            tracked_wallets=[{"trackedWalletAddress": "WalletA"}],
+        )
+
+        self.assertEqual(report["counts"]["candidates"], 1)
+        self.assertEqual(report["counts"]["resolved"], 1)
+        self.assertEqual(report["candidates"][0]["wallet"], "WalletB")
+        resolved = report["resolved_candidates"][0]
+        self.assertEqual(resolved["wallet"], "WalletA")
+        self.assertEqual(resolved["audit_status"], "RESOLVED_APPLIED")
+        self.assertTrue(resolved["review_resolved"])
+        self.assertEqual(resolved["resolution"]["decision"], "approve_promotion")
+
+    def test_approved_promotion_stays_active_until_wallet_is_tracked(self):
+        report = build_wallet_candidate_audit(
+            outcome_ledger={"wallets": {"WalletA": self.ledger_row("WalletA", "PROMOTION_REVIEW")}},
+            baseline_comparison={"wallets": []},
+            review_decisions={
+                "decisions": [
+                    {"wallet": "WalletA", "decision": "approve_promotion", "approved": True},
+                ]
+            },
+            tracked_wallets=[],
+        )
+
+        self.assertEqual(report["counts"]["candidates"], 1)
+        self.assertEqual(report["counts"]["resolved"], 0)
+        self.assertFalse(report["candidates"][0]["review_resolved"])
+
 
 if __name__ == "__main__":
     unittest.main()

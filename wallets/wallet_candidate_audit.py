@@ -8,6 +8,8 @@ from wallets.wallet_promotion_engine import MIN_KNOWN_OUTCOMES
 
 
 REVIEW_ACTIONS = {"PROMOTION_REVIEW", "DEMOTION_REVIEW"}
+PROMOTION_DECISIONS = {"approve_promotion", "promote", "promote_to_tracked"}
+DEMOTION_DECISIONS = {"approve_demotion", "demote", "demote_off_watch"}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -42,6 +44,42 @@ def ledger_wallets(outcome_ledger: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {}
 
 
+def wallet_address(row: Any) -> str | None:
+    if isinstance(row, dict):
+        wallet = row.get("trackedWalletAddress") or row.get("wallet") or row.get("address")
+        return str(wallet) if wallet else None
+    if row:
+        return str(row)
+    return None
+
+
+def tracked_wallet_set(tracked_wallets: Any) -> set[str]:
+    if not isinstance(tracked_wallets, list):
+        return set()
+    return {wallet for row in tracked_wallets if (wallet := wallet_address(row))}
+
+
+def approved_decisions_by_wallet(review_decisions: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    rows = as_dict(review_decisions).get("decisions")
+    if not isinstance(rows, list):
+        return {}
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("approved"):
+            continue
+        wallet = wallet_address(row)
+        decision = str(row.get("decision") or row.get("action") or "").strip().lower()
+        if wallet and decision in PROMOTION_DECISIONS | DEMOTION_DECISIONS:
+            result[wallet] = {
+                "wallet": wallet,
+                "decision": "approve_promotion" if decision in PROMOTION_DECISIONS else "approve_demotion",
+                "approved_at": row.get("approved_at"),
+                "approved_by": row.get("approved_by") or "operator",
+                "note": row.get("note") or row.get("reason") or "",
+            }
+    return result
+
+
 def comparison_by_wallet(baseline_comparison: dict[str, Any]) -> dict[str, dict[str, Any]]:
     rows = as_dict(baseline_comparison).get("wallets")
     if not isinstance(rows, list):
@@ -68,6 +106,8 @@ def candidate_row(wallet: str, ledger_row: dict[str, Any], comparison_row: dict[
         "wallet": wallet,
         "recommendation_action": action,
         "audit_status": "HUMAN_REVIEW_REQUIRED" if sample_passed else "INSUFFICIENT_EVIDENCE",
+        "review_resolved": False,
+        "resolution": {},
         "review_only": True,
         "wallet_list_apply_allowed": False,
         "comparison_status": as_dict(comparison_row).get("comparison_status"),
@@ -101,14 +141,29 @@ def build_wallet_candidate_audit(
     *,
     outcome_ledger: dict[str, Any],
     baseline_comparison: dict[str, Any] | None = None,
+    review_decisions: dict[str, Any] | None = None,
+    tracked_wallets: list[Any] | None = None,
 ) -> dict[str, Any]:
     ledger = ledger_wallets(outcome_ledger)
     comparisons = comparison_by_wallet(as_dict(baseline_comparison))
+    approved = approved_decisions_by_wallet(review_decisions)
+    tracked = tracked_wallet_set(tracked_wallets)
     candidates = []
+    resolved_candidates = []
     for wallet, row in ledger.items():
         action = str(as_dict(row.get("recommendation")).get("action") or "")
         if action in REVIEW_ACTIONS:
-            candidates.append(candidate_row(wallet, row, comparisons.get(wallet)))
+            candidate = candidate_row(wallet, row, comparisons.get(wallet))
+            resolution = resolution_for_candidate(wallet, action, approved.get(wallet), tracked)
+            if resolution:
+                candidate["audit_status"] = "RESOLVED_APPLIED"
+                candidate["review_resolved"] = True
+                candidate["resolution"] = resolution
+                candidate["wallet_list_apply_allowed"] = False
+                candidate.setdefault("audit_notes", []).append(resolution["reason"])
+                resolved_candidates.append(candidate)
+            else:
+                candidates.append(candidate)
 
     candidates.sort(
         key=lambda row: (
@@ -133,10 +188,32 @@ def build_wallet_candidate_audit(
             "demotion_review": counts.get("DEMOTION_REVIEW", 0),
             "human_review_required": audit_counts.get("HUMAN_REVIEW_REQUIRED", 0),
             "insufficient_evidence": audit_counts.get("INSUFFICIENT_EVIDENCE", 0),
+            "resolved": len(resolved_candidates),
         },
         "candidates": candidates,
+        "resolved_candidates": resolved_candidates,
     }
 
 
 def action_rank(action: str) -> int:
     return {"PROMOTION_REVIEW": 20, "DEMOTION_REVIEW": 10}.get(str(action), 0)
+
+
+def resolution_for_candidate(wallet: str, recommendation_action: str, decision: dict[str, Any] | None, tracked: set[str]) -> dict[str, Any] | None:
+    if not decision:
+        return None
+    if recommendation_action == "PROMOTION_REVIEW" and decision.get("decision") == "approve_promotion" and wallet in tracked:
+        return {
+            "decision": "approve_promotion",
+            "approved_at": decision.get("approved_at"),
+            "approved_by": decision.get("approved_by"),
+            "reason": "wallet is already tracked after approved apply",
+        }
+    if recommendation_action == "DEMOTION_REVIEW" and decision.get("decision") == "approve_demotion" and wallet not in tracked:
+        return {
+            "decision": "approve_demotion",
+            "approved_at": decision.get("approved_at"),
+            "approved_by": decision.get("approved_by"),
+            "reason": "wallet is no longer tracked after approved apply",
+        }
+    return None

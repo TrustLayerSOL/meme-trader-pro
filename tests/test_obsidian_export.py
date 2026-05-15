@@ -108,6 +108,7 @@ old generated body
         self.assertIn("Top Wallets By Confidence", index)
         self.assertIn("Wallet Candidate Audit Queue", index)
         self.assertIn('FROM "MemeTraderPro/WalletCandidateReviews"', index)
+        self.assertIn("review_resolved != true", index)
         self.assertIn('FROM "MemeTraderPro/Wallets"', index)
         self.assertIn("Pending Review Wallets", index)
         self.assertIn("High Rug Association", index)
@@ -172,6 +173,27 @@ old generated body
         self.assertIn("[[WAL-WalletABC123|WalletABC123]]", note)
         self.assertIn("runner-heavy known outcomes", note)
         self.assertIn("review recommendation has enough known outcomes", note)
+
+    def test_wallet_candidate_note_marks_resolved_reviews(self):
+        candidate = {
+            "wallet": "WalletABC123",
+            "recommendation_action": "PROMOTION_REVIEW",
+            "audit_status": "RESOLVED_APPLIED",
+            "review_resolved": True,
+            "resolution": {
+                "decision": "approve_promotion",
+                "reason": "wallet is already tracked after approved apply",
+            },
+            "evidence_gates": {"known_outcome_sample_passed": True},
+            "evidence": {"known_outcomes": 24},
+        }
+
+        note = render_wallet_candidate_note(candidate)
+
+        self.assertIn("review_resolved: true", note)
+        self.assertIn("audit_status: RESOLVED_APPLIED", note)
+        self.assertIn("Resolved: True", note)
+        self.assertIn("approve_promotion", note)
 
     def test_wallet_review_decisions_note_summarizes_saved_operator_decisions(self):
         note = render_wallet_review_decisions_note(

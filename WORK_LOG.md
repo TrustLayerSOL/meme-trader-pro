@@ -43,6 +43,40 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Wallet Review Queue Resolution:
+
+Changed files:
+
+- `wallets/wallet_candidate_audit.py`
+- `utils/build_wallet_candidate_audit.py`
+- `obsidian_export/candidate_note.py`
+- `obsidian_export/dashboard_notes.py`
+- `obsidian_export/exporter.py`
+- `tests/test_wallet_candidate_audit.py`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added resolved-candidate handling to the wallet candidate audit.
+- Approved promotions now move out of the active candidate queue once the wallet is actually present in `data/tracked_wallets.json`.
+- Resolved candidate review notes are still exported to Obsidian for history, but carry `review_resolved: true` and `audit_status: RESOLVED_APPLIED`.
+- The Obsidian Wallet Candidate Audit Queue now filters out resolved review notes.
+- Rebuilt `data/wallet_candidate_audit.json`; current active queue is `0` promotion reviews, `13` demotion reviews, and `1` resolved applied promotion.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_audit tests.test_obsidian_export.ObsidianExportTests.test_wallet_candidate_note_marks_resolved_reviews tests.test_obsidian_export.ObsidianExportTests.test_dashboard_notes_include_required_dataview_queries`
+- `./trading_env/bin/python utils/build_wallet_candidate_audit.py`
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_audit tests.test_obsidian_export tests.test_core_logic.WalletListApplyTests`
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_audit.py utils/build_wallet_candidate_audit.py obsidian_export/candidate_note.py obsidian_export/dashboard_notes.py obsidian_export/exporter.py`
+- `/Applications/MemeTraderPro Obsidian Export.app` completed successfully.
+
+Remaining risk / next step:
+
+- Demotion reviews are still active and need operator review or a compact bulk review policy.
+- Next high-leverage step is promotion outcome monitoring: track post-promotion signal quality separately so promoted wallets are demoted if they stop performing.
+
 2026-05-15 update - Approved Promotion Applied From Candidate Audit:
 
 Changed files:

@@ -31,12 +31,15 @@ def render_wallet_candidate_note(row: dict[str, Any]) -> str:
     evidence = as_dict(row.get("evidence"))
     gates = as_dict(row.get("evidence_gates"))
     action = str(row.get("recommendation_action") or "UNKNOWN")
+    resolution = as_dict(row.get("resolution"))
+    review_resolved = bool(row.get("review_resolved", False))
     frontmatter = {
         "type": "wallet_candidate_review",
         "source": "memetraderpro",
         "wallet_address": wallet,
         "recommendation_action": action,
         "audit_status": row.get("audit_status"),
+        "review_resolved": review_resolved,
         "comparison_status": row.get("comparison_status"),
         "review_only": bool(row.get("review_only", True)),
         "wallet_list_apply_allowed": bool(row.get("wallet_list_apply_allowed", False)),
@@ -58,9 +61,14 @@ def render_wallet_candidate_note(row: dict[str, Any]) -> str:
 - Wallet: {wikilink(wallet_stem(wallet), wallet)}
 - Recommendation: {action}
 - Audit status: {row.get("audit_status") or "unknown"}
+- Resolved: {review_resolved}
 - Comparison status: {row.get("comparison_status") or "unknown"}
 - Review only: {frontmatter["review_only"]}
 - Wallet-list apply allowed: {frontmatter["wallet_list_apply_allowed"]}
+
+## Resolution
+
+{_resolution_table(resolution) if review_resolved else "Not resolved. Operator review is still active."}
 
 ## Evidence Gates
 
@@ -93,6 +101,18 @@ def _gate_table(gates: dict[str, Any]) -> str:
             ["Minimum known outcomes", gates.get("minimum_known_outcomes")],
             ["Source coverage", compact_number(gates.get("source_coverage"), 4)],
             ["Recommendation is review-only", gates.get("recommendation_is_review_only")],
+        ],
+    )
+
+
+def _resolution_table(resolution: dict[str, Any]) -> str:
+    return table(
+        ["Field", "Value"],
+        [
+            ["Decision", resolution.get("decision")],
+            ["Approved by", resolution.get("approved_by")],
+            ["Approved at", resolution.get("approved_at")],
+            ["Reason", resolution.get("reason")],
         ],
     )
 

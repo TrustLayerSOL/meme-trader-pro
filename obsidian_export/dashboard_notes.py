@@ -38,7 +38,7 @@ LIMIT 50
 ```dataview
 TABLE recommendation_action, audit_status, known_outcomes, source_coverage, promotion_score, demotion_score
 FROM "MemeTraderPro/WalletCandidateReviews"
-WHERE type = "wallet_candidate_review"
+WHERE type = "wallet_candidate_review" AND review_resolved != true
 SORT recommendation_action DESC, known_outcomes DESC
 LIMIT 50
 ```
