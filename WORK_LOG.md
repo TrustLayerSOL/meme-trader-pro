@@ -44,6 +44,52 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Wallet Evidence Enrichment:
+
+Changed files:
+
+- `wallets/wallet_evidence_enrichment.py`
+- `utils/enrich_wallet_history_evidence.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_evidence_enrichment.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a review-only enrichment layer for wallet-history evidence rows.
+- The enricher attaches only prior market snapshots to decision-time entry context, so future price/liquidity data cannot leak into the entry fields.
+- Later token movement is stored separately as evaluation/outcome labels using fixed `30s`, `2m`, `5m`, and `15m` windows.
+- Added a local enrichment runner that reads `data/wallet_evidence/wallet_history_evidence.jsonl`, queries SQLite `token_snapshots` and `swap_ticks`, links historical replay outcomes where available, and writes generated outputs under ignored `data/` paths.
+- Added read-only `/api/wallet-evidence-enrichment` and Obsidian `MemeTraderPro/Dashboards/Wallet Evidence Enrichment.md`.
+
+Current local run:
+
+- Processed `520` wallet evidence rows currently present in `data/wallet_evidence/wallet_history_evidence.jsonl`.
+- Found market snapshots for `17` of `49` evidence mints.
+- Loaded `470` relevant market snapshots.
+- Fully enriched `16` rows.
+- Added decision-time entry context to `151` rows.
+- Added known later outcomes to `30` rows and fixed-window labels to `29` rows.
+- Left `369` rows missing market context and `135` rows missing outcome labels.
+- Generated `data/wallet_backfills/wallet_evidence_enrichment_report.json` and `data/wallet_evidence/wallet_history_evidence_enriched.jsonl`; both are ignored local research artifacts.
+
+Verification:
+
+- Added failing tests first for decision-time-safe prior snapshot use, missing-context reporting, report writing, SQLite snapshot loading, read-only API routing, and Obsidian note rendering.
+- `./trading_env/bin/python -m unittest tests.test_wallet_evidence_enrichment`
+- `./trading_env/bin/python utils/enrich_wallet_history_evidence.py`
+
+Remaining risk / next step:
+
+- Most evidence rows still lack matching market snapshots, so this is not enough to trust wallet scores.
+- Next step is to reduce missing market context by backfilling token snapshots/swap ticks around the 32 mints with no usable snapshot coverage, then rerun enrichment before promotion/demotion review.
+
 2026-05-15 update - Read-Only Wallet-History Backfill:
 
 Changed files:

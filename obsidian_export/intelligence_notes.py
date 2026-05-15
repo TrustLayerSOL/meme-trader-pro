@@ -30,6 +30,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/Wallet Candidate Evidence Plan.md": render_wallet_candidate_evidence_plan(snapshot),
         "Dashboards/Wallet Candidate Backfill Targets.md": render_wallet_candidate_backfill_targets(snapshot),
         "Dashboards/Wallet History Backfill.md": render_wallet_history_backfill(snapshot),
+        "Dashboards/Wallet Evidence Enrichment.md": render_wallet_evidence_enrichment(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -125,6 +126,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     backfill_summary = as_dict(backfill_targets.get("summary"))
     history_backfill = as_dict(snapshot.get("wallet_history_backfill"))
     history_summary = as_dict(history_backfill.get("summary"))
+    evidence_enrichment = as_dict(snapshot.get("wallet_evidence_enrichment"))
+    enrichment_summary = as_dict(evidence_enrichment.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -149,6 +152,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Candidate wallet-history backfill targets: {backfill_summary.get("needs_wallet_history") or 0}
 - Candidate outcome-label backfill targets: {backfill_summary.get("needs_outcome_label_backfill") or 0}
 - Wallet-history evidence rows created: {history_summary.get("total_evidence_rows_created") or 0}
+- Wallet evidence enriched rows: {enrichment_summary.get("enriched_rows") or 0}
+- Wallet evidence missing market context: {enrichment_summary.get("missing_market_context_rows") or 0}
 
 ## Review First
 
@@ -168,6 +173,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[Wallet Candidate Evidence Plan]]
 - [[Wallet Candidate Backfill Targets]]
 - [[Wallet History Backfill]]
+- [[Wallet Evidence Enrichment]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -312,6 +318,33 @@ Review-only wallet-history backfill report. This records fetched wallet evidence
 ## Wallets
 
 {_wallet_history_backfill_table(rows)}
+"""
+    return _note(frontmatter, body)
+
+
+def render_wallet_evidence_enrichment(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_evidence_enrichment"))
+    summary = as_dict(report.get("summary"))
+    rows = [row for row in report.get("evidence_records") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("wallet_evidence_enrichment")
+    body = f"""# Wallet Evidence Enrichment
+
+{GENERATED_MARKER}
+
+Review-only enrichment report. This attaches decision-time-safe market context and later outcome labels to wallet-history evidence without promoting, demoting, or trading.
+
+## Summary
+
+- Evidence rows: {_count(summary.get("total_evidence_rows"))}
+- Enriched rows: {_count(summary.get("enriched_rows"))}
+- Missing market context: {_count(summary.get("missing_market_context_rows"))}
+- Missing outcome labels: {_count(summary.get("missing_outcome_label_rows"))}
+- Rows with entry context: {_count(summary.get("rows_with_entry_context"))}
+- Rows with known outcome: {_count(summary.get("rows_with_known_outcome"))}
+
+## Evidence Rows
+
+{_wallet_evidence_enrichment_table(rows)}
 """
     return _note(frontmatter, body)
 
@@ -762,6 +795,27 @@ def _wallet_history_backfill_table(rows: list[dict[str, Any]]) -> str:
                 row.get("target_status") or "",
                 _count(row.get("evidence_rows_created")),
                 compact_number(as_dict(row.get("metrics")).get("evidence_confidence_score") or 0, 6),
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _wallet_evidence_enrichment_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No enriched wallet-evidence rows currently surfaced."
+    return table(
+        ["Wallet", "Mint", "Status", "Action", "Entry Price", "Liquidity", "Outcome", "Confidence"],
+        [
+            [
+                str(row.get("wallet") or ""),
+                str(row.get("token_mint") or ""),
+                row.get("enrichment_status") or "",
+                row.get("observed_action") or "",
+                compact_number(as_dict(row.get("estimated_entry_context")).get("price") or 0, 6),
+                compact_number(as_dict(row.get("estimated_entry_context")).get("liquidity") or 0, 6),
+                as_dict(row.get("later_token_outcome")).get("outcome_type") or "unknown",
+                compact_number(row.get("confidence_score") or 0, 6),
             ]
             for row in rows[:25]
         ],

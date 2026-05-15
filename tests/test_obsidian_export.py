@@ -463,6 +463,27 @@ old generated body
                         }
                     ],
                 },
+                "wallet_evidence_enrichment": {
+                    "summary": {
+                        "total_evidence_rows": 84,
+                        "enriched_rows": 22,
+                        "missing_market_context_rows": 10,
+                        "missing_outcome_label_rows": 52,
+                        "rows_with_entry_context": 74,
+                        "rows_with_known_outcome": 22,
+                    },
+                    "evidence_records": [
+                        {
+                            "wallet": "WalletENRICH789",
+                            "token_mint": "MintENRICH",
+                            "enrichment_status": "ENRICHED",
+                            "observed_action": "buy",
+                            "estimated_entry_context": {"price": 0.0012, "liquidity": 12000},
+                            "later_token_outcome": {"outcome_type": "runner"},
+                            "confidence_score": 90,
+                        }
+                    ],
+                },
             }
         )
 
@@ -473,6 +494,7 @@ old generated body
         evidence_plan = notes["Dashboards/Wallet Candidate Evidence Plan.md"]
         backfill_targets = notes["Dashboards/Wallet Candidate Backfill Targets.md"]
         wallet_history = notes["Dashboards/Wallet History Backfill.md"]
+        evidence_enrichment = notes["Dashboards/Wallet Evidence Enrichment.md"]
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
@@ -495,6 +517,7 @@ old generated body
         self.assertIn("Wallet Candidate Evidence Plan", command)
         self.assertIn("Wallet Candidate Backfill Targets", command)
         self.assertIn("Wallet History Backfill", command)
+        self.assertIn("Wallet Evidence Enrichment", command)
         self.assertIn("Tracked wallets", cycle)
         self.assertIn("12,175", cycle)
         self.assertIn("demotion_reviews_pending", cycle)
@@ -514,6 +537,9 @@ old generated body
         self.assertIn("type: wallet_history_backfill", wallet_history)
         self.assertIn("WalletHISTORY456", wallet_history)
         self.assertIn("wallet_history_collected", wallet_history)
+        self.assertIn("type: wallet_evidence_enrichment", evidence_enrichment)
+        self.assertIn("WalletENRICH789", evidence_enrichment)
+        self.assertIn("ENRICHED", evidence_enrichment)
         self.assertIn("reviewable wallets: 2", command)
         self.assertIn("WalletGOOD", replay)
         self.assertIn("type: wallet_replay_ecosystem_review", replay)

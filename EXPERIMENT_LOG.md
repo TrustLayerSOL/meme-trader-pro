@@ -20,6 +20,39 @@ Next action:
 
 ## Entries
 
+### 2026-05-15 - Wallet Evidence Enrichment
+
+Date: 2026-05-15
+
+Hypothesis: Wallet-history evidence becomes reviewable only when each transaction row can be tied to decision-time-safe market context and later outcome labels without allowing future data into the entry fields.
+
+Files changed:
+
+- `wallets/wallet_evidence_enrichment.py`
+- `utils/enrich_wallet_history_evidence.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_evidence_enrichment.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `EXPERIMENT_LOG.md`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+Data used: Current local wallet-history evidence rows plus SQLite `token_snapshots`, SQLite `swap_ticks`, and local historical replay events.
+
+Sample size: `520` wallet evidence rows across `44` wallets and `49` token mints.
+
+Baseline result: Wallet-history evidence existed, but most rows had no entry price, market cap, liquidity, or later outcome labels, which made promotion/demotion review weak.
+
+New result: Enrichment added decision-time entry context to `151` rows, known later outcomes to `30` rows, fixed-window labels to `29` rows, and fully enriched `16` rows. `369` rows still lack market context.
+
+Conclusion: The enrichment path works and is leakage-safe, but the current evidence set is still data-thin. Wallet scores should not be trusted until missing market context is reduced.
+
+Next action: Backfill token snapshots/swap ticks around evidence mints with missing context, then rerun enrichment and candidate review.
+
 ### 2026-05-15 - Historical Replay Dataset Contract
 
 Date: 2026-05-15
