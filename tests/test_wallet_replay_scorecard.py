@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from wallets.wallet_replay_scorecard import build_wallet_replay_scorecard
+from wallets.wallet_replay_review import build_wallet_replay_review
 from utils.build_wallet_replay_scorecard import write_wallet_replay_scorecard
 
 
@@ -109,6 +110,38 @@ class WalletReplayScorecardTests(unittest.TestCase):
             self.assertEqual(result["counts"]["wallets"], 1)
             self.assertTrue(out.exists())
             self.assertIn("WalletA", out.read_text())
+
+    def test_replay_review_separates_reviewable_wallets_from_low_coverage(self):
+        scorecard = build_wallet_replay_scorecard(
+            [
+                event(["WalletGood", "WalletPartner"], mint="Good1"),
+                event(["WalletGood", "WalletPartner"], mint="Good2"),
+                event(["WalletGood"], mint="Good3"),
+                event(["WalletGood"], mint="Good4"),
+                event(["WalletGood"], mint="Good5"),
+                event(
+                    ["WalletThin"],
+                    mint="Thin1",
+                    windows={
+                        "30s": {"outcome_type": "unknown"},
+                        "2m": {"outcome_type": "unknown"},
+                        "5m": {"outcome_type": "unknown"},
+                        "15m": {"outcome_type": "unknown"},
+                    },
+                ),
+            ]
+        )
+
+        review = build_wallet_replay_review(scorecard, limit=10, min_known_events=3, min_fillable_events=3)
+
+        self.assertEqual(review["mode"], "WALLET_REPLAY_REVIEW_ONLY")
+        self.assertTrue(review["live_execution_locked"])
+        self.assertEqual(review["summary"]["reviewable_wallets"], 1)
+        self.assertEqual(review["summary"]["low_coverage_wallets"], 2)
+        self.assertEqual(review["reviewable_wallets"][0]["wallet"], "WalletGood")
+        self.assertEqual(review["reviewable_wallets"][0]["known_15m"], 5)
+        self.assertIn("WalletThin", {row["wallet"] for row in review["low_coverage_wallets"]})
+        self.assertEqual(review["co_entry_review"][0]["wallets"], ["WalletGood", "WalletPartner"])
 
 
 if __name__ == "__main__":

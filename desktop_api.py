@@ -35,6 +35,7 @@ from core.wallet_discovery import normalize_tracked_wallets
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
+from wallets.wallet_replay_review import build_wallet_replay_review
 
 
 ROOT = Path(__file__).resolve().parent
@@ -52,6 +53,7 @@ WALLET_BEHAVIOR_FILE = ROOT / "data" / "wallet_behavior.json"
 CANDIDATE_WALLETS_FILE = ROOT / "data" / "candidate_wallets.json"
 PAPER_WATCH_WALLETS_FILE = ROOT / "data" / "paper_watch_wallets.json"
 WALLET_REVIEW_DECISIONS_FILE = ROOT / "data" / "wallet_review_decisions.json"
+WALLET_REPLAY_SCORECARD_FILE = ROOT / "data" / "wallet_replay_scorecard.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
     "bot": LOG_DIR / "bot.log",
@@ -245,6 +247,7 @@ def read_state_files():
         "candidate_wallets": read_json(CANDIDATE_WALLETS_FILE, {"candidates": []}),
         "paper_watch_wallets": read_json(PAPER_WATCH_WALLETS_FILE, {"wallets": []}),
         "wallet_review_decisions": read_json(WALLET_REVIEW_DECISIONS_FILE, {"decisions": []}),
+        "wallet_replay_scorecard": read_json(WALLET_REPLAY_SCORECARD_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -3508,6 +3511,14 @@ def build_wallet_quant_payload(state=None, limit=80):
     }
 
 
+def build_wallet_replay_review_payload(state=None, limit=80):
+    state = state or read_state_files()
+    return build_wallet_replay_review(
+        state.get("wallet_replay_scorecard") if isinstance(state.get("wallet_replay_scorecard"), dict) else {},
+        limit=limit,
+    )
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4104,6 +4115,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-quant":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_quant_payload(limit=limit))
+    if path == "/api/wallet-replay-review":
+        limit = parse_int_query(query, "limit", 80, 1, 500)
+        return json_response(build_wallet_replay_review_payload(limit=limit))
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

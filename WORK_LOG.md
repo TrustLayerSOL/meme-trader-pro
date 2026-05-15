@@ -5061,3 +5061,31 @@ Verification:
 Remaining:
 
 - The project path should be cleaned up later so there is one clear real folder instead of a symlinked `Jordan/meme_trader_pro` path pointing to `Jordan 2/meme_trader_pro`.
+
+### 2026-05-15 - Wallet Replay Review API
+
+Changed files:
+
+- `wallets/wallet_replay_review.py`
+- `desktop_api.py`
+- `tests/test_wallet_replay_scorecard.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a read-only wallet replay review layer on top of `data/wallet_replay_scorecard.json`.
+- The review separates wallets with enough known/fillable replay evidence from wallets that are still low coverage.
+- The review exposes repeated co-entry pairs for wallet-ecosystem inspection.
+- Added `/api/wallet-replay-review` as a read-only desktop API endpoint.
+- Live execution remains locked; this is review/measurement infrastructure only.
+
+Verification:
+
+- Added failing tests first for the replay review builder and API route, then implemented the minimum code to pass them.
+- Focused tests passed for wallet replay review and desktop route behavior.
+
+Remaining:
+
+- Next step is using the review queue to generate human-readable wallet ecosystem review notes and decide which wallets/pairs deserve deeper replay inspection.
