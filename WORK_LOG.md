@@ -5384,3 +5384,43 @@ Verification:
 Remaining:
 
 - Next step is to export/review the wallet-cycle note in Obsidian and use the pending demotion queue to decide whether the last weak wallets should be removed.
+
+### 2026-05-15 - Applied Five Wallet Demotions
+
+Changed files:
+
+- `WORK_LOG.md`
+- Ignored local state updated through existing tools:
+  - `data/wallet_review_decisions.json`
+  - `data/paper_watch_wallets.json`
+  - `data/bad_wallets.json`
+  - `data/wallet_candidate_audit.json`
+  - `data/wallet_cycle_report.json`
+  - `data/wallet_list_update_audit.json`
+
+What changed:
+
+- Approved demotion for 5 pending wallet-cycle review wallets:
+  - `8psNvWTrdNTiVRNzAgsou9kETXNJm2SXZyaKuJraVRtf`
+  - `8PX97NP5WY871SmsZwHqYL9z97k3vzHGjvKFvAT7cARz`
+  - `C4zMfjZ9X9ZAMrSVkMHXc8fVroqowLsiiGPtgCnQQkWu`
+  - `8NS4mW2ncJ1YHUaBC9sDv6kbbbFzZRKSSdR1ZwakU2Lu`
+  - `AjbYXGehLngocYkDiUahjwTWyp1mGuf7E3sgYiwDsozy`
+- Ran guarded wallet-review apply after a dry-run showed exactly 5 demotions.
+- Demoted wallets were removed from active paper-watch influence and added to the bad-wallet block list.
+- Backup archive created at `data/archives/wallet_apply_20260515T072712433906Z_2823746a`.
+- Regenerated candidate audit and wallet-cycle report.
+- Exported the updated Obsidian research vault; exporter wrote 642 notes.
+- Live execution stayed locked; no trade execution path was touched.
+
+Verification:
+
+- Dry-run wallet apply reported `Promoted: 0`, `Demoted: 5`, `Skipped: 15`.
+- Applied wallet review reported `Promoted: 0`, `Demoted: 5`, `Skipped: 15`.
+- `data/wallet_candidate_audit.json` regenerated with `candidates=0`, `promotion=0`, `demotion=0`.
+- `data/wallet_cycle_report.json` regenerated with `tracked=523`, `active_paper_watch=12396`, `blocked=15`, `pending_promotion=0`, `pending_demotion=0`.
+- `/api/wallet-cycle` returned `200`, `read_only=true`, `live_execution_locked=true`, and no pending demotion reviews.
+
+Remaining:
+
+- Next step is to improve wallet intake quality: mine new candidate wallets from runner outcomes and compare them against the current demoted/bad-wallet block list before adding them to active paper-watch.
