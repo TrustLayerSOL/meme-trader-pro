@@ -44,6 +44,36 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Wallet Cycle Report:
+
+Changed files:
+
+- `wallets/wallet_cycle_report.py`
+- `utils/build_wallet_cycle_report.py`
+- `tests/test_wallet_cycle_report.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a review-only wallet-cycle report that summarizes the current wallet feedback loop in one JSON artifact.
+- The report combines tracked wallets, active paper-watch rows, blocked/demoted paper-watch rows, bad wallets, candidate-audit queue counts, replay scorecard counts, approved review decisions, latest wallet-apply audit, and top pending candidates.
+- Generated `data/wallet_cycle_report.json`.
+- Current report counts: `523` tracked wallets, `12,175` active paper-watch wallets, `10` blocked paper-watch wallets, `10` bad wallets, `0` pending promotion reviews, and `5` pending demotion reviews.
+- Current attention flags: `demotion_reviews_pending` and `bad_wallets_blocked_from_reentry`.
+
+Verification:
+
+- Added failing tests first for report counts and pending-review attention.
+- `./trading_env/bin/python -m unittest tests.test_wallet_cycle_report`
+- `./trading_env/bin/python utils/build_wallet_cycle_report.py`
+
+Remaining risk / next step:
+
+- This is a generated operator/research artifact, not a strategy decision engine.
+- Next step is adding this report to the Obsidian/export layer or desktop API only if it improves wallet review clarity.
+
 2026-05-15 update - Bad-Wallet Reentry Guard:
 
 Changed files:
