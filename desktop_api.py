@@ -40,6 +40,7 @@ from wallets.wallet_candidate_evidence_plan import build_wallet_candidate_eviden
 from wallets.wallet_candidate_quality import build_wallet_candidate_quality_report
 from wallets.wallet_candidate_quality_review import build_wallet_candidate_quality_review
 from wallets.wallet_cycle_report import build_wallet_cycle_report
+from wallets.wallet_history_backfill import build_wallet_history_backfill_report
 from wallets.wallet_replay_review import build_wallet_replay_review
 
 
@@ -64,6 +65,7 @@ WALLET_CANDIDATE_QUALITY_REPORT_FILE = ROOT / "data" / "wallet_candidate_quality
 WALLET_CANDIDATE_QUALITY_REVIEW_FILE = ROOT / "data" / "wallet_candidate_quality_review.json"
 WALLET_CANDIDATE_EVIDENCE_PLAN_FILE = ROOT / "data" / "wallet_candidate_evidence_plan.json"
 WALLET_CANDIDATE_BACKFILL_TARGETS_FILE = ROOT / "data" / "wallet_candidate_backfill_targets.json"
+WALLET_HISTORY_BACKFILL_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_history_backfill_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -265,6 +267,7 @@ def read_state_files():
         "wallet_candidate_quality_review": read_json(WALLET_CANDIDATE_QUALITY_REVIEW_FILE, {}),
         "wallet_candidate_evidence_plan": read_json(WALLET_CANDIDATE_EVIDENCE_PLAN_FILE, {}),
         "wallet_candidate_backfill_targets": read_json(WALLET_CANDIDATE_BACKFILL_TARGETS_FILE, {}),
+        "wallet_history_backfill": read_json(WALLET_HISTORY_BACKFILL_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -3671,6 +3674,35 @@ def build_wallet_candidate_backfill_targets_payload(state=None, limit=80):
     }
 
 
+def build_wallet_history_backfill_payload(state=None, limit=80):
+    state = state or read_state_files()
+    existing = state.get("wallet_history_backfill")
+    if isinstance(existing, dict) and existing.get("mode") == "WALLET_HISTORY_BACKFILL_REVIEW_ONLY":
+        rows = existing.get("wallets") if isinstance(existing.get("wallets"), list) else []
+        evidence = existing.get("evidence_records") if isinstance(existing.get("evidence_records"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "source": "wallet_history_backfill_json",
+            "source_detail": str(WALLET_HISTORY_BACKFILL_REPORT_FILE.relative_to(ROOT)),
+            "count": min(len(rows), int(limit)),
+            "wallets": rows[:limit],
+            "evidence_records": evidence[:limit],
+        }
+    report = build_wallet_history_backfill_report(
+        backfill_targets=state.get("wallet_candidate_backfill_targets") if isinstance(state.get("wallet_candidate_backfill_targets"), dict) else {},
+        execute=False,
+        max_wallets=limit,
+    )
+    rows = report.get("wallets") if isinstance(report.get("wallets"), list) else []
+    return {
+        **report,
+        "read_only": True,
+        "source": "wallet_history_backfill_dry_run_computed",
+        "count": min(len(rows), int(limit)),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4284,6 +4316,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-candidate-backfill-targets":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_backfill_targets_payload(limit=limit))
+    if path == "/api/wallet-history-backfill":
+        limit = parse_int_query(query, "limit", 80, 1, 500)
+        return json_response(build_wallet_history_backfill_payload(limit=limit))
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

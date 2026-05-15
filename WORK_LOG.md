@@ -44,6 +44,60 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Read-Only Wallet-History Backfill:
+
+Changed files:
+
+- `.gitignore`
+- `wallets/wallet_history_backfill.py`
+- `wallets/wallet_history_parser.py`
+- `wallets/wallet_evidence_models.py`
+- `wallets/wallet_evidence_reporter.py`
+- `utils/run_wallet_history_backfill.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_history_backfill.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a read-only wallet-history backfill runner for candidate wallets marked `COLLECT_WALLET_HISTORY`.
+- The runner is dry-run by default and only fetches historical wallet signatures/transactions when explicitly run with `--execute`.
+- Added wallet token-delta parsing with quote/stable mint filtering so wrapped SOL/USDC/USDT do not pollute meme-token evidence.
+- Added structured wallet evidence rows with wallet, token mint, observed action, timestamp, transaction signature, outcome windows when known, missing fields, confidence score, and parser version.
+- Added preliminary wallet metrics: observed interactions, usable evidence rows, runner/rug participation rates, missing-data ratio, confidence score, and minimum additional evidence needed.
+- Added versioned local output paths under `data/wallet_backfills/`, `data/wallet_evidence/`, and `data/reports/wallet_backfills/`; these are ignored generated research artifacts.
+- Added read-only `/api/wallet-history-backfill` and Obsidian `MemeTraderPro/Dashboards/Wallet History Backfill.md`.
+
+Current local run:
+
+- Processed `45` wallet-history targets.
+- Created `146` structured evidence rows.
+- Partially backfilled `41` wallets.
+- Blocked `4` wallets with `blocked_missing_data` because recent fetched transactions did not produce usable non-quote token-delta evidence.
+- Preserved `180` raw fetched transactions in `data/wallet_backfills/raw_transactions/wallet_history_raw_20260515-093110.jsonl`.
+- Marked `0` wallets ready for candidate review because outcome labels, price/liquidity context, and deeper coverage are still thin.
+
+Verification:
+
+- Added failing tests first for read-only collection, dry-run no-RPC behavior, report writing, and quote-side mint filtering.
+- `./trading_env/bin/python -m unittest tests.test_wallet_history_backfill`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_wallet_history_backfill_route_is_read_only`
+- `./trading_env/bin/python -m unittest tests.test_obsidian_export.ObsidianExportTests.test_intelligence_notes_surface_anomalies_drift_lineage_and_workflow`
+- `./trading_env/bin/python -m py_compile wallets/wallet_history_backfill.py wallets/wallet_history_parser.py wallets/wallet_evidence_models.py wallets/wallet_evidence_reporter.py utils/run_wallet_history_backfill.py desktop_api.py obsidian_export/exporter.py obsidian_export/intelligence_notes.py`
+- `./trading_env/bin/python utils/run_wallet_history_backfill.py --max-wallets 45 --signature-limit 8 --max-transactions-per-wallet 4`
+- `./trading_env/bin/python utils/run_wallet_history_backfill.py --execute --max-wallets 45 --signature-limit 8 --max-transactions-per-wallet 4 --request-pause-seconds 0.2`
+
+Remaining risk / next step:
+
+- Evidence rows mostly lack entry price, exit price, market cap, liquidity, and later outcome labels.
+- Next step is outcome/market-context enrichment for these evidence rows using existing token snapshots/replay labels, then rerun the candidate evidence plan and review queue.
+
 2026-05-15 update - Wallet Candidate Backfill Targets:
 
 Changed files:

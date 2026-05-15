@@ -27,6 +27,9 @@ data/.*.tmp
 data/archives/
 data/process_locks/
 data/historical_replay/
+data/reports/
 data/rejected_signals/
 data/signal_contexts/
+data/wallet_backfills/
+data/wallet_evidence/
 !data/__init__.py

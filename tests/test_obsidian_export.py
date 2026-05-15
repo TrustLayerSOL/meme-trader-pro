@@ -444,6 +444,25 @@ old generated body
                         }
                     ],
                 },
+                "wallet_history_backfill": {
+                    "summary": {
+                        "wallets_processed": 45,
+                        "wallets_successfully_backfilled": 12,
+                        "wallets_partially_backfilled": 5,
+                        "wallets_blocked": 3,
+                        "total_evidence_rows_created": 84,
+                        "ready_for_candidate_review": 2,
+                    },
+                    "wallets": [
+                        {
+                            "wallet": "WalletHISTORY456",
+                            "status": "COLLECTED",
+                            "target_status": "wallet_history_collected",
+                            "evidence_rows_created": 8,
+                            "metrics": {"evidence_confidence_score": 72.5},
+                        }
+                    ],
+                },
             }
         )
 
@@ -453,6 +472,7 @@ old generated body
         quality_review = notes["Dashboards/Wallet Candidate Quality Review.md"]
         evidence_plan = notes["Dashboards/Wallet Candidate Evidence Plan.md"]
         backfill_targets = notes["Dashboards/Wallet Candidate Backfill Targets.md"]
+        wallet_history = notes["Dashboards/Wallet History Backfill.md"]
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
@@ -474,6 +494,7 @@ old generated body
         self.assertIn("Wallet Candidate Quality Review", command)
         self.assertIn("Wallet Candidate Evidence Plan", command)
         self.assertIn("Wallet Candidate Backfill Targets", command)
+        self.assertIn("Wallet History Backfill", command)
         self.assertIn("Tracked wallets", cycle)
         self.assertIn("12,175", cycle)
         self.assertIn("demotion_reviews_pending", cycle)
@@ -490,6 +511,9 @@ old generated body
         self.assertIn("type: wallet_candidate_backfill_targets", backfill_targets)
         self.assertIn("WalletBACKFILL123", backfill_targets)
         self.assertIn("COLLECT_WALLET_HISTORY", backfill_targets)
+        self.assertIn("type: wallet_history_backfill", wallet_history)
+        self.assertIn("WalletHISTORY456", wallet_history)
+        self.assertIn("wallet_history_collected", wallet_history)
         self.assertIn("reviewable wallets: 2", command)
         self.assertIn("WalletGOOD", replay)
         self.assertIn("type: wallet_replay_ecosystem_review", replay)

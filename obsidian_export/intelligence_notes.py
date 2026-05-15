@@ -29,6 +29,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/Wallet Candidate Quality Review.md": render_wallet_candidate_quality_review(snapshot),
         "Dashboards/Wallet Candidate Evidence Plan.md": render_wallet_candidate_evidence_plan(snapshot),
         "Dashboards/Wallet Candidate Backfill Targets.md": render_wallet_candidate_backfill_targets(snapshot),
+        "Dashboards/Wallet History Backfill.md": render_wallet_history_backfill(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -122,6 +123,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     evidence_plan_summary = as_dict(evidence_plan.get("summary"))
     backfill_targets = as_dict(snapshot.get("wallet_candidate_backfill_targets"))
     backfill_summary = as_dict(backfill_targets.get("summary"))
+    history_backfill = as_dict(snapshot.get("wallet_history_backfill"))
+    history_summary = as_dict(history_backfill.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -145,6 +148,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Candidate evidence gaps needing replay: {evidence_plan_summary.get("needs_replay_coverage") or 0}
 - Candidate wallet-history backfill targets: {backfill_summary.get("needs_wallet_history") or 0}
 - Candidate outcome-label backfill targets: {backfill_summary.get("needs_outcome_label_backfill") or 0}
+- Wallet-history evidence rows created: {history_summary.get("total_evidence_rows_created") or 0}
 
 ## Review First
 
@@ -163,6 +167,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[Wallet Candidate Quality Review]]
 - [[Wallet Candidate Evidence Plan]]
 - [[Wallet Candidate Backfill Targets]]
+- [[Wallet History Backfill]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -280,6 +285,33 @@ Review-only target list for filling evidence gaps in the strongest candidate wal
 ## Targets
 
 {_candidate_backfill_targets_table(rows)}
+"""
+    return _note(frontmatter, body)
+
+
+def render_wallet_history_backfill(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_history_backfill"))
+    summary = as_dict(report.get("summary"))
+    rows = [row for row in report.get("wallets") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("wallet_history_backfill")
+    body = f"""# Wallet History Backfill
+
+{GENERATED_MARKER}
+
+Review-only wallet-history backfill report. This records fetched wallet evidence and block reasons without promoting, demoting, or trading.
+
+## Summary
+
+- Wallets processed: {_count(summary.get("wallets_processed"))}
+- Successfully backfilled: {_count(summary.get("wallets_successfully_backfilled"))}
+- Partially backfilled: {_count(summary.get("wallets_partially_backfilled"))}
+- Blocked: {_count(summary.get("wallets_blocked"))}
+- Evidence rows created: {_count(summary.get("total_evidence_rows_created"))}
+- Ready for candidate review: {_count(summary.get("ready_for_candidate_review"))}
+
+## Wallets
+
+{_wallet_history_backfill_table(rows)}
 """
     return _note(frontmatter, body)
 
@@ -712,6 +744,24 @@ def _candidate_backfill_targets_table(rows: list[dict[str, Any]]) -> str:
                 _count(row.get("unknown_15m_events")),
                 _count(as_dict(row.get("missing")).get("replay_known_15m")),
                 _count(as_dict(row.get("missing")).get("known_outcomes")),
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _wallet_history_backfill_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No wallet-history backfill rows currently surfaced."
+    return table(
+        ["Wallet", "Status", "Target Status", "Evidence Rows", "Confidence"],
+        [
+            [
+                str(row.get("wallet") or ""),
+                row.get("status") or "",
+                row.get("target_status") or "",
+                _count(row.get("evidence_rows_created")),
+                compact_number(as_dict(row.get("metrics")).get("evidence_confidence_score") or 0, 6),
             ]
             for row in rows[:25]
         ],
