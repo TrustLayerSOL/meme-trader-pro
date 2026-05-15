@@ -26,6 +26,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/MemeTraderPro Drift Monitor.md": render_drift_monitor(drift),
         "Dashboards/Wallet Cycle Report.md": render_wallet_cycle_report(snapshot),
         "Dashboards/Wallet Candidate Quality.md": render_wallet_candidate_quality(snapshot),
+        "Dashboards/Wallet Candidate Quality Review.md": render_wallet_candidate_quality_review(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -113,6 +114,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     cycle_queue = as_dict(cycle.get("review_queue"))
     quality = as_dict(snapshot.get("wallet_candidate_quality_report"))
     quality_summary = as_dict(quality.get("summary"))
+    quality_review = as_dict(snapshot.get("wallet_candidate_quality_review"))
+    quality_review_summary = as_dict(quality_review.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -132,6 +135,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Pending wallet demotions: {cycle_queue.get("demotion_review") or 0}
 - Active candidate-quality rows: {quality_summary.get("active_candidates") or 0}
 - Strong candidate observations: {quality_summary.get("strong_observation") or 0}
+- Candidate promotion-ready rows: {quality_review_summary.get("promotion_review_ready") or 0}
 
 ## Review First
 
@@ -147,6 +151,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[MemeTraderPro Drift Monitor]]
 - [[Wallet Cycle Report]]
 - [[Wallet Candidate Quality]]
+- [[Wallet Candidate Quality Review]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -185,6 +190,32 @@ Review-only ranking of candidate wallets by current evidence quality. This does 
 ## Top Ranked Candidates
 
 {_candidate_quality_table(rows)}
+"""
+    return _note(frontmatter, body)
+
+
+def render_wallet_candidate_quality_review(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_candidate_quality_review"))
+    summary = as_dict(report.get("summary"))
+    rows = [row for row in report.get("shortlist") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("wallet_candidate_quality_review")
+    body = f"""# Wallet Candidate Quality Review
+
+{GENERATED_MARKER}
+
+Review-only cross-check of top candidate-quality wallets against replay and outcome evidence. This does not approve or apply wallet-list changes.
+
+## Summary
+
+- Total reviewed: {_count(summary.get("total_reviewed"))}
+- Promotion review ready: {_count(summary.get("promotion_review_ready"))}
+- Observe more: {_count(summary.get("observe_more"))}
+- Risk review: {_count(summary.get("risk_review"))}
+- Reject review: {_count(summary.get("reject_review"))}
+
+## Shortlist
+
+{_candidate_quality_review_table(rows)}
 """
     return _note(frontmatter, body)
 
@@ -559,6 +590,25 @@ def _candidate_quality_table(rows: list[dict[str, Any]]) -> str:
                 _count(row.get("winner_mints")),
                 _count(row.get("early_buy_events")),
                 ", ".join(str(item) for item in row.get("risk_flags") or []) or "none",
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _candidate_quality_review_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No candidate-quality review rows currently surfaced."
+    return table(
+        ["Wallet", "Quality", "Action", "Replay Known", "Fillable", "Gaps"],
+        [
+            [
+                str(row.get("wallet") or ""),
+                compact_number(row.get("quality_score") or 0, 6),
+                as_dict(row.get("recommendation")).get("action") or "",
+                _count(as_dict(row.get("replay")).get("known_15m")),
+                _count(as_dict(row.get("replay")).get("fillable_events")),
+                ", ".join(str(item) for item in row.get("evidence_gaps") or []) or "none",
             ]
             for row in rows[:25]
         ],

@@ -391,12 +391,30 @@ old generated body
                         }
                     ],
                 },
+                "wallet_candidate_quality_review": {
+                    "summary": {
+                        "total_reviewed": 50,
+                        "promotion_review_ready": 2,
+                        "observe_more": 47,
+                        "risk_review": 1,
+                        "reject_review": 0,
+                    },
+                    "shortlist": [
+                        {
+                            "wallet": "WalletREADY456",
+                            "quality_score": 88,
+                            "recommendation": {"action": "PROMOTION_REVIEW_READY"},
+                            "evidence_gaps": [],
+                        }
+                    ],
+                },
             }
         )
 
         command = notes["Dashboards/MemeTraderPro Research Command Center.md"]
         cycle = notes["Dashboards/Wallet Cycle Report.md"]
         quality = notes["Dashboards/Wallet Candidate Quality.md"]
+        quality_review = notes["Dashboards/Wallet Candidate Quality Review.md"]
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
@@ -415,6 +433,7 @@ old generated body
         self.assertIn("Wallet Replay Ecosystem Review", command)
         self.assertIn("Wallet Cycle Report", command)
         self.assertIn("Wallet Candidate Quality", command)
+        self.assertIn("Wallet Candidate Quality Review", command)
         self.assertIn("Tracked wallets", cycle)
         self.assertIn("12,175", cycle)
         self.assertIn("demotion_reviews_pending", cycle)
@@ -422,6 +441,9 @@ old generated body
         self.assertIn("type: wallet_candidate_quality_report", quality)
         self.assertIn("WalletQUALITY123", quality)
         self.assertIn("2,659", quality)
+        self.assertIn("type: wallet_candidate_quality_review", quality_review)
+        self.assertIn("WalletREADY456", quality_review)
+        self.assertIn("PROMOTION_REVIEW_READY", quality_review)
         self.assertIn("reviewable wallets: 2", command)
         self.assertIn("WalletGOOD", replay)
         self.assertIn("type: wallet_replay_ecosystem_review", replay)
