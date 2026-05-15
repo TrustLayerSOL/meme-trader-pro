@@ -6,6 +6,7 @@ from obsidian_export.dashboard_notes import render_dashboard_notes
 from obsidian_export.candidate_note import render_wallet_candidate_note, wallet_candidate_filename
 from obsidian_export.decision_note import render_wallet_review_decisions_note
 from obsidian_export.exporter import GENERATED_MARKER, merge_generated_note
+from obsidian_export.intelligence_notes import render_intelligence_notes
 from obsidian_export.signal_note import render_signal_note
 from obsidian_export.wallet_note import render_wallet_note, wallet_filename
 
@@ -235,6 +236,60 @@ old generated body
         self.assertIn("approve_promotion", note)
         self.assertIn("repeat winner", note)
         self.assertIn("not_in_current_candidate_audit", note)
+
+    def test_intelligence_notes_surface_anomalies_drift_lineage_and_workflow(self):
+        notes = render_intelligence_notes(
+            {
+                "wallet_rows": [
+                    {
+                        "wallet": "WalletBAD999",
+                        "recommendation": {"action": "DEMOTION_REVIEW"},
+                        "behavior_score": {"score": 18},
+                        "behavior_profile": {"wallet_roi": -12.5},
+                        "rug_participation": 4,
+                        "runner_participation": 1,
+                        "signal_count": 44,
+                    }
+                ],
+                "rejections": [
+                    {
+                        "decision_id": "dec_reject_win",
+                        "mint": "MintWinner",
+                        "rejection reason": "score_gate",
+                        "what would have happened afterward if traded": {"status": "runner", "max_gain_pct": 300},
+                    }
+                ],
+                "postmortems": [{"postmortem_id": "pm_open", "status": "open", "mint": "MintBad"}],
+                "wallet_candidate_audit": {
+                    "candidates": [
+                        {
+                            "wallet": "WalletNEW123",
+                            "recommendation_action": "PROMOTION_REVIEW",
+                            "audit_status": "HUMAN_REVIEW_REQUIRED",
+                            "evidence": {"known_outcomes": 30, "promotion_score": 90},
+                        }
+                    ]
+                },
+                "replay_visibility": {"counts": {"records": 5}, "mode": "REVIEW_ONLY"},
+            }
+        )
+
+        command = notes["Dashboards/MemeTraderPro Research Command Center.md"]
+        anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
+        drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
+        lineage = notes["Dashboards/MemeTraderPro Signal Lineage.md"]
+        workflow = notes["Dashboards/MemeTraderPro Daily Workflow.md"]
+        shared = notes["../SharedQuant/Dashboards/Quant Research Command Center.md"]
+
+        self.assertIn("Action Queue", command)
+        self.assertIn("Wallet Degradation", anomaly)
+        self.assertIn("WalletBAD999", anomaly)
+        self.assertIn("Rejected-Signal Winners", anomaly)
+        self.assertIn("MintWinner", anomaly)
+        self.assertIn("Wallet-Score Drift", drift)
+        self.assertIn("Signal Lineage", lineage)
+        self.assertIn("Daily Research Workflow", workflow)
+        self.assertIn("Cross-Project Anomaly Radar", shared)
 
 
 if __name__ == "__main__":
