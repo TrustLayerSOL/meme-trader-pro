@@ -303,14 +303,36 @@ def render_shared_quant_dashboard() -> str:
 - [[NorthStar Research Command Center]]
 - [[NorthStar Anomaly Radar]]
 - [[NorthStar Drift Monitor]]
+- [[Prop API Dashboard]]
 
 ## Daily Research Loop
 
 1. Review project command centers.
-2. Resolve anomalies before browsing raw notes.
-3. Promote one strong hypothesis into an experiment.
-4. Close or update stale postmortems.
-5. Record one daily observation.
+2. Check [[Prop API Dashboard]] for coverage, parser, source, and export readiness before trusting new prop inputs.
+3. Resolve anomalies before browsing raw notes.
+4. Promote one strong hypothesis into an experiment.
+5. Close or update stale postmortems.
+6. Record one daily observation.
+
+## Prop API Data Health
+
+```dataview
+TABLE coverage_percent, dates_covered, missing_date_ranges, accepted_rows, rejected_rows, export_readiness
+FROM "PropAPI/CoverageReports"
+WHERE type = "prop_api_coverage_summary"
+SORT file.mtime DESC
+LIMIT 5
+```
+
+## Prop API Parser Health
+
+```dataview
+TABLE issue_count, duplicate_count, missing_player_count, missing_odds_count, malformed_count
+FROM "PropAPI/ParserIssues"
+WHERE type = "prop_api_parser_issues"
+SORT file.mtime DESC
+LIMIT 10
+```
 
 ## Shared Postmortem Queue
 
@@ -450,4 +472,3 @@ def _wallet_roi(row: dict[str, Any]) -> float:
 
 def _wallet_alert_sort(row: dict[str, Any]) -> float:
     return abs(min(_wallet_roi(row), 0)) + max(0, 50 - _score(row))
-

@@ -290,6 +290,8 @@ old generated body
         self.assertIn("Signal Lineage", lineage)
         self.assertIn("Daily Research Workflow", workflow)
         self.assertIn("Cross-Project Anomaly Radar", shared)
+        self.assertIn("Prop API Dashboard", shared)
+        self.assertIn("PropAPI/CoverageReports", shared)
 
 
 if __name__ == "__main__":

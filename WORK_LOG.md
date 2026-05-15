@@ -5113,3 +5113,25 @@ Verification:
 Remaining:
 
 - Next step is exposing or exporting this report where the operator reviews wallet ecosystem decisions.
+
+### 2026-05-15 - Shared Quant Obsidian Dashboard Links
+
+Changed files:
+
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_obsidian_export.py`
+
+What changed:
+
+- Preserved valid Obsidian dashboard/export changes from the parallel project work.
+- Added the Prop API generated marker to the known generated-marker list.
+- Added Prop API dashboard and health-query links to the shared Quant Research Command Center note.
+
+Verification:
+
+- `tests.test_obsidian_export` passed as part of the relevant test run.
+
+Remaining:
+
+- Keep Obsidian exports as valid project review artifacts when they support quant research dashboards.
