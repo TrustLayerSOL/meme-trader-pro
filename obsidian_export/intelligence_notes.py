@@ -28,6 +28,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/Wallet Candidate Quality.md": render_wallet_candidate_quality(snapshot),
         "Dashboards/Wallet Candidate Quality Review.md": render_wallet_candidate_quality_review(snapshot),
         "Dashboards/Wallet Candidate Evidence Plan.md": render_wallet_candidate_evidence_plan(snapshot),
+        "Dashboards/Wallet Candidate Backfill Targets.md": render_wallet_candidate_backfill_targets(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -119,6 +120,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     quality_review_summary = as_dict(quality_review.get("summary"))
     evidence_plan = as_dict(snapshot.get("wallet_candidate_evidence_plan"))
     evidence_plan_summary = as_dict(evidence_plan.get("summary"))
+    backfill_targets = as_dict(snapshot.get("wallet_candidate_backfill_targets"))
+    backfill_summary = as_dict(backfill_targets.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -140,6 +143,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Strong candidate observations: {quality_summary.get("strong_observation") or 0}
 - Candidate promotion-ready rows: {quality_review_summary.get("promotion_review_ready") or 0}
 - Candidate evidence gaps needing replay: {evidence_plan_summary.get("needs_replay_coverage") or 0}
+- Candidate wallet-history backfill targets: {backfill_summary.get("needs_wallet_history") or 0}
+- Candidate outcome-label backfill targets: {backfill_summary.get("needs_outcome_label_backfill") or 0}
 
 ## Review First
 
@@ -157,6 +162,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[Wallet Candidate Quality]]
 - [[Wallet Candidate Quality Review]]
 - [[Wallet Candidate Evidence Plan]]
+- [[Wallet Candidate Backfill Targets]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -247,6 +253,33 @@ Review-only collection plan for top candidate wallets. Use this to decide where 
 ## Coverage Queue
 
 {_candidate_evidence_plan_table(rows)}
+"""
+    return _note(frontmatter, body)
+
+
+def render_wallet_candidate_backfill_targets(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_candidate_backfill_targets"))
+    summary = as_dict(report.get("summary"))
+    rows = [row for row in report.get("targets") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("wallet_candidate_backfill_targets")
+    body = f"""# Wallet Candidate Backfill Targets
+
+{GENERATED_MARKER}
+
+Review-only target list for filling evidence gaps in the strongest candidate wallets. Use this to decide whether the next step is wallet-history collection, outcome-label backfill, more replay events, or risk review.
+
+## Summary
+
+- Total targets: {_count(summary.get("total_targets"))}
+- Needs wallet history: {_count(summary.get("needs_wallet_history"))}
+- Needs outcome-label backfill: {_count(summary.get("needs_outcome_label_backfill"))}
+- Needs more replay events: {_count(summary.get("needs_more_replay_events"))}
+- Risk review: {_count(summary.get("risk_review"))}
+- Ready or hold: {_count(summary.get("ready_or_hold"))}
+
+## Targets
+
+{_candidate_backfill_targets_table(rows)}
 """
     return _note(frontmatter, body)
 
@@ -658,6 +691,26 @@ def _candidate_evidence_plan_table(rows: list[dict[str, Any]]) -> str:
                 row.get("next_action") or "",
                 _count(as_dict(row.get("missing")).get("replay_known_15m")),
                 _count(as_dict(row.get("missing")).get("fillable_events")),
+                _count(as_dict(row.get("missing")).get("known_outcomes")),
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _candidate_backfill_targets_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No candidate backfill target rows currently surfaced."
+    return table(
+        ["Wallet", "Priority", "Next Step", "Local Events", "Unknown 15m", "Missing Replay", "Missing Outcomes"],
+        [
+            [
+                str(row.get("wallet") or ""),
+                compact_number(row.get("priority_score") or 0, 6),
+                row.get("next_collection_step") or "",
+                _count(row.get("local_replay_events")),
+                _count(row.get("unknown_15m_events")),
+                _count(as_dict(row.get("missing")).get("replay_known_15m")),
                 _count(as_dict(row.get("missing")).get("known_outcomes")),
             ]
             for row in rows[:25]

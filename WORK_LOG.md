@@ -44,6 +44,43 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Wallet Candidate Backfill Targets:
+
+Changed files:
+
+- `wallets/wallet_candidate_backfill_targets.py`
+- `utils/build_wallet_candidate_backfill_targets.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_candidate_backfill_targets.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a review-only target builder for the candidate evidence plan.
+- The builder groups existing historical replay events by wallet and classifies the next backfill action per candidate: collect wallet history, backfill outcome labels, collect more replay events, resolve risk flags, or hold for review.
+- Generated `data/wallet_candidate_backfill_targets.json`.
+- Current local target counts after rebuilding the candidate-quality chain: `50` total targets, `45` needing wallet-history collection, `1` needing outcome-label backfill, `0` needing more replay events, and `4` needing risk review first.
+- Added read-only `/api/wallet-candidate-backfill-targets` and Obsidian `MemeTraderPro/Dashboards/Wallet Candidate Backfill Targets.md`.
+
+Verification:
+
+- Added failing tests first for unknown replay-event outcome labels, no-local-event wallet-history targets, report writing, read-only API routing, and Obsidian note rendering.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_backfill_targets`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_backfill_targets_route_is_read_only`
+- `./trading_env/bin/python -m unittest tests.test_obsidian_export.ObsidianExportTests.test_intelligence_notes_surface_anomalies_drift_lineage_and_workflow`
+- `./trading_env/bin/python utils/build_wallet_candidate_backfill_targets.py`
+
+Remaining risk / next step:
+
+- This is a queue, not a chain-history collector.
+- Next step is to build the read-only wallet-history collection/backfill runner for the `COLLECT_WALLET_HISTORY` rows, then rerun replay/outcome labeling before considering any candidate promotions.
+
 2026-05-15 update - Wallet Candidate Evidence Plan:
 
 Changed files:

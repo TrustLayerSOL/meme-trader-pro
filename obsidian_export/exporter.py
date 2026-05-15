@@ -289,6 +289,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
     wallet_candidate_quality_report = read_json(data_dir / "wallet_candidate_quality_report.json", {})
     wallet_candidate_quality_review = read_json(data_dir / "wallet_candidate_quality_review.json", {})
     wallet_candidate_evidence_plan = read_json(data_dir / "wallet_candidate_evidence_plan.json", {})
+    wallet_candidate_backfill_targets = read_json(data_dir / "wallet_candidate_backfill_targets.json", {})
     paper = read_json(data_dir / "paper_trades.json", {})
     replay_visibility = read_json(data_dir / "replay_visibility_report.json", {})
     wallet_replay_scorecard = read_json(data_dir / "wallet_replay_scorecard.json", {})
@@ -315,6 +316,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
         "wallet_candidate_quality_report": wallet_candidate_quality_report,
         "wallet_candidate_quality_review": wallet_candidate_quality_review,
         "wallet_candidate_evidence_plan": wallet_candidate_evidence_plan,
+        "wallet_candidate_backfill_targets": wallet_candidate_backfill_targets,
         "replay_visibility": replay_visibility,
         "wallet_replay_review": build_wallet_replay_review(wallet_replay_scorecard),
     }
