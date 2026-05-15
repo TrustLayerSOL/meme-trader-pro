@@ -5135,3 +5135,28 @@ Verification:
 Remaining:
 
 - Keep Obsidian exports as valid project review artifacts when they support quant research dashboards.
+
+### 2026-05-15 - Obsidian Wallet Replay Ecosystem Review
+
+Changed files:
+
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_obsidian_export.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Wired the wallet replay review queue into the Obsidian intelligence export.
+- Added a generated `Wallet Replay Ecosystem Review` dashboard note using the wallet replay operator report.
+- Linked the new review note from the MemeTraderPro Research Command Center and surfaced reviewable/low-coverage wallet counts there.
+
+Verification:
+
+- Added a failing Obsidian export test first for the new review note and command-center link.
+- Focused Obsidian export test passed.
+
+Remaining:
+
+- Next step is running the export app/script and reviewing the generated note in Obsidian during the next operator review cycle.

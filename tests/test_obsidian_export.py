@@ -271,10 +271,15 @@ old generated body
                     ]
                 },
                 "replay_visibility": {"counts": {"records": 5}, "mode": "REVIEW_ONLY"},
+                "wallet_replay_review": {
+                    "summary": {"reviewable_wallets": 2, "low_coverage_wallets": 7, "co_entry_pairs": 3},
+                    "operator_report_markdown": "# Wallet Replay Ecosystem Review\n\nReview-only.\n\n## Reviewable Wallets\n\n- `WalletGOOD`",
+                },
             }
         )
 
         command = notes["Dashboards/MemeTraderPro Research Command Center.md"]
+        replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
         lineage = notes["Dashboards/MemeTraderPro Signal Lineage.md"]
@@ -289,6 +294,10 @@ old generated body
         self.assertIn("Wallet-Score Drift", drift)
         self.assertIn("Signal Lineage", lineage)
         self.assertIn("Daily Research Workflow", workflow)
+        self.assertIn("Wallet Replay Ecosystem Review", command)
+        self.assertIn("reviewable wallets: 2", command)
+        self.assertIn("WalletGOOD", replay)
+        self.assertIn("type: wallet_replay_ecosystem_review", replay)
         self.assertIn("Cross-Project Anomaly Radar", shared)
         self.assertIn("Prop API Dashboard", shared)
         self.assertIn("PropAPI/CoverageReports", shared)

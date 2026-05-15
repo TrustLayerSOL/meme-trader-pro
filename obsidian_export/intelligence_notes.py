@@ -24,6 +24,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/MemeTraderPro Research Command Center.md": render_command_center(snapshot, anomaly, drift),
         "Dashboards/MemeTraderPro Anomaly Radar.md": render_anomaly_radar(snapshot, anomaly),
         "Dashboards/MemeTraderPro Drift Monitor.md": render_drift_monitor(drift),
+        "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
         "../SharedQuant/Dashboards/Quant Research Command Center.md": render_shared_quant_dashboard(),
@@ -103,6 +104,8 @@ def build_drift_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], drift: dict[str, Any]) -> str:
     frontmatter = _frontmatter("research_command_center")
+    replay_review = as_dict(snapshot.get("wallet_replay_review"))
+    replay_summary = as_dict(replay_review.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -115,6 +118,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Rejected-signal winners: {len(anomaly["rejected_signal_winners"])}
 - Unresolved postmortems: {len(anomaly["unresolved_postmortems"])}
 - Wallet-score drift rows: {len(drift["wallet_score_drift"])}
+- Wallet replay reviewable wallets: {replay_summary.get("reviewable_wallets") or 0}
+- Wallet replay low-coverage wallets: {replay_summary.get("low_coverage_wallets") or 0}
 
 ## Review First
 
@@ -128,6 +133,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 
 - [[MemeTraderPro Anomaly Radar]]
 - [[MemeTraderPro Drift Monitor]]
+- [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
 - [[Wallet Review Decisions]]
@@ -137,6 +143,25 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 This page is the queue. Use folder tables only after an anomaly or experiment points there.
 """
     return _note(frontmatter, body)
+
+
+def render_wallet_replay_review(snapshot: dict[str, Any]) -> str:
+    review = as_dict(snapshot.get("wallet_replay_review"))
+    report = str(review.get("operator_report_markdown") or "").strip()
+    if not report:
+        summary = as_dict(review.get("summary"))
+        report = "\n\n".join(
+            [
+                "# Wallet Replay Ecosystem Review",
+                "Review-only. No wallet replay report is available yet.",
+                "## Summary",
+                f"- Reviewable wallets: `{summary.get('reviewable_wallets') or 0}`",
+                f"- Low-coverage wallets: `{summary.get('low_coverage_wallets') or 0}`",
+                f"- Co-entry pairs: `{summary.get('co_entry_pairs') or 0}`",
+            ]
+        )
+    frontmatter = _frontmatter("wallet_replay_ecosystem_review")
+    return _note(frontmatter, f"{report}\n")
 
 
 def render_anomaly_radar(snapshot: dict[str, Any], anomaly: dict[str, Any]) -> str:

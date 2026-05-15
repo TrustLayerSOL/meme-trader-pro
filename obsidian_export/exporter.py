@@ -25,6 +25,7 @@ from obsidian_export.signal_note import (
     signal_filename,
 )
 from obsidian_export.wallet_note import render_wallet_note, wallet_filename
+from wallets.wallet_replay_review import build_wallet_replay_review
 
 
 FOLDERS = [
@@ -248,6 +249,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
     wallet_review_decisions = read_json(data_dir / "wallet_review_decisions.json", {})
     paper = read_json(data_dir / "paper_trades.json", {})
     replay_visibility = read_json(data_dir / "replay_visibility_report.json", {})
+    wallet_replay_scorecard = read_json(data_dir / "wallet_replay_scorecard.json", {})
 
     signals = read_jsonl(data_dir / "signal_contexts" / "contexts.jsonl", limit=config.max_signals)
     rejections = read_jsonl(data_dir / "rejected_signals" / "rejections.jsonl", limit=config.max_rejected_signals)
@@ -268,6 +270,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
         "wallet_candidate_audit": wallet_candidate_audit,
         "wallet_review_decisions": wallet_review_decisions,
         "replay_visibility": replay_visibility,
+        "wallet_replay_review": build_wallet_replay_review(wallet_replay_scorecard),
     }
 
 
