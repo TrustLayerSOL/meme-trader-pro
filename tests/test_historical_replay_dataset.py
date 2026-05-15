@@ -77,6 +77,33 @@ class HistoricalReplayDatasetTests(unittest.TestCase):
         self.assertTrue(event["research_safety"]["decision_time_safe"])
         self.assertFalse(event["execution_assumptions"]["perfect_fills_allowed"])
 
+    def test_replay_event_declares_fixed_evaluation_windows(self):
+        event = build_replay_event(self.base_unified_record())
+
+        self.assertEqual(
+            event["evaluation_windows"],
+            [
+                {"label": "30s", "seconds": 30},
+                {"label": "2m", "seconds": 120},
+                {"label": "5m", "seconds": 300},
+                {"label": "15m", "seconds": 900},
+            ],
+        )
+
+    def test_execution_assumptions_include_realistic_fill_controls(self):
+        record = self.base_unified_record()
+        record["replay_assumptions"] = {}
+        record["signal_context"]["market"]["liquidity"] = 800
+
+        event = build_replay_event(record)
+
+        self.assertEqual(event["execution_assumptions"]["fill_status"], "failed_liquidity_floor")
+        self.assertEqual(event["execution_assumptions"]["liquidity_floor_usd"], 1_000)
+        self.assertEqual(event["execution_assumptions"]["entry_liquidity_usd"], 800)
+        self.assertGreater(event["execution_assumptions"]["slippage_bps"], 0)
+        self.assertGreater(event["execution_assumptions"]["latency_seconds"], 0)
+        self.assertFalse(event["execution_assumptions"]["perfect_fills_allowed"])
+
     def test_leakage_validator_rejects_future_fields_inside_decision_context(self):
         event = build_replay_event(self.base_unified_record())
         event["decision_context"]["future_price"] = 0.02
@@ -109,13 +136,11 @@ class HistoricalReplayDatasetTests(unittest.TestCase):
         self.assertEqual(event["decision_context"]["scoring"]["score"], 15)
 
     def test_dataset_contains_accepted_and_rejected_records_with_summary_counts(self):
-        dataset = build_historical_replay_dataset(
-            [
-                self.base_unified_record(record_type="accepted_trade"),
-                self.base_unified_record(record_type="rejected_signal"),
-            ],
-            generated_at=123.0,
-        )
+        accepted = self.base_unified_record(record_type="accepted_trade")
+        rejected = self.base_unified_record(record_type="rejected_signal")
+        rejected["signal_context"]["market"]["liquidity"] = 500
+        rejected["replay_assumptions"] = {}
+        dataset = build_historical_replay_dataset([accepted, rejected], generated_at=123.0)
 
         self.assertEqual(dataset["schema_version"], "historical_replay_dataset.v1")
         self.assertEqual(dataset["generated_at"], 123.0)
@@ -123,6 +148,9 @@ class HistoricalReplayDatasetTests(unittest.TestCase):
         self.assertEqual(dataset["counts"]["accepted_trade"], 1)
         self.assertEqual(dataset["counts"]["rejected_signal"], 1)
         self.assertEqual(dataset["counts"]["unsafe_events"], 0)
+        self.assertEqual(dataset["fill_status_counts"]["fillable_with_assumptions"], 1)
+        self.assertEqual(dataset["fill_status_counts"]["failed_liquidity_floor"], 1)
+        self.assertEqual(dataset["evaluation_windows"], ["30s", "2m", "5m", "15m"])
         self.assertEqual(
             {event["source_record_type"] for event in dataset["events"]},
             {"accepted_trade", "rejected_signal"},

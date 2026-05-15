@@ -50,6 +50,34 @@ Conclusion: The project now has the first clean bridge between forward paper dat
 
 Next action: Add fixed evaluation windows and richer slippage/latency/failed-fill assumptions before using historical replay results for wallet promotion or filter changes.
 
+### 2026-05-15 - Replay Realism Assumptions
+
+Date: 2026-05-15
+
+Hypothesis: Replay records are more useful when every event declares the same evaluation windows and explicit execution realism assumptions before any historical result is interpreted as edge.
+
+Files changed:
+
+- `research/historical_replay_dataset.py`
+- `tests/test_historical_replay_dataset.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Data used: Current local historical replay dataset generated from unified records.
+
+Sample size: `6,041` replay events.
+
+Baseline result: Replay events separated decision context from later outcome, but did not declare common evaluation windows or classify whether the event was fillable under basic liquidity assumptions.
+
+New result: Replay events now declare `30s`, `2m`, `5m`, and `15m` evaluation windows and include latency, slippage, entry liquidity, liquidity floor, fill status, failed-fill assumptions, and max position liquidity percent. The local summary currently reports `207` fillable-with-assumptions, `153` failed-liquidity-floor, and `5,681` unknown-liquidity events.
+
+Conclusion: Replay structure is better, but decision-time liquidity coverage is still too incomplete for strong strategy conclusions.
+
+Next action: Improve decision-time market context coverage, then compute windowed later outcomes for each fixed replay window.
+
 ### 2026-05-14 - Wallet Candidate Audit Report
 
 Date: 2026-05-14

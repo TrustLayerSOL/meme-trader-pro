@@ -78,6 +78,34 @@ Remaining risk / next step:
 - Current replay events are a schema-safe dataset, not a profitability proof.
 - Next high-leverage step is fixed evaluation windows plus realistic slippage, latency, liquidity, and failed-fill assumptions before historical results are used to tune wallet scoring.
 
+2026-05-15 update - Replay Realism Assumptions:
+
+Changed files:
+
+- `research/historical_replay_dataset.py`
+- `tests/test_historical_replay_dataset.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added fixed replay evaluation windows to every historical replay event: `30s`, `2m`, `5m`, and `15m`.
+- Added review-only execution realism fields: latency seconds, slippage percent/bps, entry liquidity, liquidity floor, fill status, failed-fill assumption, and max position liquidity percent.
+- Added dataset-level `fill_status_counts` so replay quality can be inspected without opening the full JSONL file.
+- Regenerated the local historical replay dataset. Current counts: `6,041` events, `0` unsafe/leakage flags, `207` fillable-with-assumptions, `153` failed-liquidity-floor, and `5,681` unknown-liquidity.
+
+Verification:
+
+- Added failing tests before implementation for fixed windows, realistic fill controls, and summary fill-status counts.
+- `./trading_env/bin/python -m unittest tests.test_historical_replay_dataset`
+- `./trading_env/bin/python utils/build_historical_replay_dataset.py`
+
+Remaining risk / next step:
+
+- The `unknown_liquidity` bucket is too large to make strong historical conclusions.
+- Next step is to improve decision-time market context coverage and then compute windowed later outcomes per replay window.
+
 2026-05-15 update - Wallet Review Queue Resolution:
 
 Changed files:
