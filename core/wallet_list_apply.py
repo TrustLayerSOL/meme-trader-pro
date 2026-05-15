@@ -84,7 +84,11 @@ def paper_watch_by_wallet(paper_watch_wallets):
 def candidate_audit_by_wallet(candidate_audit):
     if not isinstance(candidate_audit, dict):
         return None
-    rows = candidate_audit.get("candidates") if isinstance(candidate_audit.get("candidates"), list) else []
+    rows = []
+    for key in ("candidates", "resolved_candidates"):
+        bucket = candidate_audit.get(key)
+        if isinstance(bucket, list):
+            rows.extend(bucket)
     result = {}
     for row in rows:
         if not isinstance(row, dict):

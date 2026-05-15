@@ -10,6 +10,9 @@ from wallets.wallet_promotion_engine import MIN_KNOWN_OUTCOMES
 REVIEW_ACTIONS = {"PROMOTION_REVIEW", "DEMOTION_REVIEW"}
 PROMOTION_DECISIONS = {"approve_promotion", "promote", "promote_to_tracked"}
 DEMOTION_DECISIONS = {"approve_demotion", "demote", "demote_off_watch"}
+REPLAY_REVIEW_SOURCE = "wallet_replay_review"
+REPLAY_MIN_KNOWN_OUTCOMES = 10
+REPLAY_MIN_FILLABLE_EVENTS = 10
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -76,8 +79,18 @@ def approved_decisions_by_wallet(review_decisions: dict[str, Any] | None) -> dic
                 "approved_at": row.get("approved_at"),
                 "approved_by": row.get("approved_by") or "operator",
                 "note": row.get("note") or row.get("reason") or "",
+                "source": row.get("source") or "",
+                "replay_metrics": as_dict(row.get("replay_metrics")),
             }
     return result
+
+
+def replay_review_decisions_by_wallet(review_decisions: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    return {
+        wallet: decision
+        for wallet, decision in approved_decisions_by_wallet(review_decisions).items()
+        if decision.get("source") == REPLAY_REVIEW_SOURCE and decision.get("replay_metrics")
+    }
 
 
 def comparison_by_wallet(baseline_comparison: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -137,6 +150,65 @@ def candidate_row(wallet: str, ledger_row: dict[str, Any], comparison_row: dict[
     }
 
 
+def replay_candidate_row(wallet: str, decision: dict[str, Any]) -> dict[str, Any]:
+    metrics = as_dict(decision.get("replay_metrics"))
+    mapped_action = "PROMOTION_REVIEW" if decision.get("decision") == "approve_promotion" else "DEMOTION_REVIEW"
+    known = safe_int(metrics.get("known_15m"))
+    fillable = safe_int(metrics.get("fillable_events"))
+    runner_rate = safe_float(metrics.get("runner_rate_known_15m"))
+    rug_rate = safe_float(metrics.get("rug_rate_known_15m"))
+    edge = safe_float(metrics.get("runner_minus_rug_rate_15m"), runner_rate - rug_rate)
+    sample_passed = known >= REPLAY_MIN_KNOWN_OUTCOMES and fillable >= REPLAY_MIN_FILLABLE_EVENTS
+    source_coverage = round(known / fillable, 4) if fillable else 0.0
+    audit_notes: list[str] = []
+    if not sample_passed:
+        audit_notes.append("replay known/fillable sample below audit threshold")
+    else:
+        audit_notes.append("approved replay recommendation has enough known/fillable outcomes for audit")
+    if decision.get("note"):
+        audit_notes.append(str(decision.get("note")))
+
+    return {
+        "wallet": wallet,
+        "recommendation_action": mapped_action,
+        "audit_status": "HUMAN_REVIEW_REQUIRED" if sample_passed else "INSUFFICIENT_EVIDENCE",
+        "review_resolved": False,
+        "resolution": {},
+        "review_only": True,
+        "wallet_list_apply_allowed": False,
+        "comparison_status": "REPLAY_REVIEW_STRONG_SIGNAL",
+        "evidence_gates": {
+            "known_outcome_sample_passed": sample_passed,
+            "minimum_known_outcomes": REPLAY_MIN_KNOWN_OUTCOMES,
+            "minimum_fillable_events": REPLAY_MIN_FILLABLE_EVENTS,
+            "source_coverage": source_coverage,
+            "recommendation_is_review_only": True,
+        },
+        "evidence": {
+            "source": REPLAY_REVIEW_SOURCE,
+            "total_signals": known,
+            "accepted_signals": 0,
+            "rejected_or_observed_signals": known,
+            "known_outcomes": known,
+            "fillable_events": fillable,
+            "runner_participation": round(runner_rate * known, 4),
+            "rug_participation": round(rug_rate * known, 4),
+            "dead_participation": 0,
+            "runner_participation_rate": runner_rate,
+            "rug_participation_rate": rug_rate,
+            "average_pnl_after_signal": None,
+            "promotion_score": round(max(edge, 0.0) * 100, 4),
+            "demotion_score": round(max(-edge, rug_rate) * 100, 4),
+            "confidence": {
+                "sample_quality": "replay_known_fillable" if sample_passed else "thin_replay_sample",
+                "known_outcome_rate": source_coverage,
+            },
+            "recommendation_reasons": [str(decision.get("note"))] if decision.get("note") else [],
+        },
+        "audit_notes": audit_notes,
+    }
+
+
 def build_wallet_candidate_audit(
     *,
     outcome_ledger: dict[str, Any],
@@ -147,13 +219,16 @@ def build_wallet_candidate_audit(
     ledger = ledger_wallets(outcome_ledger)
     comparisons = comparison_by_wallet(as_dict(baseline_comparison))
     approved = approved_decisions_by_wallet(review_decisions)
+    replay_approved = replay_review_decisions_by_wallet(review_decisions)
     tracked = tracked_wallet_set(tracked_wallets)
     candidates = []
     resolved_candidates = []
+    seen_candidate_wallets: set[str] = set()
     for wallet, row in ledger.items():
         action = str(as_dict(row.get("recommendation")).get("action") or "")
         if action in REVIEW_ACTIONS:
             candidate = candidate_row(wallet, row, comparisons.get(wallet))
+            seen_candidate_wallets.add(wallet)
             resolution = resolution_for_candidate(wallet, action, approved.get(wallet), tracked)
             if resolution:
                 candidate["audit_status"] = "RESOLVED_APPLIED"
@@ -164,6 +239,20 @@ def build_wallet_candidate_audit(
                 resolved_candidates.append(candidate)
             else:
                 candidates.append(candidate)
+    for wallet, decision in replay_approved.items():
+        if wallet in seen_candidate_wallets:
+            continue
+        candidate = replay_candidate_row(wallet, decision)
+        resolution = resolution_for_candidate(wallet, candidate["recommendation_action"], decision, tracked)
+        if resolution:
+            candidate["audit_status"] = "RESOLVED_APPLIED"
+            candidate["review_resolved"] = True
+            candidate["resolution"] = resolution
+            candidate["wallet_list_apply_allowed"] = False
+            candidate.setdefault("audit_notes", []).append(resolution["reason"])
+            resolved_candidates.append(candidate)
+        else:
+            candidates.append(candidate)
 
     candidates.sort(
         key=lambda row: (
@@ -210,6 +299,8 @@ def resolution_for_candidate(wallet: str, recommendation_action: str, decision: 
             "reason": "wallet is already tracked after approved apply",
         }
     if recommendation_action == "DEMOTION_REVIEW" and decision.get("decision") == "approve_demotion" and wallet not in tracked:
+        if decision.get("source") == REPLAY_REVIEW_SOURCE:
+            return None
         return {
             "decision": "approve_demotion",
             "approved_at": decision.get("approved_at"),

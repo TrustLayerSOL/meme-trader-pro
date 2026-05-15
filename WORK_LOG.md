@@ -44,6 +44,50 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Replay Recommendations Applied Through Wallet Gates:
+
+Changed files:
+
+- `wallets/wallet_candidate_audit.py`
+- `core/wallet_list_apply.py`
+- `tests/test_wallet_candidate_audit.py`
+- `tests/test_core_logic.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Bridged approved replay-review decisions into the existing wallet candidate audit instead of bypassing stale-audit protection.
+- Replay promotion/demotion decisions now become review-only candidate rows with known/fillable replay gates, runner/rug rates, replay source evidence, and human-review status.
+- Applied the current guarded wallet-review update: promoted `4` replay-qualified paper-watch wallets into `data/tracked_wallets.json`, demoted `0`, skipped `2`.
+- Rebuilt `data/wallet_candidate_audit.json`; current active queue is `0` promotion reviews, `15` demotion reviews, and `4` resolved applied replay promotions.
+- Added clearer post-apply dry-run behavior so already-applied promotions show as `already tracked` instead of stale audit rows.
+- Regenerated the wallet research loop after the tracked-wallet refresh: `data/wallet_outcome_ledger.json`, `data/historical_replay/`, `data/wallet_replay_scorecard.json`, replay review decisions, and the candidate audit.
+- Current regenerated replay summary: `6,041` events, `0` unsafe/leakage flags, `726` fillable-with-assumptions events, `667` liquidity-floor failures, and `4,648` unknown-liquidity events.
+- Current regenerated scorecard covers `364` wallets and `50` top co-entry pairs.
+
+Verification:
+
+- Added failing tests first for replay decisions becoming audit rows, replay promotions resolving after tracking, and resolved audit rows explaining already-applied promotions.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_audit`
+- `./trading_env/bin/python -m unittest tests.test_core_logic.WalletListApplyTests.test_candidate_audit_resolved_rows_explain_already_applied_promotions tests.test_core_logic.WalletListApplyTests.test_candidate_audit_blocks_stale_approved_promotion tests.test_core_logic.WalletListApplyTests.test_candidate_audit_can_supply_current_promotion_evidence`
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_audit tests.test_wallet_replay_scorecard tests.test_core_logic.WalletListApplyTests tests.test_desktop_api tests.test_obsidian_export` (`116` tests)
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_audit.py wallets/wallet_replay_review.py core/wallet_list_apply.py utils/build_wallet_candidate_audit.py utils/sync_replay_wallet_decisions.py utils/apply_wallet_review.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_audit.py`
+- `./trading_env/bin/python utils/apply_wallet_review.py`
+- `./trading_env/bin/python utils/apply_wallet_review.py --apply`
+- `./trading_env/bin/python utils/build_wallet_outcome_ledger.py`
+- `./trading_env/bin/python utils/build_historical_replay_dataset.py`
+- `./trading_env/bin/python utils/build_wallet_replay_scorecard.py`
+- `./trading_env/bin/python utils/sync_replay_wallet_decisions.py --limit 50 --approved-by codex_replay_review`
+
+Remaining risk / next step:
+
+- The applied changes are wallet-list metadata only; live execution remains locked.
+- The replay-demotion decision was not actionable because the wallet is not currently tracked.
+- Next step is reviewing the remaining `15` demotion-review wallets and expanding decision-time liquidity coverage so replay unknowns continue to shrink.
+
 2026-05-15 update - Historical Replay Dataset Contract:
 
 Changed files:

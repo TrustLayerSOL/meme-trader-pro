@@ -101,6 +101,85 @@ class WalletCandidateAuditTests(unittest.TestCase):
         self.assertEqual(report["counts"]["resolved"], 0)
         self.assertFalse(report["candidates"][0]["review_resolved"])
 
+    def test_replay_review_decisions_become_candidate_audit_rows(self):
+        report = build_wallet_candidate_audit(
+            outcome_ledger={"wallets": {}},
+            baseline_comparison={"wallets": []},
+            review_decisions={
+                "decisions": [
+                    {
+                        "wallet": "ReplayPromote",
+                        "decision": "approve_promotion",
+                        "approved": True,
+                        "source": "wallet_replay_review",
+                        "note": "runner-heavy replay evidence",
+                        "replay_metrics": {
+                            "known_15m": 12,
+                            "fillable_events": 12,
+                            "runner_rate_known_15m": 0.75,
+                            "rug_rate_known_15m": 0,
+                            "runner_minus_rug_rate_15m": 0.75,
+                        },
+                    },
+                    {
+                        "wallet": "ReplayDemote",
+                        "decision": "approve_demotion",
+                        "approved": True,
+                        "source": "wallet_replay_review",
+                        "replay_metrics": {
+                            "known_15m": 14,
+                            "fillable_events": 14,
+                            "runner_rate_known_15m": 0.1,
+                            "rug_rate_known_15m": 0.2,
+                            "runner_minus_rug_rate_15m": -0.1,
+                        },
+                    },
+                ]
+            },
+            tracked_wallets=[],
+        )
+
+        rows = {row["wallet"]: row for row in report["candidates"]}
+        self.assertEqual(report["counts"]["promotion_review"], 1)
+        self.assertEqual(report["counts"]["demotion_review"], 1)
+        self.assertEqual(rows["ReplayPromote"]["recommendation_action"], "PROMOTION_REVIEW")
+        self.assertEqual(rows["ReplayPromote"]["comparison_status"], "REPLAY_REVIEW_STRONG_SIGNAL")
+        self.assertTrue(rows["ReplayPromote"]["evidence_gates"]["known_outcome_sample_passed"])
+        self.assertEqual(rows["ReplayPromote"]["evidence"]["known_outcomes"], 12)
+        self.assertEqual(rows["ReplayPromote"]["evidence"]["source"], "wallet_replay_review")
+        self.assertEqual(rows["ReplayDemote"]["recommendation_action"], "DEMOTION_REVIEW")
+
+    def test_replay_approved_promotion_resolves_after_wallet_is_tracked(self):
+        report = build_wallet_candidate_audit(
+            outcome_ledger={"wallets": {}},
+            baseline_comparison={"wallets": []},
+            review_decisions={
+                "decisions": [
+                    {
+                        "wallet": "ReplayPromote",
+                        "decision": "approve_promotion",
+                        "approved": True,
+                        "source": "wallet_replay_review",
+                        "replay_metrics": {
+                            "known_15m": 12,
+                            "fillable_events": 12,
+                            "runner_rate_known_15m": 0.75,
+                            "rug_rate_known_15m": 0,
+                            "runner_minus_rug_rate_15m": 0.75,
+                        },
+                    },
+                ]
+            },
+            tracked_wallets=[{"trackedWalletAddress": "ReplayPromote"}],
+        )
+
+        self.assertEqual(report["counts"]["candidates"], 0)
+        self.assertEqual(report["counts"]["resolved"], 1)
+        resolved = report["resolved_candidates"][0]
+        self.assertEqual(resolved["wallet"], "ReplayPromote")
+        self.assertEqual(resolved["audit_status"], "RESOLVED_APPLIED")
+        self.assertEqual(resolved["resolution"]["decision"], "approve_promotion")
+
 
 if __name__ == "__main__":
     unittest.main()

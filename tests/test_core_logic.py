@@ -932,6 +932,39 @@ class WalletListApplyTests(unittest.TestCase):
         self.assertEqual(result["summary"]["promoted"], 0)
         self.assertEqual(result["audit"]["skipped"][0]["reason"], "stale or missing candidate audit")
 
+    def test_candidate_audit_resolved_rows_explain_already_applied_promotions(self):
+        result = apply_wallet_review_decisions(
+            tracked_wallets=[{"trackedWalletAddress": "Promote111", "name": "already promoted"}],
+            paper_watch_wallets={
+                "wallets": [
+                    {"wallet": "Promote111", "status": "promoted_to_tracked", "source": "candidate_wallet_discovery"},
+                ]
+            },
+            bad_wallets=[],
+            review_decisions={
+                "decisions": [
+                    {"wallet": "Promote111", "decision": "approve_promotion", "approved": True},
+                ]
+            },
+            lifecycle_report={"wallets": []},
+            candidate_audit={
+                "candidates": [],
+                "resolved_candidates": [
+                    {
+                        "wallet": "Promote111",
+                        "recommendation_action": "PROMOTION_REVIEW",
+                        "evidence_gates": {"known_outcome_sample_passed": True},
+                        "evidence": {"promotion_score": 94.0, "known_outcomes": 20},
+                    },
+                ],
+            },
+            dry_run=True,
+        )
+
+        self.assertEqual(result["summary"]["promoted"], 0)
+        self.assertEqual(result["summary"]["skipped"], 1)
+        self.assertEqual(result["audit"]["skipped"][0]["reason"], "already tracked")
+
     def test_dry_run_does_not_change_lists(self):
         tracked = [{"trackedWalletAddress": "Demote111", "name": "bad"}]
         result = apply_wallet_review_decisions(
