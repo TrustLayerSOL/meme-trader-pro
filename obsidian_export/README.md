@@ -63,7 +63,21 @@ MemeTraderPro/
   DailyReports/
   Dashboards/
     Wallet Review Decisions.md
+    Top Wallets.md
+    Wallets Pending Review.md
+    Rug Association Watchlist.md
+    Rejected Signal Winners.md
+    Recent Paper Trade Outcomes.md
 ```
+
+The vault is summary-first. The exporter also adds Obsidian ignore filters for:
+
+```text
+MemeTraderPro/Wallets/
+MemeTraderPro/RejectedSignals/
+```
+
+Those folders can still hold generated detail notes on disk, but Obsidian does not need to live-index them for normal daily research.
 
 Every generated note includes:
 
@@ -78,14 +92,14 @@ Manual notes above that marker are preserved on future exports. Generated conten
 Optional environment limits:
 
 ```bash
-OBSIDIAN_EXPORT_MAX_WALLETS=100
+OBSIDIAN_EXPORT_MAX_WALLETS=250
 OBSIDIAN_EXPORT_MAX_SIGNALS=500
-OBSIDIAN_EXPORT_MAX_REJECTED_SIGNALS=500
+OBSIDIAN_EXPORT_MAX_REJECTED_SIGNALS=250
 OBSIDIAN_EXPORT_MAX_PAPER_TRADES=500
 OBSIDIAN_EXPORT_MAX_POSTMORTEMS=500
 ```
 
-Use `OBSIDIAN_EXPORT_MAX_WALLETS=all` or leave it unset to export all wallet notes.
+Use `OBSIDIAN_EXPORT_MAX_WALLETS=all` to export all wallet detail notes. Leaving it unset exports a bounded detail window and the static summary dashboards.
 
 ## Dataview Example
 

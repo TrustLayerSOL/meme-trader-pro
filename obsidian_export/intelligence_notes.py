@@ -137,6 +137,9 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
 - [[Wallet Review Decisions]]
+- [[Top Wallets]]
+- [[Wallets Pending Review]]
+- [[Rejected Signal Winners]]
 
 ## Not Raw Data
 
@@ -226,15 +229,11 @@ Wallets with high confidence but negative realized/replay expectancy.
 
 {bullet_list(drift["signal_drift_queries"])}
 
-## Dataview Drift Query
+## Static Drift Queues
 
-```dataview
-TABLE confidence_score, roi, win_rate, runner_count, rug_count, status
-FROM "MemeTraderPro/Wallets"
-WHERE type = "wallet" AND roi < 0
-SORT roi ASC
-LIMIT 50
-```
+- [[Top Wallets]]
+- [[Wallets Pending Review]]
+- [[Rug Association Watchlist]]
 """
     return _note(frontmatter, body)
 
@@ -251,13 +250,7 @@ signal -> wallet -> rejected signal / paper trade -> replay finding -> postmorte
 
 ## Recent Rejected Signal Lineage
 
-```dataview
-TABLE timestamp, rejection_reason, lane, outcome_status, triggering_wallets
-FROM "MemeTraderPro/RejectedSignals"
-WHERE type = "rejected_signal"
-SORT timestamp DESC
-LIMIT 50
-```
+Open [[Rejected Signal Winners]] before drilling into raw rejected-signal detail.
 
 ## Postmortem Lineage
 

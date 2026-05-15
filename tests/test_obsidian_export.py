@@ -1,13 +1,15 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from obsidian_export.dashboard_notes import render_dashboard_notes
 from obsidian_export.candidate_note import render_wallet_candidate_note, wallet_candidate_filename
 from obsidian_export.decision_note import render_wallet_review_decisions_note
-from obsidian_export.exporter import GENERATED_MARKER, merge_generated_note
+from obsidian_export.exporter import GENERATED_MARKER, ensure_vault_ignore_filters, merge_generated_note
 from obsidian_export.intelligence_notes import render_intelligence_notes
 from obsidian_export.signal_note import render_signal_note
+from obsidian_export.summary_notes import render_summary_index_notes
 from obsidian_export.wallet_note import render_wallet_note, wallet_filename
 
 
@@ -110,7 +112,8 @@ old generated body
         self.assertIn("Wallet Candidate Audit Queue", index)
         self.assertIn('FROM "MemeTraderPro/WalletCandidateReviews"', index)
         self.assertIn("review_resolved != true", index)
-        self.assertIn('FROM "MemeTraderPro/Wallets"', index)
+        self.assertNotIn('FROM "MemeTraderPro/Wallets"', index)
+        self.assertNotIn('FROM "MemeTraderPro/RejectedSignals"', index)
         self.assertIn("Pending Review Wallets", index)
         self.assertIn("High Rug Association", index)
         self.assertIn("Recent Rejected Signals", index)
@@ -134,6 +137,89 @@ old generated body
                 Path(tmp) / "MemeTraderPro" / "Wallets" / "WAL-WalletABC123.md",
             )
             self.assertTrue(path.exists())
+
+    def test_exporter_sets_ignore_filters_for_high_volume_generated_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            obsidian = vault / ".obsidian"
+            obsidian.mkdir()
+            (obsidian / "app.json").write_text(
+                json.dumps({"alwaysUpdateLinks": True, "userIgnoreFilters": ["ExistingArchive/"]}),
+                encoding="utf-8",
+            )
+
+            ensure_vault_ignore_filters(vault)
+
+            settings = json.loads((obsidian / "app.json").read_text(encoding="utf-8"))
+            self.assertTrue(settings["alwaysUpdateLinks"])
+            self.assertIn("ExistingArchive/", settings["userIgnoreFilters"])
+            self.assertIn("MemeTraderPro/Wallets/", settings["userIgnoreFilters"])
+            self.assertIn("MemeTraderPro/RejectedSignals/", settings["userIgnoreFilters"])
+
+    def test_summary_index_notes_are_static_and_focus_actionable_queues(self):
+        notes = render_summary_index_notes(
+            {
+                "wallet_rows": [
+                    {
+                        "wallet": "WalletGOOD123",
+                        "recommendation": {"action": "PROMOTION_REVIEW", "reasons": ["runner-heavy"]},
+                        "behavior_score": {"score": 91.2},
+                        "behavior_profile": {"wallet_roi": 18.5},
+                        "paper_watch_win_rate": 80,
+                        "runner_participation": 8,
+                        "rug_participation": 0,
+                        "last_seen": 1778770000.0,
+                    },
+                    {
+                        "wallet": "WalletRUG999",
+                        "recommendation": {"action": "DEMOTION_REVIEW", "reasons": ["rug-heavy"]},
+                        "behavior_score": {"score": 12.0},
+                        "behavior_profile": {"wallet_roi": -22.4},
+                        "paper_watch_win_rate": 10,
+                        "runner_participation": 1,
+                        "rug_participation": 5,
+                        "last_seen": 1778770100.0,
+                    },
+                ],
+                "rejections": [
+                    {
+                        "decision_id": "dec_reject_win",
+                        "mint": "MintWinner",
+                        "lane": "wallet_main",
+                        "rejection reason": "score_gate",
+                        "recorded_at": 1778770200.0,
+                        "what would have happened afterward if traded": {
+                            "status": "runner",
+                            "max_gain_pct": 312,
+                        },
+                    }
+                ],
+                "paper_trades": [
+                    {
+                        "decision_id": "dec_trade",
+                        "token_mint": "MintTrade",
+                        "status": "closed",
+                        "paper_lane": "wallet_main",
+                        "total_pnl": 4.2,
+                        "total_pnl_pct": 21,
+                        "entry_time": 1778770300.0,
+                    }
+                ],
+            }
+        )
+
+        top_wallets = notes["Dashboards/Top Wallets.md"]
+        rejected_winners = notes["Dashboards/Rejected Signal Winners.md"]
+        trades = notes["Dashboards/Recent Paper Trade Outcomes.md"]
+
+        self.assertIn("type: wallet_index", top_wallets)
+        self.assertIn("WalletGOOD123", top_wallets)
+        self.assertIn("WalletRUG999", notes["Dashboards/Rug Association Watchlist.md"])
+        self.assertIn("MintWinner", rejected_winners)
+        self.assertIn("runner", rejected_winners)
+        self.assertIn("MintTrade", trades)
+        for content in notes.values():
+            self.assertNotIn("```dataview", content)
 
     def test_wallet_candidate_note_exposes_review_gates_and_links_wallet(self):
         candidate = {

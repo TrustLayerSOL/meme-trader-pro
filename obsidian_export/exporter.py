@@ -24,9 +24,15 @@ from obsidian_export.signal_note import (
     render_signal_note,
     signal_filename,
 )
+from obsidian_export.summary_notes import render_summary_index_notes
 from obsidian_export.wallet_note import render_wallet_note, wallet_filename
 from wallets.wallet_replay_review import build_wallet_replay_review
 
+
+HIGH_VOLUME_IGNORE_FILTERS = [
+    "MemeTraderPro/Wallets/",
+    "MemeTraderPro/RejectedSignals/",
+]
 
 FOLDERS = [
     "Wallets",
@@ -72,8 +78,15 @@ class ObsidianExporter:
 
     def export(self) -> dict[str, Any]:
         self.ensure_folders()
+        ensure_vault_ignore_filters(self.config.vault_path)
         snapshot = load_snapshot(self.config)
-        stats = {"vault_path": str(self.config.vault_path), "root": str(self.root), "written": 0, "folders": FOLDERS}
+        stats = {
+            "vault_path": str(self.config.vault_path),
+            "root": str(self.root),
+            "written": 0,
+            "folders": FOLDERS,
+            "ignored_high_volume_folders": HIGH_VOLUME_IGNORE_FILTERS,
+        }
 
         signals_by_wallet = index_signals_by_wallet(snapshot.get("signals") or [])
         postmortems_by_wallet = index_postmortems_by_wallet(snapshot.get("postmortems") or [])
@@ -132,6 +145,10 @@ class ObsidianExporter:
             self.write_rendered_note(relative_path, content)
             stats["written"] += 1
 
+        for relative_path, content in render_summary_index_notes(snapshot).items():
+            self.write_rendered_note(relative_path, content)
+            stats["written"] += 1
+
         self.write_rendered_note(
             "Dashboards/Wallet Review Decisions.md",
             render_wallet_review_decisions_note(
@@ -146,6 +163,27 @@ class ObsidianExporter:
             stats["written"] += 1
 
         return stats
+
+
+def ensure_vault_ignore_filters(vault_path: Path) -> Path:
+    obsidian_dir = vault_path / ".obsidian"
+    obsidian_dir.mkdir(parents=True, exist_ok=True)
+    app_json = obsidian_dir / "app.json"
+    try:
+        settings = json.loads(app_json.read_text(encoding="utf-8")) if app_json.exists() else {}
+    except json.JSONDecodeError:
+        settings = {}
+    if not isinstance(settings, dict):
+        settings = {}
+
+    current = settings.get("userIgnoreFilters")
+    filters = [str(item) for item in current] if isinstance(current, list) else []
+    for item in HIGH_VOLUME_IGNORE_FILTERS:
+        if item not in filters:
+            filters.append(item)
+    settings["userIgnoreFilters"] = filters
+    app_json.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return app_json
 
 
 def merge_generated_note(existing: str | None, frontmatter: dict[str, Any], generated_body: str) -> str:
