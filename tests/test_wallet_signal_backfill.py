@@ -97,6 +97,8 @@ class WalletSignalBackfillTests(unittest.TestCase):
             ledger = build_wallet_outcome_ledger(records)
 
         self.assertEqual(records[0]["later_token_outcome"]["outcome_type"], "runner")
+        self.assertEqual(records[0]["later_token_outcome"]["windows"]["30s"]["outcome_type"], "runner")
+        self.assertEqual(records[0]["later_token_outcome"]["windows"]["2m"]["outcome_type"], "runner")
         self.assertEqual(ledger["wallets"]["WalletA"]["known_outcomes"], 1)
         self.assertEqual(ledger["wallets"]["WalletA"]["runner_participation"], 1)
 

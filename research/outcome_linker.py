@@ -6,6 +6,12 @@ from research.outcome_labeler import label_later_token_outcome
 
 
 DEFAULT_EVALUATION_HORIZON_SECONDS = 3600
+DEFAULT_EVALUATION_WINDOWS = (
+    ("30s", 30),
+    ("2m", 120),
+    ("5m", 300),
+    ("15m", 900),
+)
 
 
 def safe_float(value: Any, default: float | None = None) -> float | None:
@@ -65,6 +71,24 @@ def build_later_outcome_from_snapshots(
         "close_reason": close_reason,
     }
     return label_later_token_outcome(outcome=outcome)
+
+
+def build_windowed_outcomes_from_snapshots(
+    *,
+    mint: str,
+    signal_time: float,
+    snapshots: list[dict[str, Any]],
+    windows: tuple[tuple[str, int], ...] = DEFAULT_EVALUATION_WINDOWS,
+) -> dict[str, dict[str, Any]]:
+    return {
+        label: build_later_outcome_from_snapshots(
+            mint=mint,
+            signal_time=signal_time,
+            snapshots=snapshots,
+            horizon_seconds=seconds,
+        )
+        for label, seconds in windows
+    }
 
 
 def unknown_outcome(mint: str, reason: str) -> dict[str, Any]:

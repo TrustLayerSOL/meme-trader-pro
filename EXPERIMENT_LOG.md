@@ -105,6 +105,38 @@ Conclusion: Decision-time context coverage improved materially, and the remainin
 
 Next action: Add windowed outcome labels for `30s`, `2m`, `5m`, and `15m` so each replay event can show whether the wallet signal survived across fixed horizons.
 
+### 2026-05-15 - Fixed-Window Replay Outcome Labels
+
+Date: 2026-05-15
+
+Hypothesis: Wallet signal replay becomes more useful when later outcomes are labeled at fixed horizons instead of only as one broad post-signal outcome.
+
+Files changed:
+
+- `research/outcome_linker.py`
+- `research/historical_replay_dataset.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_outcome_linker.py`
+- `tests/test_historical_replay_dataset.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Data used: Current local wallet-performance signals and SQLite `token_snapshots`.
+
+Sample size: `6,041` replay events.
+
+Baseline result: Replay events declared fixed windows, but later outcome labels were not summarized by window.
+
+New result: Replay events now carry per-window labels under `later_token_outcome.windows`, and replay summaries expose `window_outcome_counts`. Current `15m` window counts are `76` runner, `14` rug, `149` dead, `275` loser, and `5,527` unknown.
+
+Conclusion: The system can now compare wallet signal outcomes by horizon. Unknown coverage remains high, so future scoring must separate coverage from performance.
+
+Next action: Build a wallet replay scorecard that ranks wallets using known/fillable window outcomes while making coverage and unknown-rate explicit.
+
 ### 2026-05-14 - Wallet Candidate Audit Report
 
 Date: 2026-05-14

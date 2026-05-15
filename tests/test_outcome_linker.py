@@ -1,6 +1,6 @@
 import unittest
 
-from research.outcome_linker import build_later_outcome_from_snapshots
+from research.outcome_linker import build_later_outcome_from_snapshots, build_windowed_outcomes_from_snapshots
 
 
 class OutcomeLinkerTests(unittest.TestCase):
@@ -47,6 +47,27 @@ class OutcomeLinkerTests(unittest.TestCase):
         self.assertEqual(outcome["outcome_type"], "rug")
         self.assertTrue(outcome["rug"])
         self.assertLessEqual(outcome["liquidity_change_pct"], -90)
+
+    def test_builds_fixed_window_outcomes_from_later_snapshots(self):
+        windows = build_windowed_outcomes_from_snapshots(
+            mint="MintA",
+            signal_time=100,
+            snapshots=[
+                {"time": 101, "price": 0.01, "liquidity": 10_000},
+                {"time": 125, "price": 0.018, "liquidity": 12_000},
+                {"time": 210, "price": 0.012, "liquidity": 11_000},
+                {"time": 390, "price": 0.006, "liquidity": 9_000},
+                {"time": 980, "price": 0.001, "liquidity": 900, "risk_label": "EMERGENCY"},
+            ],
+        )
+
+        self.assertEqual(list(windows.keys()), ["30s", "2m", "5m", "15m"])
+        self.assertEqual(windows["30s"]["outcome_type"], "runner")
+        self.assertEqual(windows["2m"]["outcome_type"], "runner")
+        self.assertEqual(windows["5m"]["outcome_type"], "runner")
+        self.assertLess(windows["5m"]["pnl_pct"], 0)
+        self.assertEqual(windows["15m"]["outcome_type"], "rug")
+        self.assertEqual(windows["15m"]["evaluation_horizon_seconds"], 900)
 
 
 if __name__ == "__main__":

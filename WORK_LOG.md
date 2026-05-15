@@ -136,6 +136,42 @@ Remaining risk / next step:
 - `4,697` replay events still lack decision-time liquidity, so replay conclusions remain limited.
 - Next step is windowed outcome labeling for `30s`, `2m`, `5m`, and `15m`, using only later outcome fields and keeping decision context unchanged.
 
+2026-05-15 update - Fixed-Window Replay Outcome Labels:
+
+Changed files:
+
+- `research/outcome_linker.py`
+- `research/historical_replay_dataset.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_outcome_linker.py`
+- `tests/test_historical_replay_dataset.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added `build_windowed_outcomes_from_snapshots` for fixed `30s`, `2m`, `5m`, and `15m` outcome labels.
+- Wallet signal records now attach per-window outcome labels under `later_token_outcome.windows`.
+- Historical replay summaries now include `window_outcome_counts` so the operator can inspect runner/rug/dead/loser/unknown counts by horizon without opening the full JSONL file.
+- Rebuilt local generated research data. Current replay summary: `6,041` events, `0` unsafe/leakage flags, `697` fillable-with-assumptions, `654` failed-liquidity-floor, and `4,690` unknown-liquidity.
+- Current `15m` window labels: `76` runner, `14` rug, `149` dead, `275` loser, and `5,527` unknown.
+
+Verification:
+
+- Added failing tests first for fixed-window outcome labeling and replay summary window counts.
+- `./trading_env/bin/python -m unittest tests.test_outcome_linker tests.test_wallet_signal_backfill`
+- `./trading_env/bin/python -m unittest tests.test_historical_replay_dataset tests.test_outcome_linker tests.test_wallet_signal_backfill`
+- `./trading_env/bin/python utils/build_wallet_outcome_ledger.py`
+- `./trading_env/bin/python utils/build_historical_replay_dataset.py`
+
+Remaining risk / next step:
+
+- Unknown labels remain high, especially at `30s`, because many signals lack dense near-term snapshots.
+- Next step is a wallet replay scorecard that uses only known/fillable window labels and reports coverage separately from performance.
+
 2026-05-15 update - Wallet Review Queue Resolution:
 
 Changed files:

@@ -221,6 +221,7 @@ def build_historical_replay_dataset(
         str(as_dict(event.get("execution_assumptions")).get("fill_status") or "unknown")
         for event in events
     )
+    window_counts = window_outcome_counts(events)
     return {
         "schema_version": HISTORICAL_REPLAY_DATASET_SCHEMA,
         "generated_at": generated,
@@ -229,5 +230,20 @@ def build_historical_replay_dataset(
         "counts": dict(counts),
         "evaluation_windows": [window["label"] for window in evaluation_windows()],
         "fill_status_counts": dict(fill_status_counts),
+        "window_outcome_counts": window_counts,
         "events": events,
     }
+
+
+def window_outcome_counts(events: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
+    for window in evaluation_windows():
+        label = str(window["label"])
+        counter: Counter[str] = Counter()
+        for event in events:
+            windows = as_dict(as_dict(event.get("later_outcome")).get("windows"))
+            outcome = as_dict(windows.get(label))
+            outcome_type = str(outcome.get("outcome_type") or "unknown")
+            counter[outcome_type] += 1
+        out[label] = dict(counter)
+    return out

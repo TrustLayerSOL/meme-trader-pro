@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from analysis.rejection_logger import DEFAULT_REJECT_PATH
-from research.outcome_linker import build_later_outcome_from_snapshots
+from research.outcome_linker import build_later_outcome_from_snapshots, build_windowed_outcomes_from_snapshots
 from research.signal_schema import build_record_from_rejection, build_record_from_trade, build_record_from_wallet_signal
 from wallets.wallet_outcome_ledger import build_wallet_outcome_ledger
 
@@ -204,11 +204,17 @@ def build_records(
                 if decision_context:
                     enriched_signal["market_info"] = decision_context.get("market_info")
                     enriched_signal.setdefault("risk_label", decision_context.get("risk_label"))
+            later_snapshots = snapshot_rows_for_signal(snapshot_db_path, str(mint or ""), signal_time, outcome_horizon_seconds)
             outcome = build_later_outcome_from_snapshots(
                 mint=str(mint or ""),
                 signal_time=signal_time,
-                snapshots=snapshot_rows_for_signal(snapshot_db_path, str(mint or ""), signal_time, outcome_horizon_seconds),
+                snapshots=later_snapshots,
                 horizon_seconds=outcome_horizon_seconds,
+            )
+            outcome["windows"] = build_windowed_outcomes_from_snapshots(
+                mint=str(mint or ""),
+                signal_time=signal_time,
+                snapshots=later_snapshots,
             )
             record = build_record_from_wallet_signal(enriched_signal)
             record["later_token_outcome"] = outcome

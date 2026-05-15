@@ -53,6 +53,12 @@ class HistoricalReplayDatasetTests(unittest.TestCase):
                 "rug": False,
                 "dead": False,
                 "max_favorable_excursion_pct": 84.0,
+                "windows": {
+                    "30s": {"outcome_type": "runner", "runner": True, "rug": False, "dead": False},
+                    "2m": {"outcome_type": "runner", "runner": True, "rug": False, "dead": False},
+                    "5m": {"outcome_type": "loser", "runner": False, "rug": False, "dead": False},
+                    "15m": {"outcome_type": "rug", "runner": False, "rug": True, "dead": False},
+                },
             },
             "replay_assumptions": {
                 "fill_model": "realistic_fill_required",
@@ -73,6 +79,7 @@ class HistoricalReplayDatasetTests(unittest.TestCase):
         self.assertEqual(event["decision"]["action"], "skip")
         self.assertEqual(event["decision_context"]["market"]["liquidity"], 12_000)
         self.assertEqual(event["later_outcome"]["outcome_type"], "runner")
+        self.assertEqual(event["later_outcome"]["windows"]["15m"]["outcome_type"], "rug")
         self.assertNotIn("later_token_outcome", event["decision_context"])
         self.assertTrue(event["research_safety"]["decision_time_safe"])
         self.assertFalse(event["execution_assumptions"]["perfect_fills_allowed"])
@@ -151,6 +158,8 @@ class HistoricalReplayDatasetTests(unittest.TestCase):
         self.assertEqual(dataset["fill_status_counts"]["fillable_with_assumptions"], 1)
         self.assertEqual(dataset["fill_status_counts"]["failed_liquidity_floor"], 1)
         self.assertEqual(dataset["evaluation_windows"], ["30s", "2m", "5m", "15m"])
+        self.assertEqual(dataset["window_outcome_counts"]["30s"]["runner"], 2)
+        self.assertEqual(dataset["window_outcome_counts"]["15m"]["rug"], 2)
         self.assertEqual(
             {event["source_record_type"] for event in dataset["events"]},
             {"accepted_trade", "rejected_signal"},
