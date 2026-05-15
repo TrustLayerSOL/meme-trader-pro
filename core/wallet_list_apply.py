@@ -81,12 +81,48 @@ def paper_watch_by_wallet(paper_watch_wallets):
     return result
 
 
+def candidate_audit_by_wallet(candidate_audit):
+    if not isinstance(candidate_audit, dict):
+        return None
+    rows = candidate_audit.get("candidates") if isinstance(candidate_audit.get("candidates"), list) else []
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        wallet = wallet_address(row)
+        if wallet:
+            result[str(wallet)] = row
+    return result
+
+
+def candidate_supports_decision(candidate, decision):
+    if not isinstance(candidate, dict):
+        return False
+    action = str(candidate.get("recommendation_action") or "")
+    gates = candidate.get("evidence_gates") if isinstance(candidate.get("evidence_gates"), dict) else {}
+    if gates and gates.get("known_outcome_sample_passed") is False:
+        return False
+    if decision == "approve_promotion":
+        return action == "PROMOTION_REVIEW"
+    if decision == "approve_demotion":
+        return action == "DEMOTION_REVIEW"
+    return False
+
+
+def candidate_metrics(candidate):
+    if not isinstance(candidate, dict):
+        return {}
+    evidence = candidate.get("evidence")
+    return dict(evidence) if isinstance(evidence, dict) else {}
+
+
 def apply_wallet_review_decisions(
     tracked_wallets,
     paper_watch_wallets,
     bad_wallets,
     review_decisions,
     lifecycle_report,
+    candidate_audit=None,
     applied_at=None,
     dry_run=True,
 ):
@@ -97,6 +133,7 @@ def apply_wallet_review_decisions(
     decisions = normalize_review_decisions(review_decisions)
     lifecycle = lifecycle_by_wallet(lifecycle_report or {})
     paper_watch = paper_watch_by_wallet(paper_watch_wallets)
+    candidate_audit_rows = candidate_audit_by_wallet(candidate_audit)
     tracked_by_wallet = {wallet_address(row): row for row in tracked_wallets if wallet_address(row)}
     bad_by_wallet = {wallet_address(row): row for row in bad_wallets if wallet_address(row)}
 
@@ -108,33 +145,50 @@ def apply_wallet_review_decisions(
     for wallet, decision in decisions.items():
         lifecycle_row = lifecycle.get(wallet, {})
         lifecycle_action = (lifecycle_row.get("lifecycle") or {}).get("action")
+        candidate_row = candidate_audit_rows.get(wallet, {}) if candidate_audit_rows is not None else {}
+        if candidate_audit_rows is not None and not candidate_row:
+            skipped.append({"wallet": wallet, "reason": "stale or missing candidate audit"})
+            continue
+        if candidate_audit_rows is not None and not candidate_supports_decision(candidate_row, decision["decision"]):
+            skipped.append({"wallet": wallet, "reason": "candidate audit does not support decision"})
+            continue
         if decision["decision"] == "approve_promotion":
             if wallet in tracked_by_wallet:
                 skipped.append({"wallet": wallet, "reason": "already tracked"})
                 continue
             base = paper_watch.get(wallet, {})
-            if not base or lifecycle_action not in PROMOTION_LIFECYCLE_ACTIONS:
+            has_lifecycle_evidence = lifecycle_action in PROMOTION_LIFECYCLE_ACTIONS
+            has_candidate_evidence = candidate_supports_decision(candidate_row, decision["decision"])
+            if not base or not (has_lifecycle_evidence or has_candidate_evidence):
                 skipped.append({"wallet": wallet, "reason": "missing promotion evidence"})
                 continue
+            metrics = (lifecycle_row.get("lifecycle") or {}).get("metrics", {})
+            if has_candidate_evidence and not has_lifecycle_evidence:
+                metrics = candidate_metrics(candidate_row)
+            elif not metrics and has_candidate_evidence:
+                metrics = candidate_metrics(candidate_row)
             promoted.append(build_tracked_wallet_row(wallet, source=base.get("source") or "paper_watch", name=base.get("name")))
             changes.append({
                 "wallet": wallet,
                 "action": "promoted_to_tracked",
                 "decision": decision,
-                "lifecycle_action": lifecycle_action,
-                "metrics": (lifecycle_row.get("lifecycle") or {}).get("metrics", {}),
+                "lifecycle_action": lifecycle_action if has_lifecycle_evidence else candidate_row.get("recommendation_action"),
+                "metrics": metrics,
             })
         elif decision["decision"] == "approve_demotion":
             if wallet not in tracked_by_wallet:
                 skipped.append({"wallet": wallet, "reason": "not currently tracked"})
                 continue
+            metrics = (lifecycle_row.get("lifecycle") or {}).get("metrics", {})
+            if not metrics and candidate_row:
+                metrics = candidate_metrics(candidate_row)
             demoted.append(wallet)
             changes.append({
                 "wallet": wallet,
                 "action": "demoted_from_tracked",
                 "decision": decision,
                 "lifecycle_action": lifecycle_action,
-                "metrics": (lifecycle_row.get("lifecycle") or {}).get("metrics", {}),
+                "metrics": metrics,
             })
 
     if dry_run:

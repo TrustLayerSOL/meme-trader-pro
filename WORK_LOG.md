@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 ## Current Work
 
@@ -42,6 +42,40 @@ Highest-value active workstreams:
 - Replay visibility reports for rejected/no-trade decisions.
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
+
+2026-05-15 update - Approved Promotion Applied From Candidate Audit:
+
+Changed files:
+
+- `core/wallet_list_apply.py`
+- `utils/apply_wallet_review.py`
+- `tests/test_core_logic.py`
+- `data/wallet_review_decisions.json`
+- `data/tracked_wallets.json`
+- `data/paper_watch_wallets.json`
+- `data/wallet_list_update_audit.json`
+
+What changed:
+
+- Recorded the operator approval for the current `PROMOTION_REVIEW` wallet `4dFoJ7QHwq72n2R42J4YxGqX6Y4edYpVPDqnNxRwhfJL`.
+- Tightened wallet-list apply so current `data/wallet_candidate_audit.json` can supply promotion evidence when the older lifecycle report still says `KEEP_PAPER_WATCH`.
+- Added stale-decision protection: if a saved approval no longer maps to the current candidate audit, apply skips it instead of mutating wallet lists.
+- Applied the approved promotion through `utils/apply_wallet_review.py --apply`.
+- Tracked wallet count moved from `518` to `519`.
+- Backup created at `data/archives/wallet_apply_20260515T010357512189Z_425058b0/`.
+- Repaired the apply audit entry so the promotion metrics reflect candidate-audit evidence instead of older zeroed lifecycle metrics.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_core_logic.WalletListApplyTests tests.test_obsidian_export`
+- `./trading_env/bin/python -m py_compile core/wallet_list_apply.py utils/apply_wallet_review.py tests/test_core_logic.py`
+- `./trading_env/bin/python utils/apply_wallet_review.py` preview showed `Promoted: 1`, `Demoted: 0`, `Skipped: 0` before apply.
+- `./trading_env/bin/python utils/apply_wallet_review.py --apply` completed with `Promoted: 1`, `Demoted: 0`, `Skipped: 0`.
+
+Remaining risk / next step:
+
+- The 13 `DEMOTION_REVIEW` wallets were not promoted or demoted in this step.
+- Continue cycling promoted wallets through paper evidence; demote later if their tracked outcomes degrade.
 
 2026-05-14 update - Obsidian Wallet Review Decisions Page:
 

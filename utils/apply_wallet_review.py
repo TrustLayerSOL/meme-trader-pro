@@ -29,6 +29,7 @@ CANDIDATE_WALLETS = ROOT / "data" / "candidate_wallets.json"
 WALLET_PERFORMANCE = ROOT / "data" / "wallet_performance.json"
 BAD_WALLETS = ROOT / "data" / "bad_wallets.json"
 REVIEW_DECISIONS = ROOT / "data" / "wallet_review_decisions.json"
+CANDIDATE_AUDIT = ROOT / "data" / "wallet_candidate_audit.json"
 AUDIT_FILE = ROOT / "data" / "wallet_list_update_audit.json"
 ARCHIVE_DIR = ROOT / "data" / "archives"
 APPLY_LOCK = ROOT / "data" / "wallet_review_apply.lock"
@@ -80,6 +81,7 @@ def run_apply(dry_run=True):
             bad_wallets=read_json(BAD_WALLETS, []),
             review_decisions=read_json(REVIEW_DECISIONS, {"decisions": []}),
             lifecycle_report=lifecycle,
+            candidate_audit=read_json(CANDIDATE_AUDIT, {"candidates": []}),
             applied_at=time.time(),
             dry_run=dry_run,
         )
@@ -88,7 +90,7 @@ def run_apply(dry_run=True):
         if dry_run:
             return result
 
-        backup_dir = create_backup([TRACKED_WALLETS, PAPER_WATCH_WALLETS, BAD_WALLETS, REVIEW_DECISIONS, AUDIT_FILE], stamp)
+        backup_dir = create_backup([TRACKED_WALLETS, PAPER_WATCH_WALLETS, BAD_WALLETS, REVIEW_DECISIONS, CANDIDATE_AUDIT, AUDIT_FILE], stamp)
         atomic_write_json(TRACKED_WALLETS, result["tracked_wallets"])
         atomic_write_json(PAPER_WATCH_WALLETS, result["paper_watch_wallets"])
         atomic_write_json(BAD_WALLETS, result["bad_wallets"])
