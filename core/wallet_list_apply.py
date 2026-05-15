@@ -180,20 +180,32 @@ def apply_wallet_review_decisions(
                 "metrics": metrics,
             })
         elif decision["decision"] == "approve_demotion":
-            if wallet not in tracked_by_wallet:
+            if wallet not in tracked_by_wallet and wallet not in paper_watch:
                 skipped.append({"wallet": wallet, "reason": "not currently tracked"})
+                continue
+            if wallet not in tracked_by_wallet and str(paper_watch.get(wallet, {}).get("status") or "") == "demote_review":
+                skipped.append({"wallet": wallet, "reason": "already demoted from paper watch"})
                 continue
             metrics = (lifecycle_row.get("lifecycle") or {}).get("metrics", {})
             if not metrics and candidate_row:
                 metrics = candidate_metrics(candidate_row)
             demoted.append(wallet)
-            changes.append({
-                "wallet": wallet,
-                "action": "demoted_from_tracked",
-                "decision": decision,
-                "lifecycle_action": lifecycle_action,
-                "metrics": metrics,
-            })
+            if wallet in tracked_by_wallet:
+                changes.append({
+                    "wallet": wallet,
+                    "action": "demoted_from_tracked",
+                    "decision": decision,
+                    "lifecycle_action": lifecycle_action,
+                    "metrics": metrics,
+                })
+            else:
+                changes.append({
+                    "wallet": wallet,
+                    "action": "demoted_from_paper_watch",
+                    "decision": decision,
+                    "lifecycle_action": candidate_row.get("recommendation_action") if candidate_row else lifecycle_action,
+                    "metrics": metrics,
+                })
 
     if dry_run:
         return build_apply_result(
@@ -220,6 +232,10 @@ def apply_wallet_review_decisions(
         if wallet in promoted_set:
             next_row["status"] = "promoted_to_tracked"
             next_row["promoted_at"] = applied_at
+        if wallet in demoted_set:
+            next_row["status"] = "demote_review"
+            next_row["demoted_at"] = applied_at
+            next_row["live_trade_driver"] = False
         next_paper_rows.append(next_row)
     next_paper_watch = dict(paper_watch_wallets)
     next_paper_watch["wallets"] = next_paper_rows

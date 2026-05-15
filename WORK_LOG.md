@@ -44,6 +44,38 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Bottom 10 Paper-Watch Wallet Demotions:
+
+Changed files:
+
+- `core/wallet_list_apply.py`
+- `tests/test_core_logic.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added guarded demotion support for paper-watch wallets. Approved demotions with candidate-audit support can now move a paper-watch wallet to `demote_review`, which keeps the evidence row but removes it from scanner observation.
+- Approved and applied demotions for the 10 weakest active paper-watch demotion-review wallets by current demotion evidence.
+- Added those 10 wallets to `data/bad_wallets.json` and marked their `data/paper_watch_wallets.json` rows as `demote_review`.
+- Created a backup before mutation: `data/archives/wallet_apply_20260515T061414877488Z_3f6c8d96`.
+- Rebuilt `data/wallet_candidate_audit.json`; current active queue is `5` demotion-review wallets, `0` promotion-review wallets.
+- Fixed wallet-apply idempotency so already-demoted paper-watch wallets show as skipped instead of being counted as pending demotions again.
+
+Verification:
+
+- Added failing tests first for paper-watch demotion and already-demoted idempotency.
+- `./trading_env/bin/python -m unittest tests.test_core_logic.WalletListApplyTests tests.test_wallet_candidate_audit tests.test_desktop_api tests.test_obsidian_export` (`109` tests)
+- `./trading_env/bin/python -m py_compile core/wallet_list_apply.py utils/apply_wallet_review.py wallets/wallet_candidate_audit.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_audit.py`
+- `./trading_env/bin/python utils/apply_wallet_review.py`
+
+Remaining risk / next step:
+
+- This was a wallet-observation list change only; live execution remains locked.
+- Next step is rerunning paper/watchlist discovery after a clean observation window, then comparing whether the demoted wallets stay weak or re-enter through fresh evidence.
+
 2026-05-15 update - Replay Recommendations Applied Through Wallet Gates:
 
 Changed files:

@@ -965,6 +965,76 @@ class WalletListApplyTests(unittest.TestCase):
         self.assertEqual(result["summary"]["skipped"], 1)
         self.assertEqual(result["audit"]["skipped"][0]["reason"], "already tracked")
 
+    def test_candidate_audit_can_demote_paper_watch_wallet(self):
+        result = apply_wallet_review_decisions(
+            tracked_wallets=[],
+            paper_watch_wallets={
+                "wallets": [
+                    {"wallet": "PaperBad111", "status": "paper_watch", "source": "candidate_wallet_discovery"},
+                    {"wallet": "KeepWatch111", "status": "paper_watch", "source": "candidate_wallet_discovery"},
+                ]
+            },
+            bad_wallets=[],
+            review_decisions={
+                "decisions": [
+                    {"wallet": "PaperBad111", "decision": "approve_demotion", "approved": True},
+                ]
+            },
+            lifecycle_report={"wallets": []},
+            candidate_audit={
+                "candidates": [
+                    {
+                        "wallet": "PaperBad111",
+                        "recommendation_action": "DEMOTION_REVIEW",
+                        "evidence_gates": {"known_outcome_sample_passed": True},
+                        "evidence": {"demotion_score": 72.0, "known_outcomes": 20},
+                    },
+                ]
+            },
+            applied_at=123,
+            dry_run=False,
+        )
+
+        rows = {row["wallet"]: row for row in result["paper_watch_wallets"]["wallets"]}
+        self.assertEqual(result["summary"]["demoted"], 1)
+        self.assertEqual(rows["PaperBad111"]["status"], "demote_review")
+        self.assertEqual(rows["PaperBad111"]["demoted_at"], 123)
+        self.assertEqual(rows["KeepWatch111"]["status"], "paper_watch")
+        self.assertEqual(result["bad_wallets"], ["PaperBad111"])
+        self.assertEqual(result["audit"]["changes"][0]["action"], "demoted_from_paper_watch")
+
+    def test_already_demoted_paper_watch_wallet_is_not_demoted_again(self):
+        result = apply_wallet_review_decisions(
+            tracked_wallets=[],
+            paper_watch_wallets={
+                "wallets": [
+                    {"wallet": "PaperBad111", "status": "demote_review", "source": "candidate_wallet_discovery"},
+                ]
+            },
+            bad_wallets=["PaperBad111"],
+            review_decisions={
+                "decisions": [
+                    {"wallet": "PaperBad111", "decision": "approve_demotion", "approved": True},
+                ]
+            },
+            lifecycle_report={"wallets": []},
+            candidate_audit={
+                "resolved_candidates": [
+                    {
+                        "wallet": "PaperBad111",
+                        "recommendation_action": "DEMOTION_REVIEW",
+                        "evidence_gates": {"known_outcome_sample_passed": True},
+                        "evidence": {"demotion_score": 72.0, "known_outcomes": 20},
+                    },
+                ]
+            },
+            dry_run=True,
+        )
+
+        self.assertEqual(result["summary"]["demoted"], 0)
+        self.assertEqual(result["summary"]["skipped"], 1)
+        self.assertEqual(result["audit"]["skipped"][0]["reason"], "already demoted from paper watch")
+
     def test_dry_run_does_not_change_lists(self):
         tracked = [{"trackedWalletAddress": "Demote111", "name": "bad"}]
         result = apply_wallet_review_decisions(
