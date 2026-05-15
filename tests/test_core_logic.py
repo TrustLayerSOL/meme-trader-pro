@@ -264,6 +264,33 @@ class CandidateWalletDiscoveryTests(unittest.TestCase):
         self.assertGreater(candidates["New111"]["score"], candidates["Noisy111"]["score"])
         self.assertEqual(report["mode"], "WATCH_ONLY_REVIEW")
 
+    def test_discovery_excludes_bad_wallets_from_active_candidates(self):
+        discovery = CandidateWalletDiscovery(
+            tracked_wallets={},
+            existing_performance={"wallets": {}},
+            bad_wallets=["BadWallet"],
+        )
+        report = discovery.build_report(
+            mint_evidence=[
+                {
+                    "mint": "RunnerMint",
+                    "winner": True,
+                    "early_buyers": [
+                        {"wallet": "BadWallet", "delta": 10, "time": 100},
+                        {"wallet": "FreshWallet", "delta": 10, "time": 101},
+                    ],
+                }
+            ],
+            generated_at=123,
+        )
+
+        candidates = {row["wallet"] for row in report["candidates"]}
+        blocked = {row["wallet"] for row in report["blocked_candidates"]}
+        self.assertEqual(candidates, {"FreshWallet"})
+        self.assertEqual(blocked, {"BadWallet"})
+        self.assertEqual(report["summary"]["blocked_bad_wallets"], 1)
+        self.assertEqual(report["review_summary"]["blocked_bad_wallets"], 1)
+
     def test_candidate_wallet_policy_promotes_only_to_paper_watch(self):
         decision = evaluate_candidate_wallet({
             "wallet": "New111",

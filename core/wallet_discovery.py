@@ -151,6 +151,9 @@ def apply_review_policy(report, policy=None):
         if action_key in summary:
             summary[action_key] += 1
         candidates.append(row)
+    report_summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    if "blocked_bad_wallets" in report_summary:
+        summary["blocked_bad_wallets"] = int(report_summary.get("blocked_bad_wallets") or 0)
     report["review_policy"] = policy
     report["review_summary"] = summary
     report["candidates"] = candidates
@@ -220,9 +223,10 @@ def extract_owner_deltas(tx, mint):
 
 
 class CandidateWalletDiscovery:
-    def __init__(self, tracked_wallets=None, existing_performance=None):
+    def __init__(self, tracked_wallets=None, existing_performance=None, bad_wallets=None):
         self.tracked_wallets = tracked_wallets or {}
         self.existing_performance = existing_performance if isinstance(existing_performance, dict) else {}
+        self.bad_wallets = {str(wallet) for wallet in bad_wallets or [] if wallet}
 
     def build_report(self, local_events=None, mint_evidence=None, generated_at=None):
         generated_at = generated_at or time.time()
@@ -232,8 +236,24 @@ class CandidateWalletDiscovery:
         for evidence in mint_evidence or []:
             self.add_mint_evidence(stats, evidence)
 
-        candidates = [self.score_wallet(wallet, row) for wallet, row in stats.items()]
+        candidates = []
+        blocked_candidates = []
+        for wallet, row in stats.items():
+            candidate = self.score_wallet(wallet, row)
+            if wallet in self.bad_wallets:
+                candidate["blocked_reason"] = "bad_wallet_list"
+                candidate["review"] = {
+                    "action": "REJECT",
+                    "mode": "REVIEW_ONLY",
+                    "mutates_tracked_wallets": False,
+                    "reasons": [],
+                    "blockers": ["wallet is on bad-wallet block list"],
+                }
+                blocked_candidates.append(candidate)
+            else:
+                candidates.append(candidate)
         candidates.sort(key=lambda row: (row["score"], row["winner_mints"], row["early_buy_events"]), reverse=True)
+        blocked_candidates.sort(key=lambda row: (row["score"], row["winner_mints"], row["early_buy_events"]), reverse=True)
         return apply_review_policy({
             "generated_at": generated_at,
             "mode": "WATCH_ONLY_REVIEW",
@@ -242,8 +262,10 @@ class CandidateWalletDiscovery:
                 "candidate_wallets": len(candidates),
                 "untracked_wallets": len([row for row in candidates if not row["already_tracked"]]),
                 "tracked_wallets": len([row for row in candidates if row["already_tracked"]]),
+                "blocked_bad_wallets": len(blocked_candidates),
             },
             "candidates": candidates,
+            "blocked_candidates": blocked_candidates,
         })
 
     def default_stats(self):

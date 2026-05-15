@@ -5424,3 +5424,43 @@ Verification:
 Remaining:
 
 - Next step is to improve wallet intake quality: mine new candidate wallets from runner outcomes and compare them against the current demoted/bad-wallet block list before adding them to active paper-watch.
+
+### 2026-05-15 - Hardened Runner Wallet Intake Against Bad Wallet Reentry
+
+Changed files:
+
+- `core/wallet_discovery.py`
+- `utils/discover_candidate_wallets.py`
+- `tests/test_core_logic.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+- Ignored local state refreshed through existing tools:
+  - `data/candidate_wallets.json`
+  - `data/paper_watch_wallets.json`
+  - `data/wallet_behavior.json`
+  - `data/wallet_cycle_report.json`
+  - `data/wallet_discovery_status.json`
+
+What changed:
+
+- Candidate discovery now reads `data/bad_wallets.json`.
+- Bad/demoted wallets are excluded from active candidate ranking even if they appear in runner or early-buyer evidence.
+- Excluded wallets are retained under `blocked_candidates` so evidence is auditable instead of hidden.
+- Discovery review summaries now surface `blocked_bad_wallets`.
+- Ran a local runner/paper-winner discovery cycle without Dexscreener trending intake.
+- Current refreshed discovery status: `2,659` active candidate wallets, `15` blocked bad-wallet candidates, `105` paper-watch candidates, `828` hold-review candidates, `0` promotion-review candidates.
+- Current refreshed paper-watch state: `13,974` total rows, `13,959` active paper-watch rows, `15` blocked bad-wallet rows.
+
+Verification:
+
+- Added a failing test first proving bad wallets could not remain active discovery candidates.
+- Focused candidate-discovery and scheduler tests passed.
+- Discovery cycle completed with `live_execution_locked=true`, `mutates_tracked_wallets=false`, and `apply_dry_run_only=true`.
+- Post-run check found `0` bad wallets in active `candidate_wallets.json` candidates and `15` bad wallets in `blocked_candidates`.
+- Wallet cycle report regenerated with `tracked=523`, `active_paper_watch=13959`, `blocked=15`, `pending_promotion=0`, `pending_demotion=0`.
+- Obsidian export refreshed and wrote `642` notes.
+
+Remaining:
+
+- Next step is to rank the new active candidate pool by evidence quality: repeat runner participation, recency, fillability, co-entry quality, and future paper outcomes, then decide which candidates deserve stronger observation priority.

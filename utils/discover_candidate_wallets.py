@@ -40,6 +40,7 @@ SQLITE_DB = ROOT / "data" / "memetrader.db"
 TRACKED_WALLETS = ROOT / "data" / "tracked_wallets.json"
 WALLET_PERFORMANCE = ROOT / "data" / "wallet_performance.json"
 CANDIDATE_WALLETS = ROOT / "data" / "candidate_wallets.json"
+BAD_WALLETS = ROOT / "data" / "bad_wallets.json"
 
 
 class SyncRpcClient:
@@ -305,7 +306,12 @@ def build_candidate_report(args):
     load_env()
     tracked_wallets = normalize_tracked_wallets(read_json(TRACKED_WALLETS, []))
     performance = read_json(WALLET_PERFORMANCE, {})
-    discovery = CandidateWalletDiscovery(tracked_wallets=tracked_wallets, existing_performance=performance)
+    bad_wallets = read_json(BAD_WALLETS, [])
+    discovery = CandidateWalletDiscovery(
+        tracked_wallets=tracked_wallets,
+        existing_performance=performance,
+        bad_wallets=bad_wallets,
+    )
 
     local_events = load_local_events(args.local_hours, args.local_limit) if args.local_hours > 0 else []
     mint_rows = []
@@ -373,6 +379,7 @@ def build_candidate_report(args):
     }
     report["source_counts"] = {
         "tracked_wallets": len(tracked_wallets),
+        "bad_wallets": len(bad_wallets) if isinstance(bad_wallets, list) else 0,
         "local_events": len(local_events),
         "winner_mints": len(mint_rows),
         "mint_evidence": len(mint_evidence),
