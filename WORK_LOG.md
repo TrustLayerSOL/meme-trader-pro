@@ -5678,6 +5678,68 @@ Remaining:
 
 - Next step is to export/review the wallet-cycle note in Obsidian and use the pending demotion queue to decide whether the last weak wallets should be removed.
 
+### 2026-05-15 - Recovered Review-Only Market Context From Surviving JSON Artifacts
+
+Changed files:
+
+- `utils/recover_market_context_from_json.py`
+- `tests/test_market_context_recovery.py`
+- `research/DATA_SOURCE_MAP.md`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+Ignored local state refreshed:
+
+- `data/memetrader.db`
+- `data/wallet_backfills/market_context_recovery_report.json`
+- `data/wallet_backfills/wallet_evidence_enrichment_report.json`
+- `data/wallet_backfills/wallet_missing_market_context_report.json`
+- `data/wallet_outcome_ledger.json`
+- `data/wallet_replay_scorecard.json`
+- `data/wallet_quant_report.json`
+- `data/wallet_candidate_quality_report.json`
+
+What changed:
+
+- Added a review-only market-context recovery utility for the post-iCloud migration state.
+- The utility rehydrates SQLite `token_snapshots` from surviving decision-time-safe JSON/JSONL artifacts:
+  - enriched wallet evidence JSONL,
+  - archived wallet evidence enrichment reports,
+  - historical replay events,
+  - paper trades,
+  - rejected signal rows,
+  - signal context rows.
+- The utility is idempotent and skips recovered snapshot keys that already exist.
+- It does not fabricate prices, create swap ticks, promote wallets, demote wallets, or touch live execution.
+- Regenerated wallet evidence enrichment, missing market-context targets, wallet outcome ledger, replay scorecard, wallet quant report, and candidate quality report from the recovered local store.
+- Updated data-source docs and build plan with the recovery boundary.
+
+Verification:
+
+- TDD red/green completed for the new recovery utility:
+  - missing utility import failed first,
+  - archived duplicate recovery test failed before source fix,
+  - final focused recovery tests passed.
+- `data/memetrader.db` now has `1,906` recovered token snapshots across `739` mints.
+- Recovery report sources:
+  - `1,005` historical replay decision-context snapshots,
+  - `773` rejected-signal context snapshots,
+  - `96` paper-trade snapshots,
+  - `12` signal-context captures,
+  - `20` wallet/scanner/market-radar evidence snapshots.
+- Wallet evidence enrichment now processes `520` rows, has entry context on `151`, and still marks `369` rows as missing market context.
+- Missing market-context report still has `36` target mints, `194` deduped missing rows, and `33` affected wallets.
+- Wallet outcome ledger regenerated with `261` wallets and `6,042` records.
+- Wallet replay scorecard regenerated with `364` wallets and `6,041` events.
+- Wallet quant report regenerated with `16,765` wallets.
+- Wallet candidate quality report regenerated with `2,072` active candidates, `15` blocked, `6` strong-observation, `197` paper-watch review, `109` hold, and `1,760` reject-review.
+
+Remaining:
+
+- The old SQLite `swap_ticks` table could not be recreated from surviving JSON artifacts; it remains empty.
+- The `194` deduped missing market-context evidence rows require a real historical market/tick backfill source. Current/current-later data must not be used to fill old decision-time prices.
+- Next step is to build the targeted historical market-context backfill lane for the `36` missing mints, using only data that can be tied to the original evidence windows.
+
 ### 2026-05-15 - Restored Migrated Repo Runtime After iCloud Folder Loss
 
 Changed files:
