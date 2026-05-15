@@ -137,6 +137,34 @@ Conclusion: The system can now compare wallet signal outcomes by horizon. Unknow
 
 Next action: Build a wallet replay scorecard that ranks wallets using known/fillable window outcomes while making coverage and unknown-rate explicit.
 
+### 2026-05-15 - Wallet Replay Scorecard
+
+Date: 2026-05-15
+
+Hypothesis: Wallet replay results are more trustworthy when coverage, fillability, fixed-window performance, market regime, and repeated co-entry behavior are reviewed together instead of scoring wallets only by raw outcomes.
+
+Files changed:
+
+- `wallets/wallet_replay_scorecard.py`
+- `utils/build_wallet_replay_scorecard.py`
+- `tests/test_wallet_replay_scorecard.py`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Data used: Current local `data/historical_replay/replay_events.jsonl`.
+
+Sample size: `6,041` replay events across `366` wallets.
+
+Baseline result: Replay data had per-event fixed-window outcomes, but there was no wallet-level scorecard that separated coverage from outcome quality or exposed repeated co-entry partners.
+
+New result: `data/wallet_replay_scorecard.json` now reports wallet-level coverage/performance by fixed window, fillability counts, market-regime exposure, co-entry partners, and top repeated co-entry pairs. Current generated report includes `50` top co-entry pairs.
+
+Conclusion: The system can now inspect wallet ecosystems instead of isolated wallets. This is still review-only and should not automatically promote or demote wallets.
+
+Next action: Build a candidate review layer from the scorecard that only considers wallets and co-entry pairs with sufficient known/fillable replay coverage.
+
 ### 2026-05-14 - Wallet Candidate Audit Report
 
 Date: 2026-05-14

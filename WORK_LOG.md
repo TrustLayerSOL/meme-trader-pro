@@ -172,6 +172,36 @@ Remaining risk / next step:
 - Unknown labels remain high, especially at `30s`, because many signals lack dense near-term snapshots.
 - Next step is a wallet replay scorecard that uses only known/fillable window labels and reports coverage separately from performance.
 
+2026-05-15 update - Wallet Replay Scorecard:
+
+Changed files:
+
+- `wallets/wallet_replay_scorecard.py`
+- `utils/build_wallet_replay_scorecard.py`
+- `tests/test_wallet_replay_scorecard.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a review-only wallet replay scorecard built from historical replay events.
+- The scorecard separates replay coverage from performance so missing data cannot look like edge.
+- Per wallet, it tracks total replay events, fillable/failed/unknown-liquidity events, fixed-window outcome counts/rates, 15m known runner/rug rates, market-regime exposure, and co-entry partners.
+- Added ecosystem-level repeated co-entry pairs.
+- Generated `data/wallet_replay_scorecard.json`: `366` wallets, `6,041` replay events, and `50` top co-entry pairs.
+
+Verification:
+
+- Added failing tests first for wallet window stats, fillability, regime exposure, co-entry partners, repeated pair summaries, and generated JSON output.
+- `./trading_env/bin/python -m unittest tests.test_wallet_replay_scorecard`
+- `./trading_env/bin/python utils/build_wallet_replay_scorecard.py`
+
+Remaining risk / next step:
+
+- This is not promotion/demotion logic yet.
+- Next step is a scorecard review layer that filters to wallets with enough known/fillable coverage and identifies candidate wallet ecosystems for human review.
+
 2026-05-15 update - Wallet Review Queue Resolution:
 
 Changed files:
