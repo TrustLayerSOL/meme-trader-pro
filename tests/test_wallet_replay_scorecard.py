@@ -4,8 +4,10 @@ from tempfile import TemporaryDirectory
 
 from wallets.wallet_replay_scorecard import build_wallet_replay_scorecard
 from wallets.wallet_replay_review import build_wallet_replay_review
+from wallets.wallet_replay_review import merge_replay_review_decisions
 from wallets.wallet_replay_review import render_wallet_replay_review_markdown
 from utils.build_wallet_replay_scorecard import write_wallet_replay_scorecard
+from utils.sync_replay_wallet_decisions import sync_replay_wallet_decisions
 
 
 def event(wallets, *, mint="MintA", fill_status="fillable_with_assumptions", regime=None, windows=None):
@@ -210,6 +212,82 @@ class WalletReplayScorecardTests(unittest.TestCase):
         self.assertEqual(review["decision_summary"]["promotion_review"], 1)
         self.assertEqual(review["decision_summary"]["demotion_review"], 1)
         self.assertIn("Best Educated Decisions", review["operator_report_markdown"])
+
+    def test_merge_replay_review_decisions_records_only_actionable_decisions(self):
+        review = {
+            "decision_recommendations": [
+                {
+                    "wallet": "WalletPromote",
+                    "known_15m": 12,
+                    "fillable_events": 12,
+                    "runner_rate_known_15m": 0.75,
+                    "rug_rate_known_15m": 0.0,
+                    "recommended_decision": {"action": "PROMOTION_REVIEW", "reasons": ["strong replay evidence"]},
+                },
+                {
+                    "wallet": "WalletDemote",
+                    "known_15m": 11,
+                    "fillable_events": 11,
+                    "runner_rate_known_15m": 0.1,
+                    "rug_rate_known_15m": 0.2,
+                    "recommended_decision": {"action": "DEMOTION_REVIEW", "reasons": ["rug pressure"]},
+                },
+                {
+                    "wallet": "WalletHold",
+                    "recommended_decision": {"action": "HOLD_MORE_DATA", "reasons": ["thin sample"]},
+                },
+            ]
+        }
+
+        merged = merge_replay_review_decisions(
+            {"decisions": [{"wallet": "OtherWallet", "decision": "hold", "approved": False}]},
+            review,
+            approved_at=123,
+        )
+
+        decisions = {row["wallet"]: row for row in merged["decisions"]}
+        self.assertEqual(decisions["WalletPromote"]["decision"], "approve_promotion")
+        self.assertEqual(decisions["WalletDemote"]["decision"], "approve_demotion")
+        self.assertTrue(decisions["WalletPromote"]["approved"])
+        self.assertEqual(decisions["WalletPromote"]["source"], "wallet_replay_review")
+        self.assertEqual(decisions["WalletPromote"]["replay_metrics"]["known_15m"], 12)
+        self.assertIn("OtherWallet", decisions)
+        self.assertNotIn("WalletHold", decisions)
+        self.assertEqual(merged["replay_review_summary"]["actionable_decisions"], 2)
+
+    def test_sync_replay_wallet_decisions_writes_review_file_without_mutating_wallet_lists(self):
+        with TemporaryDirectory() as tmp:
+            scorecard_path = Path(tmp) / "scorecard.json"
+            decisions_path = Path(tmp) / "decisions.json"
+            write_wallet_replay_scorecard(
+                [
+                    event(
+                        ["WalletPromote"],
+                        mint=f"Promote{i}",
+                        windows={
+                            "30s": {"outcome_type": "runner"},
+                            "2m": {"outcome_type": "runner"},
+                            "5m": {"outcome_type": "runner"},
+                            "15m": {"outcome_type": "runner"},
+                        },
+                    )
+                    for i in range(12)
+                ],
+                out_path=scorecard_path,
+            )
+
+            result = sync_replay_wallet_decisions(
+                scorecard_path=scorecard_path,
+                decisions_path=decisions_path,
+                timestamp=123,
+            )
+
+            saved = decisions_path.read_text(encoding="utf-8")
+            self.assertEqual(result["mode"], "REPLAY_WALLET_DECISION_SYNC")
+            self.assertTrue(result["live_execution_locked"])
+            self.assertFalse(result["tracked_wallets_mutated"])
+            self.assertIn("approve_promotion", saved)
+            self.assertIn("WalletPromote", saved)
 
 
 if __name__ == "__main__":

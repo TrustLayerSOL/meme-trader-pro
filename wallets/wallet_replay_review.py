@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+ACTIONABLE_REPLAY_ACTIONS = {
+    "PROMOTION_REVIEW": "approve_promotion",
+    "DEMOTION_REVIEW": "approve_demotion",
+}
+
 
 def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -177,6 +182,74 @@ def decision_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
         else:
             counts["hold_more_data"] += 1
     return counts
+
+
+def replay_decision_row(row: dict[str, Any], *, approved_at: float, approved_by: str = "wallet_replay_review") -> dict[str, Any] | None:
+    decision = as_dict(row.get("recommended_decision"))
+    action = str(decision.get("action") or "")
+    mapped = ACTIONABLE_REPLAY_ACTIONS.get(action)
+    wallet = str(row.get("wallet") or "").strip()
+    if not wallet or not mapped:
+        return None
+    reasons = decision.get("reasons") if isinstance(decision.get("reasons"), list) else []
+    return {
+        "wallet": wallet,
+        "decision": mapped,
+        "approved": True,
+        "approved_by": approved_by,
+        "approved_at": approved_at,
+        "updated_at": approved_at,
+        "source": "wallet_replay_review",
+        "note": "; ".join(str(reason) for reason in reasons[:3]),
+        "replay_metrics": {
+            "known_15m": safe_int(row.get("known_15m")),
+            "fillable_events": safe_int(row.get("fillable_events")),
+            "runner_rate_known_15m": safe_float(row.get("runner_rate_known_15m")),
+            "rug_rate_known_15m": safe_float(row.get("rug_rate_known_15m")),
+            "runner_minus_rug_rate_15m": safe_float(row.get("runner_minus_rug_rate_15m")),
+        },
+    }
+
+
+def replay_review_decision_rows(review: dict[str, Any], *, approved_at: float, approved_by: str = "wallet_replay_review") -> list[dict[str, Any]]:
+    rows = []
+    for row in review.get("decision_recommendations") or []:
+        if not isinstance(row, dict):
+            continue
+        decision = replay_decision_row(row, approved_at=approved_at, approved_by=approved_by)
+        if decision:
+            rows.append(decision)
+    return rows
+
+
+def merge_replay_review_decisions(
+    existing: dict[str, Any] | None,
+    review: dict[str, Any],
+    *,
+    approved_at: float,
+    approved_by: str = "wallet_replay_review",
+) -> dict[str, Any]:
+    current = existing if isinstance(existing, dict) else {}
+    current_rows = current.get("decisions") if isinstance(current.get("decisions"), list) else []
+    next_rows = replay_review_decision_rows(review, approved_at=approved_at, approved_by=approved_by)
+    next_wallets = {row["wallet"] for row in next_rows}
+    kept = [
+        row
+        for row in current_rows
+        if not (isinstance(row, dict) and str(row.get("wallet") or "") in next_wallets)
+    ]
+    merged = dict(current)
+    merged["decisions"] = next_rows + kept
+    merged["updated_at"] = approved_at
+    merged["mode"] = "WALLET_REVIEW_DECISIONS"
+    merged["replay_review_summary"] = {
+        "source": "wallet_replay_review",
+        "actionable_decisions": len(next_rows),
+        "approve_promotion": len([row for row in next_rows if row.get("decision") == "approve_promotion"]),
+        "approve_demotion": len([row for row in next_rows if row.get("decision") == "approve_demotion"]),
+        "approved_at": approved_at,
+    }
+    return merged
 
 
 def render_wallet_replay_review_markdown(review: dict[str, Any]) -> str:

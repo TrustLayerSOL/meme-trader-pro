@@ -5188,3 +5188,29 @@ Verification:
 Remaining:
 
 - These recommendations should guide review while Obsidian is unreliable. They should not be treated as automatic wallet-list changes.
+
+### 2026-05-15 - Replay Wallet Decisions Synced
+
+Changed files:
+
+- `wallets/wallet_replay_review.py`
+- `utils/sync_replay_wallet_decisions.py`
+- `tests/test_wallet_replay_scorecard.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a replay-decision sync utility that records only actionable replay recommendations into `data/wallet_review_decisions.json`.
+- Saved the current trusted replay decisions locally: 4 approved promotion-review decisions and 1 approved demotion-review decision.
+- Existing wallet-list apply gates were left intact.
+
+Verification:
+
+- Added tests for replay decision merging and sync-file writing.
+- `utils/sync_replay_wallet_decisions.py --limit 50 --approved-by codex_replay_review` wrote 5 actionable decisions and did not mutate tracked/bad/paper-watch wallet lists.
+- Wallet review apply dry-run reported 0 promoted, 0 demoted, and 6 skipped because the current candidate audit does not yet support these decisions.
+
+Remaining:
+
+- Next step is bridging replay recommendations into the candidate/paper-watch review flow so the apply gate can decide safely without bypassing stale-audit protection.
