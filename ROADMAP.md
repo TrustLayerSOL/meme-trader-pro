@@ -1,6 +1,6 @@
 # MemeTraderPro Roadmap
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 ## Current Product Direction
 
@@ -73,9 +73,11 @@ Snapshot-linked promotion/demotion candidates now flow into `data/wallet_candida
 
 Wallet candidate audit rows now export into Obsidian as generated review notes under `MemeTraderPro/WalletCandidateReviews/`. These notes expose the candidate evidence gates and recommendation reasons for human review while preserving MemeTraderPro data files as the source of truth.
 
+The first historical replay dataset contract now exists. `research/historical_replay_dataset.py` converts unified records into review-only replay events with separated decision context, execution assumptions, and later outcome labels. `utils/build_historical_replay_dataset.py` generated the first local dataset with `6,041` replay events and `0` unsafe/leakage-flagged events.
+
 ## Next Milestone
 
-Tighten the approved-decision workflow against the candidate audit/export records so wallet-list changes can only come from reviewed candidates with durable operator decisions.
+Use the historical replay dataset to compare wallet behavior across accepted trades, failed trades, rejected signals, and wallet observations without hindsight leakage.
 
 That ledger should measure:
 

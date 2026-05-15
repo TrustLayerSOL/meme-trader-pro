@@ -1,6 +1,6 @@
 # Experiment Log
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 Use this log for every signal, filter, wallet score, replay assumption, or promotion/demotion change.
 
@@ -19,6 +19,36 @@ Next action:
 ```
 
 ## Entries
+
+### 2026-05-15 - Historical Replay Dataset Contract
+
+Date: 2026-05-15
+
+Hypothesis: Historical testing can help refine wallet behavior only if accepted and rejected signals are converted into a single decision-time-safe replay dataset with later outcomes separated from signal context.
+
+Files changed:
+
+- `research/historical_replay_dataset.py`
+- `utils/build_historical_replay_dataset.py`
+- `tests/test_historical_replay_dataset.py`
+- `.gitignore`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Data used: Current local unified records from paper trades, rejected signals, and wallet-performance signal observations via `utils.build_wallet_outcome_ledger.build_records()`.
+
+Sample size: First local generated dataset contains `6,041` replay events: `36` accepted trades, `5` failed trades, and `6,000` rejected signals.
+
+Baseline result: The wallet outcome ledger could aggregate wallet outcomes, but there was no separate replay event dataset contract with explicit leakage checks and separated execution assumptions.
+
+New result: `data/historical_replay/replay_events.jsonl` and `data/historical_replay/summary.json` are generated locally with `0` unsafe/leakage-flagged events. Generated replay data is ignored by git and remains review-only.
+
+Conclusion: The project now has the first clean bridge between forward paper data and historical replay analysis. This is not proof of edge yet; it is the dataset contract needed to test edge honestly.
+
+Next action: Add fixed evaluation windows and richer slippage/latency/failed-fill assumptions before using historical replay results for wallet promotion or filter changes.
 
 ### 2026-05-14 - Wallet Candidate Audit Report
 

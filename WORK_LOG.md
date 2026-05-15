@@ -34,6 +34,7 @@ Highest-value active workstreams:
 
 - Research governance for signals, filters, scores, replay, and experiments.
 - Unified signal outcome schema for accepted trades and rejected signals.
+- Historical replay dataset contract for comparing past and future wallet signals without hindsight leakage.
 - Wallet-outcome ledger from unified accepted/rejected records.
 - Wallet Quant Tracker V2 report/context layer.
 - Wallet tiering: candidate, paper-watch, promotion-review, trusted, demotion-review, blocked.
@@ -42,6 +43,40 @@ Highest-value active workstreams:
 - Replay visibility reports for rejected/no-trade decisions.
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
+
+2026-05-15 update - Historical Replay Dataset Contract:
+
+Changed files:
+
+- `.gitignore`
+- `research/historical_replay_dataset.py`
+- `utils/build_historical_replay_dataset.py`
+- `tests/test_historical_replay_dataset.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added the first review-only historical replay dataset contract.
+- Unified records can now be converted into replay events with `decision_context`, `decision`, `execution_assumptions`, and `later_outcome` separated.
+- Added a decision-time leakage validator that flags future/outcome-style fields inside replay decision context.
+- Added a local builder that writes `data/historical_replay/replay_events.jsonl` and `data/historical_replay/summary.json`.
+- Generated the first local replay dataset: `6,041` events, `36` accepted trades, `5` failed trades, `6,000` rejected signals, and `0` unsafe/leakage-flagged events.
+- Added `data/historical_replay/` to `.gitignore` because replay datasets are generated local research data, not source code.
+
+Verification:
+
+- Added failing tests before implementation for replay event separation, leakage detection, dataset counts, and output writing.
+- `./trading_env/bin/python -m unittest tests.test_historical_replay_dataset`
+- `./trading_env/bin/python utils/build_historical_replay_dataset.py`
+
+Remaining risk / next step:
+
+- Current replay events are a schema-safe dataset, not a profitability proof.
+- Next high-leverage step is fixed evaluation windows plus realistic slippage, latency, liquidity, and failed-fill assumptions before historical results are used to tune wallet scoring.
 
 2026-05-15 update - Wallet Review Queue Resolution:
 

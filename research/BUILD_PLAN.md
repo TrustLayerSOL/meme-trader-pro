@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 ## Legend
 
@@ -43,8 +43,11 @@ Primary next iteration:
 9. Store replayable signal contexts for triggered and rejected signals.
 10. Build no-trade/rejection reports that show whether filters protect the system or block winners.
 11. Tag market regime so wallet performance can be compared across dead, runner-heavy, rug-heavy, and volatile periods.
+12. Build a historical replay dataset contract so older signals and future paper signals can be compared under the same decision-time-safe schema.
 
 PnL is useful but not the main proof yet. The first proof is a clean data loop: discovery -> observation -> outcome -> score -> tier change.
+
+Historical testing is relevant, but only if it is treated as causal replay instead of hindsight backtesting. Historical rows must separate data known at signal time from later outcome labels, model slippage/latency/liquidity/failed-fill assumptions, and use the same schema as forward paper signals.
 
 ## Frozen Until Wallet Edge Is Measured
 
@@ -176,7 +179,8 @@ Deliverables:
 - [~] Unified signal outcome schema for accepted trades, failed trades, rejected signals, skipped signals, and future replay evaluations. `research/signal_schema.py` creates comparable records but runtime persistence is not wired yet.
 - [~] Wallet-outcome ledger. `wallets/wallet_outcome_ledger.py` and `utils/build_wallet_outcome_ledger.py` generate a review-only JSON ledger from current paper trades, rejection rows, and wallet-performance signal observations. `research/outcome_labeler.py` now classifies later outcomes, `research/outcome_linker.py` links signal observations to later token snapshots inside an evaluation window, and `wallets/wallet_promotion_engine.py` owns review-only promotion/demotion recommendations. Runtime persistence still needs hardening.
 - [~] Wallet baseline comparison. `wallets/wallet_baseline_comparison.py` and `utils/build_wallet_baseline_comparison.py` compare `data/wallet_quant_report.json` against `data/wallet_outcome_ledger.json` and identify agreement, conflict, unconfirmed quant signals, quant-only wallets, and ledger-only wallets. Coverage improved from `28` to `251` ledger wallets; known outcome labels now exist for `1,617` wallet signal/trade observations from local snapshot evidence.
-- [~] Wallet candidate audit. `wallets/wallet_candidate_audit.py` and `utils/build_wallet_candidate_audit.py` generate `data/wallet_candidate_audit.json` for snapshot-linked promotion/demotion candidates. Current report has `14` candidates: `1` promotion-review and `13` demotion-review. It is review-only and blocks wallet-list apply. Obsidian export now writes human review packets under `MemeTraderPro/WalletCandidateReviews/`.
+- [~] Wallet candidate audit. `wallets/wallet_candidate_audit.py` and `utils/build_wallet_candidate_audit.py` generate `data/wallet_candidate_audit.json` for snapshot-linked promotion/demotion candidates. Current active queue has `13` demotion-review candidates, `0` active promotion-review candidates, and `1` resolved applied promotion. It is review-only and blocks wallet-list apply unless an explicit approved decision maps cleanly to the current audit.
+- [ ] Historical replay dataset contract. Create `data/historical_replay/replay_events.jsonl` from accepted trades, rejected signals, wallet observations, and later outcome labels while keeping future/outcome data outside decision context. This is review-only and must not feed live execution.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -192,7 +196,8 @@ Next actions:
 - Continue wiring `core/decision_ledger.py` and SQLite-backed decision records before adding more disconnected GUI panels.
 - Harden scanner skips, main paper entries, exploration entries, failed buys, exits, and postmortems around `decision_id`.
 - Persist unified signal outcome records for accepted paper trades and rejected signals into a review-only ledger.
-- Tighten approved wallet-review decisions so they must map cleanly back to candidate audit/export records before any wallet-list action consumes them.
+- Build the historical replay dataset contract and validator before collecting larger historical slices.
+- Backfill historical replay events from local unified records, then expand to larger external historical slices only after leakage checks pass.
 - Choose the canonical source of truth for each data class.
 - Define minimum SQLite tables and backfill existing JSON.
 

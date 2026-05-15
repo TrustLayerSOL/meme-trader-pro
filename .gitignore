@@ -26,6 +26,7 @@ data/*.lock
 data/.*.tmp
 data/archives/
 data/process_locks/
+data/historical_replay/
 data/rejected_signals/
 data/signal_contexts/
 !data/__init__.py
