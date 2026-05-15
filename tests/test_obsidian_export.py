@@ -484,6 +484,24 @@ old generated body
                         }
                     ],
                 },
+                "wallet_missing_market_context": {
+                    "summary": {
+                        "target_mints": 3,
+                        "missing_market_context_rows": 10,
+                        "wallets_affected": 7,
+                        "targets_with_known_outcomes": 1,
+                    },
+                    "targets": [
+                        {
+                            "token_mint": "MintMISSINGCTX",
+                            "next_collection_step": "BACKFILL_MARKET_CONTEXT",
+                            "evidence_rows": 5,
+                            "unique_wallets": 3,
+                            "known_outcome_rows": 1,
+                            "backfill_window": {"start_time": 1000, "end_time": 2000},
+                        }
+                    ],
+                },
             }
         )
 
@@ -495,6 +513,7 @@ old generated body
         backfill_targets = notes["Dashboards/Wallet Candidate Backfill Targets.md"]
         wallet_history = notes["Dashboards/Wallet History Backfill.md"]
         evidence_enrichment = notes["Dashboards/Wallet Evidence Enrichment.md"]
+        missing_context = notes["Dashboards/Wallet Missing Market Context.md"]
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
@@ -518,6 +537,7 @@ old generated body
         self.assertIn("Wallet Candidate Backfill Targets", command)
         self.assertIn("Wallet History Backfill", command)
         self.assertIn("Wallet Evidence Enrichment", command)
+        self.assertIn("Wallet Missing Market Context", command)
         self.assertIn("Tracked wallets", cycle)
         self.assertIn("12,175", cycle)
         self.assertIn("demotion_reviews_pending", cycle)
@@ -540,6 +560,9 @@ old generated body
         self.assertIn("type: wallet_evidence_enrichment", evidence_enrichment)
         self.assertIn("WalletENRICH789", evidence_enrichment)
         self.assertIn("ENRICHED", evidence_enrichment)
+        self.assertIn("type: wallet_missing_market_context", missing_context)
+        self.assertIn("MintMISSINGCTX", missing_context)
+        self.assertIn("BACKFILL_MARKET_CONTEXT", missing_context)
         self.assertIn("reviewable wallets: 2", command)
         self.assertIn("WalletGOOD", replay)
         self.assertIn("type: wallet_replay_ecosystem_review", replay)

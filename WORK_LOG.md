@@ -44,6 +44,49 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Missing Market-Context Targets:
+
+Changed files:
+
+- `wallets/wallet_missing_market_context.py`
+- `utils/build_wallet_missing_market_context_targets.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_missing_market_context.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a review-only missing market-context target report for wallet evidence rows that still lack decision-time entry context.
+- The report groups missing evidence by token mint, dedupes repeated rows, excludes quote/stable mints, counts affected wallets/actions/outcomes, and calculates the exact time window needed for future snapshot/tick backfill.
+- Added read-only `/api/wallet-missing-market-context` and Obsidian `MemeTraderPro/Dashboards/Wallet Missing Market Context.md`.
+- Helper-agent review confirmed the route/note naming, read-only API pattern, and no-mutation boundary.
+
+Current local run:
+
+- Generated `data/wallet_backfills/wallet_missing_market_context_report.json`.
+- Current target queue has `36` token mints.
+- Current queue covers `194` deduped evidence rows still missing market context.
+- `33` wallets are affected.
+- `3` target mints already have known later outcomes but still need decision-time market context.
+- Highest single-mint gap has `20` evidence rows.
+
+Verification:
+
+- Added failing tests first for grouping missing context rows, excluding quote mints, deduping repeated evidence rows, report writing, read-only API routing, and Obsidian note rendering.
+- `./trading_env/bin/python -m unittest tests.test_wallet_missing_market_context`
+- `./trading_env/bin/python utils/build_wallet_missing_market_context_targets.py`
+
+Remaining risk / next step:
+
+- This report identifies the missing market-context queue; it does not fetch or repair snapshots yet.
+- Next step is a read-only market-context backfill runner for the top target mints, then rerun wallet evidence enrichment.
+
 2026-05-15 update - Wallet Evidence Enrichment:
 
 Changed files:

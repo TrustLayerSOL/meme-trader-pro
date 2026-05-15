@@ -20,6 +20,39 @@ Next action:
 
 ## Entries
 
+### 2026-05-15 - Missing Market-Context Targets
+
+Date: 2026-05-15
+
+Hypothesis: Wallet evidence with missing entry market context should be converted into a precise token/time-window target queue before any new market-data backfill is attempted.
+
+Files changed:
+
+- `wallets/wallet_missing_market_context.py`
+- `utils/build_wallet_missing_market_context_targets.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_missing_market_context.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `EXPERIMENT_LOG.md`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+Data used: Current local wallet evidence enrichment report.
+
+Sample size: `194` deduped missing-context evidence rows across `36` target token mints and `33` affected wallets after excluding quote mints.
+
+Baseline result: The enrichment report showed missing market context counts, but it did not provide an actionable token/time-window queue for the next data backfill.
+
+New result: `data/wallet_backfills/wallet_missing_market_context_report.json` now identifies target mints, evidence row counts, affected wallets, observed action counts, known-outcome rows, and backfill windows.
+
+Conclusion: The next market-data backfill can now be targeted instead of broad. This still does not prove wallet quality; it only defines the missing data collection queue.
+
+Next action: Build a read-only market-context backfill runner for the top target mints, then rerun wallet evidence enrichment.
+
 ### 2026-05-15 - Wallet Evidence Enrichment
 
 Date: 2026-05-15

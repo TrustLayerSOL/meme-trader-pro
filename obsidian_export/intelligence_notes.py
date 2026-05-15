@@ -31,6 +31,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/Wallet Candidate Backfill Targets.md": render_wallet_candidate_backfill_targets(snapshot),
         "Dashboards/Wallet History Backfill.md": render_wallet_history_backfill(snapshot),
         "Dashboards/Wallet Evidence Enrichment.md": render_wallet_evidence_enrichment(snapshot),
+        "Dashboards/Wallet Missing Market Context.md": render_wallet_missing_market_context(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -128,6 +129,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     history_summary = as_dict(history_backfill.get("summary"))
     evidence_enrichment = as_dict(snapshot.get("wallet_evidence_enrichment"))
     enrichment_summary = as_dict(evidence_enrichment.get("summary"))
+    missing_context = as_dict(snapshot.get("wallet_missing_market_context"))
+    missing_context_summary = as_dict(missing_context.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -154,6 +157,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Wallet-history evidence rows created: {history_summary.get("total_evidence_rows_created") or 0}
 - Wallet evidence enriched rows: {enrichment_summary.get("enriched_rows") or 0}
 - Wallet evidence missing market context: {enrichment_summary.get("missing_market_context_rows") or 0}
+- Missing market-context target mints: {missing_context_summary.get("target_mints") or 0}
 
 ## Review First
 
@@ -174,6 +178,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[Wallet Candidate Backfill Targets]]
 - [[Wallet History Backfill]]
 - [[Wallet Evidence Enrichment]]
+- [[Wallet Missing Market Context]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -345,6 +350,31 @@ Review-only enrichment report. This attaches decision-time-safe market context a
 ## Evidence Rows
 
 {_wallet_evidence_enrichment_table(rows)}
+"""
+    return _note(frontmatter, body)
+
+
+def render_wallet_missing_market_context(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_missing_market_context"))
+    summary = as_dict(report.get("summary"))
+    rows = [row for row in report.get("targets") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("wallet_missing_market_context")
+    body = f"""# Wallet Missing Market Context
+
+{GENERATED_MARKER}
+
+Review-only target list for wallet evidence rows that still lack decision-time market context. This identifies mints and time windows for future snapshot/tick backfill; it does not fetch data, promote wallets, or trade.
+
+## Summary
+
+- Target mints: {_count(summary.get("target_mints"))}
+- Missing-context evidence rows: {_count(summary.get("missing_market_context_rows"))}
+- Wallets affected: {_count(summary.get("wallets_affected"))}
+- Targets with known outcomes: {_count(summary.get("targets_with_known_outcomes"))}
+
+## Targets
+
+{_wallet_missing_market_context_table(rows)}
 """
     return _note(frontmatter, body)
 
@@ -816,6 +846,26 @@ def _wallet_evidence_enrichment_table(rows: list[dict[str, Any]]) -> str:
                 compact_number(as_dict(row.get("estimated_entry_context")).get("liquidity") or 0, 6),
                 as_dict(row.get("later_token_outcome")).get("outcome_type") or "unknown",
                 compact_number(row.get("confidence_score") or 0, 6),
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _wallet_missing_market_context_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No missing market-context targets currently surfaced."
+    return table(
+        ["Mint", "Step", "Rows", "Wallets", "Known Outcomes", "Start", "End"],
+        [
+            [
+                str(row.get("token_mint") or ""),
+                row.get("next_collection_step") or "",
+                _count(row.get("evidence_rows")),
+                _count(row.get("unique_wallets")),
+                _count(row.get("known_outcome_rows")),
+                compact_number(as_dict(row.get("backfill_window")).get("start_time") or 0, 6),
+                compact_number(as_dict(row.get("backfill_window")).get("end_time") or 0, 6),
             ]
             for row in rows[:25]
         ],
