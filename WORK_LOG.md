@@ -44,6 +44,43 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Wallet Candidate Evidence Plan:
+
+Changed files:
+
+- `wallets/wallet_candidate_evidence_plan.py`
+- `utils/build_wallet_candidate_evidence_plan.py`
+- `desktop_api.py`
+- `obsidian_export/exporter.py`
+- `obsidian_export/intelligence_notes.py`
+- `tests/test_wallet_candidate_evidence_plan.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a review-only evidence collection plan for the strongest candidate wallets.
+- The plan converts the candidate-quality review shortlist into concrete missing evidence counts: replay-known 15m outcomes, fillable replay events, and outcome-ledger labels.
+- Added `data/wallet_candidate_evidence_plan.json`.
+- Current local plan counts: `50` candidates, `0` ready for review, `44` needing replay coverage, `44` needing outcome coverage, and `6` needing risk review.
+- Added read-only `/api/wallet-candidate-evidence-plan` and Obsidian `MemeTraderPro/Dashboards/Wallet Candidate Evidence Plan.md`.
+
+Verification:
+
+- Added failing tests first for missing replay/outcome coverage, risk-review separation, report writing, read-only API routing, and Obsidian note rendering.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_evidence_plan`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_evidence_plan_route_is_read_only`
+- `./trading_env/bin/python -m unittest tests.test_obsidian_export.ObsidianExportTests.test_intelligence_notes_surface_anomalies_drift_lineage_and_workflow`
+- `./trading_env/bin/python utils/build_wallet_candidate_evidence_plan.py`
+
+Remaining risk / next step:
+
+- This is a queue, not a collector. It identifies which evidence is missing but does not fetch new chain history.
+- Next step is to use this plan to target replay/outcome backfill for the highest-quality wallets instead of expanding wallet count blindly.
+
 2026-05-15 update - Wallet Candidate Quality Review:
 
 Changed files:
@@ -104,7 +141,7 @@ What changed:
 - The report ranks active candidate wallets by current evidence quality using candidate score, runner overlap, early-entry evidence, unique mint coverage, recency, paper-watch status, sell-heavy risk, and behavior labels.
 - Bad-listed wallets are excluded from ranked candidates and preserved in `blocked_candidates` so broad discovery can stay open without silently re-admitting known weak wallets.
 - Generated `data/wallet_candidate_quality_report.json`.
-- Current local report counts: `1,889` active candidates, `15` blocked candidates, `6` strong observations, `215` paper-watch review rows, `93` hold-review rows, and `1,575` reject-review rows.
+- Current local report counts: `1,913` active candidates, `15` blocked candidates, `7` strong observations, `229` paper-watch review rows, `84` hold-review rows, and `1,593` reject-review rows.
 - Added read-only `/api/wallet-candidate-quality` and Obsidian `MemeTraderPro/Dashboards/Wallet Candidate Quality.md`.
 
 Verification:

@@ -27,6 +27,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/Wallet Cycle Report.md": render_wallet_cycle_report(snapshot),
         "Dashboards/Wallet Candidate Quality.md": render_wallet_candidate_quality(snapshot),
         "Dashboards/Wallet Candidate Quality Review.md": render_wallet_candidate_quality_review(snapshot),
+        "Dashboards/Wallet Candidate Evidence Plan.md": render_wallet_candidate_evidence_plan(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
@@ -116,6 +117,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     quality_summary = as_dict(quality.get("summary"))
     quality_review = as_dict(snapshot.get("wallet_candidate_quality_review"))
     quality_review_summary = as_dict(quality_review.get("summary"))
+    evidence_plan = as_dict(snapshot.get("wallet_candidate_evidence_plan"))
+    evidence_plan_summary = as_dict(evidence_plan.get("summary"))
     body = f"""# MemeTraderPro Research Command Center
 
 {GENERATED_MARKER}
@@ -136,6 +139,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - Active candidate-quality rows: {quality_summary.get("active_candidates") or 0}
 - Strong candidate observations: {quality_summary.get("strong_observation") or 0}
 - Candidate promotion-ready rows: {quality_review_summary.get("promotion_review_ready") or 0}
+- Candidate evidence gaps needing replay: {evidence_plan_summary.get("needs_replay_coverage") or 0}
 
 ## Review First
 
@@ -152,6 +156,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 - [[Wallet Cycle Report]]
 - [[Wallet Candidate Quality]]
 - [[Wallet Candidate Quality Review]]
+- [[Wallet Candidate Evidence Plan]]
 - [[Wallet Replay Ecosystem Review]]
 - [[MemeTraderPro Signal Lineage]]
 - [[MemeTraderPro Daily Workflow]]
@@ -216,6 +221,32 @@ Review-only cross-check of top candidate-quality wallets against replay and outc
 ## Shortlist
 
 {_candidate_quality_review_table(rows)}
+"""
+    return _note(frontmatter, body)
+
+
+def render_wallet_candidate_evidence_plan(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("wallet_candidate_evidence_plan"))
+    summary = as_dict(report.get("summary"))
+    rows = [row for row in report.get("coverage_queue") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("wallet_candidate_evidence_plan")
+    body = f"""# Wallet Candidate Evidence Plan
+
+{GENERATED_MARKER}
+
+Review-only collection plan for top candidate wallets. Use this to decide where more replay/outcome evidence is needed before wallet promotion review.
+
+## Summary
+
+- Total candidates: {_count(summary.get("total_candidates"))}
+- Ready for review: {_count(summary.get("ready_for_review"))}
+- Needs replay coverage: {_count(summary.get("needs_replay_coverage"))}
+- Needs outcome coverage: {_count(summary.get("needs_outcome_coverage"))}
+- Risk review: {_count(summary.get("risk_review"))}
+
+## Coverage Queue
+
+{_candidate_evidence_plan_table(rows)}
 """
     return _note(frontmatter, body)
 
@@ -609,6 +640,25 @@ def _candidate_quality_review_table(rows: list[dict[str, Any]]) -> str:
                 _count(as_dict(row.get("replay")).get("known_15m")),
                 _count(as_dict(row.get("replay")).get("fillable_events")),
                 ", ".join(str(item) for item in row.get("evidence_gaps") or []) or "none",
+            ]
+            for row in rows[:25]
+        ],
+    )
+
+
+def _candidate_evidence_plan_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No candidate evidence plan rows currently surfaced."
+    return table(
+        ["Wallet", "Priority", "Next Action", "Missing Replay", "Missing Fillable", "Missing Outcomes"],
+        [
+            [
+                str(row.get("wallet") or ""),
+                compact_number(row.get("priority_score") or 0, 6),
+                row.get("next_action") or "",
+                _count(as_dict(row.get("missing")).get("replay_known_15m")),
+                _count(as_dict(row.get("missing")).get("fillable_events")),
+                _count(as_dict(row.get("missing")).get("known_outcomes")),
             ]
             for row in rows[:25]
         ],

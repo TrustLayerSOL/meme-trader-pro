@@ -35,6 +35,7 @@ from core.wallet_discovery import normalize_tracked_wallets
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
+from wallets.wallet_candidate_evidence_plan import build_wallet_candidate_evidence_plan
 from wallets.wallet_candidate_quality import build_wallet_candidate_quality_report
 from wallets.wallet_candidate_quality_review import build_wallet_candidate_quality_review
 from wallets.wallet_cycle_report import build_wallet_cycle_report
@@ -60,6 +61,7 @@ WALLET_REPLAY_SCORECARD_FILE = ROOT / "data" / "wallet_replay_scorecard.json"
 WALLET_CYCLE_REPORT_FILE = ROOT / "data" / "wallet_cycle_report.json"
 WALLET_CANDIDATE_QUALITY_REPORT_FILE = ROOT / "data" / "wallet_candidate_quality_report.json"
 WALLET_CANDIDATE_QUALITY_REVIEW_FILE = ROOT / "data" / "wallet_candidate_quality_review.json"
+WALLET_CANDIDATE_EVIDENCE_PLAN_FILE = ROOT / "data" / "wallet_candidate_evidence_plan.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -259,6 +261,7 @@ def read_state_files():
         "wallet_cycle_report": read_json(WALLET_CYCLE_REPORT_FILE, {}),
         "wallet_candidate_quality_report": read_json(WALLET_CANDIDATE_QUALITY_REPORT_FILE, {}),
         "wallet_candidate_quality_review": read_json(WALLET_CANDIDATE_QUALITY_REVIEW_FILE, {}),
+        "wallet_candidate_evidence_plan": read_json(WALLET_CANDIDATE_EVIDENCE_PLAN_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -3612,6 +3615,32 @@ def build_wallet_candidate_quality_review_payload(state=None, limit=80):
     }
 
 
+def build_wallet_candidate_evidence_plan_payload(state=None, limit=80):
+    state = state or read_state_files()
+    existing = state.get("wallet_candidate_evidence_plan")
+    if isinstance(existing, dict) and existing.get("mode") == "WALLET_CANDIDATE_EVIDENCE_PLAN_REVIEW_ONLY":
+        rows = existing.get("coverage_queue") if isinstance(existing.get("coverage_queue"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "source": "wallet_candidate_evidence_plan_json",
+            "source_detail": str(WALLET_CANDIDATE_EVIDENCE_PLAN_FILE.relative_to(ROOT)),
+            "count": min(len(rows), int(limit)),
+            "coverage_queue": rows[:limit],
+        }
+    report = build_wallet_candidate_evidence_plan(
+        candidate_quality_review=state.get("wallet_candidate_quality_review") if isinstance(state.get("wallet_candidate_quality_review"), dict) else {},
+        limit=limit,
+    )
+    rows = report.get("coverage_queue") if isinstance(report.get("coverage_queue"), list) else []
+    return {
+        **report,
+        "read_only": True,
+        "source": "wallet_candidate_evidence_plan_computed",
+        "count": min(len(rows), int(limit)),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4219,6 +4248,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-candidate-quality-review":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_quality_review_payload(limit=limit))
+    if path == "/api/wallet-candidate-evidence-plan":
+        limit = parse_int_query(query, "limit", 80, 1, 500)
+        return json_response(build_wallet_candidate_evidence_plan_payload(limit=limit))
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":
