@@ -106,6 +106,36 @@ Remaining risk / next step:
 - The `unknown_liquidity` bucket is too large to make strong historical conclusions.
 - Next step is to improve decision-time market context coverage and then compute windowed later outcomes per replay window.
 
+2026-05-15 update - Decision-Time Market Context Enrichment:
+
+Changed files:
+
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Wallet-performance signal backfill now looks for the latest token snapshot at or before the signal timestamp, within a bounded prior window.
+- The enrichment fills missing decision-time `market_info` fields such as price, liquidity, market cap, snapshot time, source, and context.
+- Future snapshots remain excluded from decision context; they are still used only for later outcome labels.
+- Rebuilt local generated research data. The replay summary improved from `5,681` unknown-liquidity events to `4,697`; fillable-with-assumptions increased from `207` to `691`; liquidity-floor failures increased from `153` to `653`.
+- Rebuilt `data/wallet_outcome_ledger.json`: `366` wallets across `6,041` records.
+
+Verification:
+
+- Added failing test first to prove prior snapshot context is used and future snapshot liquidity is ignored.
+- `./trading_env/bin/python -m unittest tests.test_wallet_signal_backfill`
+- `./trading_env/bin/python utils/build_wallet_outcome_ledger.py`
+- `./trading_env/bin/python utils/build_historical_replay_dataset.py`
+
+Remaining risk / next step:
+
+- `4,697` replay events still lack decision-time liquidity, so replay conclusions remain limited.
+- Next step is windowed outcome labeling for `30s`, `2m`, `5m`, and `15m`, using only later outcome fields and keeping decision context unchanged.
+
 2026-05-15 update - Wallet Review Queue Resolution:
 
 Changed files:

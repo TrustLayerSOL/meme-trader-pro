@@ -78,6 +78,33 @@ Conclusion: Replay structure is better, but decision-time liquidity coverage is 
 
 Next action: Improve decision-time market context coverage, then compute windowed later outcomes for each fixed replay window.
 
+### 2026-05-15 - Decision-Time Market Context Enrichment
+
+Date: 2026-05-15
+
+Hypothesis: Wallet signal replay quality improves when missing decision-time market context is filled from snapshots at or before the signal timestamp, without using future data.
+
+Files changed:
+
+- `utils/build_wallet_outcome_ledger.py`
+- `tests/test_wallet_signal_backfill.py`
+- `ROADMAP.md`
+- `EXPERIMENT_LOG.md`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+Data used: Current local wallet-performance signals and SQLite `token_snapshots`.
+
+Sample size: `6,041` replay events; `6,041` wallet outcome ledger records across `366` wallets.
+
+Baseline result: Historical replay summary had `207` fillable-with-assumptions events, `153` liquidity-floor failures, and `5,681` unknown-liquidity events.
+
+New result: Prior-snapshot enrichment reduced unknown-liquidity events to `4,697`, increased fillable-with-assumptions events to `691`, and increased liquidity-floor failures to `653`.
+
+Conclusion: Decision-time context coverage improved materially, and the remaining unknown-liquidity bucket is now a clear data-capture target.
+
+Next action: Add windowed outcome labels for `30s`, `2m`, `5m`, and `15m` so each replay event can show whether the wallet signal survived across fixed horizons.
+
 ### 2026-05-14 - Wallet Candidate Audit Report
 
 Date: 2026-05-14

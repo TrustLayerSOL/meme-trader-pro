@@ -73,7 +73,7 @@ Snapshot-linked promotion/demotion candidates now flow into `data/wallet_candida
 
 Wallet candidate audit rows now export into Obsidian as generated review notes under `MemeTraderPro/WalletCandidateReviews/`. These notes expose the candidate evidence gates and recommendation reasons for human review while preserving MemeTraderPro data files as the source of truth.
 
-The first historical replay dataset contract now exists. `research/historical_replay_dataset.py` converts unified records into review-only replay events with separated decision context, fixed evaluation windows, execution assumptions, and later outcome labels. `utils/build_historical_replay_dataset.py` generated the current local dataset with `6,041` replay events, `0` unsafe/leakage-flagged events, `207` fillable-with-assumptions events, `153` liquidity-floor failures, and `5,681` unknown-liquidity events.
+The first historical replay dataset contract now exists. `research/historical_replay_dataset.py` converts unified records into review-only replay events with separated decision context, fixed evaluation windows, execution assumptions, and later outcome labels. `utils/build_historical_replay_dataset.py` generated the current local dataset with `6,041` replay events, `0` unsafe/leakage-flagged events, `691` fillable-with-assumptions events, `653` liquidity-floor failures, and `4,697` unknown-liquidity events after decision-time prior-snapshot enrichment.
 
 ## Next Milestone
 

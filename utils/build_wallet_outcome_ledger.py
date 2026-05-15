@@ -53,6 +53,91 @@ def paper_trade_rows(paper_state: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def safe_float(value: Any, default: float | None = None) -> float | None:
+    try:
+        if value in (None, ""):
+            return default
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number == number else default
+
+
+def snapshot_context_at_or_before_signal(
+    db_path: Path,
+    mint: str,
+    signal_time: Any,
+    *,
+    max_age_seconds: float = 300,
+) -> dict[str, Any]:
+    if not db_path.exists() or not mint or signal_time in (None, ""):
+        return {}
+    signal_ts = safe_float(signal_time, None)
+    if signal_ts is None:
+        return {}
+    min_ts = signal_ts - max(0.0, float(max_age_seconds))
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            select time, mint, source, context, price, liquidity, risk_label, payload_json
+            from token_snapshots
+            where mint = ? and time <= ? and time >= ?
+            order by time desc
+            limit 1
+            """,
+            (mint, signal_ts, min_ts),
+        ).fetchone()
+        conn.close()
+    except sqlite3.Error:
+        return {}
+    if row is None:
+        return {}
+    snap = dict(row)
+    payload = read_payload_json(snap.get("payload_json"))
+    market_cap = first_present(
+        payload.get("market_cap"),
+        payload.get("market_cap_usd"),
+        as_dict(payload.get("market")).get("market_cap"),
+        as_dict(payload.get("market_info")).get("market_cap"),
+    )
+    return {
+        "market_info": {
+            "price": snap.get("price"),
+            "liquidity": snap.get("liquidity"),
+            "market_cap": market_cap,
+            "snapshot_time": snap.get("time"),
+            "snapshot_source": snap.get("source"),
+            "snapshot_context": snap.get("context"),
+        },
+        "risk_label": snap.get("risk_label"),
+    }
+
+
+def read_payload_json(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
 def snapshot_rows_for_signal(db_path: Path, mint: str, signal_time: Any, horizon_seconds: float) -> list[dict[str, Any]]:
     if not db_path.exists() or not mint or signal_time in (None, ""):
         return []
@@ -113,13 +198,19 @@ def build_records(
         try:
             mint = signal.get("mint") or signal.get("token_mint")
             signal_time = signal.get("time") or signal.get("timestamp")
+            enriched_signal = dict(signal)
+            if not as_dict(enriched_signal.get("market_info")):
+                decision_context = snapshot_context_at_or_before_signal(snapshot_db_path, str(mint or ""), signal_time)
+                if decision_context:
+                    enriched_signal["market_info"] = decision_context.get("market_info")
+                    enriched_signal.setdefault("risk_label", decision_context.get("risk_label"))
             outcome = build_later_outcome_from_snapshots(
                 mint=str(mint or ""),
                 signal_time=signal_time,
                 snapshots=snapshot_rows_for_signal(snapshot_db_path, str(mint or ""), signal_time, outcome_horizon_seconds),
                 horizon_seconds=outcome_horizon_seconds,
             )
-            record = build_record_from_wallet_signal(signal)
+            record = build_record_from_wallet_signal(enriched_signal)
             record["later_token_outcome"] = outcome
             records.append(record)
         except Exception:
