@@ -5089,3 +5089,27 @@ Verification:
 Remaining:
 
 - Next step is using the review queue to generate human-readable wallet ecosystem review notes and decide which wallets/pairs deserve deeper replay inspection.
+
+### 2026-05-15 - Wallet Replay Operator Report
+
+Changed files:
+
+- `wallets/wallet_replay_review.py`
+- `tests/test_wallet_replay_scorecard.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added markdown rendering for the wallet replay review queue.
+- The report summarizes reviewable wallets, low-coverage wallets, repeated co-entry pairs, thresholds, and the next operator action.
+- The markdown is included in the `/api/wallet-replay-review` payload as `operator_report_markdown` for future Obsidian/API export without writing generated files into git.
+
+Verification:
+
+- Added a failing test first for human-readable markdown output.
+- Focused markdown renderer test passed.
+
+Remaining:
+
+- Next step is exposing or exporting this report where the operator reviews wallet ecosystem decisions.

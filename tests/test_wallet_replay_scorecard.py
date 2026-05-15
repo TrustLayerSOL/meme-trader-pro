@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 
 from wallets.wallet_replay_scorecard import build_wallet_replay_scorecard
 from wallets.wallet_replay_review import build_wallet_replay_review
+from wallets.wallet_replay_review import render_wallet_replay_review_markdown
 from utils.build_wallet_replay_scorecard import write_wallet_replay_scorecard
 
 
@@ -142,6 +143,28 @@ class WalletReplayScorecardTests(unittest.TestCase):
         self.assertEqual(review["reviewable_wallets"][0]["known_15m"], 5)
         self.assertIn("WalletThin", {row["wallet"] for row in review["low_coverage_wallets"]})
         self.assertEqual(review["co_entry_review"][0]["wallets"], ["WalletGood", "WalletPartner"])
+
+    def test_replay_review_markdown_is_human_readable(self):
+        scorecard = build_wallet_replay_scorecard(
+            [
+                event(["WalletGood", "WalletPartner"], mint="Good1"),
+                event(["WalletGood", "WalletPartner"], mint="Good2"),
+                event(["WalletGood"], mint="Good3"),
+                event(["WalletThin"], mint="Thin1", windows={"15m": {"outcome_type": "unknown"}}),
+            ]
+        )
+        review = build_wallet_replay_review(scorecard, limit=10, min_known_events=2, min_fillable_events=2)
+
+        markdown = render_wallet_replay_review_markdown(review)
+
+        self.assertIn("# Wallet Replay Ecosystem Review", markdown)
+        self.assertIn("Review-only", markdown)
+        self.assertIn("## Reviewable Wallets", markdown)
+        self.assertIn("WalletGood", markdown)
+        self.assertIn("## Low-Coverage Wallets", markdown)
+        self.assertIn("WalletThin", markdown)
+        self.assertIn("## Repeated Co-Entry Pairs", markdown)
+        self.assertIn("WalletPartner", markdown)
 
 
 if __name__ == "__main__":
