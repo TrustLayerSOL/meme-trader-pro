@@ -44,6 +44,49 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Historical Market-Context Backfill Checkpoint:
+
+Changed files:
+
+- `wallets/historical_market_context_backfill.py`
+- `utils/backfill_historical_market_context.py`
+- `tests/test_historical_market_context_backfill.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a review-only historical market-context backfill/reporting lane for evidence rows that still lack decision-time market context after migration recovery.
+- The report links missing evidence rows to preserved raw transaction artifacts by transaction signature.
+- It recovers only partial quote-per-token context when the raw transaction has both a target token delta and a quote-mint delta for the same wallet.
+- It does not invent USD prices, market cap, liquidity, `swap_ticks`, later outcomes, or current-price substitutions.
+- It keeps decision-time context separate from later outcome labels and preserves source file, wallet, mint, signature, timestamp, missing fields, confidence level, recovery method, and block reasons.
+
+Current local run:
+
+- Generated `data/reports/historical_backfill/historical_market_context_backfill_report.json`.
+- Generated `data/reports/historical_backfill/historical_market_context_backfill_records.jsonl`.
+- Scanned `194` missing-context evidence rows.
+- Partially recovered `47` rows from preserved raw transaction quote deltas.
+- Blocked `100` rows because the raw transaction was not present in local artifacts.
+- Blocked `47` rows because a raw transaction existed but did not include a usable quote-price delta.
+- Affected `33` wallets and `36` tokens.
+- `12` wallets now have at least one partial transaction-derived context row for review.
+
+Verification:
+
+- Added failing tests first for transaction-derived partial context, missing transaction blocking, no fake pricing when quote deltas are absent, and report/record file writing.
+- `./trading_env/bin/python -m unittest tests.test_historical_market_context_backfill`
+- `./trading_env/bin/python -m py_compile wallets/historical_market_context_backfill.py utils/backfill_historical_market_context.py tests/test_historical_market_context_backfill.py`
+- `./trading_env/bin/python utils/backfill_historical_market_context.py`
+
+Remaining risk / next step:
+
+- This is a 50% historical backfill lane checkpoint, not a finished historical pricing layer.
+- Partial quote-per-token context is useful for audit/replay triage, but not enough to trust wallet scores by itself because USD price, liquidity, and market cap remain missing.
+- Next step is to recover or collect the missing raw transactions, then add a trusted historical market-snapshot source for liquidity/market-cap context without using current prices.
+
 2026-05-15 update - Missing Market-Context Targets:
 
 Changed files:
