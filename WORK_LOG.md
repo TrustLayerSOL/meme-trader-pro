@@ -44,6 +44,56 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Blocked Reason Reducer:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `85%`
+
+Changed files:
+
+- `wallets/wallet_candidate_blocker_reducer.py`
+- `utils/build_wallet_candidate_blocker_reducer.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_blocker_reducer.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_blocker_reducer.json`
+
+What changed:
+
+- Added a read-only Stage 4 blocker reducer that combines the candidate audit, collection plan, and latest batch result into one operator-readable blocker report.
+- Added `/api/wallet-candidate-blockers?limit=N`.
+- Current local blocker view:
+  - blocked total: `49`,
+  - actionable review: `0`,
+  - manual risk-review blockers: `4`,
+  - missing outcomes plus market-context blockers: `36`,
+  - missing outcome-label blockers: `9`,
+  - latest batch health: `16/16` passed, `0` failed.
+- No wallet-list apply, promotion, demotion, live execution, or trading mutations were added.
+
+Verification:
+
+- Red tests first for missing blocker reducer module and API route.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_blocker_reducer tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_blockers_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_blockers_route_is_read_only`
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_blocker_reducer.py utils/build_wallet_candidate_blocker_reducer.py desktop_api.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_blocker_reducer.py`
+- Local route check: `/api/wallet-candidate-blockers?limit=5` returns `live_execution_locked=true`, `wallet_list_apply_allowed=false`, `wallet_list_mutated=false`, and the current blocker counts above.
+
+Remaining risk / next step:
+
+- Stage 4 can now classify, batch-refresh, and explain blockers. Next step: reduce the biggest blocker first by adding a targeted outcome/market-context recovery queue for the `36` wallets blocked on both outcome and market context.
+
 2026-05-16 update - Stage 4 Evidence Collection Batch Runner:
 
 Active milestone:

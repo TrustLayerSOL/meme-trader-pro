@@ -1030,6 +1030,32 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with(limit=12)
 
+    def test_wallet_candidate_blockers_payload_is_review_only(self):
+        payload = desktop_api.build_wallet_candidate_blockers_payload({
+            "wallet_candidate_audit": {"counts": {"candidates": 1}},
+            "wallet_candidate_collection_plan": {
+                "summary": {"total_targets": 1, "manual_risk_review": 1},
+                "targets": [{"wallet": "RiskWallet", "next_collection_step": "MANUAL_RISK_REVIEW", "missing": {"known_outcomes": 20}}],
+            },
+            "wallet_candidate_collection_batch": {"summary": {"steps_passed": 16, "steps_failed": 0}},
+        }, limit=1)
+
+        self.assertEqual(payload["mode"], "WALLET_CANDIDATE_BLOCKER_REDUCER_REVIEW_ONLY")
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["primary_blocker_counts"]["manual_risk_review"], 1)
+        self.assertEqual(payload["count"], 1)
+
+    def test_wallet_candidate_blockers_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_wallet_candidate_blockers_payload", return_value={"mode": "WALLET_CANDIDATE_BLOCKER_REDUCER_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/wallet-candidate-blockers?limit=12")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with(limit=12)
+
     def test_wallet_candidate_quality_payload_is_review_only(self):
         payload = desktop_api.build_wallet_candidate_quality_payload({
             "candidate_wallets": {

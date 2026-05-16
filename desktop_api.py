@@ -36,6 +36,7 @@ from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
 from wallets.wallet_candidate_backfill_targets import build_wallet_candidate_backfill_targets
+from wallets.wallet_candidate_blocker_reducer import build_wallet_candidate_blocker_reducer
 from wallets.wallet_candidate_collection_plan import build_wallet_candidate_collection_plan
 from wallets.wallet_candidate_decision_prep import build_wallet_candidate_decision_prep
 from wallets.wallet_candidate_evidence_plan import build_wallet_candidate_evidence_plan
@@ -71,7 +72,9 @@ WALLET_CANDIDATE_QUALITY_REPORT_FILE = ROOT / "data" / "wallet_candidate_quality
 WALLET_CANDIDATE_QUALITY_REVIEW_FILE = ROOT / "data" / "wallet_candidate_quality_review.json"
 WALLET_CANDIDATE_EVIDENCE_PLAN_FILE = ROOT / "data" / "wallet_candidate_evidence_plan.json"
 WALLET_CANDIDATE_BACKFILL_TARGETS_FILE = ROOT / "data" / "wallet_candidate_backfill_targets.json"
+WALLET_CANDIDATE_COLLECTION_PLAN_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_candidate_collection_plan.json"
 WALLET_CANDIDATE_COLLECTION_BATCH_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_candidate_collection_batch_report.json"
+WALLET_CANDIDATE_BLOCKER_REDUCER_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_candidate_blocker_reducer.json"
 WALLET_HISTORY_BACKFILL_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_history_backfill_report.json"
 WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_evidence_enrichment_report.json"
 WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_missing_market_context_report.json"
@@ -277,7 +280,9 @@ def read_state_files():
         "wallet_candidate_quality_review": read_json(WALLET_CANDIDATE_QUALITY_REVIEW_FILE, {}),
         "wallet_candidate_evidence_plan": read_json(WALLET_CANDIDATE_EVIDENCE_PLAN_FILE, {}),
         "wallet_candidate_backfill_targets": read_json(WALLET_CANDIDATE_BACKFILL_TARGETS_FILE, {}),
+        "wallet_candidate_collection_plan": read_json(WALLET_CANDIDATE_COLLECTION_PLAN_FILE, {}),
         "wallet_candidate_collection_batch": read_json(WALLET_CANDIDATE_COLLECTION_BATCH_FILE, {}),
+        "wallet_candidate_blocker_reducer": read_json(WALLET_CANDIDATE_BLOCKER_REDUCER_FILE, {}),
         "wallet_history_backfill": read_json(WALLET_HISTORY_BACKFILL_REPORT_FILE, {}),
         "wallet_evidence_enrichment": read_json(WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE, {}),
         "wallet_missing_market_context": read_json(WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE, {}),
@@ -3662,6 +3667,45 @@ def build_wallet_candidate_collection_batch_payload(state=None, limit=50):
     }
 
 
+def build_wallet_candidate_blockers_payload(state=None, limit=50):
+    state = state or read_state_files()
+    existing = state.get("wallet_candidate_blocker_reducer")
+    if isinstance(existing, dict) and existing.get("mode") == "WALLET_CANDIDATE_BLOCKER_REDUCER_REVIEW_ONLY":
+        rows = existing.get("top_blocked_wallets") if isinstance(existing.get("top_blocked_wallets"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "wallet_candidate_blocker_reducer_json",
+            "source_detail": str(WALLET_CANDIDATE_BLOCKER_REDUCER_FILE.relative_to(ROOT)),
+            "count": min(len(rows), int(limit)),
+            "top_blocked_wallets": rows[: int(limit)],
+        }
+    plan = state.get("wallet_candidate_collection_plan")
+    if not isinstance(plan, dict) or not isinstance(plan.get("targets"), list):
+        plan = build_wallet_candidate_collection_plan(
+            state.get("wallet_candidate_audit", {}),
+            limit=max(500, int(limit)),
+        )
+    report = build_wallet_candidate_blocker_reducer(
+        candidate_audit=state.get("wallet_candidate_audit", {}),
+        collection_plan=plan,
+        collection_batch=state.get("wallet_candidate_collection_batch", {}),
+        limit=limit,
+    )
+    rows = report.get("top_blocked_wallets") if isinstance(report.get("top_blocked_wallets"), list) else []
+    return {
+        **report,
+        "read_only": True,
+        "source": "wallet_candidate_blocker_reducer_computed",
+        "source_detail": str(WALLET_CANDIDATE_BLOCKER_REDUCER_FILE.relative_to(ROOT)),
+        "count": min(len(rows), int(limit)),
+    }
+
+
 def build_wallet_candidate_quality_payload(state=None, limit=80):
     state = state or read_state_files()
     existing = state.get("wallet_candidate_quality_report")
@@ -4479,6 +4523,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-candidate-collection-batch":
         limit = parse_int_query(query, "limit", 50, 1, 250)
         return json_response(build_wallet_candidate_collection_batch_payload(limit=limit))
+    if path == "/api/wallet-candidate-blockers":
+        limit = parse_int_query(query, "limit", 50, 1, 250)
+        return json_response(build_wallet_candidate_blockers_payload(limit=limit))
     if path == "/api/wallet-candidate-quality":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_quality_payload(limit=limit))
