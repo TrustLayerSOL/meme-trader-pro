@@ -144,6 +144,31 @@ class TrustedHistoricalMarketSnapshotProviderTests(unittest.TestCase):
         self.assertEqual(record["required_fields"], [])
         self.assertEqual(report["summary"]["score_ready_records"], 1)
 
+    def test_recovered_usd_price_without_liquidity_and_market_cap_is_not_score_ready(self):
+        report = build_trusted_historical_market_snapshot_report(
+            backfill_records=[
+                backfill_record(
+                    status="partial_context_recovered",
+                    decision_time_context={
+                        "decision_time_safe": True,
+                        "timestamp": 1000,
+                        "price": 0.3,
+                        "price_in_quote": 0.002,
+                        "quote_mint": WSOL,
+                        "market_cap": None,
+                        "liquidity": None,
+                    },
+                )
+            ],
+            generated_at=1234,
+        )
+
+        record = report["records"][0]
+        self.assertEqual(record["snapshot_status"], "price_recovered_not_score_ready")
+        self.assertFalse(record["score_ready"])
+        self.assertEqual(record["required_fields"], ["liquidity", "market_cap"])
+        self.assertEqual(report["summary"]["price_recovered_not_score_ready"], 1)
+
     def test_report_groups_requirements_by_token_and_writer_persists_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

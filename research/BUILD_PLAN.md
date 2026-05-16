@@ -25,7 +25,7 @@ All progress reports should use this 10-stage format. Percentages are stage-leve
 | Stage 3 | Wallet Evidence Engine | Current core focus. Wallet history backfills, evidence rows, missing-data handling, and confidence reporting exist; score-ready evidence still needs stronger market context. | 60% |
 | Stage 4 | Wallet Promotion/Demotion System | Early implementation. Review-only promotion/demotion flow and bad-wallet re-entry guards exist; automatic trust evolution remains future work. | 30% |
 | Stage 5 | Wallet Ecosystem Intelligence | Early foundation. Replay scorecards expose repeated co-entry pairs, but relationship graphs, funding overlap, and deployer-linked ecosystems are not mature yet. | 15% |
-| Stage 6 | Replay Realism Layer | Critical active support lane. Replay assumptions, fillability, failed-fill handling, and historical context trust gates exist; trusted historical price/liquidity/market-cap ingestion is still missing. | 40% |
+| Stage 6 | Replay Realism Layer | Critical active support lane. Replay assumptions, fillability, failed-fill handling, historical context trust gates, and WSOL quote-to-USD enrichment exist; trusted token liquidity/market-cap timelines are still missing. | 50% |
 | Stage 7 | Regime Detection | Minimal foundation. Market-regime fields exist in some schemas, but regime classification is not validated or score-driving yet. | 10% |
 | Stage 8 | Replay Validation + Forward Testing | Continuous. Historical replay, rejected-signal review, paper outcomes, and postmortem surfaces exist; larger clean samples and market-context coverage are still needed. | 35% |
 | Stage 9 | Behavioral Intelligence Layer | Long-term moat, mostly future. Some co-entry evidence exists, but repeatable behavioral structures are not deeply modeled yet. | 10% |
@@ -33,12 +33,30 @@ All progress reports should use this 10-stage format. Percentages are stage-leve
 
 Current active milestone for the next implementation step:
 
-- <mark>Stage 6 - Replay Realism Layer: 40%</mark>
+- <mark>Stage 6 - Replay Realism Layer: 50%</mark>
 
 Reason:
 
 - The latest completed work made historical context safer by blocking incomplete rows from wallet scoring.
-- The next high-leverage step is to obtain or reconstruct trusted decision-time price, liquidity, and market-cap context so replay and wallet evidence can become score-ready.
+- Historical WSOL quote prices can now be converted to USD with a decision-time-safe SOL/USD series.
+- The next high-leverage step is to obtain or reconstruct trusted decision-time liquidity and market-cap context so replay and wallet evidence can become score-ready.
+
+## Layer Status Snapshot
+
+Operator-facing layer status snapshot as of 2026-05-16:
+
+| Layer | Status |
+| --- | ---: |
+| Live Data Foundation | 92% |
+| Evidence Layer | 82% |
+| Wallet Graph / Funding Intelligence | 96% |
+| Replayable Token Timelines | 35% |
+| Similar-Rug Pattern Matching | 10% |
+| Alerting / Dashboard Layer | 35% |
+| Validation / Proof Layer | 15% |
+| Productization | 5% |
+
+This layer view is separate from the 10-stage roadmap. Use the 10-stage roadmap for step-completion reporting, and use this layer view for product health snapshots.
 
 ## Product Goal
 
@@ -219,6 +237,7 @@ Deliverables:
 - [x] Migration-safe market-context recovery. `utils/recover_market_context_from_json.py` rebuilds review-only SQLite `token_snapshots` from surviving JSON/JSONL artifacts after local DB loss. Current recovered store has `1,906` recovered snapshots across `739` mints. It does not fabricate missing prices, create `swap_ticks`, promote wallets, or alter trading logic.
 - [x] Historical market-context backfill checkpoint. `wallets/historical_market_context_backfill.py`, `utils/backfill_historical_market_context.py`, `wallets/missing_raw_transaction_recovery.py`, and `utils/recover_missing_raw_transactions.py` classify the remaining missing evidence against preserved raw transactions and recover exact missing raw signatures with read-only RPC. Current local run scanned `194` missing-context rows, recovered all `100` missing raw transactions, removed the missing-transaction blocker, partially recovered `108` rows from paired token/quote raw transaction deltas, and left `86` rows blocked because the transaction evidence still lacks usable quote-price deltas. This is the 100% checkpoint for the recovered-repo historical backfill lane: raw artifact recovery and honest classification are complete, but trusted USD price/liquidity snapshots and lost `swap_ticks` still cannot be assumed.
 - [x] Trusted historical snapshot gate. `wallets/trusted_historical_market_snapshot_provider.py` and `utils/build_trusted_historical_market_snapshot_report.py` classify every historical backfill row for wallet-score readiness. Current local report scanned `194` rows, marked `108` as partial quote-context not score-ready, marked `86` as needing external historical market snapshots, and marked `0` as score-ready. This completes the trust-gate milestone at `100%`: unresolved rows are explicitly blocked from wallet scoring until a real historical price/liquidity/market-cap source or richer on-chain parser is added.
+- [x] Historical quote-price enrichment. `wallets/historical_quote_price_enrichment.py` and `utils/enrich_historical_quote_prices.py` convert WSOL quote-per-token context into USD token price using a decision-time-safe historical SOL/USD series. Current local run used CoinGecko SOL market-chart range data and recovered USD entry price for all `108` WSOL-quoted rows. These rows remain blocked from wallet scoring because liquidity and market cap are still missing.
 - [ ] Canonical event schema for alerts, candidates, wallet actions, quote checks, paper entries/exits, watchdog triggers, and postmortems.
 - [ ] Migration/backfill routine from JSON into SQLite as the source of truth.
 
@@ -249,6 +268,7 @@ Next actions:
 - Use `data/wallet_backfills/wallet_missing_market_context_report.json` as the exact queue for the next read-only token snapshot/swap-tick backfill.
 - Use `data/reports/historical_backfill/historical_market_context_backfill_report.json` to separate partial transaction-derived context from rows that still need trusted historical market snapshots.
 - Use `data/reports/historical_backfill/missing_raw_transaction_recovery_report.json` to audit the exact read-only recovery of previously missing raw transaction signatures.
+- Use `data/reports/historical_backfill/historical_quote_price_enrichment_report.json` to audit WSOL quote-to-USD conversion coverage.
 - Use `data/reports/historical_backfill/trusted_historical_market_snapshot_report.json` to keep incomplete historical rows out of wallet scoring and to choose the next true external/provider-parser requirement.
 - Rerun wallet outcome/replay reports after tracked-wallet changes so the next review cycle measures the refreshed wallet set.
 - Reduce unknown-liquidity and unknown-window replay events by improving decision-time market context and later snapshot coverage before treating replay results as strategy evidence.

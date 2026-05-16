@@ -44,6 +44,73 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Historical Quote Price Enrichment:
+
+Active milestone:
+
+- Stage 6 - Replay Realism Layer
+
+Milestone completion:
+
+- `50%`
+
+Changed files:
+
+- `wallets/historical_quote_price_enrichment.py`
+- `utils/enrich_historical_quote_prices.py`
+- `tests/test_historical_quote_price_enrichment.py`
+- `wallets/trusted_historical_market_snapshot_provider.py`
+- `tests/test_trusted_historical_market_snapshot_provider.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/historical_backfill/sol_usd_price_series.jsonl`
+- `data/reports/historical_backfill/historical_quote_price_enrichment_report.json`
+- `data/reports/historical_backfill/historical_quote_price_enrichment_records.jsonl`
+- `data/reports/historical_backfill/trusted_historical_market_snapshot_report.json`
+- `data/reports/historical_backfill/trusted_historical_market_snapshot_records.jsonl`
+
+What changed:
+
+- Added a review-only historical quote-price enrichment lane.
+- The lane converts WSOL quote-per-token context into USD token price using a prior SOL/USD historical price point.
+- It fetches CoinGecko SOL market-chart range data only when explicitly run with `--fetch-coingecko`.
+- It refuses future quote prices and stale quote prices.
+- It keeps later outcome data separate from decision-time context.
+- It does not create liquidity, market cap, wallet promotions, wallet demotions, or execution changes.
+- Updated the trusted historical snapshot gate so rows with recovered USD price but missing liquidity/market cap are classified as `price_recovered_not_score_ready`.
+- Recorded the operator-facing layer status snapshot in the build plan while preserving the 10-stage reporting format.
+
+Current local run:
+
+- Scanned `194` historical backfill rows.
+- Recovered USD token entry price for all `108` WSOL-quoted rows.
+- `86` rows still have no usable quote-price context and still need an external token historical price source or richer parser evidence.
+- Trusted gate now reports:
+  - `108` rows as `price_recovered_not_score_ready`,
+  - `86` rows as `needs_external_historical_market_snapshot`,
+  - `0` score-ready rows.
+- Remaining required fields:
+  - `liquidity`: `194`
+  - `market_cap`: `194`
+  - `price`: `86`
+
+Verification:
+
+- Added failing tests first for prior-only SOL/USD conversion, future-price rejection, stale-price rejection, unsupported records, report writing, and trusted-gate classification after quote enrichment.
+- `./trading_env/bin/python -m unittest tests.test_historical_quote_price_enrichment`
+- `./trading_env/bin/python -m unittest tests.test_trusted_historical_market_snapshot_provider tests.test_historical_quote_price_enrichment`
+- `./trading_env/bin/python utils/enrich_historical_quote_prices.py --fetch-coingecko --fetch-timeout 30`
+- `./trading_env/bin/python utils/build_trusted_historical_market_snapshot_report.py --source-records data/reports/historical_backfill/historical_quote_price_enrichment_records.jsonl`
+
+Remaining risk / next step:
+
+- Stage 6 cannot honestly reach 100% without trusted historical liquidity and market-cap timelines.
+- The next highest-leverage step is a liquidity/market-cap recovery lane: either integrate a provider that gives historical token liquidity/FDV/market-cap by mint and timestamp, or build a richer on-chain pool/bonding-curve parser that can reconstruct those fields at the transaction slot.
+
 2026-05-16 update - 10-Stage Milestone Reporting Contract:
 
 Changed files:
