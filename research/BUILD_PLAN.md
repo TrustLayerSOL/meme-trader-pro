@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-15
+Last updated: 2026-05-16
 
 ## Legend
 
@@ -13,6 +13,32 @@ Last updated: 2026-05-15
 <mark>Active roadmap area: Quant Wallet Tracker V2.</mark>
 
 <mark>Current focus: Maximize information captured from every wallet signal, no-trade decision, and paper outcome so the system becomes explainable, replayable, and measurable before adding complexity.</mark>
+
+## Major Milestone Map
+
+All progress reports should use this 10-stage format. Percentages are stage-level completion estimates, not whole-project completion estimates.
+
+| Stage | Milestone | Current status | Current estimate |
+| --- | --- | --- | --- |
+| Stage 1 | Live Signal Foundation | Mostly completed. Wallet activity can flow into normalized events, token context, signal generation, event persistence, and replay-safe storage. | 90% |
+| Stage 2 | Signal Context Layer | Underway. Rejected-signal context and decision-time safety are partially wired; accepted paper entries still need complete matching context. | 65% |
+| Stage 3 | Wallet Evidence Engine | Current core focus. Wallet history backfills, evidence rows, missing-data handling, and confidence reporting exist; score-ready evidence still needs stronger market context. | 60% |
+| Stage 4 | Wallet Promotion/Demotion System | Early implementation. Review-only promotion/demotion flow and bad-wallet re-entry guards exist; automatic trust evolution remains future work. | 30% |
+| Stage 5 | Wallet Ecosystem Intelligence | Early foundation. Replay scorecards expose repeated co-entry pairs, but relationship graphs, funding overlap, and deployer-linked ecosystems are not mature yet. | 15% |
+| Stage 6 | Replay Realism Layer | Critical active support lane. Replay assumptions, fillability, failed-fill handling, and historical context trust gates exist; trusted historical price/liquidity/market-cap ingestion is still missing. | 40% |
+| Stage 7 | Regime Detection | Minimal foundation. Market-regime fields exist in some schemas, but regime classification is not validated or score-driving yet. | 10% |
+| Stage 8 | Replay Validation + Forward Testing | Continuous. Historical replay, rejected-signal review, paper outcomes, and postmortem surfaces exist; larger clean samples and market-context coverage are still needed. | 35% |
+| Stage 9 | Behavioral Intelligence Layer | Long-term moat, mostly future. Some co-entry evidence exists, but repeatable behavioral structures are not deeply modeled yet. | 10% |
+| Stage 10 | Semi-Autonomous Risk Engine | Intentionally deferred. Do not automate risk/trust changes until evidence, replay, relationship intelligence, and validation are trustworthy. | 0% |
+
+Current active milestone for the next implementation step:
+
+- <mark>Stage 6 - Replay Realism Layer: 40%</mark>
+
+Reason:
+
+- The latest completed work made historical context safer by blocking incomplete rows from wallet scoring.
+- The next high-leverage step is to obtain or reconstruct trusted decision-time price, liquidity, and market-cap context so replay and wallet evidence can become score-ready.
 
 ## Product Goal
 

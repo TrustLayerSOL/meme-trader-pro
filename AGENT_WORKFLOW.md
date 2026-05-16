@@ -2,7 +2,7 @@
 
 Permanent instructions for agents working in this repo.
 
-Last updated: 2026-04-29
+Last updated: 2026-05-16
 
 ## Purpose
 
@@ -17,6 +17,20 @@ Current project priority:
 - Route new automated social/catalyst inputs into the canonical decision ledger instead of creating a separate social dashboard truth.
 - Separate pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection.
 - Do not describe the slow watchdog as sub-second rug protection.
+
+## Milestone Reporting Format
+
+After every completed step, report progress using the current 10-stage project map in `research/BUILD_PLAN.md`.
+
+Required status format:
+
+- `Active milestone: Stage N - Name`
+- `Milestone completion: X%`
+- `What changed: ...`
+- `Verification: ...`
+- `Next logical step: ...`
+
+Do not give vague whole-project percentages. If a task affects multiple stages, name the main stage moved by the work and briefly mention secondary stages. If the active milestone is unclear, ask for clarification before reporting a percentage.
 
 ## Lead Agent Mandate
 

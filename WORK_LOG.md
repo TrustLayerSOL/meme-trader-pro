@@ -44,6 +44,35 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - 10-Stage Milestone Reporting Contract:
+
+Changed files:
+
+- `AGENT_WORKFLOW.md`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added the 10 major milestones as the official stage map for Quant Wallet Tracker V2.
+- Added the required reporting format for future completion updates:
+  - active milestone,
+  - milestone completion percentage,
+  - what changed,
+  - verification,
+  - next logical step.
+- Clarified that percentages are stage-level estimates, not vague whole-project estimates.
+- Set the next active implementation milestone to `Stage 6 - Replay Realism Layer` because the trusted historical snapshot gate is complete, but trusted historical price/liquidity/market-cap ingestion is still missing.
+
+Verification:
+
+- Documentation-only change; no runtime tests required.
+- Reviewed the stage map against the current build plan and latest historical backfill state.
+
+Remaining risk / next step:
+
+- The milestone map is now explicit, but the next actual build step is still technical: add a trusted historical market data source or richer on-chain parser so Stage 6 can move past the current context-availability blocker.
+
 2026-05-16 update - Trusted Historical Snapshot Gate:
 
 Changed files:
