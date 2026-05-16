@@ -44,6 +44,59 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Evidence Collection Plan:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `75%`
+
+Changed files:
+
+- `wallets/wallet_candidate_collection_plan.py`
+- `utils/build_wallet_candidate_collection_plan.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_collection_plan.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_collection_plan.json`
+
+What changed:
+
+- Added a review-only collection plan for the non-actionable Stage 4 wallet queue.
+- Added `/api/wallet-candidate-collection-plan?limit=N`.
+- The plan converts current Stage 4 audit rows into concrete next collection steps:
+  - collect outcomes plus market context,
+  - collect outcome labels,
+  - manual risk review.
+- Current local plan:
+  - total targets: `49`,
+  - collect outcomes plus market context: `36`,
+  - collect outcome labels: `9`,
+  - manual risk review: `4`,
+  - resolved excluded: `5`.
+- No approvals, wallet-list applies, live execution changes, or auto-demotions were added.
+
+Verification:
+
+- Red test first for missing collection-plan module.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_collection_plan tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_collection_plan_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_collection_plan_route_is_read_only`
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_collection_plan.py utils/build_wallet_candidate_collection_plan.py desktop_api.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_collection_plan.py`
+- Local route check: `/api/wallet-candidate-collection-plan?limit=5` returns `live_execution_locked=true`, `wallet_list_apply_allowed=false`, `wallet_list_mutated=false`.
+
+Remaining risk / next step:
+
+- The queue now tells us exactly what evidence is missing. Next step: build the outcome-label/market-context batch runner for the `36` outcome+market-context wallets and `9` outcome-label wallets, still read-only.
+
 2026-05-16 update - Stage 4 Review Bucket Summary:
 
 Active milestone:

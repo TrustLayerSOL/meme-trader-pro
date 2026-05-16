@@ -36,6 +36,7 @@ from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
 from wallets.wallet_candidate_backfill_targets import build_wallet_candidate_backfill_targets
+from wallets.wallet_candidate_collection_plan import build_wallet_candidate_collection_plan
 from wallets.wallet_candidate_decision_prep import build_wallet_candidate_decision_prep
 from wallets.wallet_candidate_evidence_plan import build_wallet_candidate_evidence_plan
 from wallets.wallet_candidate_quality import build_wallet_candidate_quality_report
@@ -3629,6 +3630,14 @@ def build_wallet_candidate_review_summary_payload(state=None, limit=25):
     )
 
 
+def build_wallet_candidate_collection_plan_payload(state=None, limit=100):
+    state = state or read_state_files()
+    return build_wallet_candidate_collection_plan(
+        state.get("wallet_candidate_audit", {}),
+        limit=limit,
+    )
+
+
 def build_wallet_candidate_quality_payload(state=None, limit=80):
     state = state or read_state_files()
     existing = state.get("wallet_candidate_quality_report")
@@ -4440,6 +4449,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-candidate-review-summary":
         limit = parse_int_query(query, "limit", 25, 1, 250)
         return json_response(build_wallet_candidate_review_summary_payload(limit=limit))
+    if path == "/api/wallet-candidate-collection-plan":
+        limit = parse_int_query(query, "limit", 100, 1, 500)
+        return json_response(build_wallet_candidate_collection_plan_payload(limit=limit))
     if path == "/api/wallet-candidate-quality":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_quality_payload(limit=limit))
