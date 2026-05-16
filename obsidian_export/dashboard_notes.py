@@ -37,7 +37,7 @@ Open [[Wallets Pending Review]].
 ## Wallet Candidate Audit Queue
 
 ```dataview
-TABLE recommendation_action, audit_status, known_outcomes, source_coverage, promotion_score, demotion_score
+TABLE recommendation_action, audit_status, evidence_source, source_bucket, stage4_action, known_outcomes, round_trip_lifecycles, source_coverage, promotion_score, demotion_score
 FROM "MemeTraderPro/WalletCandidateReviews"
 WHERE type = "wallet_candidate_review" AND review_resolved != true
 SORT recommendation_action DESC, known_outcomes DESC

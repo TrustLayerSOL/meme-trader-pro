@@ -63,6 +63,7 @@ PAPER_WATCH_WALLETS_FILE = ROOT / "data" / "paper_watch_wallets.json"
 WALLET_REVIEW_DECISIONS_FILE = ROOT / "data" / "wallet_review_decisions.json"
 WALLET_REPLAY_SCORECARD_FILE = ROOT / "data" / "wallet_replay_scorecard.json"
 WALLET_CYCLE_REPORT_FILE = ROOT / "data" / "wallet_cycle_report.json"
+WALLET_CANDIDATE_AUDIT_FILE = ROOT / "data" / "wallet_candidate_audit.json"
 WALLET_CANDIDATE_QUALITY_REPORT_FILE = ROOT / "data" / "wallet_candidate_quality_report.json"
 WALLET_CANDIDATE_QUALITY_REVIEW_FILE = ROOT / "data" / "wallet_candidate_quality_review.json"
 WALLET_CANDIDATE_EVIDENCE_PLAN_FILE = ROOT / "data" / "wallet_candidate_evidence_plan.json"
@@ -267,6 +268,7 @@ def read_state_files():
         "wallet_review_decisions": read_json(WALLET_REVIEW_DECISIONS_FILE, {"decisions": []}),
         "wallet_replay_scorecard": read_json(WALLET_REPLAY_SCORECARD_FILE, {}),
         "wallet_cycle_report": read_json(WALLET_CYCLE_REPORT_FILE, {}),
+        "wallet_candidate_audit": read_json(WALLET_CANDIDATE_AUDIT_FILE, {}),
         "wallet_candidate_quality_report": read_json(WALLET_CANDIDATE_QUALITY_REPORT_FILE, {}),
         "wallet_candidate_quality_review": read_json(WALLET_CANDIDATE_QUALITY_REVIEW_FILE, {}),
         "wallet_candidate_evidence_plan": read_json(WALLET_CANDIDATE_EVIDENCE_PLAN_FILE, {}),
@@ -3570,6 +3572,41 @@ def build_wallet_cycle_payload(state=None):
     }
 
 
+def build_wallet_candidate_audit_payload(state=None, limit=80):
+    state = state or read_state_files()
+    existing = state.get("wallet_candidate_audit")
+    audit = existing if isinstance(existing, dict) else {}
+    candidates = audit.get("candidates") if isinstance(audit.get("candidates"), list) else []
+    resolved = audit.get("resolved_candidates") if isinstance(audit.get("resolved_candidates"), list) else []
+    limited = candidates[: int(limit)]
+    stage4_rows = [
+        row for row in candidates
+        if isinstance(row, dict) and isinstance(row.get("evidence"), dict) and row["evidence"].get("source") == "wallet_stage4_review"
+    ]
+    return {
+        "generated_at": audit.get("generated_at") or time.time(),
+        "mode": audit.get("mode") or "WALLET_CANDIDATE_AUDIT_REVIEW_ONLY",
+        "read_only": True,
+        "review_only": True,
+        "live_execution_locked": True,
+        "wallet_list_apply_allowed": False,
+        "source": "wallet_candidate_audit_json",
+        "source_detail": str(WALLET_CANDIDATE_AUDIT_FILE.relative_to(ROOT)),
+        "summary": audit.get("counts") if isinstance(audit.get("counts"), dict) else {},
+        "stage4_summary": {
+            "stage4_sourced_candidates": len(stage4_rows),
+            "stage4_demotion_reviews": len([row for row in stage4_rows if row.get("recommendation_action") == "DEMOTION_REVIEW"]),
+            "stage4_risk_reviews": len([row for row in stage4_rows if row.get("recommendation_action") == "RISK_REVIEW_REQUIRED"]),
+            "stage4_promotion_reviews": len([row for row in stage4_rows if row.get("recommendation_action") == "PROMOTION_REVIEW"]),
+        },
+        "count": min(len(candidates), int(limit)),
+        "resolved_count": len(resolved),
+        "candidates": limited,
+        "resolved_candidates": resolved[: int(limit)],
+        "operator_note": "Read-only review queue. Wallet-list changes still require an explicit approved decision plus the separate wallet-review apply guard.",
+    }
+
+
 def build_wallet_candidate_quality_payload(state=None, limit=80):
     state = state or read_state_files()
     existing = state.get("wallet_candidate_quality_report")
@@ -4363,6 +4400,9 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_wallet_replay_review_payload(limit=limit))
     if path == "/api/wallet-cycle":
         return json_response(build_wallet_cycle_payload())
+    if path == "/api/wallet-candidate-audit":
+        limit = parse_int_query(query, "limit", 80, 1, 500)
+        return json_response(build_wallet_candidate_audit_payload(limit=limit))
     if path == "/api/wallet-candidate-quality":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_quality_payload(limit=limit))

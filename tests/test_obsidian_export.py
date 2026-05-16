@@ -111,6 +111,8 @@ old generated body
         self.assertIn("Top Wallets By Confidence", index)
         self.assertIn("Wallet Candidate Audit Queue", index)
         self.assertIn('FROM "MemeTraderPro/WalletCandidateReviews"', index)
+        self.assertIn("evidence_source", index)
+        self.assertIn("round_trip_lifecycles", index)
         self.assertIn("review_resolved != true", index)
         self.assertNotIn('FROM "MemeTraderPro/Wallets"', index)
         self.assertNotIn('FROM "MemeTraderPro/RejectedSignals"', index)
@@ -119,6 +121,41 @@ old generated body
         self.assertIn("Recent Rejected Signals", index)
         self.assertIn("Recent Paper Trades", index)
         self.assertIn("Recent Postmortems", index)
+
+    def test_wallet_candidate_note_surfaces_stage4_evidence(self):
+        from obsidian_export.candidate_note import render_wallet_candidate_note
+
+        note = render_wallet_candidate_note({
+            "wallet": "WalletStage4",
+            "recommendation_action": "DEMOTION_REVIEW",
+            "audit_status": "HUMAN_REVIEW_REQUIRED",
+            "review_resolved": False,
+            "comparison_status": "STAGE4_REVIEW_GATE",
+            "evidence_gates": {
+                "known_outcome_sample_passed": True,
+                "minimum_known_outcomes": 20,
+                "minimum_round_trips": 3,
+                "stage4_action": "DEMOTION_OR_BLOCK_REVIEW",
+            },
+            "evidence": {
+                "source": "wallet_stage4_review",
+                "known_outcomes": 20,
+                "round_trip_lifecycles": 1,
+                "rug_participation": 20,
+                "runner_participation": 0,
+                "source_bucket": "hold_no_edge",
+                "scorecard_next_action": "hold_out_of_paper_watch",
+            },
+            "audit_notes": ["Stage 4 review gate produced a human-review action"],
+        })
+
+        self.assertIn("evidence_source: wallet_stage4_review", note)
+        self.assertIn("stage4_action: DEMOTION_OR_BLOCK_REVIEW", note)
+        self.assertIn("round_trip_lifecycles: 1", note)
+        self.assertIn("Source", note)
+        self.assertIn("wallet_stage4_review", note)
+        self.assertIn("Round-trip lifecycles", note)
+        self.assertIn("Stage 4 action", note)
 
     def test_exporter_writes_under_meme_trader_pro_folder(self):
         from obsidian_export.config import ObsidianExportConfig

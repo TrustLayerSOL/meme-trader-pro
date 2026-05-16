@@ -44,6 +44,52 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Review Queue API / Obsidian Visibility:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `60%`
+
+Changed files:
+
+- `desktop_api.py`
+- `obsidian_export/candidate_note.py`
+- `obsidian_export/dashboard_notes.py`
+- `tests/test_desktop_api.py`
+- `tests/test_obsidian_export.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a read-only local API payload for the Stage 4-backed wallet candidate audit queue.
+- Added `/api/wallet-candidate-audit?limit=N`.
+- The payload exposes candidate counts, Stage 4-sourced review counts, current candidates, resolved candidates, and an operator note that wallet-list changes still require explicit approved decisions plus the apply guard.
+- Updated Obsidian wallet candidate review notes to surface:
+  - evidence source,
+  - source bucket,
+  - Stage 4 action,
+  - round-trip lifecycles,
+  - Stage 4 gate fields.
+- Updated the Obsidian Intelligence Dashboard dataview query so the review queue shows Stage 4 evidence source and round-trip context.
+- No wallet-list changes, trading changes, or auto-approval logic were added.
+
+Verification:
+
+- Red tests first for missing API payload/route and missing Stage 4 Obsidian fields.
+- `./trading_env/bin/python -m unittest tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_audit_payload_surfaces_stage4_review_queue tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_audit_route_is_read_only tests.test_obsidian_export.ObsidianExportTests.test_dashboard_notes_include_required_dataview_queries tests.test_obsidian_export.ObsidianExportTests.test_wallet_candidate_note_surfaces_stage4_evidence`
+- `./trading_env/bin/python -m unittest tests.test_desktop_api tests.test_obsidian_export tests.test_wallet_candidate_audit` (`112` tests)
+- `./trading_env/bin/python -m py_compile desktop_api.py obsidian_export/candidate_note.py obsidian_export/dashboard_notes.py`
+
+Remaining risk / next step:
+
+- Stage 4 review queue is now visible through API/Obsidian, but the decision workflow still requires manual selection. Next step: add a narrow review-decision helper/report that can prepare proposed approval records for selected wallets without applying them.
+
 2026-05-16 update - Stage 4 Human Review/Apply Bridge:
 
 Active milestone:
