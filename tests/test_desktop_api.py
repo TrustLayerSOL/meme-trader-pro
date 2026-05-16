@@ -938,6 +938,38 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with(limit=12, selected_wallets=["WalletA", "WalletB", "WalletC"])
 
+    def test_wallet_candidate_review_summary_payload_is_review_only(self):
+        payload = desktop_api.build_wallet_candidate_review_summary_payload({
+            "wallet_candidate_audit": {
+                "counts": {"candidates": 1},
+                "candidates": [
+                    {
+                        "wallet": "WalletRisk",
+                        "recommendation_action": "RISK_REVIEW_REQUIRED",
+                        "audit_status": "RISK_REVIEW_REQUIRED",
+                        "evidence": {"source": "wallet_stage4_review"},
+                    }
+                ],
+                "resolved_candidates": [],
+            }
+        }, limit=10)
+
+        self.assertEqual(payload["mode"], "WALLET_CANDIDATE_REVIEW_SUMMARY_ONLY")
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["summary"]["risk_review_required"], 1)
+        self.assertEqual(payload["buckets"]["risk_review_required"][0]["wallet"], "WalletRisk")
+
+    def test_wallet_candidate_review_summary_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_wallet_candidate_review_summary_payload", return_value={"mode": "WALLET_CANDIDATE_REVIEW_SUMMARY_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/wallet-candidate-review-summary?limit=12")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with(limit=12)
+
     def test_wallet_candidate_quality_payload_is_review_only(self):
         payload = desktop_api.build_wallet_candidate_quality_payload({
             "candidate_wallets": {

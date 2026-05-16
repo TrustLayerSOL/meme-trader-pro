@@ -44,6 +44,60 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Review Bucket Summary:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `70%`
+
+Changed files:
+
+- `wallets/wallet_candidate_review_summary.py`
+- `utils/build_wallet_candidate_review_summary.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_review_summary.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_review_summary.json`
+
+What changed:
+
+- Added a review-only summary layer for the current wallet candidate audit queue.
+- Added `/api/wallet-candidate-review-summary?limit=N`.
+- The summary separates:
+  - actionable human-review rows,
+  - risk-review-required rows,
+  - insufficient-evidence rows,
+  - resolved/applied rows.
+- Current local summary:
+  - candidates: `49`,
+  - actionable review: `0`,
+  - risk review required: `4`,
+  - insufficient evidence: `45`,
+  - resolved candidates: `5`,
+  - draft proposed decisions: `0`.
+- No wallet-list changes, live execution changes, approvals, or apply operations were added.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_review_summary tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_review_summary_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_review_summary_route_is_read_only`
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_review_summary.py utils/build_wallet_candidate_review_summary.py desktop_api.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_review_summary.py`
+- Local route check: `/api/wallet-candidate-review-summary?limit=5` returns `live_execution_locked=true`, `wallet_list_apply_allowed=false`, `wallet_list_mutated=false`.
+
+Remaining risk / next step:
+
+- Stage 4 now has the review gate, visible queue, draft-decision prep, and review-bucket summary. The next useful step is to cycle back into evidence collection for the `45` insufficient-evidence wallets and the `4` risk-review wallets rather than forcing wallet trust changes from weak data.
+
 2026-05-16 update - Stage 4 Draft Decision Prep:
 
 Active milestone:

@@ -40,6 +40,7 @@ from wallets.wallet_candidate_decision_prep import build_wallet_candidate_decisi
 from wallets.wallet_candidate_evidence_plan import build_wallet_candidate_evidence_plan
 from wallets.wallet_candidate_quality import build_wallet_candidate_quality_report
 from wallets.wallet_candidate_quality_review import build_wallet_candidate_quality_review
+from wallets.wallet_candidate_review_summary import build_wallet_candidate_review_summary
 from wallets.wallet_cycle_report import build_wallet_cycle_report
 from wallets.wallet_evidence_enrichment import build_wallet_evidence_enrichment_report
 from wallets.wallet_history_backfill import build_wallet_history_backfill_report
@@ -3618,6 +3619,16 @@ def build_wallet_candidate_decision_prep_payload(state=None, limit=80, selected_
     return report
 
 
+def build_wallet_candidate_review_summary_payload(state=None, limit=25):
+    state = state or read_state_files()
+    decision_prep = build_wallet_candidate_decision_prep(state.get("wallet_candidate_audit", {}), limit=limit)
+    return build_wallet_candidate_review_summary(
+        state.get("wallet_candidate_audit", {}),
+        decision_prep=decision_prep,
+        limit=limit,
+    )
+
+
 def build_wallet_candidate_quality_payload(state=None, limit=80):
     state = state or read_state_files()
     existing = state.get("wallet_candidate_quality_report")
@@ -4426,6 +4437,9 @@ def route_request(method, raw_path, body=None, headers=None):
             limit=limit,
             selected_wallets=selected_wallets or None,
         ))
+    if path == "/api/wallet-candidate-review-summary":
+        limit = parse_int_query(query, "limit", 25, 1, 250)
+        return json_response(build_wallet_candidate_review_summary_payload(limit=limit))
     if path == "/api/wallet-candidate-quality":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_quality_payload(limit=limit))
