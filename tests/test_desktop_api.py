@@ -1082,6 +1082,31 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with(limit=12)
 
+    def test_wallet_candidate_context_recovery_runner_payload_is_review_only(self):
+        payload = desktop_api.build_wallet_candidate_context_recovery_runner_payload({
+            "wallet_candidate_context_recovery": {"targets": [{"wallet": "WalletA", "missing_known_outcomes": 20}]},
+            "wallet_evidence_enriched_rows": [
+                {"wallet": "WalletA", "token_mint": "MintA", "enrichment_status": "MISSING_MARKET_CONTEXT"}
+            ],
+            "wallet_missing_market_context": {"targets": [{"token_mint": "MintA", "wallets": ["WalletA"], "evidence_rows": 1}]},
+        }, limit=1)
+
+        self.assertEqual(payload["mode"], "WALLET_CANDIDATE_CONTEXT_RECOVERY_RUNNER_REVIEW_ONLY")
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["summary"]["targets_processed"], 1)
+        self.assertEqual(payload["count"], 1)
+
+    def test_wallet_candidate_context_recovery_runner_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_wallet_candidate_context_recovery_runner_payload", return_value={"mode": "WALLET_CANDIDATE_CONTEXT_RECOVERY_RUNNER_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/wallet-candidate-context-recovery-runner?limit=12")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with(limit=12)
+
     def test_wallet_candidate_quality_payload_is_review_only(self):
         payload = desktop_api.build_wallet_candidate_quality_payload({
             "candidate_wallets": {

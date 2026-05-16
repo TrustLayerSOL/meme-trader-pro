@@ -44,6 +44,59 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Bounded Context Recovery Runner:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `95%`
+
+Changed files:
+
+- `wallets/wallet_candidate_context_recovery_runner.py`
+- `utils/build_wallet_candidate_context_recovery_runner.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_context_recovery_runner.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_context_recovery_runner.json`
+
+What changed:
+
+- Added a bounded read-only runner for the 36-wallet context recovery lane.
+- Added `/api/wallet-candidate-context-recovery-runner?limit=N`.
+- Current local bounded run:
+  - targets processed: `36`,
+  - wallets with existing artifacts: `36`,
+  - wallets without existing artifacts: `0`,
+  - enriched evidence rows linked: `849`,
+  - missing market-context rows linked: `738`,
+  - historical backfill records linked: `623`,
+  - recovered score-ready rows: `0`,
+  - still-blocked wallets: `36`.
+- The runner links existing local artifacts only. It does not fetch external data, fabricate market context, approve trust changes, apply wallet-list changes, trade, or mutate wallet lists.
+
+Verification:
+
+- Red tests first for missing runner module and API route.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_context_recovery_runner tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_context_recovery_runner_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_context_recovery_runner_route_is_read_only`
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_context_recovery_runner.py utils/build_wallet_candidate_context_recovery_runner.py desktop_api.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_context_recovery_runner.py`
+- `./trading_env/bin/python -m unittest discover tests` (`484` tests)
+- Local route check: `/api/wallet-candidate-context-recovery-runner?limit=12` returns `live_execution_locked=true`, `wallet_list_mutated=false`, and the current bounded recovery counts above.
+
+Remaining risk / next step:
+
+- The run proves the 36 wallets are not empty; they have linked local evidence. The blocker is quality, not existence: missing decision-time market context and outcome labels still prevent trust changes. Next step: turn the runner output into a bounded Stage 4 blocker-closeout report that separates wallets needing outcome labels, market context, transaction linkage, or manual risk review.
+
 2026-05-16 update - Stage 4 Context Recovery Queue:
 
 Active milestone:
