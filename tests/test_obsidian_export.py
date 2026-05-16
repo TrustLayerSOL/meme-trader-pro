@@ -615,7 +615,10 @@ old generated body
         self.assertIn("reviewable wallets: 2", command)
         self.assertIn("WalletGOOD", replay)
         self.assertIn("type: wallet_replay_ecosystem_review", replay)
-        self.assertIn("Cross-Project Anomaly Radar", shared)
+        self.assertIn("What Matters Today", shared)
+        self.assertIn("Cross-Project Command Centers", shared)
+        self.assertIn("Daily Threat Radar Dashboard", shared)
+        self.assertIn("Threat Radar High-Risk Warnings", shared)
         self.assertIn("Prop API Dashboard", shared)
         self.assertIn("PropAPI/CoverageReports", shared)
 
