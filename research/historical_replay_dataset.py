@@ -16,6 +16,7 @@ DEFAULT_EVALUATION_WINDOWS = (
 )
 DEFAULT_LATENCY_SECONDS = 1.0
 DEFAULT_LIQUIDITY_FLOOR_USD = 1_000
+DEFAULT_MAX_POSITION_LIQUIDITY_PCT = 1.0
 
 LEAKAGE_KEY_FRAGMENTS = (
     "future",
@@ -90,6 +91,7 @@ def execution_assumptions_from_record(record: dict[str, Any]) -> dict[str, Any]:
     assumptions = as_dict(record.get("replay_assumptions"))
     signal_execution = as_dict(as_dict(record.get("signal_context")).get("execution_assumptions"))
     signal_context = as_dict(record.get("signal_context"))
+    decision = as_dict(record.get("decision"))
     market = as_dict(signal_context.get("market")) or as_dict(signal_context.get("market_info"))
     entry_liquidity = safe_float(first_present(assumptions.get("liquidity_usd"), market.get("liquidity")), None)
     slippage_pct = safe_float(
@@ -108,25 +110,94 @@ def execution_assumptions_from_record(record: dict[str, Any]) -> dict[str, Any]:
         ),
         DEFAULT_LATENCY_SECONDS,
     )
+    signal_timestamp = safe_float(
+        first_present(
+            decision.get("decision_timestamp"),
+            signal_context.get("entry_timestamp"),
+            signal_context.get("captured_at"),
+        ),
+        None,
+    )
     liquidity_floor = safe_float(assumptions.get("liquidity_floor_usd"), DEFAULT_LIQUIDITY_FLOOR_USD)
+    max_position_liquidity_pct = safe_float(
+        assumptions.get("max_position_liquidity_pct"),
+        DEFAULT_MAX_POSITION_LIQUIDITY_PCT,
+    )
+    requested_entry_usd = safe_float(
+        first_present(
+            assumptions.get("position_size_usd"),
+            assumptions.get("entry_size_usd"),
+            assumptions.get("size_usd"),
+            record.get("position_size_usd"),
+            record.get("size_usd"),
+        ),
+        None,
+    )
     fill_status = "unknown_liquidity"
+    max_fill_usd = None
+    expected_fill_usd = None
+    fill_ratio = None
+    partial_fill = False
     if entry_liquidity is not None:
-        fill_status = "failed_liquidity_floor" if entry_liquidity < (liquidity_floor or 0) else "fillable_with_assumptions"
+        max_fill_usd = entry_liquidity * max((max_position_liquidity_pct or 0), 0) / 100
+        if entry_liquidity < (liquidity_floor or 0):
+            fill_status = "failed_liquidity_floor"
+            expected_fill_usd = 0.0 if requested_entry_usd is not None else None
+            fill_ratio = 0.0 if requested_entry_usd is not None else None
+        elif requested_entry_usd is not None and requested_entry_usd > max_fill_usd > 0:
+            fill_status = "partial_fill_limited"
+            expected_fill_usd = max_fill_usd
+            fill_ratio = max_fill_usd / requested_entry_usd
+            partial_fill = True
+        else:
+            fill_status = "fillable_with_assumptions"
+            expected_fill_usd = requested_entry_usd
+            fill_ratio = 1.0 if requested_entry_usd is not None else None
+    exit_latency_seconds = safe_float(
+        first_present(
+            assumptions.get("exit_latency_seconds"),
+            signal_execution.get("exit_delay_seconds"),
+            latency_seconds,
+        ),
+        DEFAULT_LATENCY_SECONDS,
+    )
+    exit_slippage_pct = safe_float(
+        first_present(
+            assumptions.get("sell_slippage_estimate_pct"),
+            assumptions.get("exit_slippage_estimate_pct"),
+            signal_execution.get("sell_slippage_estimate_pct"),
+            slippage_pct,
+        ),
+        slippage_pct,
+    )
     return {
         "fill_model": assumptions.get("fill_model", "realistic_fill_required"),
         "perfect_fills_allowed": bool(assumptions.get("perfect_fills_allowed", False)),
         "slippage_estimate_pct": slippage_pct,
         "slippage_bps": round(slippage_pct * 100, 4) if slippage_pct is not None else None,
         "latency_seconds": latency_seconds,
+        "entry_executable_at": round(signal_timestamp + latency_seconds, 6)
+        if signal_timestamp is not None and latency_seconds is not None
+        else None,
         "liquidity_usd": entry_liquidity,
         "entry_liquidity_usd": entry_liquidity,
         "liquidity_floor_usd": liquidity_floor,
         "fill_status": fill_status,
+        "requested_entry_usd": requested_entry_usd,
+        "max_fill_usd": round(max_fill_usd, 6) if max_fill_usd is not None else None,
+        "expected_fill_usd": round(expected_fill_usd, 6) if expected_fill_usd is not None else None,
+        "fill_ratio": round(fill_ratio, 6) if fill_ratio is not None else None,
+        "partial_fill": partial_fill,
+        "entry_effective_price_multiplier": round(1 + (slippage_pct or 0) / 100, 8),
+        "exit_latency_seconds": exit_latency_seconds,
+        "exit_slippage_estimate_pct": exit_slippage_pct,
+        "exit_effective_price_multiplier": round(1 - (exit_slippage_pct or 0) / 100, 8),
+        "partial_exit_assumed": bool(assumptions.get("partial_exit_assumed", False)),
         "failed_fill_assumption": assumptions.get(
             "failed_fill_assumption",
             "fail replay entry when decision-time liquidity is below the configured floor",
         ),
-        "max_position_liquidity_pct": safe_float(assumptions.get("max_position_liquidity_pct"), 1.0),
+        "max_position_liquidity_pct": max_position_liquidity_pct,
     }
 
 

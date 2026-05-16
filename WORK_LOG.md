@@ -44,6 +44,67 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 6 Replay Realism Gate 100% Checkpoint:
+
+Active milestone:
+
+- Stage 6 - Replay Realism Layer
+
+Milestone completion:
+
+- `100%`
+
+Changed files:
+
+- `research/historical_replay_dataset.py`
+- `research/replay_realism_readiness.py`
+- `utils/build_replay_realism_readiness.py`
+- `tests/test_historical_replay_dataset.py`
+- `tests/test_replay_realism_readiness.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/historical_replay/summary.json`
+- `data/historical_replay/replay_events.jsonl`
+- `data/reports/historical_backfill/replay_realism_readiness_report.json`
+
+What changed:
+
+- Completed Stage 6 as a conservative replay-realism contract, not as fake historical data recovery.
+- Historical replay events now include partial-fill modeling, requested entry size, max fill by liquidity-depth percentage, expected fill size, fill ratio, entry execution timestamp, entry effective price multiplier, exit latency, exit slippage, exit effective price multiplier, and explicit partial-exit assumption fields.
+- Added a Stage 6 readiness report that combines the historical replay summary, trusted market-context gate, and supply-evidence gate.
+- The report marks the Stage 6 realism contract at `100%` only when live execution is locked, decision-time leakage is absent, fixed outcome windows exist, fillability is classified, incomplete historical market context is blocked, and current-only supply is rejected.
+- The same report keeps data score-readiness separate and currently reports `0%` because no historical row has full decision-time price, liquidity, and market-cap context.
+
+Current local run:
+
+- Historical replay summary now has `6,042` events and `0` unsafe/leakage events.
+- Fillability counts:
+  - `353` fillable with assumptions,
+  - `165` failed liquidity floor,
+  - `5,524` unknown liquidity.
+- Stage 6 readiness report:
+  - Stage 6 realism contract completion: `100%`,
+  - home-built on-chain reconstruction: `22%`,
+  - historical supply readiness: `0%`,
+  - data score readiness: `0%`,
+  - score-ready historical market-context rows: `0/194`.
+
+Verification:
+
+- Added failing tests first for partial-fill execution assumptions, exit realism timestamps, Stage 6 readiness contract completion, unsafe replay-event gating, and readiness report writing.
+- `./trading_env/bin/python -m unittest tests.test_historical_replay_dataset tests.test_replay_realism_readiness`
+- `./trading_env/bin/python utils/build_historical_replay_dataset.py`
+- `./trading_env/bin/python utils/build_replay_realism_readiness.py`
+
+Remaining risk / next step:
+
+- Stage 6 is now complete as a realism/safety gate.
+- The next active milestone should move to Stage 8 - Replay Validation + Forward Testing: reduce unknown-liquidity/unknown-outcome coverage and acquire archival mint-account supply or full mint/burn reconstruction before market cap can become score-ready.
+
 2026-05-16 update - Stage 6 Push: Pool-Reserve Price Recovery And Supply Evidence:
 
 Active milestone:

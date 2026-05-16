@@ -111,6 +111,45 @@ class HistoricalReplayDatasetTests(unittest.TestCase):
         self.assertGreater(event["execution_assumptions"]["latency_seconds"], 0)
         self.assertFalse(event["execution_assumptions"]["perfect_fills_allowed"])
 
+    def test_execution_assumptions_model_partial_fill_when_size_exceeds_liquidity_depth(self):
+        record = self.base_unified_record()
+        record["replay_assumptions"] = {
+            "position_size_usd": 500,
+            "liquidity_usd": 10_000,
+            "max_position_liquidity_pct": 1.0,
+            "slippage_estimate_pct": 2.5,
+        }
+
+        event = build_replay_event(record)
+        assumptions = event["execution_assumptions"]
+
+        self.assertEqual(assumptions["fill_status"], "partial_fill_limited")
+        self.assertEqual(assumptions["requested_entry_usd"], 500)
+        self.assertEqual(assumptions["max_fill_usd"], 100)
+        self.assertEqual(assumptions["expected_fill_usd"], 100)
+        self.assertEqual(assumptions["fill_ratio"], 0.2)
+        self.assertTrue(assumptions["partial_fill"])
+        self.assertEqual(assumptions["entry_effective_price_multiplier"], 1.025)
+
+    def test_execution_assumptions_include_exit_realism_and_execution_timestamps(self):
+        record = self.base_unified_record()
+        record["replay_assumptions"] = {
+            "position_size_usd": 50,
+            "liquidity_usd": 10_000,
+            "latency_seconds": 1.5,
+            "exit_latency_seconds": 2.0,
+            "sell_slippage_estimate_pct": 4.0,
+        }
+
+        event = build_replay_event(record)
+        assumptions = event["execution_assumptions"]
+
+        self.assertEqual(assumptions["entry_executable_at"], 101.5)
+        self.assertEqual(assumptions["exit_latency_seconds"], 2.0)
+        self.assertEqual(assumptions["exit_slippage_estimate_pct"], 4.0)
+        self.assertEqual(assumptions["exit_effective_price_multiplier"], 0.96)
+        self.assertFalse(assumptions["partial_exit_assumed"])
+
     def test_leakage_validator_rejects_future_fields_inside_decision_context(self):
         event = build_replay_event(self.base_unified_record())
         event["decision_context"]["future_price"] = 0.02
