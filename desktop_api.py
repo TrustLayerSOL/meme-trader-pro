@@ -71,6 +71,7 @@ WALLET_CANDIDATE_QUALITY_REPORT_FILE = ROOT / "data" / "wallet_candidate_quality
 WALLET_CANDIDATE_QUALITY_REVIEW_FILE = ROOT / "data" / "wallet_candidate_quality_review.json"
 WALLET_CANDIDATE_EVIDENCE_PLAN_FILE = ROOT / "data" / "wallet_candidate_evidence_plan.json"
 WALLET_CANDIDATE_BACKFILL_TARGETS_FILE = ROOT / "data" / "wallet_candidate_backfill_targets.json"
+WALLET_CANDIDATE_COLLECTION_BATCH_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_candidate_collection_batch_report.json"
 WALLET_HISTORY_BACKFILL_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_history_backfill_report.json"
 WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_evidence_enrichment_report.json"
 WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_missing_market_context_report.json"
@@ -276,6 +277,7 @@ def read_state_files():
         "wallet_candidate_quality_review": read_json(WALLET_CANDIDATE_QUALITY_REVIEW_FILE, {}),
         "wallet_candidate_evidence_plan": read_json(WALLET_CANDIDATE_EVIDENCE_PLAN_FILE, {}),
         "wallet_candidate_backfill_targets": read_json(WALLET_CANDIDATE_BACKFILL_TARGETS_FILE, {}),
+        "wallet_candidate_collection_batch": read_json(WALLET_CANDIDATE_COLLECTION_BATCH_FILE, {}),
         "wallet_history_backfill": read_json(WALLET_HISTORY_BACKFILL_REPORT_FILE, {}),
         "wallet_evidence_enrichment": read_json(WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE, {}),
         "wallet_missing_market_context": read_json(WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE, {}),
@@ -3638,6 +3640,28 @@ def build_wallet_candidate_collection_plan_payload(state=None, limit=100):
     )
 
 
+def build_wallet_candidate_collection_batch_payload(state=None, limit=50):
+    state = state or read_state_files()
+    existing = state.get("wallet_candidate_collection_batch")
+    report = existing if isinstance(existing, dict) else {}
+    steps = report.get("steps") if isinstance(report.get("steps"), list) else []
+    return {
+        "generated_at": report.get("generated_at") or time.time(),
+        "mode": report.get("mode") or "WALLET_CANDIDATE_COLLECTION_BATCH_REVIEW_ONLY",
+        "read_only": True,
+        "review_only": True,
+        "live_execution_locked": True,
+        "wallet_list_apply_allowed": False,
+        "wallet_list_mutated": False,
+        "source": "wallet_candidate_collection_batch_report",
+        "source_detail": str(WALLET_CANDIDATE_COLLECTION_BATCH_FILE.relative_to(ROOT)),
+        "summary": report.get("summary") if isinstance(report.get("summary"), dict) else {},
+        "count": min(len(steps), int(limit)),
+        "steps": steps[: int(limit)],
+        "operator_note": report.get("operator_note") or "Read-only batch report. No wallet-list apply or trading commands are allowed here.",
+    }
+
+
 def build_wallet_candidate_quality_payload(state=None, limit=80):
     state = state or read_state_files()
     existing = state.get("wallet_candidate_quality_report")
@@ -4452,6 +4476,9 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-candidate-collection-plan":
         limit = parse_int_query(query, "limit", 100, 1, 500)
         return json_response(build_wallet_candidate_collection_plan_payload(limit=limit))
+    if path == "/api/wallet-candidate-collection-batch":
+        limit = parse_int_query(query, "limit", 50, 1, 250)
+        return json_response(build_wallet_candidate_collection_batch_payload(limit=limit))
     if path == "/api/wallet-candidate-quality":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_quality_payload(limit=limit))

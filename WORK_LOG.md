@@ -44,6 +44,56 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Evidence Collection Batch Runner:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `80%`
+
+Changed files:
+
+- `utils/run_wallet_candidate_collection_batch.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_collection_batch.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_collection_batch_report.json`
+
+What changed:
+
+- Added a read-only Stage 4 batch runner that refreshes the wallet evidence report chain from enrichment through candidate collection planning.
+- Added `/api/wallet-candidate-collection-batch?limit=N` so the operator/API layer can inspect the latest batch result without reading files directly.
+- The batch runner blocks apply/trading command names before execution and reports every step with stdout/stderr tails.
+- Current local batch:
+  - planned targets: `49`,
+  - outcome plus market-context targets: `36`,
+  - outcome-label targets: `9`,
+  - manual risk-review targets: `4`,
+  - steps passed: `16/16`,
+  - steps failed: `0`.
+- No wallet-list apply, promotion, demotion, live execution, or trading mutations were added.
+
+Verification:
+
+- Red API tests first for missing collection-batch payload/route.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_collection_batch tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_collection_batch_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_collection_batch_route_is_read_only`
+- `./trading_env/bin/python -m py_compile utils/run_wallet_candidate_collection_batch.py desktop_api.py`
+- `./trading_env/bin/python utils/run_wallet_candidate_collection_batch.py`
+- Local route check: `/api/wallet-candidate-collection-batch?limit=5` returns `live_execution_locked=true`, `wallet_list_apply_allowed=false`, `wallet_list_mutated=false`, `steps_passed=16`, and `steps_failed=0`.
+
+Remaining risk / next step:
+
+- The evidence chain can now be refreshed repeatably. Next step: turn the batch results into a Stage 4 “blocked reason reducer” that counts which missing evidence categories are still preventing wallet promotion/demotion decisions.
+
 2026-05-16 update - Stage 4 Evidence Collection Plan:
 
 Active milestone:
