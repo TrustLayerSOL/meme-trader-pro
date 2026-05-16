@@ -44,6 +44,71 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 8 Replay Validation Gate 100% Checkpoint:
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing
+
+Milestone completion:
+
+- `100%`
+
+Changed files:
+
+- `research/replay_validation_readiness.py`
+- `utils/build_replay_validation_readiness.py`
+- `tests/test_replay_validation_readiness.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/replay_validation/stage8_validation_readiness_report.json`
+
+What changed:
+
+- Completed Stage 8 as a validation-loop contract, not as proof of profitable edge.
+- Added a Stage 8 readiness report that cross-checks the current replay summary, Stage 6 realism gate, wallet replay scorecard, wallet outcome ledger, and candidate backfill targets.
+- The report marks the Stage 8 validation contract at `100%` only when live execution is locked, replay has events, unsafe replay events are zero, Stage 6 is complete, wallet scorecard records match replay event counts, wallet outcome ledger records match replay event counts, candidate backfill targets are classified, and evidence gaps are explicit.
+- The same report keeps proof readiness separate and currently reports `0%` because known 15m outcomes, fillable coverage, and score-ready historical market context remain too thin.
+
+Current local run:
+
+- Historical replay events: `6,042`.
+- Unsafe/leakage events: `0`.
+- Wallet replay scorecard: `261` wallets, `6,042` events.
+- Wallet outcome ledger: `261` wallets, `6,042` records.
+- Candidate backfill targets: `50` total.
+- Backfill target actions:
+  - `46` need wallet-history collection,
+  - `0` need outcome-label backfill,
+  - `0` need more replay events,
+  - `4` need risk review.
+- Stage 8 readiness report:
+  - Stage 8 validation contract completion: `100%`,
+  - proof readiness: `0%`,
+  - fillable replay events: `353`,
+  - fillable rate: `6%`,
+  - known 15m outcomes: `2`,
+  - known 15m outcome rate: `0%`,
+  - Stage 6 data score readiness: `0%`.
+
+Verification:
+
+- Added failing tests first for Stage 8 contract completion with low proof readiness, stale replay scorecard detection, and report writing.
+- `./trading_env/bin/python -m unittest tests.test_replay_validation_readiness`
+- `./trading_env/bin/python utils/build_wallet_outcome_ledger.py`
+- `./trading_env/bin/python utils/build_wallet_replay_scorecard.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_backfill_targets.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+
+Remaining risk / next step:
+
+- Stage 8 is now complete as a validation/staleness/proof-separation gate.
+- The next active milestone moves to Stage 3 - Wallet Evidence Engine: collect read-only wallet history for the `46` queued wallets and resolve the `4` risk-review wallets before wallet scores can be trusted.
+
 2026-05-16 update - Stage 6 Replay Realism Gate 100% Checkpoint:
 
 Active milestone:
