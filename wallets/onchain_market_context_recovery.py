@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from wallets.historical_market_context_backfill import index_raw_transactions, token_amount
+from wallets.historical_quote_price_enrichment import nearest_prior_quote_price, normalize_quote_price_series
 from wallets.wallet_evidence_models import as_dict, safe_float
 from wallets.wallet_history_parser import QUOTE_MINTS
 
@@ -49,17 +50,37 @@ def balance_rows_by_owner(tx: dict[str, Any], field: str) -> dict[str, dict[str,
     return owners
 
 
-def quote_usd_price_from_context(context: dict[str, Any]) -> float | None:
-    quote_mint = str(context.get("quote_mint") or "").strip()
+def quote_usd_price_from_context(
+    context: dict[str, Any],
+    *,
+    timestamp: float | None = None,
+    quote_mint_override: str | None = None,
+    quote_price_series: list[dict[str, float]] | None = None,
+    max_quote_age_seconds: float = 7200.0,
+) -> dict[str, Any] | None:
+    quote_mint = str(quote_mint_override or context.get("quote_mint") or "").strip()
     if quote_mint in STABLE_USD_QUOTE_MINTS:
-        return 1.0
+        return {"price_usd": 1.0, "source": "stable_quote"}
     explicit = first_positive(context.get("quote_usd_price"), context.get("historical_quote_usd_price"))
     if explicit is not None:
-        return explicit
+        return {"price_usd": explicit, "source": str(context.get("quote_usd_price_source") or "decision_time_context")}
     price = positive_float(context.get("price"))
     price_in_quote = positive_float(context.get("price_in_quote"))
     if price is not None and price_in_quote is not None:
-        return price / price_in_quote
+        return {"price_usd": price / price_in_quote, "source": "derived_from_price_and_quote"}
+    if quote_mint == WSOL_MINT and quote_price_series:
+        prior, status = nearest_prior_quote_price(
+            quote_price_series,
+            timestamp,
+            max_quote_age_seconds=max_quote_age_seconds,
+        )
+        if status == "quote_usd_price_recovered" and prior:
+            return {
+                "price_usd": prior["price_usd"],
+                "source": "historical_quote_price_series",
+                "timestamp": prior["timestamp"],
+                "age_seconds": round((timestamp or 0.0) - prior["timestamp"], 6) if timestamp is not None else None,
+            }
     return None
 
 
@@ -122,14 +143,20 @@ def remove_values(values: list[Any], remove: set[str]) -> list[str]:
     return sorted({str(value) for value in values if str(value).strip() and str(value) not in remove})
 
 
-def recover_record(record: dict[str, Any], raw_by_signature: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def recover_record(
+    record: dict[str, Any],
+    raw_by_signature: dict[str, dict[str, Any]],
+    *,
+    quote_price_series: list[dict[str, float]] | None = None,
+    max_quote_age_seconds: float = 7200.0,
+) -> dict[str, Any]:
     wallet = str(record.get("wallet") or "").strip()
     token_mint = str(record.get("token_mint") or "").strip()
     signature = str(record.get("transaction_signature") or "").strip()
     context = dict(as_dict(record.get("decision_time_context")))
     context.setdefault("decision_time_safe", True)
     quote_mint = str(context.get("quote_mint") or "").strip() or None
-    quote_usd = quote_usd_price_from_context(context)
+    timestamp = safe_float(record.get("timestamp") or context.get("timestamp"), None)
     raw = raw_by_signature.get(signature)
     block_reasons = {str(reason) for reason in record.get("block_reasons") or [] if str(reason).strip()}
     missing_fields = {str(field) for field in record.get("missing_fields") or [] if str(field).strip()}
@@ -153,21 +180,57 @@ def recover_record(record: dict[str, Any], raw_by_signature: dict[str, dict[str,
             block_reasons.add("blocked_missing_onchain_pool_reserves")
             status = "blocked_missing_onchain_pool_reserves"
             recovery_method = "blocked_missing_onchain_pool_reserves"
-        elif quote_usd is None:
-            block_reasons.add("blocked_missing_quote_usd_price")
-            status = "blocked_missing_quote_usd_price"
-            recovery_method = "blocked_missing_quote_usd_price"
         else:
             candidate = candidates[0]
-            quote_post = positive_float(candidate.get("pool_quote_reserve_post"))
-            quote_pre = positive_float(candidate.get("pool_quote_reserve_pre"))
-            quote_reserve = quote_post if quote_post is not None else quote_pre
-            if quote_reserve is None:
-                block_reasons.add("blocked_missing_liquidity")
-                block_reasons.add("blocked_missing_onchain_pool_reserves")
-                status = "blocked_missing_onchain_pool_reserves"
-                recovery_method = "blocked_missing_onchain_pool_reserves"
+            quote_mint = candidate.get("quote_mint") or quote_mint
+            quote_usd_info = quote_usd_price_from_context(
+                context,
+                timestamp=timestamp,
+                quote_mint_override=quote_mint,
+                quote_price_series=quote_price_series,
+                max_quote_age_seconds=max_quote_age_seconds,
+            )
+            quote_usd = positive_float(as_dict(quote_usd_info).get("price_usd"))
+            if quote_usd is None:
+                block_reasons.add("blocked_missing_quote_usd_price")
+                status = "blocked_missing_quote_usd_price"
+                recovery_method = "blocked_missing_quote_usd_price"
+                quote_usd_info = None
             else:
+                quote_usd_info = as_dict(quote_usd_info)
+                context["quote_mint"] = quote_mint
+                context["quote_usd_price"] = quote_usd
+                context["quote_usd_price_source"] = quote_usd_info.get("source")
+                if quote_usd_info.get("timestamp") is not None:
+                    context["quote_usd_price_time"] = quote_usd_info.get("timestamp")
+                if quote_usd_info.get("age_seconds") is not None:
+                    context["quote_usd_price_age_seconds"] = quote_usd_info.get("age_seconds")
+
+                quote_post = positive_float(candidate.get("pool_quote_reserve_post"))
+                quote_pre = positive_float(candidate.get("pool_quote_reserve_pre"))
+                quote_reserve = quote_post if quote_post is not None else quote_pre
+                token_post = positive_float(candidate.get("pool_token_reserve_post"))
+                token_pre = positive_float(candidate.get("pool_token_reserve_pre"))
+                token_reserve = token_post if token_post is not None else token_pre
+                if quote_reserve is None:
+                    block_reasons.add("blocked_missing_liquidity")
+                    block_reasons.add("blocked_missing_onchain_pool_reserves")
+                    status = "blocked_missing_onchain_pool_reserves"
+                    recovery_method = "blocked_missing_onchain_pool_reserves"
+                    quote_usd = None
+
+            if quote_usd is not None:
+                price_recovered_from_pool = False
+                if positive_float(context.get("price_in_quote")) is None and token_reserve is not None:
+                    context["price_in_quote"] = quote_reserve / token_reserve
+                    context["price_quote_per_token"] = quote_reserve / token_reserve
+                    context["price_in_quote_source"] = "onchain_pool_reserve_ratio"
+                if positive_float(context.get("price")) is None and positive_float(context.get("price_in_quote")) is not None:
+                    context["price"] = positive_float(context.get("price_in_quote")) * quote_usd
+                    context["price_usd"] = context["price"]
+                    context["price_source"] = "onchain_pool_reserve_ratio"
+                    price_recovered_from_pool = True
+
                 liquidity_usd = quote_reserve * quote_usd * 2
                 pre_liquidity_usd = quote_pre * quote_usd * 2 if quote_pre is not None else None
                 context.update(
@@ -189,10 +252,13 @@ def recover_record(record: dict[str, Any], raw_by_signature: dict[str, dict[str,
                         "decision_time_safe": True,
                     }
                 )
+                if positive_float(context.get("price")) is not None:
+                    block_reasons.discard("blocked_missing_price")
+                    missing_fields.discard("entry_price")
                 block_reasons.discard("blocked_missing_liquidity")
                 block_reasons.discard("blocked_missing_onchain_pool_reserves")
                 missing_fields.discard("liquidity")
-                status = "onchain_liquidity_recovered"
+                status = "onchain_price_liquidity_recovered" if price_recovered_from_pool else "onchain_liquidity_recovered"
                 recovery_method = "onchain_pool_balance_reconstruction"
 
                 token_supply = token_supply_from_context(context)
@@ -226,7 +292,7 @@ def recover_record(record: dict[str, Any], raw_by_signature: dict[str, dict[str,
         "onchain_recovery_version": RECOVERY_VERSION,
         "wallet": wallet,
         "token_mint": token_mint,
-        "timestamp": safe_float(record.get("timestamp") or context.get("timestamp"), None),
+        "timestamp": timestamp,
         "transaction_signature": signature,
         "source_status": record.get("status"),
         "status": status,
@@ -245,10 +311,12 @@ def build_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     block_reasons = Counter(reason for record in records for reason in record.get("block_reasons") or [])
     missing_fields = Counter(field for record in records for field in record.get("missing_fields") or [])
     liquidity_recovered = sum(1 for record in records if positive_float(as_dict(record.get("decision_time_context")).get("liquidity")) is not None)
+    price_recovered = sum(1 for record in records if positive_float(as_dict(record.get("decision_time_context")).get("price")) is not None)
     market_cap_recovered = sum(1 for record in records if positive_float(as_dict(record.get("decision_time_context")).get("market_cap")) is not None)
     score_ready = sum(1 for record in records if record.get("score_ready_candidate"))
     return {
         "records_scanned": len(records),
+        "price_recovered_records": price_recovered,
         "liquidity_recovered_records": liquidity_recovered,
         "market_cap_recovered_records": market_cap_recovered,
         "score_ready_candidate_records": score_ready,
@@ -280,12 +348,20 @@ def build_onchain_market_context_recovery_report(
     *,
     backfill_records: list[dict[str, Any]],
     raw_transactions: list[dict[str, Any]],
+    quote_price_series: list[dict[str, Any]] | None = None,
+    max_quote_age_seconds: float = 7200.0,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     raw_by_signature = index_raw_transactions(raw_transactions)
+    normalized_quote_prices = normalize_quote_price_series(quote_price_series or [])
     records = [
-        recover_record(record, raw_by_signature)
+        recover_record(
+            record,
+            raw_by_signature,
+            quote_price_series=normalized_quote_prices,
+            max_quote_age_seconds=max_quote_age_seconds,
+        )
         for record in backfill_records or []
         if isinstance(record, dict)
     ]
@@ -295,6 +371,8 @@ def build_onchain_market_context_recovery_report(
         "review_only": True,
         "live_execution_locked": True,
         "onchain_recovery_version": RECOVERY_VERSION,
+        "quote_price_points": len(normalized_quote_prices),
+        "max_quote_age_seconds": max_quote_age_seconds,
         "provider_policy": {
             "primary_source": "home_built_onchain_reconstruction",
             "provider_snapshots_allowed_for": ["temporary_validation", "fallback_gap_analysis"],

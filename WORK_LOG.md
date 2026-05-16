@@ -44,6 +44,78 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 6 Push: Pool-Reserve Price Recovery And Supply Evidence:
+
+Active milestone:
+
+- Stage 6 - Replay Realism Layer
+
+Milestone completion:
+
+- `65%`
+
+Changed files:
+
+- `wallets/onchain_market_context_recovery.py`
+- `utils/recover_onchain_market_context.py`
+- `tests/test_onchain_market_context_recovery.py`
+- `wallets/onchain_supply_evidence.py`
+- `utils/build_onchain_supply_evidence.py`
+- `tests/test_onchain_supply_evidence.py`
+- `wallets/trusted_historical_market_snapshot_provider.py`
+- `tests/test_trusted_historical_market_snapshot_provider.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/historical_backfill/onchain_market_context_recovery_report.json`
+- `data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl`
+- `data/reports/historical_backfill/onchain_supply_evidence_report.json`
+- `data/reports/historical_backfill/onchain_supply_evidence_records.jsonl`
+- `data/reports/historical_backfill/trusted_onchain_market_context_report.json`
+- `data/reports/historical_backfill/trusted_onchain_market_context_records.jsonl`
+
+What changed:
+
+- Extended home-built on-chain market-context recovery so it can recover price and liquidity directly from pool/vault reserve ratios when wallet-level quote deltas are missing.
+- The lane now uses only prior historical quote-price series points for WSOL quote conversion and refuses future quote prices.
+- Added a supply-evidence classifier that records token decimals from raw transaction balances but refuses to treat decimals, pool reserves, current supply, or inferred pump supply as historical total supply.
+- Updated the trusted gate so rows with price+liquidity but missing supply/market cap get a distinct `liquidity_recovered_not_score_ready` status.
+- Provider snapshots remain validation/fallback only.
+
+Current local run:
+
+- On-chain market-context recovery scanned `194` rows.
+- Price recovered: `157`.
+- Liquidity recovered: `65`.
+- Market cap recovered: `0`.
+- Trusted on-chain gate now reports:
+  - `65` rows as `liquidity_recovered_not_score_ready`,
+  - `92` rows as `price_recovered_not_score_ready`,
+  - `37` rows still needing harder price/pool recovery,
+  - `0` score-ready rows.
+- Supply evidence scanned `194` rows:
+  - recovered decimals for all `36` affected tokens,
+  - recovered decision-time supply for `0`,
+  - marked all `194` rows as `needs_archival_supply`.
+
+Verification:
+
+- Added failing tests first for pool-reserve price recovery, future quote-price rejection, writer quote-series loading, supply recovery only from decision-time context, decimals-only blocking, and trusted-gate liquidity status.
+- `./trading_env/bin/python -m unittest tests.test_onchain_market_context_recovery`
+- `./trading_env/bin/python -m unittest tests.test_onchain_supply_evidence`
+- `./trading_env/bin/python -m unittest tests.test_trusted_historical_market_snapshot_provider`
+- `./trading_env/bin/python utils/recover_onchain_market_context.py`
+- `./trading_env/bin/python utils/build_onchain_supply_evidence.py`
+- `./trading_env/bin/python utils/build_trusted_historical_market_snapshot_report.py --source-records data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl --report-path data/reports/historical_backfill/trusted_onchain_market_context_report.json --records-path data/reports/historical_backfill/trusted_onchain_market_context_records.jsonl`
+
+Remaining risk / next step:
+
+- Stage 6 cannot honestly be marked 100% from local artifacts because historical total supply is not present.
+- Next step is archival mint-account supply recovery or a complete replay-safe mint/burn instruction reconstruction up to each decision slot.
+
 2026-05-16 update - Home-Built On-Chain Market Context Recovery:
 
 Active milestone:

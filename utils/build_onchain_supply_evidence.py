@@ -12,52 +12,42 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.backfill_historical_market_context import load_raw_transactions, read_jsonl  # noqa: E402
-from wallets.onchain_market_context_recovery import (  # noqa: E402
-    build_onchain_market_context_recovery_report,
-    relative_path,
-)
+from wallets.onchain_market_context_recovery import relative_path  # noqa: E402
+from wallets.onchain_supply_evidence import build_onchain_supply_evidence_report  # noqa: E402
 
 
 DEFAULT_SOURCE_RECORDS_PATH = (
-    ROOT / "data" / "reports" / "historical_backfill" / "historical_quote_price_enrichment_records.jsonl"
-)
-DEFAULT_RAW_TRANSACTIONS_DIR = ROOT / "data" / "wallet_backfills" / "raw_transactions"
-DEFAULT_QUOTE_PRICE_SERIES_PATH = ROOT / "data" / "reports" / "historical_backfill" / "sol_usd_price_series.jsonl"
-DEFAULT_REPORT_PATH = ROOT / "data" / "reports" / "historical_backfill" / "onchain_market_context_recovery_report.json"
-DEFAULT_OUTPUT_RECORDS_PATH = (
     ROOT / "data" / "reports" / "historical_backfill" / "onchain_market_context_recovery_records.jsonl"
 )
+DEFAULT_RAW_TRANSACTIONS_DIR = ROOT / "data" / "wallet_backfills" / "raw_transactions"
+DEFAULT_REPORT_PATH = ROOT / "data" / "reports" / "historical_backfill" / "onchain_supply_evidence_report.json"
+DEFAULT_OUTPUT_RECORDS_PATH = (
+    ROOT / "data" / "reports" / "historical_backfill" / "onchain_supply_evidence_records.jsonl"
+)
 
 
-def write_onchain_market_context_recovery_report(
+def write_onchain_supply_evidence_report(
     *,
     source_records_path: Path | str = DEFAULT_SOURCE_RECORDS_PATH,
     raw_transactions_dir: Path | str = DEFAULT_RAW_TRANSACTIONS_DIR,
-    quote_price_series_path: Path | str = DEFAULT_QUOTE_PRICE_SERIES_PATH,
     report_path: Path | str = DEFAULT_REPORT_PATH,
     output_records_path: Path | str = DEFAULT_OUTPUT_RECORDS_PATH,
-    max_quote_age_seconds: float = 7200.0,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     source_records_path = Path(source_records_path)
     raw_transactions_dir = Path(raw_transactions_dir)
-    quote_price_series_path = Path(quote_price_series_path)
     report_path = Path(report_path)
     output_records_path = Path(output_records_path)
-    source_records = read_jsonl(source_records_path)
+    records = read_jsonl(source_records_path)
     raw_transactions = load_raw_transactions(raw_transactions_dir)
-    quote_price_series = read_jsonl(quote_price_series_path)
-    report = build_onchain_market_context_recovery_report(
-        backfill_records=source_records,
+    report = build_onchain_supply_evidence_report(
+        market_context_records=records,
         raw_transactions=raw_transactions,
-        quote_price_series=quote_price_series,
-        max_quote_age_seconds=max_quote_age_seconds,
         generated_at=generated_at,
     )
     report["input_paths"] = {
         "source_records": relative_path(source_records_path, ROOT),
         "raw_transactions_dir": relative_path(raw_transactions_dir, ROOT),
-        "quote_price_series": relative_path(quote_price_series_path, ROOT),
     }
     report["output_paths"] = {
         "report": relative_path(report_path, ROOT),
@@ -73,13 +63,9 @@ def write_onchain_market_context_recovery_report(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Recover historical liquidity/market-cap context from local on-chain transaction evidence."
-    )
+    parser = argparse.ArgumentParser(description="Build a read-only historical token supply evidence report.")
     parser.add_argument("--source-records", type=Path, default=DEFAULT_SOURCE_RECORDS_PATH)
     parser.add_argument("--raw-transactions-dir", type=Path, default=DEFAULT_RAW_TRANSACTIONS_DIR)
-    parser.add_argument("--quote-price-series", type=Path, default=DEFAULT_QUOTE_PRICE_SERIES_PATH)
-    parser.add_argument("--max-quote-age-seconds", type=float, default=7200.0)
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--records-path", type=Path, default=DEFAULT_OUTPUT_RECORDS_PATH)
     return parser.parse_args(argv)
@@ -87,13 +73,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    report = write_onchain_market_context_recovery_report(
+    report = write_onchain_supply_evidence_report(
         source_records_path=args.source_records,
         raw_transactions_dir=args.raw_transactions_dir,
-        quote_price_series_path=args.quote_price_series,
         report_path=args.report_path,
         output_records_path=args.records_path,
-        max_quote_age_seconds=args.max_quote_age_seconds,
     )
     print(json.dumps(report["summary"], indent=2, sort_keys=True))
     return 0

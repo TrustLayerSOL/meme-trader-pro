@@ -64,6 +64,8 @@ def required_fields_for_context(context: dict[str, Any]) -> list[str]:
 def snapshot_status_for_record(source_status: str, context: dict[str, Any], required_fields: list[str]) -> str:
     if not required_fields:
         return "trusted_snapshot_complete"
+    if positive_number(context.get("price")) and positive_number(context.get("liquidity")):
+        return "liquidity_recovered_not_score_ready"
     if positive_number(context.get("price")):
         return "price_recovered_not_score_ready"
     if source_status == "partial_context_recovered" and positive_number(context.get("price_in_quote")):
@@ -158,6 +160,7 @@ def build_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         "score_ready_records": score_ready,
         "partial_quote_context_not_score_ready": statuses.get("partial_quote_context_not_score_ready", 0),
         "price_recovered_not_score_ready": statuses.get("price_recovered_not_score_ready", 0),
+        "liquidity_recovered_not_score_ready": statuses.get("liquidity_recovered_not_score_ready", 0),
         "needs_external_historical_market_snapshot": statuses.get(
             "needs_external_historical_market_snapshot", 0
         ),

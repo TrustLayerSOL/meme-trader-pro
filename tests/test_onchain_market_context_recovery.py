@@ -163,20 +163,86 @@ class OnchainMarketContextRecoveryTests(unittest.TestCase):
         self.assertIsNone(record["decision_time_context"].get("liquidity"))
         self.assertIn("blocked_missing_liquidity", record["block_reasons"])
 
+    def test_recovers_price_and_liquidity_from_pool_reserves_with_prior_quote_series(self):
+        record = backfill_record(
+            status="blocked_missing_price",
+            block_reasons=["blocked_missing_price", "blocked_missing_liquidity", "blocked_missing_market_cap"],
+            missing_fields=["entry_price", "liquidity", "market_cap"],
+            decision_time_context={
+                "decision_time_safe": True,
+                "timestamp": 1000,
+                "price": None,
+                "price_in_quote": None,
+                "quote_mint": None,
+                "market_cap": None,
+                "liquidity": None,
+            },
+        )
+
+        report = build_onchain_market_context_recovery_report(
+            backfill_records=[record],
+            raw_transactions=[raw_tx(pool_token_post=500_000, pool_quote_post=25.0)],
+            quote_price_series=[{"timestamp": 990, "price_usd": 2.0}],
+            generated_at=1234,
+        )
+
+        recovered = report["records"][0]
+        context = recovered["decision_time_context"]
+        self.assertEqual(recovered["status"], "onchain_price_liquidity_recovered")
+        self.assertEqual(context["quote_mint"], WSOL)
+        self.assertEqual(context["quote_usd_price"], 2.0)
+        self.assertEqual(context["quote_usd_price_source"], "historical_quote_price_series")
+        self.assertEqual(context["price_in_quote"], 0.00005)
+        self.assertEqual(context["price"], 0.0001)
+        self.assertEqual(context["price_source"], "onchain_pool_reserve_ratio")
+        self.assertEqual(context["liquidity"], 100.0)
+        self.assertNotIn("blocked_missing_price", recovered["block_reasons"])
+        self.assertNotIn("entry_price", recovered["missing_fields"])
+
+    def test_does_not_use_future_quote_series_for_pool_price(self):
+        record = backfill_record(
+            status="blocked_missing_price",
+            block_reasons=["blocked_missing_price", "blocked_missing_liquidity"],
+            decision_time_context={
+                "decision_time_safe": True,
+                "timestamp": 1000,
+                "price": None,
+                "price_in_quote": None,
+                "quote_mint": None,
+                "market_cap": None,
+                "liquidity": None,
+            },
+        )
+
+        report = build_onchain_market_context_recovery_report(
+            backfill_records=[record],
+            raw_transactions=[raw_tx(pool_token_post=500_000, pool_quote_post=25.0)],
+            quote_price_series=[{"timestamp": 1001, "price_usd": 2.0}],
+            generated_at=1234,
+        )
+
+        recovered = report["records"][0]
+        self.assertEqual(recovered["status"], "blocked_missing_quote_usd_price")
+        self.assertIsNone(recovered["decision_time_context"].get("price"))
+        self.assertIn("blocked_missing_quote_usd_price", recovered["block_reasons"])
+
     def test_writer_persists_report_and_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             records_path = root / "historical_quote_price_enrichment_records.jsonl"
             raw_dir = root / "raw_transactions"
+            quote_series_path = root / "sol_usd_price_series.jsonl"
             report_path = root / "onchain_market_context_recovery_report.json"
             output_records_path = root / "onchain_market_context_recovery_records.jsonl"
             raw_dir.mkdir()
             records_path.write_text(json.dumps(backfill_record()) + "\n", encoding="utf-8")
+            quote_series_path.write_text(json.dumps({"timestamp": 990, "price_usd": 2.0}) + "\n", encoding="utf-8")
             (raw_dir / "raw.jsonl").write_text(json.dumps(raw_tx()) + "\n", encoding="utf-8")
 
             report = write_onchain_market_context_recovery_report(
                 source_records_path=records_path,
                 raw_transactions_dir=raw_dir,
+                quote_price_series_path=quote_series_path,
                 report_path=report_path,
                 output_records_path=output_records_path,
                 generated_at=1234,
@@ -185,6 +251,7 @@ class OnchainMarketContextRecoveryTests(unittest.TestCase):
             self.assertTrue(report_path.exists())
             self.assertTrue(output_records_path.exists())
             self.assertEqual(report["summary"]["records_scanned"], 1)
+            self.assertEqual(report["quote_price_points"], 1)
             output_rows = [json.loads(line) for line in output_records_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(output_rows[0]["transaction_signature"], "SigA")
 
