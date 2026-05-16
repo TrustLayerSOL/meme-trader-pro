@@ -44,6 +44,53 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 3 Wallet Evidence Recommendation Buckets:
+
+Active milestone:
+
+- Stage 3 - Wallet Evidence Engine
+
+Milestone completion:
+
+- `83%`
+
+Changed files:
+
+- `wallets/wallet_evidence_recommendations.py`
+- `utils/build_wallet_evidence_recommendations.py`
+- `tests/test_wallet_evidence_recommendations.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_backfills/wallet_evidence_recommendations_report.json`
+
+What changed:
+
+- Added a review-only wallet evidence recommendation report that labels wallets as `paper_watch_candidate`, `observe_more`, `risk_review`, or `hold_no_edge`.
+- Added a separate `do_not_promote_yet` trust gate so candidate-review readiness cannot be confused with trusted wallet promotion while wallet score readiness is `0%`.
+- Generated the current recommendation report from the Stage 3 evidence inputs.
+- Current report reviews `50` wallets:
+  - `38` paper-watch candidates,
+  - `7` observe-more wallets,
+  - `4` risk-review wallets,
+  - `1` hold-no-edge wallet,
+  - `50` do-not-promote-yet labels,
+  - `0` trusted promotions,
+  - `0` auto-applied changes.
+
+Verification:
+
+- Added failing tests first for risk-review, hold-no-edge, paper-watch-but-not-trusted, observe-more, and report writing behavior.
+- `./trading_env/bin/python -m unittest tests.test_wallet_evidence_recommendations`
+- `./trading_env/bin/python utils/build_wallet_evidence_recommendations.py`
+
+Remaining risk / next step:
+
+- These are review buckets, not proof of edge. The next Stage 3 step is to improve known-outcome and score-ready market-context coverage so paper-watch candidates can be evaluated beyond surface wallet history.
+
 2026-05-16 update - Stage 3 Wallet Evidence Engine Checkpoint:
 
 Active milestone:
