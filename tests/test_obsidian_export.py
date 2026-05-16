@@ -8,6 +8,7 @@ from obsidian_export.candidate_note import render_wallet_candidate_note, wallet_
 from obsidian_export.decision_note import render_wallet_review_decisions_note
 from obsidian_export.exporter import GENERATED_MARKER, ensure_vault_ignore_filters, merge_generated_note
 from obsidian_export.intelligence_notes import render_intelligence_notes
+from obsidian_export.markdown import table
 from obsidian_export.signal_note import render_signal_note
 from obsidian_export.summary_notes import render_summary_index_notes
 from obsidian_export.wallet_note import render_wallet_note, wallet_filename
@@ -48,6 +49,15 @@ class ObsidianExportTests(unittest.TestCase):
 
     def test_wallet_filename_is_stable_and_obsidian_safe(self):
         self.assertEqual(wallet_filename("Wallet/ABC 123"), "WAL-Wallet-ABC-123.md")
+
+    def test_markdown_table_escapes_aliased_wikilinks(self):
+        rendered = table(
+            ["Wallet", "Action", "Score"],
+            [["[[WAL-WalletABC123|WalletABC123]]", "DEMOTION_REVIEW", 22.14]],
+        )
+
+        self.assertIn("[[WAL-WalletABC123\\|WalletABC123]]", rendered)
+        self.assertIn("| [[WAL-WalletABC123\\|WalletABC123]] | DEMOTION_REVIEW | 22.14 |", rendered)
 
     def test_signal_note_includes_market_risk_decision_and_wallet_links(self):
         note = render_signal_note(
@@ -354,8 +364,8 @@ old generated body
 
         self.assertIn("type: wallet_review_decisions", note)
         self.assertIn("approved_decisions: 1", note)
-        self.assertIn("[[WAL-WalletABC123|WalletABC123]]", note)
-        self.assertIn("[[WREV-PROMOTION_REVIEW-WalletABC123|candidate review]]", note)
+        self.assertIn("[[WAL-WalletABC123\\|WalletABC123]]", note)
+        self.assertIn("[[WREV-PROMOTION_REVIEW-WalletABC123\\|candidate review]]", note)
         self.assertIn("approve_promotion", note)
         self.assertIn("repeat winner", note)
         self.assertIn("not_in_current_candidate_audit", note)

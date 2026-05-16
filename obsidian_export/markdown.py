@@ -103,7 +103,7 @@ def bullet_list(items: list[Any], *, empty: str = "None recorded.") -> str:
 
 
 def table(headers: list[str], rows: list[list[Any]]) -> str:
-    clean_headers = [str(header) for header in headers]
+    clean_headers = [_table_cell(header) for header in headers]
     out = [
         "| " + " | ".join(clean_headers) + " |",
         "| " + " | ".join(["---"] * len(clean_headers)) + " |",
@@ -111,10 +111,14 @@ def table(headers: list[str], rows: list[list[Any]]) -> str:
     for row in rows:
         cells = []
         for value in row:
-            text = "" if value is None else str(value)
-            cells.append(text.replace("\n", " "))
+            cells.append(_table_cell(value))
         out.append("| " + " | ".join(cells) + " |")
     return "\n".join(out)
+
+
+def _table_cell(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return text.replace("\n", " ").replace("|", "\\|")
 
 
 def as_list(value: Any) -> list[Any]:
