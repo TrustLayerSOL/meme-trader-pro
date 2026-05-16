@@ -22,7 +22,7 @@ def safe_float(value: Any, default: float = 0.0) -> float:
     return number if number == number else default
 
 
-def candidate_wallet_targets(backfill_targets: Any, *, max_wallets: int = 45) -> list[dict[str, Any]]:
+def candidate_wallet_targets(backfill_targets: Any, *, max_wallets: int = 50) -> list[dict[str, Any]]:
     targets = []
     for row in as_dict(backfill_targets).get("targets") or []:
         if not isinstance(row, dict):
@@ -81,7 +81,7 @@ def build_wallet_history_backfill_report(
     replay_events: list[dict[str, Any]] | None = None,
     execute: bool = False,
     generated_at: float | None = None,
-    max_wallets: int = 45,
+    max_wallets: int = 50,
     signature_limit: int = 40,
     max_transactions_per_wallet: int = 20,
     request_pause_seconds: float = 0.0,

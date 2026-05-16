@@ -54,6 +54,24 @@ class FakeRpc:
 
 
 class WalletHistoryBackfillTests(unittest.TestCase):
+    def test_default_queue_limit_covers_current_stage3_target_count(self):
+        report = build_wallet_history_backfill_report(
+            backfill_targets={
+                "targets": [
+                    {
+                        "wallet": f"Wallet{i}",
+                        "priority_score": 100 - i,
+                        "next_collection_step": "COLLECT_WALLET_HISTORY",
+                    }
+                    for i in range(46)
+                ]
+            },
+            execute=False,
+        )
+
+        self.assertEqual(report["summary"]["target_wallets"], 46)
+        self.assertEqual(report["summary"]["dry_run_wallets"], 46)
+
     def test_parser_excludes_quote_side_mints_from_wallet_evidence(self):
         from wallets.wallet_history_parser import parse_wallet_token_deltas
 
@@ -164,6 +182,47 @@ class WalletHistoryBackfillTests(unittest.TestCase):
 
             self.assertTrue(out.exists())
             self.assertEqual(report["summary"]["target_wallets"], 1)
+
+    def test_writer_dedupes_existing_evidence_and_preserves_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = root / "wallet_history_backfill_report.json"
+            evidence = root / "wallet_history_evidence.jsonl"
+            report_dir = root / "reports"
+            raw_dir = root / "raw"
+            evidence.write_text(
+                (
+                    '{"wallet":"WalletA","transaction_signature":"SigBuy","token_mint":"MintA","observed_action":"buy","token_amount_delta":10}\n'
+                    '{"wallet":"WalletA","transaction_signature":"SigBuy","token_mint":"MintA","observed_action":"buy","token_amount_delta":10}\n'
+                ),
+                encoding="utf-8",
+            )
+
+            report = write_wallet_history_backfill_report(
+                out_path=out,
+                evidence_path=evidence,
+                report_dir=report_dir,
+                raw_dir=raw_dir,
+                backfill_targets={
+                    "targets": [
+                        {
+                            "wallet": "WalletA",
+                            "next_collection_step": "COLLECT_WALLET_HISTORY",
+                        }
+                    ]
+                },
+                rpc=FakeRpc(),
+                execute=True,
+                max_wallets=1,
+            )
+
+            self.assertEqual(len(evidence.read_text(encoding="utf-8").splitlines()), 2)
+            self.assertEqual(report["evidence_rows_written"], 1)
+            self.assertEqual(report["evidence_duplicate_rows_skipped"], 1)
+            self.assertEqual(report["existing_evidence_duplicates_removed"], 1)
+            archive = report.get("evidence_dedupe_archive_path")
+            self.assertTrue(archive)
+            self.assertTrue(Path(archive).exists())
 
 
 if __name__ == "__main__":

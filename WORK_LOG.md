@@ -44,6 +44,105 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 3 Wallet Evidence Engine Checkpoint:
+
+Active milestone:
+
+- Stage 3 - Wallet Evidence Engine
+
+Milestone completion:
+
+- `80%`
+
+Changed files:
+
+- `wallets/wallet_history_backfill.py`
+- `utils/run_wallet_history_backfill.py`
+- `research/wallet_evidence_readiness.py`
+- `utils/build_wallet_evidence_readiness.py`
+- `tests/test_wallet_history_backfill.py`
+- `tests/test_wallet_evidence_readiness.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/wallet_backfills/wallet_history_backfill_report.json`
+- `data/wallet_evidence/wallet_history_evidence.jsonl`
+- `data/wallet_evidence/wallet_history_evidence_enriched.jsonl`
+- `data/wallet_backfills/wallet_evidence_enrichment_report.json`
+- `data/wallet_backfills/wallet_missing_market_context_report.json`
+- `data/reports/historical_backfill/historical_market_context_backfill_report.json`
+- `data/reports/historical_backfill/historical_quote_price_enrichment_report.json`
+- `data/reports/historical_backfill/onchain_market_context_recovery_report.json`
+- `data/reports/historical_backfill/onchain_supply_evidence_report.json`
+- `data/reports/historical_backfill/trusted_onchain_market_context_report.json`
+- `data/reports/wallet_backfills/wallet_evidence_readiness_report.json`
+
+What changed:
+
+- Processed the full Stage 3 wallet-history queue instead of the previous 45-wallet default.
+- Made wallet-history evidence persistence idempotent so repeated backfills do not duplicate wallet evidence and inflate wallet-quality metrics.
+- Ran the read-only wallet-history backfill for all `46` queued wallets.
+- Rebuilt enrichment, missing-market-context, historical context, quote-price, on-chain liquidity, supply-evidence, trusted-context, Stage 6, Stage 8, and new Stage 3 readiness reports from the larger deduped evidence set.
+- Added a Stage 3 readiness report that separates evidence collection completion from wallet score readiness.
+
+Current local run:
+
+- Wallet-history targets processed: `46/46`.
+- Fully collected wallets: `2`.
+- Partially collected wallets: `44`.
+- Blocked wallets: `0`.
+- Evidence rows created in this pass: `745`.
+- Raw transactions preserved in this pass: `890`.
+- New unique evidence rows written: `700`.
+- Duplicate evidence rows skipped: `45`.
+- Merged wallet evidence rows: `1,033`.
+- Evidence duplicate count after merge: `0`.
+- Enrichment coverage:
+  - `46` unique wallets,
+  - `91` unique mints,
+  - `324` rows with entry context,
+  - `24` rows with known outcomes,
+  - `709` rows missing market context.
+- Missing market-context queue:
+  - `77` target mints,
+  - `643` missing-context rows,
+  - `33` affected wallets.
+- On-chain context recovery:
+  - `201` price-recovered records,
+  - `86` liquidity-recovered records,
+  - `0` market-cap-recovered records.
+- Stage 3 readiness report:
+  - Stage 3 evidence collection contract: `100%`,
+  - wallet score readiness: `0%`,
+  - ready for candidate review: `39`,
+  - risk-review targets: `4`,
+  - score-ready market-context records: `0`.
+
+Verification:
+
+- Added failing tests first for full 46-wallet queue coverage, evidence dedupe/archive behavior, Stage 3 readiness contract completion, and duplicate-evidence failure detection.
+- `./trading_env/bin/python -m unittest tests.test_wallet_history_backfill`
+- `./trading_env/bin/python -m unittest tests.test_wallet_evidence_readiness`
+- `./trading_env/bin/python utils/run_wallet_history_backfill.py --execute --max-wallets 46 --signature-limit 40 --max-transactions-per-wallet 20 --request-pause-seconds 0.2`
+- `./trading_env/bin/python utils/enrich_wallet_history_evidence.py`
+- `./trading_env/bin/python utils/build_wallet_missing_market_context_targets.py`
+- `./trading_env/bin/python utils/backfill_historical_market_context.py`
+- `./trading_env/bin/python utils/enrich_historical_quote_prices.py`
+- `./trading_env/bin/python utils/recover_onchain_market_context.py`
+- `./trading_env/bin/python utils/build_onchain_supply_evidence.py`
+- `./trading_env/bin/python utils/build_trusted_historical_market_snapshot_report.py --source-records data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl --report-path data/reports/historical_backfill/trusted_onchain_market_context_report.json --records-path data/reports/historical_backfill/trusted_onchain_market_context_records.jsonl`
+- `./trading_env/bin/python utils/build_replay_realism_readiness.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+- `./trading_env/bin/python utils/build_wallet_evidence_readiness.py`
+
+Remaining risk / next step:
+
+- Stage 3 collection mechanics are now strong enough to keep moving, but score readiness is still not strong enough to trust wallet promotion/demotion as proof.
+- The next Stage 3 step is to resolve the `4` risk-review wallets, then improve outcome-label and decision-time market-context coverage. Market-cap scoring remains blocked until historical supply can be recovered without using current-only data.
+
 2026-05-16 update - Stage 8 Replay Validation Gate 100% Checkpoint:
 
 Active milestone:
