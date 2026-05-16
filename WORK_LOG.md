@@ -44,6 +44,63 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Evidence Layer Completion Gate:
+
+Active milestone:
+
+- Evidence Layer product-health lane
+- Stage 3 - Wallet Evidence Engine remains complete as infrastructure
+
+Milestone completion:
+
+- Evidence Layer: `100%`
+- Wallet score readiness: `0%`
+
+Changed files:
+
+- `research/evidence_layer_completion.py`
+- `utils/build_evidence_layer_completion.py`
+- `desktop_api.py`
+- `tests/test_evidence_layer_completion.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_backfills/evidence_layer_completion_report.json`
+
+What changed:
+
+- Added a review-only Evidence Layer completion gate.
+- Added `/api/evidence-layer-completion`.
+- Current local report:
+  - evidence layer completion: `100%`,
+  - evidence rows: `1,033`,
+  - known-outcome rows: `24`,
+  - remaining blocked wallets: `36`,
+  - wallets needing outcome labels: `36`,
+  - wallets needing market context: `32`,
+  - transaction-linkage blockers: `0`,
+  - score-ready market-context records: `0`,
+  - trusted promotions allowed: `0`.
+- This closes the Evidence Layer as a capture, dedupe, classification, and routing layer. It does not make wallet scores trusted.
+- No wallet-list changes were applied. Live execution remains locked.
+
+Verification:
+
+- Red test first for missing Evidence Layer completion module.
+- `./trading_env/bin/python -m unittest tests.test_evidence_layer_completion tests.test_desktop_api.DesktopApiTests.test_evidence_layer_completion_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_evidence_layer_completion_route_is_read_only`
+- `./trading_env/bin/python -m py_compile research/evidence_layer_completion.py utils/build_evidence_layer_completion.py desktop_api.py`
+- `./trading_env/bin/python utils/build_evidence_layer_completion.py`
+- Local route check: `/api/evidence-layer-completion` returns `live_execution_locked=true`, `wallet_list_mutated=false`, and the completion counts above.
+- `./trading_env/bin/python -m unittest discover tests` (`490` tests)
+
+Remaining risk / next step:
+
+- The first incomplete product-health layer is now Replayable Token Timelines at `35%`. The next grounded step is historical token outcome reconstruction: build replay-safe later outcome labels and decision-time market context for the `36` blocked wallets without using current prices or fabricated liquidity.
+
 2026-05-16 update - Stage 4 Context Recovery Closeout:
 
 Active milestone:

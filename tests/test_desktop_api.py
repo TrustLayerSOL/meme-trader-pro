@@ -1220,6 +1220,60 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with(limit=12)
 
+    def test_evidence_layer_completion_payload_is_review_only(self):
+        payload = desktop_api.build_evidence_layer_completion_payload({
+            "wallet_evidence_readiness": {
+                "live_execution_locked": True,
+                "summary": {
+                    "stage3_evidence_contract_completion_pct": 100,
+                    "wallet_score_readiness_pct": 0,
+                    "evidence_duplicate_count": 0,
+                    "wallets_blocked": 0,
+                    "evidence_rows": 100,
+                    "rows_with_known_outcome": 20,
+                    "score_ready_market_context_records": 0,
+                },
+                "evidence_gaps": ["low_known_outcome_coverage", "missing_market_context"],
+            },
+            "wallet_evidence_scorecard": {
+                "live_execution_locked": True,
+                "summary": {
+                    "stage3_engine_completion_pct": 100,
+                    "trusted_promotions_allowed": 0,
+                },
+            },
+            "wallet_candidate_context_recovery_closeout": {
+                "live_execution_locked": True,
+                "summary": {
+                    "still_blocked_wallets": 36,
+                    "needs_outcome_labels": 36,
+                    "needs_market_context": 32,
+                    "needs_transaction_linkage": 0,
+                },
+                "next_action_counts": {
+                    "BACKFILL_MARKET_CONTEXT_AND_OUTCOME_LABELS": 32,
+                    "BACKFILL_OUTCOME_LABELS": 4,
+                },
+            },
+        })
+
+        self.assertEqual(payload["mode"], "EVIDENCE_LAYER_COMPLETION_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["summary"]["evidence_layer_completion_pct"], 100)
+        self.assertEqual(payload["summary"]["wallet_score_readiness_pct"], 0)
+
+    def test_evidence_layer_completion_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_evidence_layer_completion_payload", return_value={"mode": "EVIDENCE_LAYER_COMPLETION_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/evidence-layer-completion")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({

@@ -32,6 +32,7 @@ from core.runtime_status import DEFAULT_STATUS, load_status
 from core.settings_manager import load_settings as load_bot_settings
 from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
+from research.evidence_layer_completion import build_evidence_layer_completion_report
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
@@ -84,6 +85,9 @@ WALLET_CANDIDATE_CONTEXT_RECOVERY_CLOSEOUT_FILE = ROOT / "data" / "reports" / "w
 WALLET_HISTORY_BACKFILL_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_history_backfill_report.json"
 WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_evidence_enrichment_report.json"
 WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_missing_market_context_report.json"
+WALLET_EVIDENCE_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_evidence_readiness_report.json"
+WALLET_EVIDENCE_SCORECARD_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_evidence_scorecard_report.json"
+EVIDENCE_LAYER_COMPLETION_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "evidence_layer_completion_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -295,6 +299,9 @@ def read_state_files():
         "wallet_history_backfill": read_json(WALLET_HISTORY_BACKFILL_REPORT_FILE, {}),
         "wallet_evidence_enrichment": read_json(WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE, {}),
         "wallet_missing_market_context": read_json(WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE, {}),
+        "wallet_evidence_readiness": read_json(WALLET_EVIDENCE_READINESS_REPORT_FILE, {}),
+        "wallet_evidence_scorecard": read_json(WALLET_EVIDENCE_SCORECARD_REPORT_FILE, {}),
+        "evidence_layer_completion": read_json(EVIDENCE_LAYER_COMPLETION_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -4014,6 +4021,33 @@ def build_wallet_missing_market_context_payload(state=None, limit=80):
     }
 
 
+def build_evidence_layer_completion_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("evidence_layer_completion")
+    if isinstance(existing, dict) and existing.get("mode") == "EVIDENCE_LAYER_COMPLETION_REVIEW_ONLY":
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "evidence_layer_completion_json",
+            "source_detail": str(EVIDENCE_LAYER_COMPLETION_REPORT_FILE.relative_to(ROOT)),
+        }
+    report = build_evidence_layer_completion_report(
+        wallet_evidence_readiness=state.get("wallet_evidence_readiness") if isinstance(state.get("wallet_evidence_readiness"), dict) else {},
+        wallet_evidence_scorecard=state.get("wallet_evidence_scorecard") if isinstance(state.get("wallet_evidence_scorecard"), dict) else {},
+        recovery_closeout=state.get("wallet_candidate_context_recovery_closeout") if isinstance(state.get("wallet_candidate_context_recovery_closeout"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "evidence_layer_completion_computed",
+        "source_detail": str(EVIDENCE_LAYER_COMPLETION_REPORT_FILE.relative_to(ROOT)),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4672,6 +4706,8 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-missing-market-context":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_missing_market_context_payload(limit=limit))
+    if path == "/api/evidence-layer-completion":
+        return json_response(build_evidence_layer_completion_payload())
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":
