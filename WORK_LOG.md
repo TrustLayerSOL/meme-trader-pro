@@ -44,6 +44,54 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 3 Wallet Evidence Lifecycle Report:
+
+Active milestone:
+
+- Stage 3 - Wallet Evidence Engine
+
+Milestone completion:
+
+- `86%`
+
+Changed files:
+
+- `wallets/wallet_evidence_lifecycle.py`
+- `utils/build_wallet_evidence_lifecycle.py`
+- `tests/test_wallet_evidence_lifecycle.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_backfills/wallet_evidence_lifecycle_report.json`
+
+What changed:
+
+- Added a review-only lifecycle report that groups wallet-history evidence by wallet and token mint.
+- The report identifies observed round trips, buy-only/open-or-unseen-exit lifecycles, sell-only/missing-entry lifecycles, hold durations, action sequences, and net token accumulation/distribution.
+- It intentionally does not infer PnL, price, liquidity, promotion, demotion, or execution.
+- Current local report from `1,033` wallet evidence rows:
+  - `102` wallet-token lifecycles,
+  - `66` observed round trips,
+  - `17` buy-only/open-or-unseen-exit lifecycles,
+  - `19` sell-only/missing-entry lifecycles,
+  - `44` wallets with round trips,
+  - median observed hold duration `488` seconds,
+  - average observed hold duration `4,335.73` seconds,
+  - `66` quote-mint evidence rows skipped.
+
+Verification:
+
+- Added failing tests first for round-trip hold duration, buy-only/sell-only labeling, quote/missing timestamp skips, and report writing.
+- `./trading_env/bin/python -m unittest tests.test_wallet_evidence_lifecycle`
+- `./trading_env/bin/python utils/build_wallet_evidence_lifecycle.py`
+
+Remaining risk / next step:
+
+- Lifecycle behavior improves observability, but it is not proof of wallet edge. The next Stage 3 step is to connect lifecycle context into review reports and then keep pushing outcome-label/market-context coverage until paper-watch candidates can be scored honestly.
+
 2026-05-16 update - Stage 3 Wallet Evidence Recommendation Buckets:
 
 Active milestone:
