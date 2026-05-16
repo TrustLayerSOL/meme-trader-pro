@@ -147,6 +147,12 @@ def build_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     statuses = Counter(str(record.get("snapshot_status") or "unknown") for record in records)
     required_fields = Counter(field for record in records for field in record.get("required_fields") or [])
     score_ready = sum(1 for record in records if record.get("score_ready"))
+    liquidity_recovered = sum(
+        1 for record in records if positive_number(as_dict(record.get("decision_time_context")).get("liquidity"))
+    )
+    market_cap_recovered = sum(
+        1 for record in records if positive_number(as_dict(record.get("decision_time_context")).get("market_cap"))
+    )
     return {
         "records_scanned": len(records),
         "score_ready_records": score_ready,
@@ -160,20 +166,36 @@ def build_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         "wallets_affected": len({record.get("wallet") for record in records if record.get("wallet")}),
         "tokens_affected": len({record.get("token_mint") for record in records if record.get("token_mint")}),
         "trust_gate_completion_pct": 100,
+        "home_built_onchain_reconstruction_pct": reconstruction_pct(
+            records_scanned=len(records),
+            liquidity_recovered=liquidity_recovered,
+            market_cap_recovered=market_cap_recovered,
+        ),
+        "provider_fallback_ingestion_pct": 0 if required_fields else 100,
         "external_historical_snapshot_ingestion_pct": 0 if required_fields else 100,
         "next_required_actions": next_required_actions(records),
     }
+
+
+def reconstruction_pct(*, records_scanned: int, liquidity_recovered: int, market_cap_recovered: int) -> int:
+    if records_scanned <= 0:
+        return 100
+    # Liquidity is the first home-built target; market cap requires separate supply evidence.
+    weighted = (liquidity_recovered * 0.65) + (market_cap_recovered * 0.35)
+    return int(round((weighted / records_scanned) * 100))
 
 
 def next_required_actions(records: list[dict[str, Any]]) -> list[str]:
     required = Counter(field for record in records for field in record.get("required_fields") or [])
     actions: list[str] = []
     if required.get("price"):
-        actions.append("Collect decision-time historical token price from a trusted source for blocked rows.")
+        actions.append("Recover decision-time token price from transaction quote deltas or pool math before using provider fallback.")
     if required.get("historical_quote_usd_price"):
-        actions.append("Collect historical quote-asset USD prices or richer swap evidence for quote-priced rows.")
+        actions.append("Recover historical quote-asset USD prices from replay-safe sources or richer swap evidence.")
     if required.get("liquidity") or required.get("market_cap"):
-        actions.append("Collect decision-time liquidity and market-cap snapshots before using these rows for wallet scoring.")
+        actions.append("Recover decision-time liquidity from on-chain pool/vault balance evidence first.")
+    if required.get("market_cap"):
+        actions.append("Recover decision-time token supply before treating market cap as score-ready.")
     if required.get("decision_time_safe_source"):
         actions.append("Reject or repair rows whose context source cannot be proven decision-time safe.")
     if not actions:
@@ -189,17 +211,38 @@ def provider_capabilities() -> dict[str, Any]:
             "does_not_provide": ["historical_quote_usd_price", "liquidity", "market_cap"],
             "score_ready_by_itself": False,
         },
+        "home_built_onchain_pool_reconstruction": {
+            "decision_time_safe": True,
+            "provides": ["liquidity"],
+            "requires": ["raw_transaction_token_balances", "quote_usd_price"],
+            "does_not_provide_without_extra_evidence": ["market_cap"],
+            "score_ready_by_itself": False,
+        },
+        "home_built_supply_reconstruction": {
+            "decision_time_safe_required": True,
+            "provides": ["market_cap"],
+            "requires": ["token_price", "decision_time_token_supply"],
+            "status": "next_required_lane",
+        },
         "historical_quote_price_enrichment": {
             "decision_time_safe": True,
             "provides": ["price"],
             "does_not_provide": ["liquidity", "market_cap"],
             "score_ready_by_itself": False,
         },
-        "external_historical_market_snapshot": {
+        "provider_historical_market_snapshot_fallback": {
             "decision_time_safe_required": True,
             "required_outputs": ["price", "liquidity", "market_cap", "source_timestamp"],
-            "status": "not_integrated",
+            "status": "fallback_or_validation_only",
         },
+    }
+
+
+def provider_policy() -> dict[str, str]:
+    return {
+        "primary_lane": "home_built_onchain_reconstruction",
+        "provider_snapshots": "validation_or_fallback_only",
+        "long_term_goal": "replay_safe_proprietary_reconstruction",
     }
 
 
@@ -216,6 +259,7 @@ def build_trusted_historical_market_snapshot_report(
         "review_only": True,
         "live_execution_locked": True,
         "snapshot_provider_version": SNAPSHOT_PROVIDER_VERSION,
+        "provider_policy": provider_policy(),
         "provider_capabilities": provider_capabilities(),
         "summary": build_summary(records),
         "snapshot_requirements_by_token": build_snapshot_requirements_by_token(records),

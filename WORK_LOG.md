@@ -44,6 +44,70 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Home-Built On-Chain Market Context Recovery:
+
+Active milestone:
+
+- Stage 6 - Replay Realism Layer
+
+Milestone completion:
+
+- `55%`
+
+Changed files:
+
+- `wallets/onchain_market_context_recovery.py`
+- `utils/recover_onchain_market_context.py`
+- `tests/test_onchain_market_context_recovery.py`
+- `wallets/trusted_historical_market_snapshot_provider.py`
+- `tests/test_trusted_historical_market_snapshot_provider.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/historical_backfill/onchain_market_context_recovery_report.json`
+- `data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl`
+- `data/reports/historical_backfill/trusted_onchain_market_context_report.json`
+- `data/reports/historical_backfill/trusted_onchain_market_context_records.jsonl`
+
+What changed:
+
+- Added a review-only home-built historical liquidity/market-context recovery lane.
+- The lane reads local raw transaction token-balance evidence and looks for non-wallet pool/vault owners that hold both the target token and a quote token in the same transaction.
+- It estimates two-sided liquidity from on-chain quote reserves and historical quote USD price when those fields are already decision-time safe.
+- It preserves pre/post pool reserves, pool owner, quote mint, source file, block reasons, and missing fields.
+- It keeps provider snapshots as validation/fallback only; the long-term source of truth is proprietary on-chain reconstruction.
+- It does not invent market cap. Market cap remains blocked until decision-time token supply exists.
+- It does not promote/demote wallets, mutate wallet lists, or touch execution.
+- Updated the trusted historical snapshot gate to report `home_built_onchain_reconstruction_pct` and to recommend on-chain liquidity/supply recovery before provider fallback.
+
+Current local run:
+
+- Scanned `194` historical quote-enriched records.
+- Recovered liquidity for `16` records from raw transaction pool/vault balances.
+- Recovered market cap for `0` records because decision-time token supply is not yet present.
+- Trusted on-chain gate now reports:
+  - `16` records with liquidity recovered,
+  - `178` records still missing liquidity,
+  - `194` records still missing market cap,
+  - `86` records still missing price,
+  - `0` score-ready records.
+
+Verification:
+
+- Added failing tests first for liquidity recovery from pool/vault reserves, market-cap recovery only with supply, blocking missing pool reserves, writer persistence, and provider-policy reporting.
+- `./trading_env/bin/python -m unittest tests.test_onchain_market_context_recovery`
+- `./trading_env/bin/python -m unittest tests.test_trusted_historical_market_snapshot_provider`
+- `./trading_env/bin/python utils/recover_onchain_market_context.py`
+- `./trading_env/bin/python utils/build_trusted_historical_market_snapshot_report.py --source-records data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl --report-path data/reports/historical_backfill/trusted_onchain_market_context_report.json --records-path data/reports/historical_backfill/trusted_onchain_market_context_records.jsonl`
+
+Remaining risk / next step:
+
+- The first on-chain lane only catches simple pool/vault reserve patterns visible in transaction token balances.
+- The next highest-leverage step is token-supply reconstruction and richer pool/bonding-curve parsing so market cap can be recovered without paid snapshots.
+
 2026-05-16 update - Historical Quote Price Enrichment:
 
 Active milestone:

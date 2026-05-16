@@ -205,6 +205,18 @@ class TrustedHistoricalMarketSnapshotProviderTests(unittest.TestCase):
             output_rows = [json.loads(line) for line in output_records_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(output_rows), 2)
 
+    def test_provider_policy_prioritizes_onchain_reconstruction_over_paid_snapshots(self):
+        report = build_trusted_historical_market_snapshot_report(
+            backfill_records=[backfill_record()],
+            generated_at=1234,
+        )
+
+        policy = report["provider_policy"]
+        self.assertEqual(policy["primary_lane"], "home_built_onchain_reconstruction")
+        self.assertEqual(policy["provider_snapshots"], "validation_or_fallback_only")
+        self.assertIn("Recover decision-time liquidity from on-chain pool/vault balance evidence first.", report["summary"]["next_required_actions"])
+        self.assertIn("home_built_onchain_reconstruction_pct", report["summary"])
+
 
 if __name__ == "__main__":
     unittest.main()
