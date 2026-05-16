@@ -44,6 +44,55 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Context Recovery Queue:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `90%`
+
+Changed files:
+
+- `wallets/wallet_candidate_context_recovery_queue.py`
+- `utils/build_wallet_candidate_context_recovery_queue.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_context_recovery_queue.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_context_recovery_queue.json`
+
+What changed:
+
+- Added a review-only targeted recovery queue for wallets blocked on both outcome labels and decision-time market context.
+- Added `/api/wallet-candidate-context-recovery?limit=N`.
+- Current local queue:
+  - total recovery targets: `36`,
+  - paper-watch targets: `31`,
+  - observe-more targets: `5`,
+  - missing known-outcome slots: `719`,
+  - missing round-trip lifecycle slots: `56`.
+- The queue names required context and suggested existing evidence sources, but it does not fetch, approve, apply, trade, or mutate wallet lists.
+
+Verification:
+
+- Red tests first for missing context-recovery queue module and API route.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_context_recovery_queue tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_context_recovery_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_context_recovery_route_is_read_only`
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_context_recovery_queue.py utils/build_wallet_candidate_context_recovery_queue.py desktop_api.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_context_recovery_queue.py`
+- Local route check: `/api/wallet-candidate-context-recovery?limit=5` returns `live_execution_locked=true`, `wallet_list_apply_allowed=false`, `wallet_list_mutated=false`, and the current recovery counts above.
+
+Remaining risk / next step:
+
+- Stage 4 now has the queue needed to attack the largest blocker. Next step: add a bounded read-only recovery runner for these `36` wallets that links existing enriched wallet evidence, historical replay rows, and missing-market-context targets without fabricating prices or outcomes.
+
 2026-05-16 update - Stage 4 Blocked Reason Reducer:
 
 Active milestone:
