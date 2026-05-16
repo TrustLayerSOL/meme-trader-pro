@@ -36,6 +36,7 @@ from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
 from wallets.wallet_candidate_backfill_targets import build_wallet_candidate_backfill_targets
+from wallets.wallet_candidate_decision_prep import build_wallet_candidate_decision_prep
 from wallets.wallet_candidate_evidence_plan import build_wallet_candidate_evidence_plan
 from wallets.wallet_candidate_quality import build_wallet_candidate_quality_report
 from wallets.wallet_candidate_quality_review import build_wallet_candidate_quality_review
@@ -3607,6 +3608,16 @@ def build_wallet_candidate_audit_payload(state=None, limit=80):
     }
 
 
+def build_wallet_candidate_decision_prep_payload(state=None, limit=80, selected_wallets=None):
+    state = state or read_state_files()
+    report = build_wallet_candidate_decision_prep(
+        state.get("wallet_candidate_audit", {}),
+        selected_wallets=selected_wallets,
+        limit=limit,
+    )
+    return report
+
+
 def build_wallet_candidate_quality_payload(state=None, limit=80):
     state = state or read_state_files()
     existing = state.get("wallet_candidate_quality_report")
@@ -4403,6 +4414,18 @@ def route_request(method, raw_path, body=None, headers=None):
     if path == "/api/wallet-candidate-audit":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_audit_payload(limit=limit))
+    if path == "/api/wallet-candidate-decision-prep":
+        limit = parse_int_query(query, "limit", 80, 1, 500)
+        selected_wallets = []
+        for value in query.get("wallet", []):
+            if value.strip():
+                selected_wallets.append(value.strip())
+        for value in query.get("wallets", []):
+            selected_wallets.extend(wallet.strip() for wallet in value.split(",") if wallet.strip())
+        return json_response(build_wallet_candidate_decision_prep_payload(
+            limit=limit,
+            selected_wallets=selected_wallets or None,
+        ))
     if path == "/api/wallet-candidate-quality":
         limit = parse_int_query(query, "limit", 80, 1, 500)
         return json_response(build_wallet_candidate_quality_payload(limit=limit))

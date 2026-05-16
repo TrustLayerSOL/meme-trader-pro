@@ -44,6 +44,50 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Draft Decision Prep:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `65%`
+
+Changed files:
+
+- `wallets/wallet_candidate_decision_prep.py`
+- `utils/build_wallet_candidate_decision_prep.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_decision_prep.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_decision_prep.json`
+
+What changed:
+
+- Added a draft-only wallet candidate decision-prep layer.
+- Added `/api/wallet-candidate-decision-prep?limit=N`.
+- Added `utils/build_wallet_candidate_decision_prep.py` to write a local review report from `data/wallet_candidate_audit.json`.
+- The helper can prepare proposed `approve_promotion` / `approve_demotion` records from current human-review audit rows.
+- Proposed records are intentionally `approved=false`, `requires_operator_approval=true`, and cannot mutate wallet lists.
+- Current local report shows `0` proposed decisions and `49` blocked/hold/risk rows after the last approved demotion. That means there is currently nothing safe to apply automatically.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_decision_prep tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_decision_prep_payload_is_draft_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_decision_prep_route_accepts_wallet_filter`
+- `./trading_env/bin/python utils/build_wallet_candidate_decision_prep.py`
+- Local route check: `/api/wallet-candidate-decision-prep?limit=5` returns `live_execution_locked=true`, `wallet_list_apply_allowed=false`, `wallet_list_mutated=false`.
+
+Remaining risk / next step:
+
+- Stage 4 can now classify, show, and draft decisions safely. The next useful step is to add a small Obsidian/API review summary that separates `risk_review_required`, `insufficient_evidence`, and `resolved_applied` wallets into clearer human-review buckets before collecting more history.
+
 2026-05-16 update - Stage 4 Review Queue API / Obsidian Visibility:
 
 Active milestone:
