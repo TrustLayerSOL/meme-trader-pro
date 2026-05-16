@@ -44,6 +44,54 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Review-Only Promotion/Demotion Gate:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `40%`
+
+Changed files:
+
+- `wallets/wallet_stage4_review.py`
+- `utils/build_wallet_stage4_review.py`
+- `tests/test_wallet_stage4_review.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_backfills/wallet_stage4_review_report.json`
+
+What changed:
+
+- Added a review-only Stage 4 promotion/demotion gate that consumes the integrated Stage 3 wallet evidence scorecard.
+- The gate classifies wallets as `PROMOTION_REVIEW_READY`, `HOLD_MORE_DATA`, `RISK_REVIEW_REQUIRED`, or `DEMOTION_OR_BLOCK_REVIEW`.
+- It never auto-applies wallet-list changes, promotes, demotes, or trades.
+- Current local report:
+  - wallets reviewed: `50`,
+  - promotion-review-ready: `0`,
+  - hold-more-data: `45`,
+  - risk-review-required: `4`,
+  - demotion/block review: `1`,
+  - auto-applied: `0`,
+  - source Stage 3 engine completion: `100%`,
+  - source wallet score readiness: `0%`.
+
+Verification:
+
+- Added failing tests first for hold-more-data, risk review, demotion/block review, promotion-review-ready when future gates pass, and report writing.
+- `./trading_env/bin/python -m unittest tests.test_wallet_stage4_review`
+- `./trading_env/bin/python utils/build_wallet_stage4_review.py`
+
+Remaining risk / next step:
+
+- The Stage 4 gate is intentionally conservative because the evidence is still incomplete. The next Stage 4 step is to wire this report into the human decision/apply workflow while preserving `0` automatic wallet-list mutations.
+
 2026-05-16 update - Stage 3 Wallet Evidence Engine 100% Scorecard:
 
 Active milestone:
