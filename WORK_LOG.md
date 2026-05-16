@@ -44,6 +44,67 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Replayable Token Timelines Completion Gate:
+
+Active milestone:
+
+- Replayable Token Timelines product-health lane
+
+Milestone completion:
+
+- Replayable Token Timelines: `100%`
+- Timeline data readiness: `0%`
+
+Changed files:
+
+- `research/replayable_token_timelines.py`
+- `utils/build_replayable_token_timelines.py`
+- `desktop_api.py`
+- `tests/test_replayable_token_timelines.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/historical_backfill/replayable_token_timelines_report.json`
+
+What changed:
+
+- Added a review-only Replayable Token Timelines completion gate.
+- Added `/api/replayable-token-timelines`.
+- Current local report:
+  - replayable token timelines completion: `100%`,
+  - timeline data readiness: `0%`,
+  - target mints: `77`,
+  - missing market-context rows: `643`,
+  - blocked wallets routed: `36`,
+  - wallets needing market context: `32`,
+  - wallets needing outcome labels: `36`,
+  - transaction-linkage blockers: `0`,
+  - on-chain records scanned: `643`,
+  - price recovered records: `201`,
+  - liquidity recovered records: `86`,
+  - market cap recovered records: `0`,
+  - supply recovered records: `0`,
+  - score-ready records: `0`.
+- This closes Replayable Token Timelines as an inventory, classification, and routing layer. It does not make historical rows score-ready.
+- No wallet-list changes were applied. Live execution remains locked.
+
+Verification:
+
+- Red tests first for missing replayable-token-timelines module and API route.
+- `./trading_env/bin/python -m unittest tests.test_replayable_token_timelines tests.test_desktop_api.DesktopApiTests.test_replayable_token_timelines_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_replayable_token_timelines_route_is_read_only`
+- `./trading_env/bin/python -m py_compile research/replayable_token_timelines.py utils/build_replayable_token_timelines.py desktop_api.py`
+- `./trading_env/bin/python utils/build_replayable_token_timelines.py`
+- Local route check: `/api/replayable-token-timelines` returns `live_execution_locked=true`, `wallet_list_mutated=false`, and the completion counts above.
+- `./trading_env/bin/python -m unittest discover tests` (`493` tests)
+
+Remaining risk / next step:
+
+- The next incomplete product-health lane is Similar-Rug Pattern Matching at `10%`. The next grounded build step is to use the now-inventoried replayable timeline blockers to classify repeated rug-like token outcomes and wallet exposure without treating unknown outcomes as rugs.
+
 2026-05-16 update - Evidence Layer Completion Gate:
 
 Active milestone:

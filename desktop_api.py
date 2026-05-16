@@ -33,6 +33,7 @@ from core.settings_manager import load_settings as load_bot_settings
 from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from research.evidence_layer_completion import build_evidence_layer_completion_report
+from research.replayable_token_timelines import build_replayable_token_timelines_report
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
@@ -88,6 +89,11 @@ WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "wallet_backfills" /
 WALLET_EVIDENCE_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_evidence_readiness_report.json"
 WALLET_EVIDENCE_SCORECARD_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_evidence_scorecard_report.json"
 EVIDENCE_LAYER_COMPLETION_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "evidence_layer_completion_report.json"
+ONCHAIN_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "onchain_market_context_recovery_report.json"
+ONCHAIN_SUPPLY_EVIDENCE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "onchain_supply_evidence_report.json"
+REPLAY_REALISM_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replay_realism_readiness_report.json"
+STAGE8_VALIDATION_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "stage8_validation_readiness_report.json"
+REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replayable_token_timelines_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -302,6 +308,11 @@ def read_state_files():
         "wallet_evidence_readiness": read_json(WALLET_EVIDENCE_READINESS_REPORT_FILE, {}),
         "wallet_evidence_scorecard": read_json(WALLET_EVIDENCE_SCORECARD_REPORT_FILE, {}),
         "evidence_layer_completion": read_json(EVIDENCE_LAYER_COMPLETION_REPORT_FILE, {}),
+        "onchain_market_context": read_json(ONCHAIN_MARKET_CONTEXT_REPORT_FILE, {}),
+        "onchain_supply_evidence": read_json(ONCHAIN_SUPPLY_EVIDENCE_REPORT_FILE, {}),
+        "replay_realism_readiness": read_json(REPLAY_REALISM_READINESS_REPORT_FILE, {}),
+        "stage8_validation_readiness": read_json(STAGE8_VALIDATION_READINESS_REPORT_FILE, {}),
+        "replayable_token_timelines": read_json(REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -4048,6 +4059,40 @@ def build_evidence_layer_completion_payload(state=None):
     }
 
 
+def build_replayable_token_timelines_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("replayable_token_timelines")
+    if isinstance(existing, dict) and existing.get("mode") == "REPLAYABLE_TOKEN_TIMELINES_REVIEW_ONLY":
+        rows = existing.get("timeline_targets") if isinstance(existing.get("timeline_targets"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "replayable_token_timelines_json",
+            "source_detail": str(REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_replayable_token_timelines_report(
+        evidence_layer_completion=state.get("evidence_layer_completion") if isinstance(state.get("evidence_layer_completion"), dict) else {},
+        recovery_closeout=state.get("wallet_candidate_context_recovery_closeout") if isinstance(state.get("wallet_candidate_context_recovery_closeout"), dict) else {},
+        missing_market_context=state.get("wallet_missing_market_context") if isinstance(state.get("wallet_missing_market_context"), dict) else {},
+        onchain_market_context=state.get("onchain_market_context") if isinstance(state.get("onchain_market_context"), dict) else {},
+        supply_evidence=state.get("onchain_supply_evidence") if isinstance(state.get("onchain_supply_evidence"), dict) else {},
+        stage6_readiness=state.get("replay_realism_readiness") if isinstance(state.get("replay_realism_readiness"), dict) else {},
+        stage8_readiness=state.get("stage8_validation_readiness") if isinstance(state.get("stage8_validation_readiness"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "replayable_token_timelines_computed",
+        "source_detail": str(REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("timeline_targets") if isinstance(report.get("timeline_targets"), list) else []),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4708,6 +4753,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_wallet_missing_market_context_payload(limit=limit))
     if path == "/api/evidence-layer-completion":
         return json_response(build_evidence_layer_completion_payload())
+    if path == "/api/replayable-token-timelines":
+        return json_response(build_replayable_token_timelines_payload())
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

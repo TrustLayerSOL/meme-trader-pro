@@ -1274,6 +1274,67 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_replayable_token_timelines_payload_is_review_only(self):
+        payload = desktop_api.build_replayable_token_timelines_payload({
+            "evidence_layer_completion": {
+                "live_execution_locked": True,
+                "summary": {
+                    "evidence_layer_completion_pct": 100,
+                    "wallet_score_readiness_pct": 0,
+                },
+            },
+            "wallet_candidate_context_recovery_closeout": {
+                "live_execution_locked": True,
+                "summary": {
+                    "still_blocked_wallets": 36,
+                    "needs_market_context": 32,
+                    "needs_outcome_labels": 36,
+                    "needs_transaction_linkage": 0,
+                },
+                "next_action_counts": {
+                    "BACKFILL_MARKET_CONTEXT_AND_OUTCOME_LABELS": 32,
+                    "BACKFILL_OUTCOME_LABELS": 4,
+                },
+            },
+            "wallet_missing_market_context": {
+                "live_execution_locked": True,
+                "summary": {"target_mints": 1, "missing_market_context_rows": 1},
+                "targets": [{"token_mint": "MintA", "evidence_rows": 1, "unknown_outcome_rows": 1}],
+            },
+            "onchain_market_context": {
+                "live_execution_locked": True,
+                "summary": {"records_scanned": 1, "score_ready_candidate_records": 0},
+            },
+            "onchain_supply_evidence": {
+                "live_execution_locked": True,
+                "summary": {"records_scanned": 1, "supply_recovered_records": 0},
+            },
+            "replay_realism_readiness": {
+                "live_execution_locked": True,
+                "summary": {"stage6_realism_contract_completion_pct": 100},
+            },
+            "stage8_validation_readiness": {
+                "live_execution_locked": True,
+                "summary": {"stage8_validation_contract_completion_pct": 100, "proof_readiness_pct": 0},
+            },
+        })
+
+        self.assertEqual(payload["mode"], "REPLAYABLE_TOKEN_TIMELINES_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["summary"]["replayable_token_timelines_completion_pct"], 100)
+
+    def test_replayable_token_timelines_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_replayable_token_timelines_payload", return_value={"mode": "REPLAYABLE_TOKEN_TIMELINES_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/replayable-token-timelines")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({
