@@ -27,6 +27,7 @@ def main() -> int:
         baseline_comparison=read_json(ROOT / "data" / "wallet_baseline_comparison.json", {}),
         review_decisions=read_json(ROOT / "data" / "wallet_review_decisions.json", {}),
         tracked_wallets=read_json(ROOT / "data" / "tracked_wallets.json", []),
+        stage4_review=read_json(ROOT / "data" / "reports" / "wallet_backfills" / "wallet_stage4_review_report.json", {}),
     )
     out = ROOT / "data" / "wallet_candidate_audit.json"
     out.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")

@@ -11,8 +11,14 @@ REVIEW_ACTIONS = {"PROMOTION_REVIEW", "DEMOTION_REVIEW"}
 PROMOTION_DECISIONS = {"approve_promotion", "promote", "promote_to_tracked"}
 DEMOTION_DECISIONS = {"approve_demotion", "demote", "demote_off_watch"}
 REPLAY_REVIEW_SOURCE = "wallet_replay_review"
+STAGE4_REVIEW_SOURCE = "wallet_stage4_review"
 REPLAY_MIN_KNOWN_OUTCOMES = 10
 REPLAY_MIN_FILLABLE_EVENTS = 10
+STAGE4_ACTION_MAP = {
+    "PROMOTION_REVIEW_READY": "PROMOTION_REVIEW",
+    "DEMOTION_OR_BLOCK_REVIEW": "DEMOTION_REVIEW",
+    "RISK_REVIEW_REQUIRED": "RISK_REVIEW_REQUIRED",
+}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -209,12 +215,101 @@ def replay_candidate_row(wallet: str, decision: dict[str, Any]) -> dict[str, Any
     }
 
 
+def stage4_review_rows(stage4_review: dict[str, Any] | None) -> list[dict[str, Any]]:
+    rows = as_dict(stage4_review).get("reviews")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict) and wallet_address(row)]
+
+
+def stage4_candidate_row(row: dict[str, Any]) -> dict[str, Any]:
+    wallet = str(wallet_address(row) or "")
+    action = str(row.get("stage4_action") or "HOLD_MORE_DATA")
+    mapped_action = STAGE4_ACTION_MAP.get(action, "HOLD_MORE_DATA")
+    evidence = as_dict(row.get("evidence"))
+    known = safe_int(evidence.get("known_outcome_rows"))
+    round_trips = safe_int(evidence.get("round_trip_lifecycles"))
+    runners = safe_int(evidence.get("runner_rows"))
+    rugs = safe_int(evidence.get("rug_rows"))
+    denominator = max(known, runners + rugs)
+    runner_rate = round(runners / denominator, 4) if denominator else 0.0
+    rug_rate = round(rugs / denominator, 4) if denominator else 0.0
+    reasons = row.get("reasons") if isinstance(row.get("reasons"), list) else []
+    stage4_gate_passed = mapped_action in {"PROMOTION_REVIEW", "DEMOTION_REVIEW"}
+    if mapped_action == "PROMOTION_REVIEW":
+        sample_passed = stage4_gate_passed and known >= 20 and round_trips >= 3 and rugs == 0
+    elif mapped_action == "DEMOTION_REVIEW":
+        sample_passed = stage4_gate_passed
+    else:
+        sample_passed = False
+    if mapped_action in REVIEW_ACTIONS and sample_passed:
+        audit_status = "HUMAN_REVIEW_REQUIRED"
+    elif mapped_action == "RISK_REVIEW_REQUIRED":
+        audit_status = "RISK_REVIEW_REQUIRED"
+    else:
+        audit_status = "INSUFFICIENT_EVIDENCE"
+
+    audit_notes = [str(reason) for reason in reasons[:5]]
+    if mapped_action == "RISK_REVIEW_REQUIRED":
+        audit_notes.append("manual risk review must happen before promotion or demotion")
+    elif sample_passed:
+        audit_notes.append("Stage 4 review gate produced a human-review action")
+    else:
+        audit_notes.append("Stage 4 row is not eligible for wallet-list apply")
+
+    return {
+        "wallet": wallet,
+        "recommendation_action": mapped_action,
+        "audit_status": audit_status,
+        "review_resolved": False,
+        "resolution": {},
+        "review_only": True,
+        "wallet_list_apply_allowed": False,
+        "comparison_status": "STAGE4_REVIEW_GATE",
+        "evidence_gates": {
+            "known_outcome_sample_passed": sample_passed,
+            "minimum_known_outcomes": 20 if mapped_action == "PROMOTION_REVIEW" else 0,
+            "minimum_round_trips": 3 if mapped_action == "PROMOTION_REVIEW" else 0,
+            "source_coverage": 1.0 if known else 0.0,
+            "recommendation_is_review_only": True,
+            "stage4_action": action,
+            "stage4_gate_passed": stage4_gate_passed,
+        },
+        "evidence": {
+            "source": STAGE4_REVIEW_SOURCE,
+            "total_signals": known,
+            "accepted_signals": 0,
+            "rejected_or_observed_signals": known,
+            "known_outcomes": known,
+            "round_trip_lifecycles": round_trips,
+            "runner_participation": runners,
+            "rug_participation": rugs,
+            "dead_participation": 0,
+            "runner_participation_rate": runner_rate,
+            "rug_participation_rate": rug_rate,
+            "average_pnl_after_signal": None,
+            "promotion_score": runners * 10 if mapped_action == "PROMOTION_REVIEW" else 0,
+            "demotion_score": max(rugs * 10, 1 if mapped_action == "DEMOTION_REVIEW" else 0),
+            "confidence": {
+                "sample_quality": "stage4_review_gate",
+                "known_outcome_rate": 1.0 if known else 0.0,
+            },
+            "recommendation_reasons": [str(reason) for reason in reasons],
+            "source_bucket": row.get("source_bucket"),
+            "scorecard_next_action": row.get("scorecard_next_action"),
+            "promotion_gate": row.get("promotion_gate"),
+        },
+        "audit_notes": audit_notes,
+    }
+
+
 def build_wallet_candidate_audit(
     *,
     outcome_ledger: dict[str, Any],
     baseline_comparison: dict[str, Any] | None = None,
     review_decisions: dict[str, Any] | None = None,
     tracked_wallets: list[Any] | None = None,
+    stage4_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ledger = ledger_wallets(outcome_ledger)
     comparisons = comparison_by_wallet(as_dict(baseline_comparison))
@@ -243,6 +338,24 @@ def build_wallet_candidate_audit(
         if wallet in seen_candidate_wallets:
             continue
         candidate = replay_candidate_row(wallet, decision)
+        seen_candidate_wallets.add(wallet)
+        resolution = resolution_for_candidate(wallet, candidate["recommendation_action"], decision, tracked)
+        if resolution:
+            candidate["audit_status"] = "RESOLVED_APPLIED"
+            candidate["review_resolved"] = True
+            candidate["resolution"] = resolution
+            candidate["wallet_list_apply_allowed"] = False
+            candidate.setdefault("audit_notes", []).append(resolution["reason"])
+            resolved_candidates.append(candidate)
+        else:
+            candidates.append(candidate)
+    for row in stage4_review_rows(stage4_review):
+        wallet = str(wallet_address(row) or "")
+        if not wallet or wallet in seen_candidate_wallets:
+            continue
+        candidate = stage4_candidate_row(row)
+        seen_candidate_wallets.add(wallet)
+        decision = approved.get(wallet)
         resolution = resolution_for_candidate(wallet, candidate["recommendation_action"], decision, tracked)
         if resolution:
             candidate["audit_status"] = "RESOLVED_APPLIED"
@@ -275,6 +388,7 @@ def build_wallet_candidate_audit(
             "candidates": len(candidates),
             "promotion_review": counts.get("PROMOTION_REVIEW", 0),
             "demotion_review": counts.get("DEMOTION_REVIEW", 0),
+            "risk_review_required": counts.get("RISK_REVIEW_REQUIRED", 0),
             "human_review_required": audit_counts.get("HUMAN_REVIEW_REQUIRED", 0),
             "insufficient_evidence": audit_counts.get("INSUFFICIENT_EVIDENCE", 0),
             "resolved": len(resolved_candidates),
@@ -285,7 +399,7 @@ def build_wallet_candidate_audit(
 
 
 def action_rank(action: str) -> int:
-    return {"PROMOTION_REVIEW": 20, "DEMOTION_REVIEW": 10}.get(str(action), 0)
+    return {"PROMOTION_REVIEW": 20, "DEMOTION_REVIEW": 10, "RISK_REVIEW_REQUIRED": 5}.get(str(action), 0)
 
 
 def resolution_for_candidate(wallet: str, recommendation_action: str, decision: dict[str, Any] | None, tracked: set[str]) -> dict[str, Any] | None:

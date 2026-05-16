@@ -44,6 +44,59 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Human Review/Apply Bridge:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `50%`
+
+Changed files:
+
+- `wallets/wallet_candidate_audit.py`
+- `utils/build_wallet_candidate_audit.py`
+- `tests/test_wallet_candidate_audit.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/wallet_candidate_audit.json`
+
+What changed:
+
+- Wired the Stage 4 review report into the existing human review/apply evidence guard.
+- `data/wallet_candidate_audit.json` can now consume Stage 4 rows from `data/reports/wallet_backfills/wallet_stage4_review_report.json`.
+- Stage 4 rows are converted into review-only candidate audit rows:
+  - `PROMOTION_REVIEW_READY` -> `PROMOTION_REVIEW`,
+  - `DEMOTION_OR_BLOCK_REVIEW` -> `DEMOTION_REVIEW`,
+  - `RISK_REVIEW_REQUIRED` remains a non-apply risk-review row.
+- This does not auto-approve anything and does not mutate wallet lists.
+- Current local candidate audit after the bridge:
+  - candidates: `50`,
+  - promotion reviews: `0`,
+  - demotion reviews: `1`,
+  - risk-review required: `4`,
+  - insufficient evidence: `45`,
+  - resolved: `4`.
+- The wallet review apply tool remains guarded by explicit approved decisions and candidate-audit support. Current dry run made no promotions and no demotions.
+
+Verification:
+
+- Red test first: Stage 4 audit-bridge tests failed because `build_wallet_candidate_audit()` did not accept `stage4_review`.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_audit tests.test_wallet_stage4_review tests.test_core_logic` (`184` tests)
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_audit.py utils/build_wallet_candidate_audit.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_audit.py`
+- `./trading_env/bin/python utils/apply_wallet_review.py` dry run.
+
+Remaining risk / next step:
+
+- Stage 4 is now connected to the manual decision/apply guard, but operator visibility still needs a cleaner report/API/export surface for the Stage 4 queue. Next step: expose the Stage 4-backed candidate audit through the local API/Obsidian review layer without enabling auto-apply.
+
 2026-05-16 update - Stage 4 Review-Only Promotion/Demotion Gate:
 
 Active milestone:

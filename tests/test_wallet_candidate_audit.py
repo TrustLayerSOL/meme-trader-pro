@@ -180,6 +180,98 @@ class WalletCandidateAuditTests(unittest.TestCase):
         self.assertEqual(resolved["audit_status"], "RESOLVED_APPLIED")
         self.assertEqual(resolved["resolution"]["decision"], "approve_promotion")
 
+    def test_stage4_review_rows_feed_human_review_queue(self):
+        report = build_wallet_candidate_audit(
+            outcome_ledger={"wallets": {}},
+            baseline_comparison={"wallets": []},
+            stage4_review={
+                "mode": "WALLET_STAGE4_PROMOTION_DEMOTION_REVIEW_ONLY",
+                "reviews": [
+                    {
+                        "wallet": "Stage4Promote",
+                        "stage4_action": "PROMOTION_REVIEW_READY",
+                        "promotion_gate": "trusted_review_possible",
+                        "source_bucket": "paper_watch_candidate",
+                        "scorecard_next_action": "review_for_promotion",
+                        "evidence": {
+                            "known_outcome_rows": 25,
+                            "round_trip_lifecycles": 5,
+                            "rug_rows": 0,
+                            "runner_rows": 12,
+                        },
+                        "reasons": ["all review gates passed; human approval still required"],
+                    },
+                    {
+                        "wallet": "Stage4Demote",
+                        "stage4_action": "DEMOTION_OR_BLOCK_REVIEW",
+                        "source_bucket": "hold_no_edge",
+                        "scorecard_next_action": "hold_out_of_paper_watch",
+                        "evidence": {
+                            "known_outcome_rows": 3,
+                            "round_trip_lifecycles": 1,
+                            "rug_rows": 1,
+                            "runner_rows": 0,
+                        },
+                        "reasons": ["wallet is held out by negative or rug-associated evidence"],
+                    },
+                    {
+                        "wallet": "Stage4Risk",
+                        "stage4_action": "RISK_REVIEW_REQUIRED",
+                        "source_bucket": "risk_review",
+                        "scorecard_next_action": "manual_risk_review",
+                        "evidence": {
+                            "known_outcome_rows": 0,
+                            "round_trip_lifecycles": 0,
+                            "rug_rows": 0,
+                            "runner_rows": 0,
+                        },
+                        "reasons": ["manual risk review is required before wallet-list changes"],
+                    },
+                ],
+            },
+            tracked_wallets=[],
+        )
+
+        rows = {row["wallet"]: row for row in report["candidates"]}
+        self.assertEqual(report["counts"]["promotion_review"], 1)
+        self.assertEqual(report["counts"]["demotion_review"], 1)
+        self.assertEqual(report["counts"]["risk_review_required"], 1)
+        self.assertEqual(rows["Stage4Promote"]["recommendation_action"], "PROMOTION_REVIEW")
+        self.assertEqual(rows["Stage4Promote"]["comparison_status"], "STAGE4_REVIEW_GATE")
+        self.assertEqual(rows["Stage4Promote"]["evidence"]["source"], "wallet_stage4_review")
+        self.assertTrue(rows["Stage4Promote"]["evidence_gates"]["known_outcome_sample_passed"])
+        self.assertEqual(rows["Stage4Demote"]["recommendation_action"], "DEMOTION_REVIEW")
+        self.assertEqual(rows["Stage4Risk"]["recommendation_action"], "RISK_REVIEW_REQUIRED")
+        self.assertFalse(rows["Stage4Risk"]["wallet_list_apply_allowed"])
+
+    def test_stage4_review_decision_resolves_after_apply_state_matches(self):
+        report = build_wallet_candidate_audit(
+            outcome_ledger={"wallets": {}},
+            baseline_comparison={"wallets": []},
+            stage4_review={
+                "mode": "WALLET_STAGE4_PROMOTION_DEMOTION_REVIEW_ONLY",
+                "reviews": [
+                    {
+                        "wallet": "Stage4Promote",
+                        "stage4_action": "PROMOTION_REVIEW_READY",
+                        "evidence": {"known_outcome_rows": 25, "round_trip_lifecycles": 5, "rug_rows": 0},
+                    }
+                ],
+            },
+            review_decisions={
+                "decisions": [
+                    {"wallet": "Stage4Promote", "decision": "approve_promotion", "approved": True},
+                ]
+            },
+            tracked_wallets=[{"trackedWalletAddress": "Stage4Promote"}],
+        )
+
+        self.assertEqual(report["counts"]["candidates"], 0)
+        self.assertEqual(report["counts"]["resolved"], 1)
+        resolved = report["resolved_candidates"][0]
+        self.assertEqual(resolved["wallet"], "Stage4Promote")
+        self.assertEqual(resolved["resolution"]["decision"], "approve_promotion")
+
 
 if __name__ == "__main__":
     unittest.main()
