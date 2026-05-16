@@ -44,6 +44,59 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Similar-Rug Pattern Matching Gate:
+
+Active milestone:
+
+- Similar-Rug Pattern Matching product-health lane
+
+Milestone completion:
+
+- Similar-Rug Pattern Matching: `100%`
+- Rug-pattern data readiness: `0%`
+
+Changed files:
+
+- `research/similar_rug_patterns.py`
+- `utils/build_similar_rug_patterns.py`
+- `desktop_api.py`
+- `tests/test_similar_rug_patterns.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/historical_backfill/similar_rug_patterns_report.json`
+
+What changed:
+
+- Added a review-only Similar-Rug Pattern Matching completion gate.
+- Added `/api/similar-rug-patterns`.
+- Current local report:
+  - similar-rug pattern completion: `100%`,
+  - rug-pattern data readiness: `0%`,
+  - confirmed rug rows: `22`,
+  - confirmed rug mints: `3`,
+  - rug-exposed wallets: `5`,
+  - unknown rows excluded from rug labels: `643`,
+  - timeline target mints: `77`,
+  - timeline data readiness: `0%`.
+- Unknown outcomes are counted separately and are not converted into rug labels.
+- This closes Similar-Rug Pattern Matching as a review/control layer. It does not allow automatic demotion or wallet-list mutation.
+- No wallet-list changes were applied. Live execution remains locked.
+
+Verification:
+
+- Red tests first for missing similar-rug module and API route.
+- `./trading_env/bin/python -m unittest tests.test_similar_rug_patterns tests.test_desktop_api.DesktopApiTests.test_similar_rug_patterns_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_similar_rug_patterns_route_is_read_only`
+- `./trading_env/bin/python utils/build_similar_rug_patterns.py`
+
+Remaining risk / next step:
+
+- The next incomplete product-health lane is Alerting / Dashboard Layer at `35%`. The next grounded build step is to expose the current evidence gates and blockers in one operator-readable status layer without adding execution, trading automation, or new strategy logic.
+
 2026-05-16 update - Replayable Token Timelines Completion Gate:
 
 Active milestone:

@@ -34,6 +34,7 @@ from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from research.evidence_layer_completion import build_evidence_layer_completion_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
+from research.similar_rug_patterns import build_similar_rug_patterns_report
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
@@ -71,6 +72,7 @@ CANDIDATE_WALLETS_FILE = ROOT / "data" / "candidate_wallets.json"
 PAPER_WATCH_WALLETS_FILE = ROOT / "data" / "paper_watch_wallets.json"
 WALLET_REVIEW_DECISIONS_FILE = ROOT / "data" / "wallet_review_decisions.json"
 WALLET_REPLAY_SCORECARD_FILE = ROOT / "data" / "wallet_replay_scorecard.json"
+WALLET_OUTCOME_LEDGER_FILE = ROOT / "data" / "wallet_outcome_ledger.json"
 WALLET_CYCLE_REPORT_FILE = ROOT / "data" / "wallet_cycle_report.json"
 WALLET_CANDIDATE_AUDIT_FILE = ROOT / "data" / "wallet_candidate_audit.json"
 WALLET_CANDIDATE_QUALITY_REPORT_FILE = ROOT / "data" / "wallet_candidate_quality_report.json"
@@ -94,6 +96,7 @@ ONCHAIN_SUPPLY_EVIDENCE_REPORT_FILE = ROOT / "data" / "reports" / "historical_ba
 REPLAY_REALISM_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replay_realism_readiness_report.json"
 STAGE8_VALIDATION_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "stage8_validation_readiness_report.json"
 REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replayable_token_timelines_report.json"
+SIMILAR_RUG_PATTERNS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "similar_rug_patterns_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -290,6 +293,7 @@ def read_state_files():
         "bad_wallets": read_json(BAD_WALLETS_FILE, []),
         "wallet_review_decisions": read_json(WALLET_REVIEW_DECISIONS_FILE, {"decisions": []}),
         "wallet_replay_scorecard": read_json(WALLET_REPLAY_SCORECARD_FILE, {}),
+        "wallet_outcome_ledger": read_json(WALLET_OUTCOME_LEDGER_FILE, {}),
         "wallet_cycle_report": read_json(WALLET_CYCLE_REPORT_FILE, {}),
         "wallet_candidate_audit": read_json(WALLET_CANDIDATE_AUDIT_FILE, {}),
         "wallet_candidate_quality_report": read_json(WALLET_CANDIDATE_QUALITY_REPORT_FILE, {}),
@@ -313,6 +317,7 @@ def read_state_files():
         "replay_realism_readiness": read_json(REPLAY_REALISM_READINESS_REPORT_FILE, {}),
         "stage8_validation_readiness": read_json(STAGE8_VALIDATION_READINESS_REPORT_FILE, {}),
         "replayable_token_timelines": read_json(REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE, {}),
+        "similar_rug_patterns": read_json(SIMILAR_RUG_PATTERNS_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -4093,6 +4098,37 @@ def build_replayable_token_timelines_payload(state=None):
     }
 
 
+def build_similar_rug_patterns_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("similar_rug_patterns")
+    if isinstance(existing, dict) and existing.get("mode") == "SIMILAR_RUG_PATTERN_MATCHING_REVIEW_ONLY":
+        rows = existing.get("rug_pattern_targets") if isinstance(existing.get("rug_pattern_targets"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "similar_rug_patterns_json",
+            "source_detail": str(SIMILAR_RUG_PATTERNS_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_similar_rug_patterns_report(
+        wallet_evidence_enrichment=state.get("wallet_evidence_enrichment") if isinstance(state.get("wallet_evidence_enrichment"), dict) else {},
+        wallet_outcome_ledger=state.get("wallet_outcome_ledger") if isinstance(state.get("wallet_outcome_ledger"), dict) else {},
+        wallet_replay_scorecard=state.get("wallet_replay_scorecard") if isinstance(state.get("wallet_replay_scorecard"), dict) else {},
+        replayable_token_timelines=state.get("replayable_token_timelines") if isinstance(state.get("replayable_token_timelines"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "similar_rug_patterns_computed",
+        "source_detail": str(SIMILAR_RUG_PATTERNS_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("rug_pattern_targets") if isinstance(report.get("rug_pattern_targets"), list) else []),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4755,6 +4791,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_evidence_layer_completion_payload())
     if path == "/api/replayable-token-timelines":
         return json_response(build_replayable_token_timelines_payload())
+    if path == "/api/similar-rug-patterns":
+        return json_response(build_similar_rug_patterns_payload())
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

@@ -1335,6 +1335,68 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_similar_rug_patterns_payload_is_review_only(self):
+        payload = desktop_api.build_similar_rug_patterns_payload({
+            "wallet_evidence_enrichment": {
+                "live_execution_locked": True,
+                "summary": {
+                    "total_evidence_rows": 3,
+                    "rows_with_known_outcome": 1,
+                    "rug_rows": 1,
+                    "missing_outcome_label_rows": 2,
+                },
+                "evidence_records": [
+                    {
+                        "wallet": "WalletRug",
+                        "token_mint": "MintRug",
+                        "later_token_outcome": {"outcome_type": "rug", "rug": True},
+                    },
+                    {
+                        "wallet": "WalletUnknown",
+                        "token_mint": "MintUnknown",
+                        "later_token_outcome": {"outcome_type": "unknown", "rug": False},
+                    },
+                ],
+            },
+            "wallet_outcome_ledger": {
+                "live_execution_locked": True,
+                "wallets": {
+                    "WalletRug": {"known_outcomes": 1, "rug_participation": 1, "rug_participation_rate": 1.0},
+                },
+            },
+            "wallet_replay_scorecard": {
+                "live_execution_locked": True,
+                "wallets": {
+                    "WalletRug": {"windows": {"15m": {"known": 1, "rug": 1}}},
+                },
+            },
+            "replayable_token_timelines": {
+                "live_execution_locked": True,
+                "summary": {
+                    "replayable_token_timelines_completion_pct": 100,
+                    "timeline_data_readiness_pct": 0,
+                    "missing_market_context_rows": 2,
+                },
+            },
+        })
+
+        self.assertEqual(payload["mode"], "SIMILAR_RUG_PATTERN_MATCHING_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["summary"]["similar_rug_pattern_completion_pct"], 100)
+        self.assertEqual(payload["summary"]["unknown_rows_excluded_from_rug_labels"], 2)
+
+    def test_similar_rug_patterns_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_similar_rug_patterns_payload", return_value={"mode": "SIMILAR_RUG_PATTERN_MATCHING_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/similar-rug-patterns")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({
