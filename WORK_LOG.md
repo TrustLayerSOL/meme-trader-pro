@@ -44,6 +44,64 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 3 Wallet Evidence Engine 100% Scorecard:
+
+Active milestone:
+
+- Stage 3 - Wallet Evidence Engine
+
+Milestone completion:
+
+- `100%`
+
+Changed files:
+
+- `wallets/wallet_evidence_scorecard.py`
+- `utils/build_wallet_evidence_scorecard.py`
+- `tests/test_wallet_evidence_scorecard.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_backfills/wallet_evidence_scorecard_report.json`
+
+What changed:
+
+- Added the integrated Stage 3 wallet evidence scorecard.
+- The scorecard combines Stage 3 readiness, wallet recommendation buckets, lifecycle behavior, and enrichment coverage into one per-wallet review artifact.
+- It separates Stage 3 engine completion from wallet score readiness so the system can be complete without pretending the strategy is proven.
+- Current local scorecard:
+  - Stage 3 engine completion: `100%`,
+  - Stage 3 evidence contract completion: `100%`,
+  - wallet score readiness: `0%`,
+  - score-ready market-context records: `0`,
+  - wallets reviewed: `50`,
+  - paper-watch candidates: `38`,
+  - observe-more wallets: `7`,
+  - risk-review wallets: `4`,
+  - hold-no-edge wallets: `1`,
+  - trusted promotions allowed: `0`,
+  - wallets with round trips: `44`,
+  - wallets with known outcomes: `4`,
+  - wallets missing market context: `37`.
+- Current next-action counts:
+  - `36` collect outcome labels plus market context,
+  - `9` collect outcome labels,
+  - `4` manual risk review,
+  - `1` hold out of paper-watch.
+
+Verification:
+
+- Added failing tests first for integrated scorecard rows, risk-review next actions, and report writing.
+- `./trading_env/bin/python -m unittest tests.test_wallet_evidence_scorecard`
+- `./trading_env/bin/python utils/build_wallet_evidence_scorecard.py`
+
+Remaining risk / next step:
+
+- Stage 3 is now complete as review infrastructure, not as proof of edge. The next active milestone is Stage 4 - Wallet Promotion/Demotion System: consume the scorecard conservatively and keep all promotion/demotion changes review-only until score-ready market context and outcome labels improve.
+
 2026-05-16 update - Stage 3 Wallet Evidence Lifecycle Report:
 
 Active milestone:
