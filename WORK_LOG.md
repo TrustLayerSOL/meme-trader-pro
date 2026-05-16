@@ -44,6 +44,49 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-15 update - Historical Backfill 100% Checkpoint:
+
+Changed files:
+
+- `wallets/missing_raw_transaction_recovery.py`
+- `utils/recover_missing_raw_transactions.py`
+- `tests/test_missing_raw_transaction_recovery.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a read-only recovery runner for exact transaction signatures previously blocked as `blocked_missing_transaction` in the historical market-context backfill report.
+- The runner dedupes missing signatures, fetches only `getTransaction` records, preserves recovered raw transactions under `data/wallet_backfills/raw_transactions/`, and writes a generated audit report under `data/reports/historical_backfill/`.
+- It does not parse or invent prices, does not update wallet lists, does not create market snapshots, and does not touch execution.
+- Reran the historical market-context classifier after recovering raw transactions.
+
+Current local run:
+
+- Dry run found `100` missing transaction-signature targets across `19` wallets and `22` tokens.
+- Execute run recovered `100` of `100` missing raw transactions and preserved them in `data/wallet_backfills/raw_transactions/missing_raw_transactions_20260515-184459.jsonl`.
+- Refreshed historical classifier scanned `194` missing-context evidence rows.
+- Missing-transaction blockers dropped from `100` to `0`.
+- Partial transaction-derived quote context increased from `47` rows to `108` rows.
+- Remaining blocked rows are `86`, all blocked by missing usable quote-price deltas rather than missing raw transactions.
+- The remaining partial rows still lack trusted liquidity and market-cap context, so they are not enough to trust wallet scores by themselves.
+
+Verification:
+
+- Added failing tests first for signature dedupe, single-fetch recovery, dry-run no-RPC behavior, and report/raw JSONL writing.
+- `./trading_env/bin/python -m unittest tests.test_missing_raw_transaction_recovery`
+- `./trading_env/bin/python -m py_compile wallets/missing_raw_transaction_recovery.py utils/recover_missing_raw_transactions.py tests/test_missing_raw_transaction_recovery.py`
+- `./trading_env/bin/python utils/recover_missing_raw_transactions.py`
+- `./trading_env/bin/python utils/recover_missing_raw_transactions.py --execute --request-pause-seconds 0.2 --rpc-timeout 20`
+- `./trading_env/bin/python utils/backfill_historical_market_context.py`
+
+Remaining risk / next step:
+
+- The recovered-repo historical backfill lane is now complete as an artifact-recovery/classification lane.
+- It cannot honestly fill the remaining `86` blocked price rows or the liquidity/market-cap gaps without a trusted historical market-snapshot source or a richer swap/pool parser.
+- Next step is to build a decision-time-safe historical market snapshot collector/provider for the unresolved mints and timestamps, or explicitly mark those rows as permanently insufficient for wallet-score trust.
+
 2026-05-15 update - Historical Market-Context Backfill Checkpoint:
 
 Changed files:
