@@ -44,6 +44,61 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Stage 4 Context Recovery Closeout:
+
+Active milestone:
+
+- Stage 4 - Wallet Promotion/Demotion System
+
+Milestone completion:
+
+- `98%`
+
+Changed files:
+
+- `wallets/wallet_candidate_context_recovery_closeout.py`
+- `utils/build_wallet_candidate_context_recovery_closeout.py`
+- `desktop_api.py`
+- `tests/test_wallet_candidate_context_recovery_closeout.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/wallet_reviews/wallet_candidate_context_recovery_closeout.json`
+
+What changed:
+
+- Added a read-only closeout report for the Stage 4 bounded recovery lane.
+- Added `/api/wallet-candidate-context-recovery-closeout?limit=N`.
+- Current local closeout:
+  - wallets reviewed: `36`,
+  - needs market context: `32`,
+  - needs outcome labels: `36`,
+  - needs transaction linkage: `0`,
+  - needs manual risk review: `0`,
+  - ready for candidate review: `0`,
+  - still blocked wallets: `36`.
+- Next-action split:
+  - `32` wallets: `BACKFILL_MARKET_CONTEXT_AND_OUTCOME_LABELS`,
+  - `4` wallets: `BACKFILL_OUTCOME_LABELS`.
+- The closeout report does not approve, promote, demote, trade, fetch external data, or mutate wallet lists.
+
+Verification:
+
+- Red tests first for missing closeout module and API route.
+- `./trading_env/bin/python -m unittest tests.test_wallet_candidate_context_recovery_closeout tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_context_recovery_closeout_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_wallet_candidate_context_recovery_closeout_route_is_read_only`
+- `./trading_env/bin/python -m py_compile wallets/wallet_candidate_context_recovery_closeout.py utils/build_wallet_candidate_context_recovery_closeout.py desktop_api.py`
+- `./trading_env/bin/python utils/build_wallet_candidate_context_recovery_closeout.py`
+- `./trading_env/bin/python -m unittest discover tests` (`487` tests)
+- Local route check: `/api/wallet-candidate-context-recovery-closeout?limit=10` returns `live_execution_locked=true`, `wallet_list_mutated=false`, and the closeout counts above.
+
+Remaining risk / next step:
+
+- Stage 4 is now structurally complete as a gated promotion/demotion workflow, but no wallet should be promoted because `0` wallets are ready for candidate review. Next step: move to the evidence-quality work implied by the closeout: recover outcome labels for all `36` and market context for the `32` that still need it.
+
 2026-05-16 update - Stage 4 Bounded Context Recovery Runner:
 
 Active milestone:

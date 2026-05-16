@@ -1107,6 +1107,35 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with(limit=12)
 
+    def test_wallet_candidate_context_recovery_closeout_payload_is_review_only(self):
+        payload = desktop_api.build_wallet_candidate_context_recovery_closeout_payload({
+            "wallet_candidate_context_recovery_runner": {
+                "wallets": [
+                    {
+                        "wallet": "WalletA",
+                        "remaining_blockers": ["missing_outcome_labels"],
+                        "existing_evidence": {"total_rows": 2, "linked_transactions": ["SigA"]},
+                    }
+                ]
+            }
+        }, limit=1)
+
+        self.assertEqual(payload["mode"], "WALLET_CANDIDATE_CONTEXT_RECOVERY_CLOSEOUT_REVIEW_ONLY")
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["summary"]["wallets_reviewed"], 1)
+        self.assertEqual(payload["count"], 1)
+
+    def test_wallet_candidate_context_recovery_closeout_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_wallet_candidate_context_recovery_closeout_payload", return_value={"mode": "WALLET_CANDIDATE_CONTEXT_RECOVERY_CLOSEOUT_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/wallet-candidate-context-recovery-closeout?limit=12")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with(limit=12)
+
     def test_wallet_candidate_quality_payload_is_review_only(self):
         payload = desktop_api.build_wallet_candidate_quality_payload({
             "candidate_wallets": {
