@@ -8,6 +8,7 @@ from obsidian_export.markdown import (
     as_dict,
     compact_number,
     iso_from_ts,
+    short_datetime,
     short_id,
     table,
     wikilink,
@@ -81,7 +82,7 @@ def render_daily_report(snapshot: dict[str, Any], *, report_date: str | None = N
 def _top_candidates(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     candidate_report = as_dict(snapshot.get("candidate_wallets"))
     rows = candidate_report.get("candidates") if isinstance(candidate_report.get("candidates"), list) else []
-    return rows[:25]
+    return rows[:10]
 
 
 def _candidate_table(rows: list[dict[str, Any]]) -> str:
@@ -92,12 +93,12 @@ def _candidate_table(rows: list[dict[str, Any]]) -> str:
         [
             [
                 wikilink(wallet_stem(str(row.get("wallet"))), short_id(row.get("wallet"))),
-                row.get("score"),
+                compact_number(row.get("score"), 1),
                 as_dict(row.get("review")).get("action"),
                 row.get("winner_mints"),
-                iso_from_ts(row.get("last_seen")),
+                short_datetime(row.get("last_seen")),
             ]
-            for row in rows[:20]
+            for row in rows[:10]
         ],
     )
 
@@ -111,12 +112,12 @@ def _wallet_recommendation_table(rows: list[dict[str, Any]], action: str) -> str
         [
             [
                 wikilink(wallet_stem(str(row.get("wallet"))), short_id(row.get("wallet"))),
-                compact_number(as_dict(row.get("behavior_score")).get("score"), 4),
-                compact_number(as_dict(row.get("behavior_profile")).get("wallet_roi"), 6),
-                compact_number(row.get("paper_watch_win_rate"), 4),
+                compact_number(as_dict(row.get("behavior_score")).get("score"), 1),
+                compact_number(as_dict(row.get("behavior_profile")).get("wallet_roi"), 2),
+                compact_number(row.get("paper_watch_win_rate"), 1),
                 "; ".join(as_dict(row.get("recommendation")).get("reasons") or []),
             ]
-            for row in selected[:20]
+            for row in selected[:10]
         ],
     )
 
@@ -139,7 +140,7 @@ def _signal_score_table(rows: list[dict[str, Any]], *, reverse: bool) -> str:
         [
             [
                 wikilink(signal_stem(row), short_id(row.get("mint"))),
-                compact_number(score, 4),
+                compact_number(score, 1),
                 short_id(row.get("mint")),
                 row.get("skip_bucket") or row.get("final_action") or row.get("should_trade"),
             ]
@@ -158,9 +159,9 @@ def _rejection_table(rows: list[dict[str, Any]]) -> str:
                 wikilink(rejected_signal_stem(row), short_id(row.get("mint") or as_dict(row.get("signal context")).get("mint"))),
                 row.get("rejection reason"),
                 row.get("lane"),
-                iso_from_ts(row.get("recorded_at")),
+                short_datetime(row.get("recorded_at")),
             ]
-            for row in rows[:20]
+            for row in rows[:10]
         ],
     )
 
@@ -174,10 +175,10 @@ def _paper_trade_table(rows: list[dict[str, Any]]) -> str:
             [
                 wikilink(paper_trade_stem(row), short_id(row.get("mint") or row.get("token_mint"))),
                 row.get("status"),
-                compact_number(row.get("total_pnl") or row.get("pnl"), 6),
-                row.get("entry_time_iso") or iso_from_ts(row.get("entry_time") or row.get("time")),
-                row.get("close_time_iso") or iso_from_ts(row.get("close_time")),
+                compact_number(row.get("total_pnl") or row.get("pnl"), 2),
+                short_datetime(row.get("entry_time_iso") or row.get("entry_time") or row.get("time")),
+                short_datetime(row.get("close_time_iso") or row.get("close_time")),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )

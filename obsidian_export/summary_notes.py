@@ -6,7 +6,7 @@ from obsidian_export.markdown import (
     GENERATED_MARKER,
     as_dict,
     compact_number,
-    iso_from_ts,
+    short_datetime,
     short_id,
     table,
     wikilink,
@@ -115,15 +115,15 @@ def _wallet_table(rows: list[dict[str, Any]]) -> str:
             [
                 wikilink(wallet_stem(str(row.get("wallet"))), short_id(row.get("wallet"))),
                 as_dict(row.get("recommendation")).get("action") or row.get("status") or row.get("tier"),
-                compact_number(_score(row), 4),
-                compact_number(_wallet_roi(row), 6),
-                compact_number(row.get("paper_watch_win_rate"), 4),
+                compact_number(_score(row), 1),
+                compact_number(_wallet_roi(row), 2),
+                compact_number(row.get("paper_watch_win_rate"), 1),
                 _runner_count(row),
                 _rug_count(row),
-                iso_from_ts(row.get("last_seen")),
+                short_datetime(row.get("last_seen")),
                 "; ".join(as_dict(row.get("recommendation")).get("reasons") or []),
             ]
-            for row in rows
+            for row in rows[:10]
         ],
     )
 
@@ -140,10 +140,10 @@ def _rejected_winner_table(rows: list[dict[str, Any]]) -> str:
                 row.get("lane"),
                 row.get("rejection reason"),
                 as_dict(row.get("what would have happened afterward if traded")).get("status"),
-                compact_number(as_dict(row.get("what would have happened afterward if traded")).get("max_gain_pct"), 4),
-                iso_from_ts(row.get("recorded_at")),
+                compact_number(as_dict(row.get("what would have happened afterward if traded")).get("max_gain_pct"), 1),
+                short_datetime(row.get("recorded_at")),
             ]
-            for row in rows
+            for row in rows[:10]
         ],
     )
 
@@ -159,11 +159,11 @@ def _paper_trade_table(rows: list[dict[str, Any]]) -> str:
                 short_id(row.get("token_mint") or row.get("mint")),
                 row.get("paper_lane"),
                 row.get("status"),
-                compact_number(row.get("total_pnl") or row.get("pnl"), 6),
-                compact_number(row.get("total_pnl_pct") or row.get("pnl_pct"), 6),
-                row.get("entry_time_iso") or iso_from_ts(row.get("entry_time") or row.get("time")),
+                compact_number(row.get("total_pnl") or row.get("pnl"), 2),
+                compact_number(row.get("total_pnl_pct") or row.get("pnl_pct"), 1),
+                short_datetime(row.get("entry_time_iso") or row.get("entry_time") or row.get("time")),
             ]
-            for row in rows[:50]
+            for row in rows[:10]
         ],
     )
 

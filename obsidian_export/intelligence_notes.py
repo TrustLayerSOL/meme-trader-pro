@@ -8,6 +8,7 @@ from obsidian_export.markdown import (
     as_dict,
     bullet_list,
     compact_number,
+    short_datetime,
     short_id,
     table,
     wikilink,
@@ -135,29 +136,17 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 
 {GENERATED_MARKER}
 
-## Action Queue
+## What Matters Today
 
-- Wallet degradation alerts: {len(anomaly["wallet_degradation"])}
-- Promotion review candidates: {len(anomaly["promotion_reviews"])}
-- Demotion review candidates: {len(anomaly["demotion_reviews"])}
-- Rejected-signal winners: {len(anomaly["rejected_signal_winners"])}
-- Unresolved postmortems: {len(anomaly["unresolved_postmortems"])}
-- Wallet-score drift rows: {len(drift["wallet_score_drift"])}
-- Wallet replay reviewable wallets: {replay_summary.get("reviewable_wallets") or 0}
-- Wallet replay low-coverage wallets: {replay_summary.get("low_coverage_wallets") or 0}
-- Active paper-watch wallets: {cycle_counts.get("active_paper_watch_wallets") or 0}
-- Blocked paper-watch wallets: {cycle_counts.get("blocked_paper_watch_wallets") or 0}
-- Pending wallet demotions: {cycle_queue.get("demotion_review") or 0}
-- Active candidate-quality rows: {quality_summary.get("active_candidates") or 0}
-- Strong candidate observations: {quality_summary.get("strong_observation") or 0}
-- Candidate promotion-ready rows: {quality_review_summary.get("promotion_review_ready") or 0}
-- Candidate evidence gaps needing replay: {evidence_plan_summary.get("needs_replay_coverage") or 0}
-- Candidate wallet-history backfill targets: {backfill_summary.get("needs_wallet_history") or 0}
-- Candidate outcome-label backfill targets: {backfill_summary.get("needs_outcome_label_backfill") or 0}
-- Wallet-history evidence rows created: {history_summary.get("total_evidence_rows_created") or 0}
-- Wallet evidence enriched rows: {enrichment_summary.get("enriched_rows") or 0}
-- Wallet evidence missing market context: {enrichment_summary.get("missing_market_context_rows") or 0}
-- Missing market-context target mints: {missing_context_summary.get("target_mints") or 0}
+{_priority_queue_table(anomaly, drift, replay_summary, cycle_queue, evidence_plan_summary, backfill_summary, enrichment_summary, missing_context_summary)}
+
+## Operational Snapshot
+
+{_operational_snapshot_table(cycle_counts, quality_summary, quality_review_summary, replay_summary, history_summary)}
+
+## Evidence Quality Changes
+
+{_evidence_quality_table(replay_summary, evidence_plan_summary, backfill_summary, enrichment_summary, missing_context_summary)}
 
 ## Review First
 
@@ -167,31 +156,136 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 4. Promote only when replay and postmortem evidence agree.
 5. Log one daily observation in the daily report.
 
-## Focus Dashboards
+## Open Only If Needed
 
-- [[MemeTraderPro Anomaly Radar]]
-- [[MemeTraderPro Drift Monitor]]
-- [[Wallet Cycle Report]]
-- [[Wallet Candidate Quality]]
-- [[Wallet Candidate Quality Review]]
-- [[Wallet Candidate Evidence Plan]]
-- [[Wallet Candidate Backfill Targets]]
-- [[Wallet History Backfill]]
-- [[Wallet Evidence Enrichment]]
-- [[Wallet Missing Market Context]]
-- [[Wallet Replay Ecosystem Review]]
-- [[MemeTraderPro Signal Lineage]]
-- [[MemeTraderPro Daily Workflow]]
-- [[Wallet Review Decisions]]
-- [[Top Wallets]]
-- [[Wallets Pending Review]]
-- [[Rejected Signal Winners]]
+{bullet_list([
+    "[[MemeTraderPro Anomaly Radar]] - wallet degradation, rejected-signal winners, unresolved postmortems",
+    "[[MemeTraderPro Drift Monitor]] - wallet-score drift and confidence mismatch",
+    "[[Wallet Candidate Evidence Plan]] - replay/outcome evidence gaps",
+    "[[Wallet Missing Market Context]] - token-context backfill targets",
+    "[[Wallet Replay Ecosystem Review]] - replay-safe wallet evidence",
+    "[[Wallet Review Decisions]] - saved human review decisions",
+])}
 
 ## Not Raw Data
 
 This page is the queue. Use folder tables only after an anomaly or experiment points there.
 """
     return _note(frontmatter, body)
+
+
+def _priority_queue_table(
+    anomaly: dict[str, Any],
+    drift: dict[str, Any],
+    replay_summary: dict[str, Any],
+    cycle_queue: dict[str, Any],
+    evidence_plan_summary: dict[str, Any],
+    backfill_summary: dict[str, Any],
+    enrichment_summary: dict[str, Any],
+    missing_context_summary: dict[str, Any],
+) -> str:
+    rows = [
+        (
+            "P0",
+            "Rejected-signal winners",
+            len(anomaly["rejected_signal_winners"]),
+            "Filter may be blocking later runners.",
+            "[[Rejected Signal Winners]]",
+        ),
+        (
+            "P0",
+            "Wallet degradation",
+            len(anomaly["wallet_degradation"]),
+            "Wallet edge deteriorated; review before trusting wallet-sourced signals.",
+            "[[MemeTraderPro Anomaly Radar]]",
+        ),
+        (
+            "P1",
+            "Unresolved postmortems",
+            len(anomaly["unresolved_postmortems"]),
+            "Open failures create stale assumptions if not closed.",
+            "[[MemeTraderPro Anomaly Radar]]",
+        ),
+        (
+            "P1",
+            "Wallet-score drift",
+            len(drift["wallet_score_drift"]),
+            "Negative expectancy can indicate stale wallet weights.",
+            "[[MemeTraderPro Drift Monitor]]",
+        ),
+        (
+            "P1",
+            "Demotion reviews",
+            _count_value(cycle_queue.get("demotion_review")) + len(anomaly["demotion_reviews"]),
+            "Bad wallets should be reviewed before new signal weighting.",
+            "[[Wallets Pending Review]]",
+        ),
+        (
+            "P2",
+            "Replay coverage gaps",
+            _count_value(evidence_plan_summary.get("needs_replay_coverage")) + _count_value(replay_summary.get("low_coverage_wallets")),
+            "Evidence is too thin for promotion/demotion confidence.",
+            "[[Wallet Candidate Evidence Plan]]",
+        ),
+        (
+            "P2",
+            "Market-context gaps",
+            _count_value(enrichment_summary.get("missing_market_context_rows")) + _count_value(missing_context_summary.get("target_mints")),
+            "Wallet evidence is less useful without entry/liquidity context.",
+            "[[Wallet Missing Market Context]]",
+        ),
+        (
+            "P2",
+            "Wallet-history backfill",
+            _count_value(backfill_summary.get("needs_wallet_history")),
+            "Backfill targets can become future reviewable wallets.",
+            "[[Wallet Candidate Backfill Targets]]",
+        ),
+    ]
+    active = [row for row in rows if row[2] > 0]
+    if not active:
+        return "No high-priority MemeTraderPro issues surfaced in this export."
+    return table(
+        ["Priority", "Issue", "Count", "Why It Matters", "Open"],
+        [[priority, issue, _count(count), why, link] for priority, issue, count, why, link in active[:8]],
+    )
+
+
+def _operational_snapshot_table(
+    cycle_counts: dict[str, Any],
+    quality_summary: dict[str, Any],
+    quality_review_summary: dict[str, Any],
+    replay_summary: dict[str, Any],
+    history_summary: dict[str, Any],
+) -> str:
+    rows = [
+        ["Wallet universe", _count(cycle_counts.get("active_paper_watch_wallets")), "Active paper-watch wallets"],
+        ["Blocked wallets", _count(cycle_counts.get("blocked_paper_watch_wallets")), "Excluded from wallet-sourced trust"],
+        ["Active candidates", _count(quality_summary.get("active_candidates")), "Candidate review pool"],
+        ["Promotion-ready", _count(quality_review_summary.get("promotion_review_ready")), "Needs human review, not auto-apply"],
+        ["Replay reviewable", _count(replay_summary.get("reviewable_wallets")), "reviewable wallets: " + str(_count(replay_summary.get("reviewable_wallets")))],
+        ["History evidence", _count(history_summary.get("total_evidence_rows_created")), "Rows created from wallet-history backfill"],
+    ]
+    return table(["Area", "Count", "Meaning"], rows)
+
+
+def _evidence_quality_table(
+    replay_summary: dict[str, Any],
+    evidence_plan_summary: dict[str, Any],
+    backfill_summary: dict[str, Any],
+    enrichment_summary: dict[str, Any],
+    missing_context_summary: dict[str, Any],
+) -> str:
+    rows = [
+        ["Low replay coverage", _count(replay_summary.get("low_coverage_wallets")), "Collect replay before trusting review outcome"],
+        ["Needs replay evidence", _count(evidence_plan_summary.get("needs_replay_coverage")), "Candidate evidence is incomplete"],
+        ["Needs outcome coverage", _count(evidence_plan_summary.get("needs_outcome_coverage")), "Validation gap"],
+        ["Wallet history targets", _count(backfill_summary.get("needs_wallet_history")), "Backfill source behavior"],
+        ["Enriched evidence rows", _count(enrichment_summary.get("enriched_rows")), "Evidence quality improved"],
+        ["Missing market context", _count(enrichment_summary.get("missing_market_context_rows")), "Backfill liquidity/price context"],
+        ["Target mints missing context", _count(missing_context_summary.get("target_mints")), "Prioritize context collection"],
+    ]
+    return table(["Evidence Signal", "Count", "Action"], rows)
 
 
 def render_wallet_candidate_quality(snapshot: dict[str, Any]) -> str:
@@ -688,13 +782,13 @@ def _wallet_table(rows: list[dict[str, Any]]) -> str:
             [
                 wikilink(wallet_stem(str(row.get("wallet"))), short_id(row.get("wallet"))),
                 as_dict(row.get("recommendation")).get("action") or row.get("status"),
-                compact_number(_score(row), 4),
-                compact_number(_wallet_roi(row), 6),
+                compact_number(_score(row), 1),
+                compact_number(_wallet_roi(row), 2),
                 row.get("signal_count") or row.get("total_signals") or row.get("signals"),
                 row.get("rug_participation") or row.get("rug_count") or 0,
                 row.get("runner_participation") or row.get("runner_count") or 0,
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -713,7 +807,7 @@ def _candidate_table(rows: list[dict[str, Any]]) -> str:
                 as_dict(row.get("evidence")).get("promotion_score"),
                 as_dict(row.get("evidence")).get("demotion_score"),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -731,7 +825,7 @@ def _cycle_candidate_table(rows: list[dict[str, Any]]) -> str:
                 compact_number(row.get("score") or 0),
                 row.get("audit_status") or "",
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -744,13 +838,13 @@ def _candidate_quality_table(rows: list[dict[str, Any]]) -> str:
         [
             [
                 str(row.get("wallet") or ""),
-                compact_number(row.get("quality_score") or 0, 6),
+                compact_number(row.get("quality_score") or 0, 1),
                 row.get("recommended_observation") or "",
                 _count(row.get("winner_mints")),
                 _count(row.get("early_buy_events")),
                 ", ".join(str(item) for item in row.get("risk_flags") or []) or "none",
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -763,13 +857,13 @@ def _candidate_quality_review_table(rows: list[dict[str, Any]]) -> str:
         [
             [
                 str(row.get("wallet") or ""),
-                compact_number(row.get("quality_score") or 0, 6),
+                compact_number(row.get("quality_score") or 0, 1),
                 as_dict(row.get("recommendation")).get("action") or "",
                 _count(as_dict(row.get("replay")).get("known_15m")),
                 _count(as_dict(row.get("replay")).get("fillable_events")),
                 ", ".join(str(item) for item in row.get("evidence_gaps") or []) or "none",
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -782,13 +876,13 @@ def _candidate_evidence_plan_table(rows: list[dict[str, Any]]) -> str:
         [
             [
                 str(row.get("wallet") or ""),
-                compact_number(row.get("priority_score") or 0, 6),
+                compact_number(row.get("priority_score") or 0, 1),
                 row.get("next_action") or "",
                 _count(as_dict(row.get("missing")).get("replay_known_15m")),
                 _count(as_dict(row.get("missing")).get("fillable_events")),
                 _count(as_dict(row.get("missing")).get("known_outcomes")),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -801,14 +895,14 @@ def _candidate_backfill_targets_table(rows: list[dict[str, Any]]) -> str:
         [
             [
                 str(row.get("wallet") or ""),
-                compact_number(row.get("priority_score") or 0, 6),
+                compact_number(row.get("priority_score") or 0, 1),
                 row.get("next_collection_step") or "",
                 _count(row.get("local_replay_events")),
                 _count(row.get("unknown_15m_events")),
                 _count(as_dict(row.get("missing")).get("replay_known_15m")),
                 _count(as_dict(row.get("missing")).get("known_outcomes")),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -824,9 +918,9 @@ def _wallet_history_backfill_table(rows: list[dict[str, Any]]) -> str:
                 row.get("status") or "",
                 row.get("target_status") or "",
                 _count(row.get("evidence_rows_created")),
-                compact_number(as_dict(row.get("metrics")).get("evidence_confidence_score") or 0, 6),
+                compact_number(as_dict(row.get("metrics")).get("evidence_confidence_score") or 0, 1),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -843,11 +937,11 @@ def _wallet_evidence_enrichment_table(rows: list[dict[str, Any]]) -> str:
                 row.get("enrichment_status") or "",
                 row.get("observed_action") or "",
                 compact_number(as_dict(row.get("estimated_entry_context")).get("price") or 0, 6),
-                compact_number(as_dict(row.get("estimated_entry_context")).get("liquidity") or 0, 6),
+                compact_number(as_dict(row.get("estimated_entry_context")).get("liquidity") or 0, 1),
                 as_dict(row.get("later_token_outcome")).get("outcome_type") or "unknown",
-                compact_number(row.get("confidence_score") or 0, 6),
+                compact_number(row.get("confidence_score") or 0, 1),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -864,19 +958,23 @@ def _wallet_missing_market_context_table(rows: list[dict[str, Any]]) -> str:
                 _count(row.get("evidence_rows")),
                 _count(row.get("unique_wallets")),
                 _count(row.get("known_outcome_rows")),
-                compact_number(as_dict(row.get("backfill_window")).get("start_time") or 0, 6),
-                compact_number(as_dict(row.get("backfill_window")).get("end_time") or 0, 6),
+                short_datetime(as_dict(row.get("backfill_window")).get("start_time")),
+                short_datetime(as_dict(row.get("backfill_window")).get("end_time")),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
 
 def _count(value: Any) -> str:
+    return f"{_count_value(value):,}"
+
+
+def _count_value(value: Any) -> int:
     try:
-        return f"{int(float(value or 0)):,}"
+        return int(float(value or 0))
     except (TypeError, ValueError):
-        return "0"
+        return 0
 
 
 def _rejected_winner_table(rows: list[dict[str, Any]]) -> str:
@@ -891,7 +989,7 @@ def _rejected_winner_table(rows: list[dict[str, Any]]) -> str:
                 row.get("rejection reason"),
                 as_dict(row.get("what would have happened afterward if traded")).get("status"),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 
@@ -908,7 +1006,7 @@ def _postmortem_table(rows: list[dict[str, Any]]) -> str:
                 row.get("status"),
                 row.get("paper_lane"),
             ]
-            for row in rows[:25]
+            for row in rows[:10]
         ],
     )
 

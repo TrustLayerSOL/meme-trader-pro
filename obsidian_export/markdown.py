@@ -38,6 +38,16 @@ def iso_from_ts(value: Any) -> str | None:
         return str(value)
 
 
+def short_datetime(value: Any) -> str | None:
+    text = iso_from_ts(value)
+    if not text:
+        return None
+    text = text.replace("+00:00", "Z")
+    if "T" not in text:
+        return text
+    return text[:16].replace("T", " ")
+
+
 def compact_number(value: Any, digits: int = 4) -> Any:
     if value in (None, ""):
         return None
