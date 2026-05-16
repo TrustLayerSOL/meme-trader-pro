@@ -567,8 +567,10 @@ old generated body
         lineage = notes["Dashboards/MemeTraderPro Signal Lineage.md"]
         workflow = notes["Dashboards/MemeTraderPro Daily Workflow.md"]
         shared = notes["../SharedQuant/Dashboards/Quant Research Command Center.md"]
+        checklist = notes["../SharedQuant/Dashboards/Daily Review Checklist.md"]
 
         self.assertIn("What Matters Today", command)
+        self.assertIn("p0_count: 2", command)
         self.assertIn("Evidence Quality Changes", command)
         self.assertIn("Open Only If Needed", command)
         self.assertIn("Rejected-signal winners", command)
@@ -621,6 +623,9 @@ old generated body
         self.assertIn("Threat Radar High-Risk Warnings", shared)
         self.assertIn("Prop API Dashboard", shared)
         self.assertIn("PropAPI/CoverageReports", shared)
+        self.assertIn("Daily Review Complete", checklist)
+        self.assertIn("ran_today", checklist)
+        self.assertIn("p0_count > 0", checklist)
 
 
 if __name__ == "__main__":
