@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-15
+Last updated: 2026-05-16
 
 ## Current Work
 
@@ -43,6 +43,58 @@ Highest-value active workstreams:
 - Replay visibility reports for rejected/no-trade decisions.
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
+
+2026-05-16 update - Trusted Historical Snapshot Gate:
+
+Changed files:
+
+- `wallets/trusted_historical_market_snapshot_provider.py`
+- `utils/build_trusted_historical_market_snapshot_report.py`
+- `tests/test_trusted_historical_market_snapshot_provider.py`
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+Generated local reports:
+
+- `data/reports/historical_backfill/trusted_historical_market_snapshot_report.json`
+- `data/reports/historical_backfill/trusted_historical_market_snapshot_records.jsonl`
+
+What changed:
+
+- Added a review-only trust gate for the recovered historical market-context lane.
+- The gate reads the historical market-context backfill records and classifies whether each row is score-ready for wallet research.
+- Rows with only transaction-derived quote-per-token context are kept visible but marked `partial_quote_context_not_score_ready`.
+- Rows still missing a usable token price are marked `needs_external_historical_market_snapshot`.
+- The report groups exact missing requirements by token mint and preserves wallet, timestamp, signature, source status, decision-time context, later-outcome reference, required fields, and why a row cannot feed wallet scoring yet.
+- It does not fetch current prices, invent USD prices, invent liquidity, create market caps, mutate wallet lists, or touch execution.
+
+Current local run:
+
+- Scanned `194` historical backfill records.
+- Score-ready records: `0`.
+- Partial quote-context rows not score-ready: `108`.
+- Rows needing external historical market snapshots: `86`.
+- Required fields still missing:
+  - `liquidity`: `194`
+  - `market_cap`: `194`
+  - `historical_quote_usd_price`: `108`
+  - `price`: `86`
+- Affected wallets: `33`.
+- Affected tokens: `36`.
+- Trust-gate milestone completion is `100%`: every row is now classified and blocked/allowed by explicit evidence.
+- External historical snapshot ingestion remains `0%`: no trusted external source is wired yet.
+
+Verification:
+
+- Added failing tests first for partial quote context, stable-quote handling, missing-price blocking, complete score-ready context, grouped token requirements, and report/record writing.
+- `./trading_env/bin/python -m unittest tests.test_trusted_historical_market_snapshot_provider`
+- `./trading_env/bin/python utils/build_trusted_historical_market_snapshot_report.py`
+
+Remaining risk / next step:
+
+- The historical lane is now safe against accidental fake context, but it still cannot make the `194` rows wallet-score-ready.
+- Next step is to choose and wire one real historical market data source, or build a richer swap/pool parser that can defensibly reconstruct decision-time USD price, liquidity, and market cap from on-chain evidence.
 
 2026-05-15 update - Historical Backfill 100% Checkpoint:
 
