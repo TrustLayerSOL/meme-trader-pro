@@ -8160,3 +8160,52 @@ Verification:
 Remaining:
 
 - Next logical step is to run a small bounded `--execute` mint-history collection batch with conservative page/transaction limits, review RPC cost/error behavior, then rerun reconstruction. If history stays partial, keep all rows blocked.
+
+### 2026-05-17 - Ran Bounded Archival Mint History RPC Probe
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint History Collector: `100%`
+- Bounded RPC Probe: `100%`
+
+What changed:
+
+- Ran `utils/collect_archival_mint_history.py --execute` with intentionally tiny limits:
+  - signature page limit: `1`,
+  - max pages per mint: `1`,
+  - max transactions per mint: `1`.
+- The goal was to verify RPC reachability and blocked-state behavior without attempting a full historical backfill.
+
+Probe result:
+
+- requirements scanned: `34`,
+- mint history targets: `34`,
+- mint histories complete: `0`,
+- blocked partial history: `34`,
+- block reason: `signature_page_limit_reached`,
+- raw transactions preserved: `0`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`,
+- RPC failures on sampled first target: `0`.
+
+Downstream result:
+
+- Reran archival mint supply reconstruction after the probe.
+- Reconstruction remained blocked:
+  - requirements scanned: `34`,
+  - snapshots reconstructed: `0`,
+  - blocked incomplete mint history: `34`.
+
+Interpretation:
+
+- The collector can reach the RPC provider.
+- The guardrail is working: partial mint history does not produce supply proof.
+- No wallet trust, wallet lists, or execution settings changed.
+
+Remaining:
+
+- Next logical step is a larger but still bounded execute batch with enough signature pages to determine whether any of the `34` mint accounts have short enough history to prove complete through their decision slots. Keep all rows blocked unless pagination reaches the end and all eligible decision-time transactions are fetched.
