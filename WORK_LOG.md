@@ -7708,3 +7708,50 @@ Remaining:
 
 - Stage 10 remains intentionally deferred because proof readiness is still `0%`.
 - Next logical milestone is Stage 1 - Live Signal Foundation at `90%`: close the remaining live-signal ingestion/source-of-truth reliability gap so forward evidence collection is stronger before any risk automation is considered.
+
+### 2026-05-17 - Completed Stage 1 Live Signal Foundation Gate
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/live_signal_foundation.py`
+- `tests/test_desktop_api.py`
+- `tests/test_live_signal_foundation.py`
+- `utils/build_live_signal_foundation.py`
+
+What changed:
+
+- Added a read-only Stage 1 completion report at `data/reports/live_signal/live_signal_foundation_report.json`.
+- Added `/api/live-signal-foundation`.
+- The report cross-checks the Signal Context Layer and historical replay summary to prove that normalized signal records, wallet observations, persisted replay events, and replay-safety controls are visible and consistent.
+- Stage 1 is now complete as review-only infrastructure. It proves the foundation is observable and replay-safe, but it does not claim proof readiness, trust wallet scores, mutate wallet lists, or enable execution.
+
+Current local Stage 1 report:
+
+- Stage 1 completion: `100%`
+- Signal records: `6,042`
+- Historical replay events: `6,042`
+- Source consistency: `100%`
+- Wallet observation records: `1,000`
+- Accepted trade records: `37`
+- Failed trade records: `5`
+- Rejected signal records: `6,000`
+- Decision-time market context coverage: `17%`
+- Unsafe replay events: `0`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Verification:
+
+- Wrote failing tests first for the Stage 1 report and desktop API route.
+- Focused Stage 1 tests passed.
+- `utils/build_live_signal_foundation.py` generated the report successfully.
+- `/api/live-signal-foundation` is wired as read-only and keeps `live_execution_locked=true`, `wallet_list_mutated=false`, and `auto_trust_mutation_allowed=false`.
+
+Remaining:
+
+- Stage 10 remains intentionally deferred because proof readiness is still `0%`.
+- Next logical work is proof-readiness blocker reduction: improve known outcome labels and score-ready decision-time market context before any semi-autonomous risk/trust automation.

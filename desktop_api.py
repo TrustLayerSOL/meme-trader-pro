@@ -35,6 +35,7 @@ from core.wallet_discovery import normalize_tracked_wallets
 from research.alerting_dashboard_layer import build_alerting_dashboard_layer_report
 from research.behavioral_intelligence_layer import build_behavioral_intelligence_layer_report
 from research.evidence_layer_completion import build_evidence_layer_completion_report
+from research.live_signal_foundation import build_live_signal_foundation_report
 from research.market_regime_detection import build_market_regime_detection_report
 from research.productization_operator_workflow import build_productization_operator_workflow_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
@@ -108,6 +109,7 @@ WALLET_EVIDENCE_SCORECARD_REPORT_FILE = ROOT / "data" / "reports" / "wallet_back
 WALLET_STAGE4_REVIEW_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_stage4_review_report.json"
 EVIDENCE_LAYER_COMPLETION_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "evidence_layer_completion_report.json"
 SIGNAL_CONTEXT_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "signal_context" / "signal_context_layer_report.json"
+LIVE_SIGNAL_FOUNDATION_REPORT_FILE = ROOT / "data" / "reports" / "live_signal" / "live_signal_foundation_report.json"
 ONCHAIN_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "onchain_market_context_recovery_report.json"
 ONCHAIN_SUPPLY_EVIDENCE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "onchain_supply_evidence_report.json"
 REPLAY_REALISM_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replay_realism_readiness_report.json"
@@ -362,6 +364,7 @@ def read_state_files():
         "wallet_stage4_review": read_json(WALLET_STAGE4_REVIEW_REPORT_FILE, {}),
         "evidence_layer_completion": read_json(EVIDENCE_LAYER_COMPLETION_REPORT_FILE, {}),
         "signal_context_layer": read_json(SIGNAL_CONTEXT_LAYER_REPORT_FILE, {}),
+        "live_signal_foundation": read_json(LIVE_SIGNAL_FOUNDATION_REPORT_FILE, {}),
         "onchain_market_context": read_json(ONCHAIN_MARKET_CONTEXT_REPORT_FILE, {}),
         "onchain_supply_evidence": read_json(ONCHAIN_SUPPLY_EVIDENCE_REPORT_FILE, {}),
         "replay_realism_readiness": read_json(REPLAY_REALISM_READINESS_REPORT_FILE, {}),
@@ -4146,6 +4149,33 @@ def build_signal_context_layer_payload(state=None):
     }
 
 
+def build_live_signal_foundation_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("live_signal_foundation")
+    if isinstance(existing, dict) and existing.get("mode") == "LIVE_SIGNAL_FOUNDATION_STAGE1_REVIEW_ONLY":
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "source": "live_signal_foundation_json",
+            "source_detail": str(LIVE_SIGNAL_FOUNDATION_REPORT_FILE.relative_to(ROOT)),
+        }
+    report = build_live_signal_foundation_report(
+        signal_context_layer=state.get("signal_context_layer") if isinstance(state.get("signal_context_layer"), dict) else {},
+        historical_replay_summary=read_json(HISTORICAL_REPLAY_SUMMARY_FILE, {}),
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "live_signal_foundation_computed",
+        "source_detail": str(LIVE_SIGNAL_FOUNDATION_REPORT_FILE.relative_to(ROOT)),
+    }
+
+
 def build_wallet_promotion_demotion_system_payload(state=None):
     state = state or read_state_files()
     existing = state.get("wallet_promotion_demotion_system")
@@ -5085,6 +5115,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_evidence_layer_completion_payload())
     if path == "/api/signal-context-layer":
         return json_response(build_signal_context_layer_payload())
+    if path == "/api/live-signal-foundation":
+        return json_response(build_live_signal_foundation_payload())
     if path == "/api/wallet-promotion-demotion-system":
         return json_response(build_wallet_promotion_demotion_system_payload())
     if path == "/api/wallet-ecosystem-intelligence":
