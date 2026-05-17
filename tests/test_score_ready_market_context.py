@@ -44,6 +44,25 @@ def supply_row(**overrides):
     return row
 
 
+def archival_supply_row(**overrides):
+    row = {
+        "wallet": "WalletA",
+        "token_mint": "MintA",
+        "timestamp": 1000,
+        "transaction_signature": "SigA",
+        "status": "archival_supply_recovered",
+        "decision_time_safe": True,
+        "ui_supply": 1_000_000,
+        "raw_supply": "1000000000000",
+        "decimals": 6,
+        "snapshot_slot": 90,
+        "decision_slot": 100,
+        "block_reasons": [],
+    }
+    row.update(overrides)
+    return row
+
+
 class ScoreReadyMarketContextTests(unittest.TestCase):
     def test_classifies_price_liquidity_rows_as_archival_supply_candidates(self):
         report = build_score_ready_market_context_report(
@@ -97,6 +116,25 @@ class ScoreReadyMarketContextTests(unittest.TestCase):
         self.assertTrue(report["records"][0]["decision_time_safe"])
         self.assertFalse(report["records"][0]["can_mutate_wallet_trust"])
 
+    def test_archival_supply_recomputes_market_cap_and_marks_row_score_ready(self):
+        report = build_score_ready_market_context_report(
+            onchain_market_context_records=[onchain_row()],
+            supply_evidence_records=[supply_row()],
+            archival_supply_records=[archival_supply_row()],
+            generated_at=123.0,
+        )
+
+        record = report["records"][0]
+        self.assertEqual(report["summary"]["score_ready_records"], 1)
+        self.assertEqual(report["summary"]["needs_market_cap_recompute_rows"], 0)
+        self.assertEqual(record["readiness_status"], "score_ready")
+        self.assertEqual(record["next_action"], "NO_ACTION_SCORE_READY")
+        self.assertEqual(record["supply_status"], "archival_supply_recovered")
+        self.assertEqual(record["token_supply"], 1_000_000)
+        self.assertEqual(record["market_cap"], 10_000)
+        self.assertTrue(record["supply_decision_time_safe"])
+        self.assertEqual(record["supply_source"], "archival_supply_evidence")
+
     def test_keeps_missing_price_or_liquidity_rows_blocked(self):
         report = build_score_ready_market_context_report(
             onchain_market_context_records=[
@@ -136,6 +174,7 @@ class ScoreReadyMarketContextTests(unittest.TestCase):
             report = write_score_ready_market_context_report(
                 onchain_records_path=onchain_path,
                 supply_records_path=supply_path,
+                archival_supply_records_path=root / "missing_archival.jsonl",
                 report_path=report_path,
                 output_records_path=records_path,
                 generated_at=123.0,

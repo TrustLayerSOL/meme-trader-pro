@@ -7947,3 +7947,60 @@ Verification:
 Remaining:
 
 - Next logical step is to implement the bounded archival supply fetch adapter or fixture importer that can fill these `34` token supply requirements from historical mint-account evidence at or before each decision slot, still without using current supply or mutating wallet trust.
+
+### 2026-05-17 - Added Archival Supply Evidence Import
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Supply Evidence Import: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_supply_evidence.py`
+- `tests/test_desktop_api.py`
+- `tests/test_score_ready_market_context.py`
+- `utils/build_archival_supply_evidence.py`
+- `utils/build_score_ready_market_context.py`
+- `wallets/archival_supply_evidence.py`
+- `wallets/score_ready_market_context.py`
+
+What changed:
+
+- Added a review-only archival supply evidence importer at `data/reports/historical_backfill/archival_supply_evidence_report.json`.
+- Added `/api/archival-supply-evidence`.
+- The importer can consume historical mint-account snapshots, including RPC-style parsed mint account fixtures.
+- It accepts supply only when the snapshot slot is at or before the candidate decision slot.
+- It blocks missing snapshots, invalid snapshots, and snapshots after the decision slot.
+- The score-ready market-context classifier now consumes safe archival supply rows and recomputes market cap from decision-time price times historical supply.
+- Current local report:
+  - candidate rows: `86`,
+  - supply recovered rows: `0`,
+  - blocked missing archival snapshot rows: `86`,
+  - tokens affected: `34`,
+  - wallets affected: `23`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`.
+- Score-ready market context remains:
+  - score-ready records: `0`,
+  - near-score-ready archival supply candidates: `86`,
+  - missing price rows: `442`,
+  - missing liquidity rows: `115`.
+
+Verification:
+
+- Wrote failing tests first for archival supply evidence import, score-ready archival supply consumption, and the desktop API route.
+- Focused tests passed.
+- Generated the local archival supply evidence report.
+- Regenerated the score-ready market-context report with archival supply input.
+
+Remaining:
+
+- Next logical step is to create the bounded archival mint-account snapshot collector/import source for the `34` token requirements, then rerun the importer. Until those snapshots exist, proof readiness must remain blocked.

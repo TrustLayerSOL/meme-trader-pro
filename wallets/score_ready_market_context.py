@@ -34,6 +34,23 @@ def index_supply_records(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str
     return indexed
 
 
+def merged_supply_records(
+    supply_evidence_records: list[dict[str, Any]],
+    archival_supply_records: list[dict[str, Any]] | None = None,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    indexed = index_supply_records(supply_evidence_records)
+    for row in archival_supply_records or []:
+        if not isinstance(row, dict) or row.get("status") != "archival_supply_recovered":
+            continue
+        indexed[record_key(row)] = {
+            **row,
+            "status": "archival_supply_recovered",
+            "decision_time_safe": True,
+            "source": "archival_supply_evidence",
+        }
+    return indexed
+
+
 def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str], dict[str, Any]]) -> dict[str, Any]:
     context = as_dict(row.get("decision_time_context"))
     supply = supply_by_key.get(record_key(row), {})
@@ -41,6 +58,8 @@ def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str
     liquidity = positive_float(context.get("liquidity") or context.get("liquidity_usd"))
     market_cap = positive_float(context.get("market_cap"))
     token_supply = positive_float(context.get("token_supply") or supply.get("ui_supply"))
+    if market_cap is None and price is not None and token_supply is not None:
+        market_cap = price * token_supply
     decision_time_safe = context.get("decision_time_safe") is True
     block_reasons = {str(reason) for reason in row.get("block_reasons") or [] if str(reason).strip()}
     supply_status = str(supply.get("status") or "missing_supply_evidence")
@@ -95,6 +114,7 @@ def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str
         "market_cap_present": market_cap is not None,
         "supply_present": token_supply is not None,
         "supply_status": supply_status,
+        "supply_source": supply.get("source"),
         "supply_decision_time_safe": supply_decision_time_safe,
         "decimals": supply.get("decimals"),
         "price": price,
@@ -142,9 +162,10 @@ def build_score_ready_market_context_report(
     *,
     onchain_market_context_records: list[dict[str, Any]],
     supply_evidence_records: list[dict[str, Any]],
+    archival_supply_records: list[dict[str, Any]] | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
-    supply_by_key = index_supply_records(supply_evidence_records)
+    supply_by_key = merged_supply_records(supply_evidence_records, archival_supply_records)
     records = [
         classify_record(row, supply_by_key)
         for row in onchain_market_context_records or []
