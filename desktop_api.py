@@ -36,6 +36,7 @@ from research.alerting_dashboard_layer import build_alerting_dashboard_layer_rep
 from research.evidence_layer_completion import build_evidence_layer_completion_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
 from research.similar_rug_patterns import build_similar_rug_patterns_report
+from research.validation_proof_layer import build_validation_proof_layer_report
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
@@ -99,6 +100,7 @@ STAGE8_VALIDATION_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "replay_va
 REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replayable_token_timelines_report.json"
 SIMILAR_RUG_PATTERNS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "similar_rug_patterns_report.json"
 ALERTING_DASHBOARD_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "dashboard" / "alerting_dashboard_layer_report.json"
+VALIDATION_PROOF_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "validation_proof_layer_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -321,6 +323,7 @@ def read_state_files():
         "replayable_token_timelines": read_json(REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE, {}),
         "similar_rug_patterns": read_json(SIMILAR_RUG_PATTERNS_REPORT_FILE, {}),
         "alerting_dashboard_layer": read_json(ALERTING_DASHBOARD_LAYER_REPORT_FILE, {}),
+        "validation_proof_layer": read_json(VALIDATION_PROOF_LAYER_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -4162,6 +4165,35 @@ def build_alerting_dashboard_layer_payload(state=None):
     }
 
 
+def build_validation_proof_layer_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("validation_proof_layer")
+    if isinstance(existing, dict) and existing.get("mode") == "VALIDATION_PROOF_LAYER_REVIEW_ONLY":
+        rows = existing.get("proof_criteria") if isinstance(existing.get("proof_criteria"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "validation_proof_layer_json",
+            "source_detail": str(VALIDATION_PROOF_LAYER_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_validation_proof_layer_report(
+        alerting_dashboard_layer=state.get("alerting_dashboard_layer") if isinstance(state.get("alerting_dashboard_layer"), dict) else {},
+        stage8_validation=state.get("stage8_validation_readiness") if isinstance(state.get("stage8_validation_readiness"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "validation_proof_layer_computed",
+        "source_detail": str(VALIDATION_PROOF_LAYER_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("proof_criteria") if isinstance(report.get("proof_criteria"), list) else []),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4828,6 +4860,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_similar_rug_patterns_payload())
     if path == "/api/alerting-dashboard-layer":
         return json_response(build_alerting_dashboard_layer_payload())
+    if path == "/api/validation-proof-layer":
+        return json_response(build_validation_proof_layer_payload())
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

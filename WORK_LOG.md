@@ -44,6 +44,58 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Validation / Proof Layer Gate:
+
+Active milestone:
+
+- Validation / Proof Layer product-health lane
+
+Milestone completion:
+
+- Validation / Proof Layer: `100%`
+- Proof readiness: `0%`
+
+Changed files:
+
+- `research/validation_proof_layer.py`
+- `utils/build_validation_proof_layer.py`
+- `desktop_api.py`
+- `tests/test_validation_proof_layer.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/replay_validation/validation_proof_layer_report.json`
+
+What changed:
+
+- Added a review-only Validation / Proof Layer checklist.
+- Added `/api/validation-proof-layer`.
+- Current local report:
+  - validation/proof layer completion: `100%`,
+  - proof readiness: `0%`,
+  - proof criteria: `12`,
+  - blocked proof criteria: `12`,
+  - Stage 8 known 15m outcomes: `2`,
+  - Stage 8 fillable rate: `6%`,
+  - Stage 8 data score readiness: `0%`.
+- The layer converts visible blocker categories into exact proof criteria before wallet scores can be trusted.
+- This is a proof-readiness checklist only. It does not claim edge, promote wallets, demote wallets, mutate wallet lists, or trade.
+- No wallet-list changes were applied. Live execution remains locked.
+
+Verification:
+
+- Red tests first for missing validation-proof module and API route.
+- `./trading_env/bin/python -m unittest tests.test_validation_proof_layer tests.test_desktop_api.DesktopApiTests.test_validation_proof_layer_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_validation_proof_layer_route_is_read_only`
+- `./trading_env/bin/python utils/build_validation_proof_layer.py`
+
+Remaining risk / next step:
+
+- The next incomplete product-health lane is Productization at `5%`. The next grounded build step is to package the current report chain into a clean operator workflow, still read-only, so the user can run/export/review the research stack without touching execution.
+
 2026-05-16 update - Alerting / Dashboard Layer Gate:
 
 Active milestone:
