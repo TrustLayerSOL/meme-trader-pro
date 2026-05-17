@@ -47,6 +47,7 @@ from research.validation_proof_layer import build_validation_proof_layer_report
 from research.wallet_ecosystem_intelligence import build_wallet_ecosystem_intelligence_report
 from research.wallet_promotion_demotion_system import build_wallet_promotion_demotion_system_report
 from wallets.archival_account_state_provider_evaluation import build_archival_account_state_provider_evaluation_report
+from wallets.archival_account_state_provider_probe import build_archival_account_state_provider_probe_report
 from wallets.archival_mint_history_collector import build_archival_mint_history_collection_report
 from wallets.archival_mint_pagination_planner import build_archival_mint_pagination_plan_report
 from wallets.archival_mint_history_progress import build_archival_mint_history_progress_report
@@ -141,6 +142,7 @@ ARCHIVAL_MINT_HISTORY_COLLECTION_REPORT_FILE = ROOT / "data" / "reports" / "hist
 ARCHIVAL_MINT_HISTORY_PROGRESS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_history_progress_report.json"
 ARCHIVAL_MINT_PAGINATION_PLAN_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_pagination_plan_report.json"
 ARCHIVAL_ACCOUNT_STATE_PROVIDER_EVALUATION_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_account_state_provider_evaluation_report.json"
+ARCHIVAL_ACCOUNT_STATE_PROVIDER_PROBE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_account_state_provider_probe_report.json"
 ARCHIVAL_MINT_HISTORY_SIGNATURE_CHECKPOINT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_history_signature_checkpoint.json"
 PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE = ROOT / "data" / "reports" / "productization" / "operator_workflow_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
@@ -408,6 +410,7 @@ def read_state_files():
         "archival_mint_history_progress": read_json(ARCHIVAL_MINT_HISTORY_PROGRESS_REPORT_FILE, {}),
         "archival_mint_pagination_plan": read_json(ARCHIVAL_MINT_PAGINATION_PLAN_REPORT_FILE, {}),
         "archival_account_state_provider_evaluation": read_json(ARCHIVAL_ACCOUNT_STATE_PROVIDER_EVALUATION_REPORT_FILE, {}),
+        "archival_account_state_provider_probe": read_json(ARCHIVAL_ACCOUNT_STATE_PROVIDER_PROBE_REPORT_FILE, {}),
         "archival_mint_history_signature_checkpoint": read_json(ARCHIVAL_MINT_HISTORY_SIGNATURE_CHECKPOINT_FILE, {}),
         "productization_operator_workflow": read_json(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE, {}),
     }
@@ -4807,6 +4810,41 @@ def build_archival_account_state_provider_evaluation_payload(state=None):
     }
 
 
+def build_archival_account_state_provider_probe_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("archival_account_state_provider_probe")
+    if isinstance(existing, dict) and existing.get("mode") == "ARCHIVAL_ACCOUNT_STATE_PROVIDER_PROBE_REVIEW_ONLY":
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "wallet_trust_mutation_allowed": False,
+            "supply_snapshot_import_allowed": False,
+            "source": "archival_account_state_provider_probe_json",
+            "source_detail": str(ARCHIVAL_ACCOUNT_STATE_PROVIDER_PROBE_REPORT_FILE.relative_to(ROOT)),
+        }
+    pagination_plan = state.get("archival_mint_pagination_plan") if isinstance(state.get("archival_mint_pagination_plan"), dict) else {}
+    provider_evaluation = (
+        state.get("archival_account_state_provider_evaluation")
+        if isinstance(state.get("archival_account_state_provider_evaluation"), dict)
+        else {}
+    )
+    report = build_archival_account_state_provider_probe_report(
+        pagination_plan=pagination_plan,
+        provider_evaluation=provider_evaluation,
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "archival_account_state_provider_probe_computed",
+        "source_detail": str(ARCHIVAL_ACCOUNT_STATE_PROVIDER_PROBE_REPORT_FILE.relative_to(ROOT)),
+    }
+
+
 def build_productization_operator_workflow_payload(state=None):
     state = state or read_state_files()
     existing = state.get("productization_operator_workflow")
@@ -5541,6 +5579,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_archival_mint_pagination_plan_payload())
     if path == "/api/archival-account-state-provider-evaluation":
         return json_response(build_archival_account_state_provider_evaluation_payload())
+    if path == "/api/archival-account-state-provider-probe":
+        return json_response(build_archival_account_state_provider_probe_payload())
     if path == "/api/productization-operator-workflow":
         return json_response(build_productization_operator_workflow_payload())
     if path == "/api/wallet-review-apply":

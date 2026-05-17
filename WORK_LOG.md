@@ -8553,3 +8553,58 @@ Provider interpretation:
 Remaining:
 
 - Next logical step is to build a manual provider-probe harness that can test a candidate archival provider against a known mint/slot and reject responses after the decision slot.
+
+### 2026-05-17 - Added Archival Account-State Provider Probe Harness
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Account-State Provider Probe Harness: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_account_state_provider_probe.py`
+- `tests/test_desktop_api.py`
+- `utils/build_archival_account_state_provider_probe.py`
+- `wallets/archival_account_state_provider_probe.py`
+
+What changed:
+
+- Added `data/reports/historical_backfill/archival_account_state_provider_probe_report.json`.
+- Added `/api/archival-account-state-provider-probe`.
+- The probe harness selects one provider-recommended mint/decision-slot target for manual archival account-state validation.
+- It can evaluate a saved raw provider response, preserve that raw response, and reject:
+  - provider responses after the decision slot,
+  - responses without provider context slot,
+  - responses without parsed mint data,
+  - responses without mint supply.
+- It never imports a supply snapshot automatically.
+
+Current local report:
+
+- provider: `quicknode_solana_mainnet_archive`,
+- probe target: `4BBPVEzF9AyVwt8Zog1z41ATKbZMVqah738sTYwvpump`,
+- decision slot: `419937176`,
+- probe status: `dry_run_probe_target_selected`,
+- probe targets: `1`,
+- raw response evaluated: `false`,
+- snapshots ready for manual review: `0`,
+- supply snapshot imports: `0`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Interpretation:
+
+- The system now has a safe place to validate one archival provider response without polluting the evidence layer.
+- Proof readiness remains blocked until a real historical provider response is captured, preserved, and validated at or before the decision slot.
+
+Remaining:
+
+- Next logical step is to run one manual archival provider probe using a saved raw `getAccountInfo` response for the selected mint/decision slot, then import nothing until the report marks it ready for manual review.
