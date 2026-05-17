@@ -65,6 +65,8 @@ def _note(note_type: str, title: str, description: str, body: str) -> str:
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
 {description}
 
 {body}

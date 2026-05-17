@@ -148,6 +148,10 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
+This is the daily MemeTraderPro operating surface. It tells you which wallet, signal, replay, and evidence-quality issues deserve attention before you open detailed generated folders.
+
 ## What Matters Today
 
 {_priority_queue_table(priority_rows)}
@@ -316,6 +320,8 @@ def render_wallet_candidate_quality(snapshot: dict[str, Any]) -> str:
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
 Review-only ranking of candidate wallets by current evidence quality. This does not promote, demote, or trade wallets.
 
 ## Summary
@@ -343,6 +349,8 @@ def render_wallet_candidate_quality_review(snapshot: dict[str, Any]) -> str:
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
 Review-only cross-check of top candidate-quality wallets against replay and outcome evidence. This does not approve or apply wallet-list changes.
 
 ## Summary
@@ -369,6 +377,8 @@ def render_wallet_candidate_evidence_plan(snapshot: dict[str, Any]) -> str:
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
 Review-only collection plan for top candidate wallets. Use this to decide where more replay/outcome evidence is needed before wallet promotion review.
 
 ## Summary
@@ -394,6 +404,8 @@ def render_wallet_candidate_backfill_targets(snapshot: dict[str, Any]) -> str:
     body = f"""# Wallet Candidate Backfill Targets
 
 {GENERATED_MARKER}
+
+## What This Dashboard Does
 
 Review-only target list for filling evidence gaps in the strongest candidate wallets. Use this to decide whether the next step is wallet-history collection, outcome-label backfill, more replay events, or risk review.
 
@@ -422,6 +434,8 @@ def render_wallet_history_backfill(snapshot: dict[str, Any]) -> str:
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
 Review-only wallet-history backfill report. This records fetched wallet evidence and block reasons without promoting, demoting, or trading.
 
 ## Summary
@@ -449,6 +463,8 @@ def render_wallet_evidence_enrichment(snapshot: dict[str, Any]) -> str:
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
 Review-only enrichment report. This attaches decision-time-safe market context and later outcome labels to wallet-history evidence without promoting, demoting, or trading.
 
 ## Summary
@@ -475,6 +491,8 @@ def render_wallet_missing_market_context(snapshot: dict[str, Any]) -> str:
     body = f"""# Wallet Missing Market Context
 
 {GENERATED_MARKER}
+
+## What This Dashboard Does
 
 Review-only target list for wallet evidence rows that still lack decision-time market context. This identifies mints and time windows for future snapshot/tick backfill; it does not fetch data, promote wallets, or trade.
 
@@ -508,7 +526,17 @@ def render_wallet_replay_review(snapshot: dict[str, Any]) -> str:
             ]
         )
     frontmatter = _frontmatter("wallet_replay_ecosystem_review")
-    return _note(frontmatter, f"{report}\n")
+    if report.startswith("# Wallet Replay Ecosystem Review"):
+        report = report.split("\n", 1)[1].lstrip() if "\n" in report else ""
+    body = f"""# Wallet Replay Ecosystem Review
+
+## What This Dashboard Does
+
+This shows replay-safe wallet evidence: which wallets have enough replay coverage, which remain low coverage, and where co-entry behavior may affect wallet trust.
+
+{report}
+"""
+    return _note(frontmatter, body)
 
 
 def render_wallet_cycle_report(snapshot: dict[str, Any]) -> str:
@@ -527,6 +555,10 @@ def render_wallet_cycle_report(snapshot: dict[str, Any]) -> str:
     body = f"""# Wallet Cycle Report
 
 {GENERATED_MARKER}
+
+## What This Dashboard Does
+
+This shows wallet-list operating state: active/blocked wallets, pending promotion and demotion reviews, replay coverage, latest apply results, and attention flags.
 
 ## Core Counts
 
@@ -579,6 +611,10 @@ def render_anomaly_radar(snapshot: dict[str, Any], anomaly: dict[str, Any]) -> s
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
+This surfaces wallet degradation, rejected-signal winners, rug-heavy wallets, unresolved postmortems, and replay anomalies that need review before trusting new wallet-driven signals.
+
 ## Wallet Degradation
 
 {_wallet_table(anomaly["wallet_degradation"])}
@@ -620,6 +656,10 @@ def render_drift_monitor(drift: dict[str, Any]) -> str:
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
+This tracks wallet-score drift and confidence mismatch so stale wallet weights, negative expectancy, and decaying signal quality are visible before tuning or trading decisions.
+
 ## Wallet-Score Drift
 
 {_wallet_table(drift["wallet_score_drift"])}
@@ -648,6 +688,10 @@ def render_signal_lineage() -> str:
     body = f"""# MemeTraderPro Signal Lineage
 
 {GENERATED_MARKER}
+
+## What This Dashboard Does
+
+This explains how MemeTraderPro evidence connects from signal to wallet, rejected signal or paper trade, replay finding, postmortem, and wallet review decision.
 
 ## Lineage Model
 
@@ -686,6 +730,10 @@ def render_daily_workflow(anomaly: dict[str, Any], drift: dict[str, Any]) -> str
 
 {GENERATED_MARKER}
 
+## What This Dashboard Does
+
+This is the daily operating checklist for MemeTraderPro. Use it to review the command center, clear anomalies, check drift, record one observation, and turn repeated issues into hypotheses.
+
 ## Daily Review
 
 1. Review [[MemeTraderPro Research Command Center]].
@@ -717,6 +765,10 @@ def render_shared_quant_dashboard() -> str:
     body = """# Quant Research Command Center
 
 GENERATED BY QUANT RESEARCH EXPORTERS - DO NOT EDIT BELOW THIS LINE
+
+## What This Dashboard Does
+
+This is the cross-project command center. It tells you which project surface to open first across Prop API, MemeTraderPro, NorthStar, and Threat Radar.
 
 ## What Matters Today
 
@@ -823,6 +875,10 @@ def render_shared_daily_review_checklist() -> str:
     body = """# Daily Review Checklist
 
 GENERATED BY QUANT RESEARCH EXPORTERS - DO NOT EDIT BELOW THIS LINE
+
+## What This Dashboard Does
+
+This verifies whether each project exporter refreshed today and whether any command center has active P0 rows that should be reviewed first.
 
 ## Daily Review Complete
 

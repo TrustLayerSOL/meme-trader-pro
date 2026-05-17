@@ -119,6 +119,7 @@ old generated body
         index = notes["Dashboards/MemeTraderPro Intelligence Dashboard.md"]
 
         self.assertIn("Top Wallets By Confidence", index)
+        self.assertIn("What This Dashboard Does", index)
         self.assertIn("Wallet Candidate Audit Queue", index)
         self.assertIn('FROM "MemeTraderPro/WalletCandidateReviews"', index)
         self.assertIn("evidence_source", index)
@@ -260,6 +261,7 @@ old generated body
         trades = notes["Dashboards/Recent Paper Trade Outcomes.md"]
 
         self.assertIn("type: wallet_index", top_wallets)
+        self.assertIn("What This Dashboard Does", top_wallets)
         self.assertIn("WalletGOOD123", top_wallets)
         self.assertIn("WalletRUG999", notes["Dashboards/Rug Association Watchlist.md"])
         self.assertIn("MintWinner", rejected_winners)
@@ -570,6 +572,7 @@ old generated body
         checklist = notes["../SharedQuant/Dashboards/Daily Review Checklist.md"]
 
         self.assertIn("What Matters Today", command)
+        self.assertIn("What This Dashboard Does", command)
         self.assertIn("p0_count: 2", command)
         self.assertIn("Evidence Quality Changes", command)
         self.assertIn("Open Only If Needed", command)
@@ -577,12 +580,16 @@ old generated body
         self.assertIn("Replay coverage gaps", command)
         self.assertIn("Market-context gaps", command)
         self.assertIn("Wallet Degradation", anomaly)
+        self.assertIn("What This Dashboard Does", anomaly)
         self.assertIn("WalletBAD999", anomaly)
         self.assertIn("Rejected-Signal Winners", anomaly)
         self.assertIn("MintWinner", anomaly)
         self.assertIn("Wallet-Score Drift", drift)
+        self.assertIn("What This Dashboard Does", drift)
         self.assertIn("Signal Lineage", lineage)
+        self.assertIn("What This Dashboard Does", lineage)
         self.assertIn("Daily Research Workflow", workflow)
+        self.assertIn("What This Dashboard Does", workflow)
         self.assertIn("MemeTraderPro Anomaly Radar", command)
         self.assertIn("MemeTraderPro Drift Monitor", command)
         self.assertIn("Wallet Replay Ecosystem Review", command)
@@ -624,6 +631,7 @@ old generated body
         self.assertIn("Prop API Dashboard", shared)
         self.assertIn("PropAPI/CoverageReports", shared)
         self.assertIn("Daily Review Complete", checklist)
+        self.assertIn("What This Dashboard Does", checklist)
         self.assertIn("ran_today", checklist)
         self.assertIn("p0_count > 0", checklist)
 
