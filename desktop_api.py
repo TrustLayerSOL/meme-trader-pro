@@ -33,6 +33,7 @@ from core.settings_manager import load_settings as load_bot_settings
 from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from research.alerting_dashboard_layer import build_alerting_dashboard_layer_report
+from research.behavioral_intelligence_layer import build_behavioral_intelligence_layer_report
 from research.evidence_layer_completion import build_evidence_layer_completion_report
 from research.market_regime_detection import build_market_regime_detection_report
 from research.productization_operator_workflow import build_productization_operator_workflow_report
@@ -115,6 +116,7 @@ REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE = ROOT / "data" / "reports" / "historical
 SIMILAR_RUG_PATTERNS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "similar_rug_patterns_report.json"
 ALERTING_DASHBOARD_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "dashboard" / "alerting_dashboard_layer_report.json"
 VALIDATION_PROOF_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "validation_proof_layer_report.json"
+BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_intelligence" / "behavioral_intelligence_layer_report.json"
 PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE = ROOT / "data" / "reports" / "productization" / "operator_workflow_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
@@ -368,6 +370,7 @@ def read_state_files():
         "similar_rug_patterns": read_json(SIMILAR_RUG_PATTERNS_REPORT_FILE, {}),
         "alerting_dashboard_layer": read_json(ALERTING_DASHBOARD_LAYER_REPORT_FILE, {}),
         "validation_proof_layer": read_json(VALIDATION_PROOF_LAYER_REPORT_FILE, {}),
+        "behavioral_intelligence_layer": read_json(BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE, {}),
         "productization_operator_workflow": read_json(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
@@ -4356,6 +4359,38 @@ def build_validation_proof_layer_payload(state=None):
     }
 
 
+def build_behavioral_intelligence_layer_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("behavioral_intelligence_layer")
+    if isinstance(existing, dict) and existing.get("mode") == "BEHAVIORAL_INTELLIGENCE_STAGE9_REVIEW_ONLY":
+        rows = existing.get("behavioral_pattern_candidates") if isinstance(existing.get("behavioral_pattern_candidates"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "behavioral_score_driving_allowed": False,
+            "source": "behavioral_intelligence_layer_json",
+            "source_detail": str(BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_behavioral_intelligence_layer_report(
+        wallet_ecosystem_intelligence=state.get("wallet_ecosystem_intelligence") if isinstance(state.get("wallet_ecosystem_intelligence"), dict) else {},
+        market_regime_detection=state.get("market_regime_detection") if isinstance(state.get("market_regime_detection"), dict) else {},
+        validation_proof_layer=state.get("validation_proof_layer") if isinstance(state.get("validation_proof_layer"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "behavioral_intelligence_layer_computed",
+        "source_detail": str(BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("behavioral_pattern_candidates") if isinstance(report.get("behavioral_pattern_candidates"), list) else []),
+    }
+
+
 def build_productization_operator_workflow_payload(state=None):
     state = state or read_state_files()
     existing = state.get("productization_operator_workflow")
@@ -5064,6 +5099,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_alerting_dashboard_layer_payload())
     if path == "/api/validation-proof-layer":
         return json_response(build_validation_proof_layer_payload())
+    if path == "/api/behavioral-intelligence-layer":
+        return json_response(build_behavioral_intelligence_layer_payload())
     if path == "/api/productization-operator-workflow":
         return json_response(build_productization_operator_workflow_payload())
     if path == "/api/wallet-review-apply":

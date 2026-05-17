@@ -7663,3 +7663,48 @@ Verification:
 Remaining:
 
 - Next logical milestone is Stage 9 - Behavioral Intelligence Layer. Start joining Stage 5 ecosystem clusters with Stage 7 regime segmentation and Stage 8 validation status into review-only behavioral pattern candidates, without treating those candidates as proven edge.
+
+### 2026-05-17 - Completed Stage 9 Behavioral Intelligence Layer
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/behavioral_intelligence_layer.py`
+- `tests/test_behavioral_intelligence_layer.py`
+- `tests/test_desktop_api.py`
+- `utils/build_behavioral_intelligence_layer.py`
+
+What changed:
+
+- Added a read-only Stage 9 completion report at `data/reports/behavioral_intelligence/behavioral_intelligence_layer_report.json`.
+- Added `/api/behavioral-intelligence-layer`.
+- The report joins Stage 5 wallet ecosystem clusters, Stage 7 market regime context, and Validation / Proof limitations into behavioral pattern candidates.
+- Stage 9 is now complete as review-only infrastructure. It can surface repeated behavioral structures for research review, but it cannot auto-promote, auto-demote, mutate wallet lists, drive wallet trust, enable live execution, or claim edge.
+
+Current local Stage 9 report:
+
+- Stage 9 completion: `100%`
+- Pattern candidates: `7`
+- Cluster candidates ingested: `7`
+- Regime rows ingested: `1`
+- Dominant regime: `unknown`
+- Known 15m outcomes: `2`
+- Behavioral data readiness: `0%`
+- Proof readiness: `0%`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Verification:
+
+- Wrote failing tests first for the Stage 9 report and desktop API route.
+- Focused Stage 9 tests passed.
+- `utils/build_behavioral_intelligence_layer.py` generated the report successfully.
+- `/api/behavioral-intelligence-layer` is wired as read-only and keeps `live_execution_locked=true`, `wallet_list_mutated=false`, `auto_trust_mutation_allowed=false`, and `behavioral_score_driving_allowed=false`.
+
+Remaining:
+
+- Stage 10 remains intentionally deferred because proof readiness is still `0%`.
+- Next logical milestone is Stage 1 - Live Signal Foundation at `90%`: close the remaining live-signal ingestion/source-of-truth reliability gap so forward evidence collection is stronger before any risk automation is considered.
