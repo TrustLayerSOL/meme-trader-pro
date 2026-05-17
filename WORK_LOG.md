@@ -8608,3 +8608,63 @@ Interpretation:
 Remaining:
 
 - Next logical step is to run one manual archival provider probe using a saved raw `getAccountInfo` response for the selected mint/decision slot, then import nothing until the report marks it ready for manual review.
+
+### 2026-05-17 - Added Archival Provider Probe Request Bundle
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Account-State Provider Probe Request Bundle: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_account_state_provider_probe_request.py`
+- `tests/test_desktop_api.py`
+- `utils/build_archival_account_state_provider_probe_request.py`
+- `wallets/archival_account_state_provider_probe_request.py`
+
+What changed:
+
+- Added `data/reports/historical_backfill/archival_account_state_provider_probe_request_report.json`.
+- Added `/api/archival-account-state-provider-probe-request`.
+- The report prepares the exact manual request bundle for the selected provider probe target.
+- It includes:
+  - token mint,
+  - decision slot,
+  - max acceptable provider context slot,
+  - standard `getAccountInfo` payload for the mint,
+  - required provider capabilities,
+  - raw response save path,
+  - validation command,
+  - acceptance criteria.
+- It performs no provider call and stores no provider URL, API key, bearer token, or secret-bearing field.
+
+Current local report:
+
+- request bundles prepared: `1`,
+- blocked request bundles: `0`,
+- provider calls performed: `0`,
+- token: `4BBPVEzF9AyVwt8Zog1z41ATKbZMVqah738sTYwvpump`,
+- decision slot: `419937176`,
+- max acceptable context slot: `419937176`,
+- raw response save path: `data/reports/historical_backfill/raw_provider_responses/archival_account_state_provider_probe_raw.json`,
+- supply snapshot imports: `0`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Interpretation:
+
+- The operator now has a clean handoff artifact for getting a historical account-state response from an archival provider.
+- A standard current-state RPC response is expected to fail if its `context.slot` is newer than the decision slot.
+- This keeps provider use as validation/fallback while preserving the long-term goal of replay-safe proprietary reconstruction.
+
+Remaining:
+
+- Next logical step is to capture one raw provider response into the requested path and rerun `utils/build_archival_account_state_provider_probe.py` so the probe can accept or reject it.
