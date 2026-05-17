@@ -8372,3 +8372,61 @@ Interpretation:
 Remaining:
 
 - Next logical step is to add a small progress report for checkpoint depth across all `34` mint targets, then decide whether to keep deep-paginating sampled mints or pause for an archival account-state provider.
+
+### 2026-05-17 - Added Archival Mint History Progress Report
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint History Progress Report: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_history_progress.py`
+- `tests/test_desktop_api.py`
+- `utils/build_archival_mint_history_progress.py`
+- `wallets/archival_mint_history_progress.py`
+
+What changed:
+
+- Added `data/reports/historical_backfill/archival_mint_history_progress_report.json`.
+- Added `/api/archival-mint-history-progress`.
+- The report summarizes checkpoint depth across all archival mint-history targets.
+- It shows which tokens:
+  - have no checkpoint yet,
+  - have checkpointed signatures but have not reached the decision slot,
+  - have reached the decision slot but not account-history start,
+  - have complete signature history.
+
+Current local report:
+
+- requirements scanned: `34`,
+- checkpointed tokens: `3`,
+- tokens missing checkpoint: `31`,
+- tokens reached decision slot: `1`,
+- tokens with complete history: `0`,
+- status counts:
+  - `checkpoint_before_decision_not_reached`: `2`,
+  - `checkpoint_reached_decision_slot_but_not_history_start`: `1`,
+  - `no_signature_checkpoint`: `31`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Interpretation:
+
+- One sampled token has checkpoint depth past the decision slot, but it still has not proven complete account history from account start, so it remains blocked.
+- Two sampled tokens need more pagination just to reach the decision slot.
+- Thirty-one mint targets have not been paginated yet.
+
+Remaining:
+
+- Next logical step is either:
+  - continue bounded pagination on the `3` sampled targets until at least one proves complete or clearly becomes too expensive, or
+  - pause this home-built reconstruction lane and evaluate a true archival account-state provider for historical mint supply snapshots.
