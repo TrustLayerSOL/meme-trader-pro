@@ -8004,3 +8004,59 @@ Verification:
 Remaining:
 
 - Next logical step is to create the bounded archival mint-account snapshot collector/import source for the `34` token requirements, then rerun the importer. Until those snapshots exist, proof readiness must remain blocked.
+
+### 2026-05-17 - Added Archival Mint Snapshot Collection Source
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint Snapshot Collection Source: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_snapshot_collector.py`
+- `tests/test_desktop_api.py`
+- `utils/collect_archival_mint_supply_snapshots.py`
+- `wallets/archival_mint_snapshot_collector.py`
+
+What changed:
+
+- Added a review-only archival mint snapshot collection lane at `data/reports/historical_backfill/archival_mint_supply_snapshot_collection_report.json`.
+- Added `/api/archival-mint-snapshot-collection`.
+- The collector prepares provider-ready `getAccountInfo` requests for the `34` token-level historical mint-supply requirements.
+- Dry-run is the default. Provider execution requires explicit `--execute` plus an archival RPC URL.
+- Fetched snapshots are accepted only when the provider response context slot is at or before the earliest affected decision slot.
+- Standard/current RPC snapshots after the decision slot are blocked as `snapshot_slot_after_decision_slot`.
+- Current local dry-run report:
+  - requirements scanned: `34`,
+  - requests prepared: `34`,
+  - pending archival provider: `34`,
+  - snapshots collected: `0`,
+  - tokens affected: `34`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`.
+- Downstream archival supply evidence remains honestly blocked:
+  - candidate rows: `86`,
+  - recovered supply rows: `0`,
+  - blocked missing archival snapshot rows: `86`,
+  - tokens affected: `34`,
+  - wallets affected: `23`.
+
+Verification:
+
+- Wrote failing tests first for the archival mint snapshot collector and desktop API route.
+- Focused collector tests passed.
+- Focused desktop API route tests passed.
+- Generated the dry-run collection report.
+- Regenerated archival supply evidence and score-ready market-context reports.
+
+Remaining:
+
+- Next logical step is to choose or build a true archival Solana mint-account snapshot source that can answer historical account state at or before a requested slot. Until that exists, the `86` near-score-ready rows must remain blocked from proof readiness and wallet trust.
