@@ -84,6 +84,13 @@ def preserve_raw_response(path: Path, raw_response: dict[str, Any] | None) -> bo
     return True
 
 
+def read_saved_raw_response(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    raw = read_json(path, None)
+    return raw if isinstance(raw, dict) else None
+
+
 def write_archival_account_state_provider_response_capture_report(
     *,
     request_bundle_path: Path | str = DEFAULT_REQUEST_BUNDLE_PATH,
@@ -93,6 +100,7 @@ def write_archival_account_state_provider_response_capture_report(
     rpc_url: str | None = None,
     rpc_post=post_json,
     timeout: int = 10,
+    validate_saved_raw_response: bool = False,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     request_bundle_path = Path(request_bundle_path)
@@ -106,7 +114,10 @@ def write_archival_account_state_provider_response_capture_report(
     provider_call_performed = False
     raw_provider_response_preserved = False
     bundle = get_request_bundle(request_report)
-    if execute and resolved_rpc_url and bundle:
+    if validate_saved_raw_response and not execute:
+        raw_provider_response = read_saved_raw_response(raw_response_output_path)
+        raw_provider_response_preserved = raw_provider_response is not None
+    elif execute and resolved_rpc_url and bundle:
         provider_call_performed = True
         raw_provider_response, provider_call_error = execute_provider_request(
             rpc_url=resolved_rpc_url,
@@ -125,6 +136,7 @@ def write_archival_account_state_provider_response_capture_report(
         timeout=timeout,
         raw_provider_response=raw_provider_response,
         raw_provider_response_preserved=raw_provider_response_preserved,
+        validate_saved_raw_response=validate_saved_raw_response,
         generated_at=generated_at,
     )
     if provider_call_performed and raw_provider_response is None:
@@ -157,6 +169,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--execute", action="store_true", help="Opt in to one provider call. Default writes a blocked/dry-run report.")
     parser.add_argument("--rpc-url", default=None)
     parser.add_argument("--timeout", type=int, default=10)
+    parser.add_argument(
+        "--validate-saved-raw-response",
+        action="store_true",
+        help="Validate an already saved raw provider response without calling a provider.",
+    )
     return parser.parse_args(argv)
 
 
@@ -170,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         execute=args.execute,
         rpc_url=args.rpc_url,
         timeout=args.timeout,
+        validate_saved_raw_response=args.validate_saved_raw_response,
     )
     print(json.dumps(report["summary"], indent=2, sort_keys=True))
     return 0

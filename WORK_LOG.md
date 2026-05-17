@@ -8717,3 +8717,48 @@ Interpretation:
 Remaining:
 
 - Next logical step is to configure or provide a real archival account-state provider endpoint or saved raw response, run one execute capture, then review the preserved response before any supply evidence import is considered.
+
+### 2026-05-17 - Added Saved Raw Provider Response Validation Path
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Saved Raw Provider Response Validation Path: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `tests/test_archival_account_state_provider_response_capture.py`
+- `utils/capture_archival_account_state_provider_response.py`
+- `wallets/archival_account_state_provider_response_capture.py`
+
+What changed:
+
+- Added `--validate-saved-raw-response` to the archival provider response capture utility.
+- A saved raw provider JSON response can now be validated without configuring or calling a provider endpoint.
+- Missing saved raw response files now block with `blocked_missing_saved_raw_provider_response`.
+- Valid saved raw responses still run through the same decision-slot and parsed-mint validation rules.
+- Provider calls remain `0`, supply imports remain `0`, and wallet trust/list mutations remain `0`.
+
+Current local report:
+
+- capture status: `blocked_missing_saved_raw_provider_response`,
+- saved raw validation requested: `true`,
+- provider calls performed: `0`,
+- raw responses preserved: `0`,
+- snapshots ready for manual review: `0`,
+- supply snapshot imports: `0`.
+
+Interpretation:
+
+- The system can now support both operator workflows:
+  - call a configured archival endpoint once, or
+  - paste/save a raw provider response file and validate it offline.
+- Current progress is blocked only because no real saved raw historical response exists yet.
+
+Remaining:
+
+- Next logical step is to obtain one real archival response for `4BBPVEzF9AyVwt8Zog1z41ATKbZMVqah738sTYwvpump` at or before slot `419937176`, save it to the requested raw response path, and run saved-response validation.

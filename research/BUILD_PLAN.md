@@ -729,7 +729,7 @@ Next actions:
 - [~] Decision ledger remains useful only for wallet-signal lineage and outcome attribution.
 - [x] Runtime health and per-source freshness indicators.
 - [x] Existing wallet discovery, paper-watch, lifecycle review, guarded apply, and behavior rollups.
-- [x] Archival provider response capture lane: request bundle, optional execute capture, raw response preservation, probe validation, and secret-free read-only reporting. Current local status is blocked until a real archival account-state endpoint or saved raw response is supplied.
+- [x] Archival provider response capture lane: request bundle, optional execute capture, saved raw response validation, raw response preservation, probe validation, and secret-free read-only reporting. Current local status is blocked until a real archival account-state endpoint response or saved raw response is supplied.
 
 ## Change Log
 

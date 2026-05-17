@@ -168,6 +168,66 @@ class ArchivalAccountStateProviderResponseCaptureTests(unittest.TestCase):
             self.assertNotIn("secret.example", rendered)
             self.assertNotIn("api-key", rendered)
 
+    def test_saved_raw_response_can_be_validated_without_provider_endpoint(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw_path = root / "raw" / "provider_response.json"
+            report_path = root / "capture_report.json"
+            request_path = root / "request_report.json"
+            request_path.write_text(
+                json.dumps(request_report(raw_response_save_path=str(raw_path))),
+                encoding="utf-8",
+            )
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_path.write_text(json.dumps(mint_response(context_slot=999)), encoding="utf-8")
+
+            report = write_archival_account_state_provider_response_capture_report(
+                request_bundle_path=request_path,
+                report_path=report_path,
+                raw_response_path=raw_path,
+                execute=False,
+                rpc_url=None,
+                validate_saved_raw_response=True,
+                generated_at=123.0,
+            )
+
+            self.assertEqual(report["capture_status"], "provider_response_captured_ready_for_manual_review")
+            self.assertEqual(report["validation_status"], "provider_snapshot_ready_for_manual_review")
+            self.assertFalse(report["provider_endpoint_configured"])
+            self.assertFalse(report["provider_call_performed"])
+            self.assertTrue(report["raw_provider_response_preserved"])
+            self.assertEqual(report["summary"]["provider_calls_performed"], 0)
+            self.assertEqual(report["summary"]["raw_responses_preserved"], 1)
+            self.assertFalse(report["supply_snapshot_import_allowed"])
+            self.assertFalse(report["supply_snapshot_imported"])
+
+    def test_missing_saved_raw_response_blocks_without_provider_call(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw_path = root / "raw" / "missing_response.json"
+            report_path = root / "capture_report.json"
+            request_path = root / "request_report.json"
+            request_path.write_text(
+                json.dumps(request_report(raw_response_save_path=str(raw_path))),
+                encoding="utf-8",
+            )
+
+            report = write_archival_account_state_provider_response_capture_report(
+                request_bundle_path=request_path,
+                report_path=report_path,
+                raw_response_path=raw_path,
+                execute=False,
+                rpc_url=None,
+                validate_saved_raw_response=True,
+                generated_at=123.0,
+            )
+
+            self.assertEqual(report["capture_status"], "blocked_missing_saved_raw_provider_response")
+            self.assertIn("missing_saved_raw_provider_response", report["blockers"])
+            self.assertFalse(report["provider_call_performed"])
+            self.assertFalse(report["raw_provider_response_preserved"])
+            self.assertEqual(report["summary"]["blocked_captures"], 1)
+
     def test_missing_request_bundle_blocks_cleanly(self):
         report = build_archival_account_state_provider_response_capture_report(
             request_report={"mode": "ARCHIVAL_ACCOUNT_STATE_PROVIDER_REQUEST_BUNDLE_REVIEW_ONLY"},

@@ -97,6 +97,7 @@ def build_archival_account_state_provider_response_capture_report(
     timeout: int = 10,
     raw_provider_response: dict[str, Any] | None = None,
     raw_provider_response_preserved: bool = False,
+    validate_saved_raw_response: bool = False,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     bundle = get_request_bundle(request_report)
@@ -110,6 +111,16 @@ def build_archival_account_state_provider_response_capture_report(
     if not bundle:
         capture_status = "blocked_missing_request_bundle"
         blockers.append("missing_request_bundle")
+    elif validate_saved_raw_response and raw_provider_response is not None:
+        validation_status, validation_blockers, validation = validate_raw_provider_response(
+            raw_provider_response=raw_provider_response,
+            probe_target=probe_target_from_bundle(bundle),
+        )
+        blockers.extend(validation_blockers)
+        capture_status = capture_status_from_validation(validation_status)
+    elif validate_saved_raw_response and not execute:
+        capture_status = "blocked_missing_saved_raw_provider_response"
+        blockers.append("missing_saved_raw_provider_response")
     elif not endpoint_configured:
         capture_status = "blocked_missing_archival_provider_rpc_url"
         blockers.append("missing_archival_provider_rpc_url")
@@ -162,6 +173,7 @@ def build_archival_account_state_provider_response_capture_report(
         "supply_snapshot_import_allowed": False,
         "supply_snapshot_imported": False,
         "execute_requested": bool(execute),
+        "validate_saved_raw_response_requested": bool(validate_saved_raw_response),
         "provider_endpoint_configured": endpoint_configured,
         "provider_call_performed": bool(provider_call_performed),
         "raw_provider_response_preserved": bool(raw_provider_response_preserved),
