@@ -32,6 +32,7 @@ from core.runtime_status import DEFAULT_STATUS, load_status
 from core.settings_manager import load_settings as load_bot_settings
 from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
+from research.alerting_dashboard_layer import build_alerting_dashboard_layer_report
 from research.evidence_layer_completion import build_evidence_layer_completion_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
 from research.similar_rug_patterns import build_similar_rug_patterns_report
@@ -97,6 +98,7 @@ REPLAY_REALISM_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "historical_b
 STAGE8_VALIDATION_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "stage8_validation_readiness_report.json"
 REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replayable_token_timelines_report.json"
 SIMILAR_RUG_PATTERNS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "similar_rug_patterns_report.json"
+ALERTING_DASHBOARD_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "dashboard" / "alerting_dashboard_layer_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -318,6 +320,7 @@ def read_state_files():
         "stage8_validation_readiness": read_json(STAGE8_VALIDATION_READINESS_REPORT_FILE, {}),
         "replayable_token_timelines": read_json(REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE, {}),
         "similar_rug_patterns": read_json(SIMILAR_RUG_PATTERNS_REPORT_FILE, {}),
+        "alerting_dashboard_layer": read_json(ALERTING_DASHBOARD_LAYER_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -4129,6 +4132,36 @@ def build_similar_rug_patterns_payload(state=None):
     }
 
 
+def build_alerting_dashboard_layer_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("alerting_dashboard_layer")
+    if isinstance(existing, dict) and existing.get("mode") == "ALERTING_DASHBOARD_LAYER_REVIEW_ONLY":
+        rows = existing.get("status_cards") if isinstance(existing.get("status_cards"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "alerting_dashboard_layer_json",
+            "source_detail": str(ALERTING_DASHBOARD_LAYER_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_alerting_dashboard_layer_report(
+        evidence_layer=state.get("evidence_layer_completion") if isinstance(state.get("evidence_layer_completion"), dict) else {},
+        replayable_timelines=state.get("replayable_token_timelines") if isinstance(state.get("replayable_token_timelines"), dict) else {},
+        similar_rug_patterns=state.get("similar_rug_patterns") if isinstance(state.get("similar_rug_patterns"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "alerting_dashboard_layer_computed",
+        "source_detail": str(ALERTING_DASHBOARD_LAYER_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("status_cards") if isinstance(report.get("status_cards"), list) else []),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4793,6 +4826,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_replayable_token_timelines_payload())
     if path == "/api/similar-rug-patterns":
         return json_response(build_similar_rug_patterns_payload())
+    if path == "/api/alerting-dashboard-layer":
+        return json_response(build_alerting_dashboard_layer_payload())
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

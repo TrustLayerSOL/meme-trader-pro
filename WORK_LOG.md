@@ -44,6 +44,56 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-16 update - Alerting / Dashboard Layer Gate:
+
+Active milestone:
+
+- Alerting / Dashboard Layer product-health lane
+
+Milestone completion:
+
+- Alerting / Dashboard Layer: `100%`
+- Research data readiness: `0%`
+
+Changed files:
+
+- `research/alerting_dashboard_layer.py`
+- `utils/build_alerting_dashboard_layer.py`
+- `desktop_api.py`
+- `tests/test_alerting_dashboard_layer.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/dashboard/alerting_dashboard_layer_report.json`
+
+What changed:
+
+- Added a review-only Alerting / Dashboard Layer status report.
+- Added `/api/alerting-dashboard-layer`.
+- Current local report:
+  - alerting/dashboard layer completion: `100%`,
+  - research data readiness: `0%`,
+  - completed upstream gate count: `3`,
+  - status cards: `3`,
+  - visible blocker categories: `12`.
+- The operator alert layer now surfaces Evidence Layer, Replayable Token Timelines, and Similar-Rug Pattern Matching in one read-only payload.
+- This is an operator-status layer only. It does not add trading automation, wallet-list mutation, or proof of edge.
+- No wallet-list changes were applied. Live execution remains locked.
+
+Verification:
+
+- Red tests first for missing alerting-dashboard module and API route.
+- `./trading_env/bin/python -m unittest tests.test_alerting_dashboard_layer tests.test_desktop_api.DesktopApiTests.test_alerting_dashboard_layer_payload_is_review_only tests.test_desktop_api.DesktopApiTests.test_alerting_dashboard_layer_route_is_read_only`
+- `./trading_env/bin/python utils/build_alerting_dashboard_layer.py`
+
+Remaining risk / next step:
+
+- The next incomplete product-health lane is Validation / Proof Layer at `15%`. The next grounded build step is to turn the visible blocker categories into a proof-readiness checklist without changing strategy logic or enabling execution.
+
 2026-05-16 update - Similar-Rug Pattern Matching Gate:
 
 Active milestone:
