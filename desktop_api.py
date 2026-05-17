@@ -34,6 +34,7 @@ from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from research.alerting_dashboard_layer import build_alerting_dashboard_layer_report
 from research.behavioral_intelligence_layer import build_behavioral_intelligence_layer_report
+from research.behavioral_trust_validation import build_behavioral_trust_validation_report
 from research.evidence_layer_completion import build_evidence_layer_completion_report
 from research.live_signal_foundation import build_live_signal_foundation_report
 from research.market_regime_detection import build_market_regime_detection_report
@@ -119,6 +120,7 @@ SIMILAR_RUG_PATTERNS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backf
 ALERTING_DASHBOARD_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "dashboard" / "alerting_dashboard_layer_report.json"
 VALIDATION_PROOF_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "validation_proof_layer_report.json"
 BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_intelligence" / "behavioral_intelligence_layer_report.json"
+BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_validation" / "behavioral_trust_validation_report.json"
 PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE = ROOT / "data" / "reports" / "productization" / "operator_workflow_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
@@ -374,6 +376,7 @@ def read_state_files():
         "alerting_dashboard_layer": read_json(ALERTING_DASHBOARD_LAYER_REPORT_FILE, {}),
         "validation_proof_layer": read_json(VALIDATION_PROOF_LAYER_REPORT_FILE, {}),
         "behavioral_intelligence_layer": read_json(BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE, {}),
+        "behavioral_trust_validation": read_json(BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE, {}),
         "productization_operator_workflow": read_json(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
@@ -4421,6 +4424,39 @@ def build_behavioral_intelligence_layer_payload(state=None):
     }
 
 
+def build_behavioral_trust_validation_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("behavioral_trust_validation")
+    if isinstance(existing, dict) and existing.get("mode") == "BEHAVIORAL_TRUST_VALIDATION_REVIEW_ONLY":
+        rows = existing.get("pattern_validations") if isinstance(existing.get("pattern_validations"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "behavioral_trust_changes_allowed": False,
+            "source": "behavioral_trust_validation_json",
+            "source_detail": str(BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_behavioral_trust_validation_report(
+        behavioral_intelligence_layer=state.get("behavioral_intelligence_layer") if isinstance(state.get("behavioral_intelligence_layer"), dict) else {},
+        validation_proof_layer=state.get("validation_proof_layer") if isinstance(state.get("validation_proof_layer"), dict) else {},
+        stage8_validation=state.get("stage8_validation_readiness") if isinstance(state.get("stage8_validation_readiness"), dict) else {},
+        evidence_layer=state.get("evidence_layer_completion") if isinstance(state.get("evidence_layer_completion"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "behavioral_trust_validation_computed",
+        "source_detail": str(BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("pattern_validations") if isinstance(report.get("pattern_validations"), list) else []),
+    }
+
+
 def build_productization_operator_workflow_payload(state=None):
     state = state or read_state_files()
     existing = state.get("productization_operator_workflow")
@@ -5133,6 +5169,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_validation_proof_layer_payload())
     if path == "/api/behavioral-intelligence-layer":
         return json_response(build_behavioral_intelligence_layer_payload())
+    if path == "/api/behavioral-trust-validation":
+        return json_response(build_behavioral_trust_validation_payload())
     if path == "/api/productization-operator-workflow":
         return json_response(build_productization_operator_workflow_payload())
     if path == "/api/wallet-review-apply":

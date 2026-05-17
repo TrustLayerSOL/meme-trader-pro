@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 ## Current Work
 
@@ -43,6 +43,57 @@ Highest-value active workstreams:
 - Replay visibility reports for rejected/no-trade decisions.
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
+
+2026-05-17 update - Behavioral Trust Validation Gate:
+
+Active milestone:
+
+- Behavioral trust validation / proof-readiness blocker lane
+
+Milestone completion:
+
+- Behavioral Trust Validation Gate: `100%`
+- Behavioral trust justified: `false`
+- Stage 10 Semi-Autonomous Risk Engine: `0%` and intentionally deferred
+
+Changed files:
+
+- `research/behavioral_trust_validation.py`
+- `utils/build_behavioral_trust_validation.py`
+- `desktop_api.py`
+- `tests/test_behavioral_trust_validation.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/behavioral_validation/behavioral_trust_validation_report.json`
+
+What changed:
+
+- Added a read-only behavioral trust validation report.
+- Added `/api/behavioral-trust-validation`.
+- The report validates Stage 9 behavioral pattern candidates against proof readiness, known outcome density, fillability, and score-ready decision-time market context.
+- Current local report:
+  - behavioral validation completion: `100%`,
+  - behavioral trust justified: `false`,
+  - validated behavioral patterns: `7`,
+  - trust-ready patterns: `0`,
+  - proof readiness: `0%`,
+  - known 15m outcomes: `2` / required `30`,
+  - fillable rate: `6%` / required `70%`,
+  - score-ready market-context records: `0`,
+  - blocked issue categories: `4`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`.
+- This is intentionally a negative evidence gate. It blocks wallet trust when replay-safe proof quality is insufficient.
+- No wallet-list changes were applied. Live execution remains locked.
+
+Remaining risk / next step:
+
+- The next grounded milestone is proof-readiness blocker reduction, starting with outcome-label density and score-ready decision-time market-context recovery. Stage 10 remains blocked until behavioral trust can be justified under replay-safe evidence.
 
 2026-05-16 update - Validation / Proof Layer Gate:
 
