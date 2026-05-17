@@ -8262,3 +8262,51 @@ Downstream result:
 Remaining:
 
 - Next logical step is to raise `max_pages_per_mint` only for a tiny target batch and see whether any low-history mint can reach complete pagination. If all sampled mints still hit the page cap, this lane will likely need either deeper pagination runs or a true archival account-state provider.
+
+### 2026-05-17 - Ran Deeper 3-Target Mint History Probe
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint History Collector: `100%`
+- Deep Bounded Mint Probe: `100%`
+
+Probe settings:
+
+- target limit: `3`,
+- signature page limit: `100`,
+- max pages per mint: `10`,
+- max transactions per mint: `250`.
+
+Result:
+
+- requirements available: `34`,
+- requirements scanned: `3`,
+- signatures fetched per sampled mint: `1000`,
+- RPC failures: `0`,
+- mint histories complete: `0`,
+- block reason: `signature_page_limit_reached`,
+- raw transactions preserved: `0`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Interpretation:
+
+- The RPC path is usable.
+- Sampled mint accounts have high activity and still require deeper pagination than `1000` signatures to prove complete account history.
+- One sampled mint crossed earlier than the decision slot, but the account history still did not prove complete to the beginning of the mint account. It remains blocked, which is correct for replay-safe supply reconstruction.
+
+Downstream result:
+
+- Reran archival mint supply reconstruction after the deeper probe.
+- Reconstruction remained blocked:
+  - requirements scanned: `34`,
+  - snapshots reconstructed: `0`,
+  - blocked incomplete mint history: `34`.
+
+Remaining:
+
+- Next logical step is to add a resumable cursor/checkpoint mode before attempting deeper pagination. Without resume support, repeated deeper runs would waste RPC calls by refetching the same signature pages.
