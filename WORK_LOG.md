@@ -8430,3 +8430,71 @@ Remaining:
 - Next logical step is either:
   - continue bounded pagination on the `3` sampled targets until at least one proves complete or clearly becomes too expensive, or
   - pause this home-built reconstruction lane and evaluate a true archival account-state provider for historical mint supply snapshots.
+
+### 2026-05-17 - Added Archival Mint Pagination Planner
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint Pagination Planner: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_pagination_planner.py`
+- `tests/test_desktop_api.py`
+- `utils/build_archival_mint_pagination_plan.py`
+- `wallets/archival_mint_pagination_planner.py`
+
+What changed:
+
+- Added `data/reports/historical_backfill/archival_mint_pagination_plan_report.json`.
+- Added `/api/archival-mint-pagination-plan`.
+- The planner turns mint-history checkpoint progress into concrete next actions:
+  - initial bounded pagination,
+  - continue toward decision slot,
+  - continue toward account-history start,
+  - run supply reconstruction when complete,
+  - consider archival account-state provider when local pagination is getting expensive.
+
+Current local planner result:
+
+- tokens planned: `34`,
+- initial pagination tokens: `31`,
+- continue pagination tokens: `2`,
+- provider recommended tokens: `1`,
+- complete history tokens: `0`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Downstream result:
+
+- Reran archival mint supply reconstruction:
+  - requirements scanned: `34`,
+  - snapshots reconstructed: `0`,
+  - blocked incomplete mint history: `34`.
+- Reran archival supply evidence:
+  - candidate rows: `86`,
+  - supply recovered records: `0`,
+  - blocked missing archival snapshot records: `86`.
+- Reran score-ready market context:
+  - records scanned: `643`,
+  - score-ready records: `0`,
+  - near-score-ready records: `86`,
+  - price-missing rows: `442`,
+  - liquidity-missing rows: `115`.
+
+Interpretation:
+
+- The local reconstruction lane is working safely but remains blocked by incomplete mint histories.
+- The planner makes the tradeoff explicit: most tokens are untouched, two sampled tokens need more pagination to reach decision slot, and one token has crossed decision slot but still looks expensive enough to justify evaluating an archival account-state provider.
+
+Remaining:
+
+- Next logical step is provider evaluation for historical mint-account supply snapshots, while optionally continuing very small pagination batches for untouched tokens to find any low-history mints.

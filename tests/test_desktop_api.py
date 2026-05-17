@@ -1898,6 +1898,34 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_archival_mint_pagination_plan_payload_is_review_only(self):
+        payload = desktop_api.build_archival_mint_pagination_plan_payload({
+            "archival_mint_pagination_plan": {
+                "mode": "ARCHIVAL_MINT_PAGINATION_PLAN_REVIEW_ONLY",
+                "summary": {"provider_recommended_tokens": 1},
+                "rows": [{"token_mint": "MintA", "recommended_action": "CONSIDER_ARCHIVAL_ACCOUNT_STATE_PROVIDER"}],
+            }
+        })
+
+        self.assertEqual(payload["mode"], "ARCHIVAL_MINT_PAGINATION_PLAN_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["review_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertFalse(payload["auto_trust_mutation_allowed"])
+        self.assertFalse(payload["wallet_trust_mutation_allowed"])
+        self.assertEqual(payload["count"], 1)
+
+    def test_archival_mint_pagination_plan_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_archival_mint_pagination_plan_payload", return_value={"mode": "ARCHIVAL_MINT_PAGINATION_PLAN_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/archival-mint-pagination-plan")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({
