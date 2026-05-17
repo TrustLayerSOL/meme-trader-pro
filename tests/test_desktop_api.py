@@ -2011,6 +2011,36 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_archival_account_state_provider_response_capture_payload_is_review_only(self):
+        payload = desktop_api.build_archival_account_state_provider_response_capture_payload({
+            "archival_account_state_provider_response_capture": {
+                "mode": "ARCHIVAL_ACCOUNT_STATE_PROVIDER_RESPONSE_CAPTURE_REVIEW_ONLY",
+                "summary": {"provider_calls_performed": 0},
+                "capture_status": "blocked_missing_archival_provider_rpc_url",
+            }
+        })
+
+        self.assertEqual(payload["mode"], "ARCHIVAL_ACCOUNT_STATE_PROVIDER_RESPONSE_CAPTURE_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["review_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["provider_call_performed"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertFalse(payload["auto_trust_mutation_allowed"])
+        self.assertFalse(payload["wallet_trust_mutation_allowed"])
+        self.assertFalse(payload["supply_snapshot_import_allowed"])
+        self.assertFalse(payload["supply_snapshot_imported"])
+
+    def test_archival_account_state_provider_response_capture_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_archival_account_state_provider_response_capture_payload", return_value={"mode": "ARCHIVAL_ACCOUNT_STATE_PROVIDER_RESPONSE_CAPTURE_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/archival-account-state-provider-response-capture")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({

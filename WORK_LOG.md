@@ -8668,3 +8668,52 @@ Interpretation:
 Remaining:
 
 - Next logical step is to capture one raw provider response into the requested path and rerun `utils/build_archival_account_state_provider_probe.py` so the probe can accept or reject it.
+
+### 2026-05-17 - Added Archival Provider Response Capture Lane
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Account-State Provider Response Capture Lane: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_account_state_provider_response_capture.py`
+- `tests/test_desktop_api.py`
+- `utils/capture_archival_account_state_provider_response.py`
+- `wallets/archival_account_state_provider_response_capture.py`
+
+What changed:
+
+- Added `/api/archival-account-state-provider-response-capture`.
+- Added a read-only capture utility that can execute one archival provider request only when an endpoint is explicitly configured.
+- The capture lane preserves a raw provider response to the request bundle path, validates it with the existing account-state probe rules, and never imports supply automatically.
+- Reports intentionally omit provider URLs and API keys; only endpoint-configured/source metadata is stored.
+- The lane blocks cleanly when no archival account-state provider URL exists.
+
+Current local report:
+
+- capture status: `blocked_missing_archival_provider_rpc_url`,
+- provider endpoint configured: `false`,
+- provider calls performed: `0`,
+- raw responses preserved: `0`,
+- snapshots ready for manual review: `0`,
+- supply snapshot imports: `0`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Interpretation:
+
+- The request-to-capture-to-validation path now exists, but no historical provider proof has been captured yet.
+- This preserves the replay-safe rule: incomplete truth is better than fake market context or current-state substitution.
+
+Remaining:
+
+- Next logical step is to configure or provide a real archival account-state provider endpoint or saved raw response, run one execute capture, then review the preserved response before any supply evidence import is considered.
