@@ -1734,6 +1734,49 @@ class PaperTraderPnlTests(unittest.TestCase):
             finally:
                 paper_trader.PAPER_TRADES_FILE = original_file
 
+    def test_open_trade_attaches_decision_time_signal_context(self):
+        with TemporaryDirectory() as tmpdir:
+            original_file = paper_trader.PAPER_TRADES_FILE
+            paper_trader.PAPER_TRADES_FILE = str(Path(tmpdir) / "paper_trades.json")
+            try:
+                trader = paper_trader.PaperTrader()
+                trader.store = NoopStore()
+                trader.wallet_performance = NoopWalletPerformance()
+                trader.engine.config["simulate_failed_fills"] = False
+
+                trade = trader.open_trade(
+                    "MintContextOpen",
+                    entry_price=1,
+                    size_usd=10,
+                    liquidity_usd=100_000,
+                    reason="context_entry",
+                    wallets=["WalletContext"],
+                    market_info={"price": 1, "liquidity": 100_000, "market_cap": 1_000_000},
+                    signal_metadata={
+                        "decision_id": "dec_context_open",
+                        "signal_type": "weighted_early_signal",
+                        "paper_lane": "main",
+                        "token_age_seconds": 45,
+                        "weighted_wallet_score": 3.2,
+                        "score": 82,
+                        "threshold": 68,
+                    },
+                )
+
+                self.assertIsNotNone(trade)
+                context = trade.get("signal_context")
+                self.assertIsInstance(context, dict)
+                self.assertEqual(context["source"], "paper_trade")
+                self.assertEqual(context["decision_id"], "dec_context_open")
+                self.assertEqual(context["signal_type"], "weighted_early_signal")
+                self.assertEqual(context["triggering_wallets"][0]["wallet"], "WalletContext")
+                self.assertEqual(context["market"]["liquidity"], 100_000)
+                self.assertEqual(context["market"]["market_cap"], 1_000_000)
+                self.assertEqual(context["market"]["token_age_seconds"], 45)
+                self.assertFalse(context["risk"].get("hard_block") is True)
+            finally:
+                paper_trader.PAPER_TRADES_FILE = original_file
+
     def test_save_state_writes_synthetic_decision_ids_for_legacy_json_trades(self):
         with TemporaryDirectory() as tmpdir:
             original_file = paper_trader.PAPER_TRADES_FILE

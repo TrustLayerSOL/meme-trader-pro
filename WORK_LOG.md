@@ -7480,3 +7480,56 @@ Verification:
 Remaining:
 
 - Next step is to move from packaging the report chain to improving the first blocked proof criterion: score-ready decision-time market context for wallet evidence rows.
+
+### 2026-05-16 - Completed Stage 2 Signal Context Layer
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `paper_trader.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/signal_context_layer.py`
+- `tests/test_core_logic.py`
+- `tests/test_desktop_api.py`
+- `tests/test_signal_context_layer.py`
+- `utils/build_signal_context_layer.py`
+
+What changed:
+
+- Added a read-only Stage 2 Signal Context Layer report at `data/reports/signal_context/signal_context_layer_report.json`.
+- Added `/api/signal-context-layer`.
+- New paper trade entries and failed paper buy attempts now attach a decision-time `signal_context` directly to the paper-trade row.
+- The Stage 2 report verifies that accepted trades, failed paper attempts, rejected signals, and wallet observation rows normalize into the shared signal outcome contract.
+- Later outcomes remain separated from decision-time context.
+- Live execution remains locked and wallet-list mutation remains blocked.
+
+Current local Stage 2 report:
+
+- Stage 2 completion: `100%`
+- Unified records: `6,042`
+- Accepted paper trades: `37`
+- Failed paper attempts: `5`
+- Rejected signals: `6,000`
+- Wallet observation records: `1,000`
+- Shared-schema records: `6,042`
+- Decision-time-safe records: `6,042`
+- Future-outcome-separated records: `6,042`
+- Canonical context-field coverage: `17%`
+- Decision-time market-context coverage: `17%`
+
+Important limitation:
+
+- Stage 2 is complete as a context integrity contract, not proof of edge. Historical context rows still need stronger market-context backfill before wallet scores can be trusted.
+
+Verification:
+
+- Wrote failing tests first for the Stage 2 report, desktop API route, and paper-trade signal-context attachment.
+- Focused Stage 2 tests passed.
+- `utils/build_signal_context_layer.py` generated the Stage 2 report successfully.
+- `/api/signal-context-layer` returned `200`, `SIGNAL_CONTEXT_LAYER_REVIEW_ONLY`, `live_execution_locked=true`, and `wallet_list_mutated=false`.
+
+Remaining:
+
+- Next step is to move from Stage 2 context integrity to the next near-complete milestone: finish Stage 4 promotion/demotion workflow hardening without automatic trust mutation.

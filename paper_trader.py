@@ -259,6 +259,16 @@ class PaperTrader:
             trade["decision_id"] = decision_id
         return trade
 
+    def attach_signal_context(self, trade):
+        if not isinstance(trade, dict):
+            return trade
+        try:
+            from research.signal_schema import build_trade_signal_context
+            trade["signal_context"] = build_trade_signal_context(trade)
+        except Exception as exc:
+            print("⚠️ Paper trade signal-context attach failed:", exc)
+        return trade
+
     def market_cap_from_info(self, market_info):
         if not isinstance(market_info, dict):
             return None
@@ -547,6 +557,8 @@ class PaperTrader:
                 "status": "failed",
                 "time": failed_time,
                 "time_iso": self.iso_time(failed_time),
+                "entry_time": failed_time,
+                "entry_time_iso": self.iso_time(failed_time),
                 "reason": result.get("reason", "buy_failed"),
                 "failure_reason": result.get("reason", "buy_failed"),
                 "fee_usd": result.get("fee_usd", 0),
@@ -561,6 +573,7 @@ class PaperTrader:
                 "signal_metadata": signal_metadata,
             }
             self.attach_decision_lineage(failed, signal_metadata)
+            self.attach_signal_context(failed)
 
             self.state.setdefault("failed_trades", []).insert(0, failed)
             self.update_stats()
@@ -639,6 +652,7 @@ class PaperTrader:
             "sells": [],
         }
         self.attach_decision_lineage(trade, signal_metadata)
+        self.attach_signal_context(trade)
 
         self.state.setdefault("open_trades", []).append(trade)
         self.record_trade_snapshot(trade, "paper_entry_opened", {

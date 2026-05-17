@@ -36,6 +36,7 @@ from research.alerting_dashboard_layer import build_alerting_dashboard_layer_rep
 from research.evidence_layer_completion import build_evidence_layer_completion_report
 from research.productization_operator_workflow import build_productization_operator_workflow_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
+from research.signal_context_layer import build_signal_context_layer_report
 from research.similar_rug_patterns import build_similar_rug_patterns_report
 from research.validation_proof_layer import build_validation_proof_layer_report
 from core.wallet_lifecycle import build_wallet_lifecycle_report
@@ -94,6 +95,7 @@ WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "wallet_backfills" /
 WALLET_EVIDENCE_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_evidence_readiness_report.json"
 WALLET_EVIDENCE_SCORECARD_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_evidence_scorecard_report.json"
 EVIDENCE_LAYER_COMPLETION_REPORT_FILE = ROOT / "data" / "reports" / "wallet_backfills" / "evidence_layer_completion_report.json"
+SIGNAL_CONTEXT_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "signal_context" / "signal_context_layer_report.json"
 ONCHAIN_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "onchain_market_context_recovery_report.json"
 ONCHAIN_SUPPLY_EVIDENCE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "onchain_supply_evidence_report.json"
 REPLAY_REALISM_READINESS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "replay_realism_readiness_report.json"
@@ -318,6 +320,7 @@ def read_state_files():
         "wallet_evidence_readiness": read_json(WALLET_EVIDENCE_READINESS_REPORT_FILE, {}),
         "wallet_evidence_scorecard": read_json(WALLET_EVIDENCE_SCORECARD_REPORT_FILE, {}),
         "evidence_layer_completion": read_json(EVIDENCE_LAYER_COMPLETION_REPORT_FILE, {}),
+        "signal_context_layer": read_json(SIGNAL_CONTEXT_LAYER_REPORT_FILE, {}),
         "onchain_market_context": read_json(ONCHAIN_MARKET_CONTEXT_REPORT_FILE, {}),
         "onchain_supply_evidence": read_json(ONCHAIN_SUPPLY_EVIDENCE_REPORT_FILE, {}),
         "replay_realism_readiness": read_json(REPLAY_REALISM_READINESS_REPORT_FILE, {}),
@@ -4073,6 +4076,34 @@ def build_evidence_layer_completion_payload(state=None):
     }
 
 
+def build_signal_context_layer_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("signal_context_layer")
+    if isinstance(existing, dict) and existing.get("mode") == "SIGNAL_CONTEXT_LAYER_REVIEW_ONLY":
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "signal_context_layer_json",
+            "source_detail": str(SIGNAL_CONTEXT_LAYER_REPORT_FILE.relative_to(ROOT)),
+        }
+    try:
+        from utils.build_wallet_outcome_ledger import build_records
+        records = build_records()
+    except Exception:
+        records = []
+    report = build_signal_context_layer_report(records)
+    return {
+        **report,
+        "read_only": True,
+        "source": "signal_context_layer_computed",
+        "source_detail": str(SIGNAL_CONTEXT_LAYER_REPORT_FILE.relative_to(ROOT)),
+    }
+
+
 def build_replayable_token_timelines_payload(state=None):
     state = state or read_state_files()
     existing = state.get("replayable_token_timelines")
@@ -4889,6 +4920,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_wallet_missing_market_context_payload(limit=limit))
     if path == "/api/evidence-layer-completion":
         return json_response(build_evidence_layer_completion_payload())
+    if path == "/api/signal-context-layer":
+        return json_response(build_signal_context_layer_payload())
     if path == "/api/replayable-token-timelines":
         return json_response(build_replayable_token_timelines_payload())
     if path == "/api/similar-rug-patterns":
