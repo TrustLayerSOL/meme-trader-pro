@@ -95,6 +95,50 @@ Remaining risk / next step:
 
 - The next grounded milestone is proof-readiness blocker reduction, starting with outcome-label density and score-ready decision-time market-context recovery. Stage 10 remains blocked until behavioral trust can be justified under replay-safe evidence.
 
+2026-05-17 update - Proof Readiness Blocker Reduction Queue:
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Proof Readiness Blocker Reduction Queue: `100%`
+- Proof readiness: `0%`
+- Behavioral trust justified: `false`
+- Stage 10 Semi-Autonomous Risk Engine: `0%` and intentionally deferred
+
+Changed files:
+
+- `research/proof_readiness_blocker_reduction.py`
+- `utils/build_proof_readiness_blocker_reduction.py`
+- `desktop_api.py`
+- `tests/test_proof_readiness_blocker_reduction.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/replay_validation/proof_readiness_blocker_reduction_report.json`
+
+What changed:
+
+- Added a read-only proof-readiness blocker reduction report.
+- Added `/api/proof-readiness-blocker-reduction`.
+- The report ranks the next work needed before behavioral trust can be justified.
+- Current local queue:
+  1. `score_ready_market_context`: `0` score-ready records across `643` affected rows, `77` target mints, and `32` wallets needing market context.
+  2. `known_15m_outcome_density`: `2` known 15m outcomes, `30` required, `28` still needed.
+  3. `fillable_rate`: `6%` current, `70%` required, `64` percentage-point gap.
+  4. `archival_supply_evidence`: `0` recovered supply rows, `643` rows needing archival mint supply.
+- The report explicitly blocks trust/list mutation and live execution.
+
+Remaining risk / next step:
+
+- The next grounded implementation step is to work the first queue item: recover or classify score-ready decision-time market context, beginning with archival supply / market-cap evidence for rows that already have price/liquidity evidence. Do not substitute current supply or current price.
+
 2026-05-16 update - Validation / Proof Layer Gate:
 
 Active milestone:

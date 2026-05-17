@@ -39,6 +39,7 @@ from research.evidence_layer_completion import build_evidence_layer_completion_r
 from research.live_signal_foundation import build_live_signal_foundation_report
 from research.market_regime_detection import build_market_regime_detection_report
 from research.productization_operator_workflow import build_productization_operator_workflow_report
+from research.proof_readiness_blocker_reduction import build_proof_readiness_blocker_reduction_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
 from research.signal_context_layer import build_signal_context_layer_report
 from research.similar_rug_patterns import build_similar_rug_patterns_report
@@ -121,6 +122,7 @@ ALERTING_DASHBOARD_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "dashboard" /
 VALIDATION_PROOF_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "validation_proof_layer_report.json"
 BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_intelligence" / "behavioral_intelligence_layer_report.json"
 BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_validation" / "behavioral_trust_validation_report.json"
+PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "proof_readiness_blocker_reduction_report.json"
 PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE = ROOT / "data" / "reports" / "productization" / "operator_workflow_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
@@ -377,6 +379,7 @@ def read_state_files():
         "validation_proof_layer": read_json(VALIDATION_PROOF_LAYER_REPORT_FILE, {}),
         "behavioral_intelligence_layer": read_json(BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE, {}),
         "behavioral_trust_validation": read_json(BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE, {}),
+        "proof_readiness_blocker_reduction": read_json(PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE, {}),
         "productization_operator_workflow": read_json(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
@@ -4457,6 +4460,42 @@ def build_behavioral_trust_validation_payload(state=None):
     }
 
 
+def build_proof_readiness_blocker_reduction_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("proof_readiness_blocker_reduction")
+    if isinstance(existing, dict) and existing.get("mode") == "PROOF_READINESS_BLOCKER_REDUCTION_REVIEW_ONLY":
+        rows = existing.get("reduction_queue") if isinstance(existing.get("reduction_queue"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "behavioral_trust_changes_allowed": False,
+            "source": "proof_readiness_blocker_reduction_json",
+            "source_detail": str(PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_proof_readiness_blocker_reduction_report(
+        behavioral_trust_validation=state.get("behavioral_trust_validation") if isinstance(state.get("behavioral_trust_validation"), dict) else {},
+        validation_proof_layer=state.get("validation_proof_layer") if isinstance(state.get("validation_proof_layer"), dict) else {},
+        stage8_validation=state.get("stage8_validation_readiness") if isinstance(state.get("stage8_validation_readiness"), dict) else {},
+        evidence_layer=state.get("evidence_layer_completion") if isinstance(state.get("evidence_layer_completion"), dict) else {},
+        replayable_token_timelines=state.get("replayable_token_timelines") if isinstance(state.get("replayable_token_timelines"), dict) else {},
+        onchain_market_context=state.get("onchain_market_context") if isinstance(state.get("onchain_market_context"), dict) else {},
+        supply_evidence=state.get("onchain_supply_evidence") if isinstance(state.get("onchain_supply_evidence"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "proof_readiness_blocker_reduction_computed",
+        "source_detail": str(PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("reduction_queue") if isinstance(report.get("reduction_queue"), list) else []),
+    }
+
+
 def build_productization_operator_workflow_payload(state=None):
     state = state or read_state_files()
     existing = state.get("productization_operator_workflow")
@@ -5171,6 +5210,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_behavioral_intelligence_layer_payload())
     if path == "/api/behavioral-trust-validation":
         return json_response(build_behavioral_trust_validation_payload())
+    if path == "/api/proof-readiness-blocker-reduction":
+        return json_response(build_proof_readiness_blocker_reduction_payload())
     if path == "/api/productization-operator-workflow":
         return json_response(build_productization_operator_workflow_payload())
     if path == "/api/wallet-review-apply":
