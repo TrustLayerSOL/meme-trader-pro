@@ -132,6 +132,45 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
         self.assertEqual(report["raw_transactions"][0]["token_mint"], "MintA")
         self.assertEqual(report["raw_transactions"][0]["source"], "archival_mint_history_collection")
 
+    def test_execute_resumes_from_signature_checkpoint(self):
+        rpc = FakeRpc(
+            signatures_by_mint={
+                "MintA": [
+                    {"signature": "SigNew", "slot": 150},
+                    {"signature": "SigDecision", "slot": 100},
+                    {"signature": "SigMint", "slot": 10},
+                ]
+            },
+            transactions_by_signature={
+                "SigDecision": tx(100, "SigDecision"),
+                "SigMint": tx(10, "SigMint"),
+            },
+        )
+
+        report = build_archival_mint_history_collection_report(
+            archival_supply_plan=plan(),
+            rpc=rpc,
+            execute=True,
+            signature_page_limit=10,
+            max_pages_per_mint=1,
+            existing_signature_checkpoint={
+                "MintA": {
+                    "next_before": "SigNew",
+                    "pagination_complete": False,
+                    "signatures": [{"signature": "SigNew", "slot": 150}],
+                }
+            },
+            generated_at=123.0,
+        )
+
+        signature_calls = [call for call in rpc.calls if call[0] == "getSignaturesForAddress"]
+        self.assertEqual(signature_calls[0][1][1]["before"], "SigNew")
+        self.assertEqual(report["summary"]["mint_histories_complete"], 1)
+        self.assertEqual(report["targets"][0]["signatures_loaded_from_checkpoint"], 1)
+        self.assertEqual(report["targets"][0]["signatures_fetched_this_run"], 2)
+        self.assertTrue(report["signature_checkpoint"]["MintA"]["pagination_complete"])
+        self.assertIsNone(report["signature_checkpoint"]["MintA"]["next_before"])
+
     def test_execute_blocks_when_page_limit_prevents_completeness_proof(self):
         rpc = FakeRpc(
             signatures_by_mint={
@@ -225,6 +264,7 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
             report_path = root / "report.json"
             raw_path = root / "raw.jsonl"
             completeness_path = root / "complete.json"
+            checkpoint_path = root / "checkpoint.json"
             plan_path.write_text(json.dumps(plan()), encoding="utf-8")
 
             report = write_archival_mint_history_collection_report(
@@ -232,6 +272,7 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
                 report_path=report_path,
                 raw_transactions_path=raw_path,
                 completeness_path=completeness_path,
+                signature_checkpoint_path=checkpoint_path,
                 rpc=rpc,
                 execute=True,
                 generated_at=123.0,
@@ -240,8 +281,10 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
             self.assertTrue(report_path.exists())
             self.assertTrue(raw_path.exists())
             self.assertTrue(completeness_path.exists())
+            self.assertTrue(checkpoint_path.exists())
             self.assertEqual(report["summary"]["mint_histories_complete"], 1)
             self.assertEqual(json.loads(completeness_path.read_text(encoding="utf-8"))["MintA"]["complete_through_slot"], 100)
+            self.assertTrue(json.loads(checkpoint_path.read_text(encoding="utf-8"))["MintA"]["pagination_complete"])
             self.assertEqual(json.loads(raw_path.read_text(encoding="utf-8").strip())["signature"], "SigMint")
 
 

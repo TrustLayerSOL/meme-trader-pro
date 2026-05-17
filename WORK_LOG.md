@@ -8310,3 +8310,65 @@ Downstream result:
 Remaining:
 
 - Next logical step is to add a resumable cursor/checkpoint mode before attempting deeper pagination. Without resume support, repeated deeper runs would waste RPC calls by refetching the same signature pages.
+
+### 2026-05-17 - Added Resumable Mint History Signature Checkpoints
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint History Collector: `100%`
+- Resumable Mint Signature Checkpoints: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_history_collector.py`
+- `utils/collect_archival_mint_history.py`
+- `wallets/archival_mint_history_collector.py`
+
+What changed:
+
+- Added resumable signature checkpoint output at `data/reports/historical_backfill/archival_mint_history_signature_checkpoint.json`.
+- Added `--signature-checkpoint-path` to the collector CLI.
+- The collector now:
+  - reads prior signatures by token mint,
+  - resumes pagination from the prior `next_before` cursor,
+  - deduplicates signatures,
+  - records signatures loaded from checkpoint,
+  - records signatures fetched in the current run,
+  - keeps completeness blocked until pagination reaches the true end of account history.
+
+Live bounded verification:
+
+- Ran two bounded 3-target execute batches.
+- First run collected `1000` signatures per sampled mint.
+- Second run loaded those `1000` checkpointed signatures per sampled mint and fetched the next `1000`.
+- Sampled mints now have `2000` checkpointed signatures each.
+- All `3` sampled mints remain blocked as `signature_page_limit_reached`.
+- RPC failures: `0`.
+- Mint histories complete: `0`.
+- Raw transactions preserved: `0`.
+- Wallet-list mutations: `0`.
+- Auto trust mutations: `0`.
+
+Downstream result:
+
+- Reran archival mint supply reconstruction.
+- Reconstruction remained blocked:
+  - requirements scanned: `34`,
+  - snapshots reconstructed: `0`,
+  - blocked incomplete mint history: `34`.
+
+Interpretation:
+
+- The recovery lane can now progress incrementally without repeatedly refetching already-seen signature pages.
+- Evidence remains conservative: checkpointed signatures alone do not unlock supply reconstruction.
+
+Remaining:
+
+- Next logical step is to add a small progress report for checkpoint depth across all `34` mint targets, then decide whether to keep deep-paginating sampled mints or pause for an archival account-state provider.
