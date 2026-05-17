@@ -47,6 +47,7 @@ from research.validation_proof_layer import build_validation_proof_layer_report
 from research.wallet_ecosystem_intelligence import build_wallet_ecosystem_intelligence_report
 from research.wallet_promotion_demotion_system import build_wallet_promotion_demotion_system_report
 from wallets.archival_mint_snapshot_collector import build_archival_mint_snapshot_collection_report
+from wallets.archival_mint_supply_reconstruction import build_archival_mint_supply_reconstruction_report
 from wallets.archival_supply_evidence import build_archival_supply_evidence_report
 from wallets.archival_supply_recovery_plan import build_archival_supply_recovery_plan
 from wallets.score_ready_market_context import build_score_ready_market_context_report
@@ -131,6 +132,7 @@ SCORE_READY_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "reports" / "historical
 ARCHIVAL_SUPPLY_RECOVERY_PLAN_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_recovery_plan.json"
 ARCHIVAL_SUPPLY_EVIDENCE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_report.json"
 ARCHIVAL_MINT_SNAPSHOT_COLLECTION_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_supply_snapshot_collection_report.json"
+ARCHIVAL_MINT_SUPPLY_RECONSTRUCTION_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_supply_reconstruction_report.json"
 PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE = ROOT / "data" / "reports" / "productization" / "operator_workflow_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
@@ -392,6 +394,7 @@ def read_state_files():
         "archival_supply_recovery_plan": read_json(ARCHIVAL_SUPPLY_RECOVERY_PLAN_REPORT_FILE, {}),
         "archival_supply_evidence": read_json(ARCHIVAL_SUPPLY_EVIDENCE_REPORT_FILE, {}),
         "archival_mint_snapshot_collection": read_json(ARCHIVAL_MINT_SNAPSHOT_COLLECTION_REPORT_FILE, {}),
+        "archival_mint_supply_reconstruction": read_json(ARCHIVAL_MINT_SUPPLY_RECONSTRUCTION_REPORT_FILE, {}),
         "productization_operator_workflow": read_json(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
@@ -4634,6 +4637,39 @@ def build_archival_mint_snapshot_collection_payload(state=None):
     }
 
 
+def build_archival_mint_supply_reconstruction_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("archival_mint_supply_reconstruction")
+    if isinstance(existing, dict) and existing.get("mode") == "ARCHIVAL_MINT_SUPPLY_RECONSTRUCTION_REVIEW_ONLY":
+        rows = existing.get("requirements") if isinstance(existing.get("requirements"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "wallet_trust_mutation_allowed": False,
+            "source": "archival_mint_supply_reconstruction_json",
+            "source_detail": str(ARCHIVAL_MINT_SUPPLY_RECONSTRUCTION_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    plan = state.get("archival_supply_recovery_plan") if isinstance(state.get("archival_supply_recovery_plan"), dict) else {}
+    report = build_archival_mint_supply_reconstruction_report(
+        archival_supply_plan=plan,
+        raw_transactions=[],
+        history_completeness={},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "archival_mint_supply_reconstruction_computed_without_complete_history",
+        "source_detail": str(ARCHIVAL_MINT_SUPPLY_RECONSTRUCTION_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("requirements") if isinstance(report.get("requirements"), list) else []),
+    }
+
+
 def build_productization_operator_workflow_payload(state=None):
     state = state or read_state_files()
     existing = state.get("productization_operator_workflow")
@@ -5358,6 +5394,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_archival_supply_evidence_payload())
     if path == "/api/archival-mint-snapshot-collection":
         return json_response(build_archival_mint_snapshot_collection_payload())
+    if path == "/api/archival-mint-supply-reconstruction":
+        return json_response(build_archival_mint_supply_reconstruction_payload())
     if path == "/api/productization-operator-workflow":
         return json_response(build_productization_operator_workflow_payload())
     if path == "/api/wallet-review-apply":

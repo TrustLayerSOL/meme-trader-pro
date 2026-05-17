@@ -8060,3 +8060,50 @@ Verification:
 Remaining:
 
 - Next logical step is to choose or build a true archival Solana mint-account snapshot source that can answer historical account state at or before a requested slot. Until that exists, the `86` near-score-ready rows must remain blocked from proof readiness and wallet trust.
+
+### 2026-05-17 - Added Mint/Burn Supply Reconstruction Gate
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint Supply Reconstruction Gate: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_supply_reconstruction.py`
+- `tests/test_desktop_api.py`
+- `utils/reconstruct_archival_mint_supply.py`
+- `wallets/archival_mint_supply_reconstruction.py`
+
+What changed:
+
+- Added a review-only mint/burn history reconstruction lane at `data/reports/historical_backfill/archival_mint_supply_reconstruction_report.json`.
+- Added `/api/archival-mint-supply-reconstruction`.
+- The reconstructor can produce compatible mint-supply snapshot rows only when complete mint/burn history is proven through the decision slot.
+- Local wallet-history raw transactions are not treated as complete mint history.
+- Helius standard `getAccountInfo` is not treated as a point-in-time historical account-state source; its documented `minContextSlot` is only a minimum evaluation slot and `changedSinceSlot` is incremental-change filtering, not historical reconstruction.
+- Current local run:
+  - requirements scanned: `34`,
+  - snapshots reconstructed: `0`,
+  - blocked incomplete mint history: `34`,
+  - tokens affected: `34`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`.
+
+Verification:
+
+- Wrote failing tests first for complete-history reconstruction, incomplete-history blocking, writer output, and desktop API route.
+- Focused reconstruction tests passed.
+- Focused desktop API route tests passed.
+- Generated the local reconstruction report from current raw artifacts.
+
+Remaining:
+
+- Next logical step is a bounded mint-history collector that fetches `getSignaturesForAddress` / `getTransaction` history for each of the `34` mint accounts, proves whether history is complete through each decision slot, and feeds only complete mint/burn histories into this reconstruction gate.
