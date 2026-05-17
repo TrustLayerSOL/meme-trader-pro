@@ -34,6 +34,7 @@ from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from research.alerting_dashboard_layer import build_alerting_dashboard_layer_report
 from research.evidence_layer_completion import build_evidence_layer_completion_report
+from research.productization_operator_workflow import build_productization_operator_workflow_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
 from research.similar_rug_patterns import build_similar_rug_patterns_report
 from research.validation_proof_layer import build_validation_proof_layer_report
@@ -101,6 +102,7 @@ REPLAYABLE_TOKEN_TIMELINES_REPORT_FILE = ROOT / "data" / "reports" / "historical
 SIMILAR_RUG_PATTERNS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "similar_rug_patterns_report.json"
 ALERTING_DASHBOARD_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "dashboard" / "alerting_dashboard_layer_report.json"
 VALIDATION_PROOF_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "validation_proof_layer_report.json"
+PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE = ROOT / "data" / "reports" / "productization" / "operator_workflow_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
 LOG_FILES = {
@@ -324,6 +326,7 @@ def read_state_files():
         "similar_rug_patterns": read_json(SIMILAR_RUG_PATTERNS_REPORT_FILE, {}),
         "alerting_dashboard_layer": read_json(ALERTING_DASHBOARD_LAYER_REPORT_FILE, {}),
         "validation_proof_layer": read_json(VALIDATION_PROOF_LAYER_REPORT_FILE, {}),
+        "productization_operator_workflow": read_json(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
         STATE_CACHE["data"] = data
@@ -4194,6 +4197,38 @@ def build_validation_proof_layer_payload(state=None):
     }
 
 
+def build_productization_operator_workflow_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("productization_operator_workflow")
+    if isinstance(existing, dict) and existing.get("mode") == "PRODUCTIZATION_OPERATOR_WORKFLOW_REVIEW_ONLY":
+        rows = existing.get("workflow_steps") if isinstance(existing.get("workflow_steps"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "source": "productization_operator_workflow_json",
+            "source_detail": str(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_productization_operator_workflow_report(
+        evidence_layer=state.get("evidence_layer_completion") if isinstance(state.get("evidence_layer_completion"), dict) else {},
+        replayable_timelines=state.get("replayable_token_timelines") if isinstance(state.get("replayable_token_timelines"), dict) else {},
+        similar_rug_patterns=state.get("similar_rug_patterns") if isinstance(state.get("similar_rug_patterns"), dict) else {},
+        alerting_dashboard_layer=state.get("alerting_dashboard_layer") if isinstance(state.get("alerting_dashboard_layer"), dict) else {},
+        validation_proof_layer=state.get("validation_proof_layer") if isinstance(state.get("validation_proof_layer"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "productization_operator_workflow_computed",
+        "source_detail": str(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("workflow_steps") if isinstance(report.get("workflow_steps"), list) else []),
+    }
+
+
 def build_wallet_detail_payload(wallet, state=None, limit=40):
     state = state or read_state_files()
     wallet = str(wallet or "").strip()
@@ -4862,6 +4897,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_alerting_dashboard_layer_payload())
     if path == "/api/validation-proof-layer":
         return json_response(build_validation_proof_layer_payload())
+    if path == "/api/productization-operator-workflow":
+        return json_response(build_productization_operator_workflow_payload())
     if path == "/api/wallet-review-apply":
         return json_response(build_wallet_review_apply_payload(dry_run=True))
     if path == "/api/candidates":

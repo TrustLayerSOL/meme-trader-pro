@@ -7435,3 +7435,48 @@ Verification:
 Remaining:
 
 - Next step is to rank the new active candidate pool by evidence quality: repeat runner participation, recency, fillability, co-entry quality, and future paper outcomes, then decide which candidates deserve stronger observation priority.
+
+### 2026-05-16 - Added Productization Operator Workflow Gate
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/productization_operator_workflow.py`
+- `tests/test_desktop_api.py`
+- `tests/test_productization_operator_workflow.py`
+- `utils/build_productization_operator_workflow.py`
+
+What changed:
+
+- Added a read-only Productization operator workflow report at `data/reports/productization/operator_workflow_report.json`.
+- The workflow packages the current report chain into 5 ordered steps:
+  - Evidence Layer
+  - Replayable Token Timelines
+  - Similar-Rug Pattern Matching
+  - Alerting / Dashboard Layer
+  - Validation / Proof Layer
+- Added `/api/productization-operator-workflow` so the local API can expose the same workflow manifest.
+- The new report lists run commands, API review endpoints, report paths, blocker counts, and proof-readiness status.
+- Live execution remains locked, wallet-list mutation remains blocked, and proof readiness remains separate from infrastructure completion.
+
+Current local productization report:
+
+- Productization completion: `100%`
+- Completed workflow steps: `5/5`
+- Blocked data issue categories: `12`
+- Blocked proof criteria: `12`
+- Research data readiness: `0%`
+- Proof readiness: `0%`
+
+Verification:
+
+- Wrote the productization tests first and confirmed they failed before implementation.
+- Focused productization tests passed.
+- `utils/build_productization_operator_workflow.py` generated the report successfully.
+
+Remaining:
+
+- Next step is to move from packaging the report chain to improving the first blocked proof criterion: score-ready decision-time market context for wallet evidence rows.

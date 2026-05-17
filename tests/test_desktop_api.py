@@ -1469,6 +1469,30 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_productization_operator_workflow_payload_is_review_only(self):
+        payload = desktop_api.build_productization_operator_workflow_payload({
+            "productization_operator_workflow": {
+                "mode": "PRODUCTIZATION_OPERATOR_WORKFLOW_REVIEW_ONLY",
+                "summary": {"productization_completion_pct": 100},
+            }
+        })
+
+        self.assertEqual(payload["mode"], "PRODUCTIZATION_OPERATOR_WORKFLOW_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertEqual(payload["summary"]["productization_completion_pct"], 100)
+
+    def test_productization_operator_workflow_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_productization_operator_workflow_payload", return_value={"mode": "PRODUCTIZATION_OPERATOR_WORKFLOW_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/productization-operator-workflow")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({
