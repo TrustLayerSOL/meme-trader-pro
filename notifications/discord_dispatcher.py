@@ -5,8 +5,18 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 
+DEFAULT_CHANNEL = "#research-updates"
+
+
 def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def normalize_channel(channel: str | None) -> str:
+    cleaned = str(channel or DEFAULT_CHANNEL).strip()
+    if not cleaned:
+        return DEFAULT_CHANNEL
+    return cleaned if cleaned.startswith("#") else f"#{cleaned}"
 
 
 def discord_payload(event: dict[str, Any]) -> dict[str, Any]:
@@ -33,31 +43,50 @@ def build_dispatch_plan(
     report: dict[str, Any],
     *,
     webhook_url: str | None,
+    channel_webhooks: dict[str, str] | None = None,
     send: bool = False,
     timeout: float = 5.0,
 ) -> dict[str, Any]:
     events = [row for row in as_list(report.get("discord_events")) if isinstance(row, dict)]
-    enabled = bool(send and webhook_url and report.get("mode") == "DISCORD_BEHAVIORAL_INTELLIGENCE_REVIEW_ONLY")
+    normalized_webhooks = {
+        normalize_channel(channel): str(url)
+        for channel, url in (channel_webhooks or {}).items()
+        if str(url or "").strip()
+    }
+    valid_report = report.get("mode") == "DISCORD_BEHAVIORAL_INTELLIGENCE_REVIEW_ONLY"
+    enabled = bool(send and valid_report and (webhook_url or normalized_webhooks))
     block_reasons: list[str] = []
-    if not webhook_url:
+    if not webhook_url and not normalized_webhooks:
         block_reasons.append("missing_webhook_url")
     if not send:
         block_reasons.append("dry_run")
-    if report.get("mode") != "DISCORD_BEHAVIORAL_INTELLIGENCE_REVIEW_ONLY":
+    if not valid_report:
         block_reasons.append("invalid_report_mode")
 
     sent = 0
     failed: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
     if enabled:
         for row in events:
+            channel = normalize_channel(row.get("channel"))
+            event_webhook = normalized_webhooks.get(channel) or webhook_url
+            if not event_webhook:
+                blocked.append(
+                    {
+                        "event_id": row.get("event_id"),
+                        "channel": channel,
+                        "reason": "missing_channel_webhook",
+                    }
+                )
+                continue
             try:
-                status = post_discord_webhook(str(webhook_url), discord_payload(row), timeout=timeout)
+                status = post_discord_webhook(str(event_webhook), discord_payload(row), timeout=timeout)
                 if 200 <= status < 300:
                     sent += 1
                 else:
-                    failed.append({"event_id": row.get("event_id"), "status": status})
+                    failed.append({"event_id": row.get("event_id"), "channel": channel, "status": status})
             except Exception as exc:  # pragma: no cover - network failures are environment-specific.
-                failed.append({"event_id": row.get("event_id"), "error": str(exc)})
+                failed.append({"event_id": row.get("event_id"), "channel": channel, "error": str(exc)})
 
     return {
         "mode": "DISCORD_DISPATCH_PLAN",
@@ -67,8 +96,8 @@ def build_dispatch_plan(
         "events_ready": len(events),
         "events_sent": sent,
         "events_failed": len(failed),
-        "events_blocked": 0 if enabled else len(events),
+        "events_blocked": len(blocked) if enabled else len(events),
         "block_reasons": block_reasons,
+        "blocked_events": blocked,
         "failed_events": failed,
     }
-

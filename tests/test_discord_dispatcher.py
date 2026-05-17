@@ -36,3 +36,32 @@ class DiscordDispatcherTests(unittest.TestCase):
         self.assertIn("dry_run", plan["block_reasons"])
         mocked_urlopen.assert_not_called()
 
+    def test_dispatch_plan_routes_events_to_channel_webhooks(self):
+        report = {
+            "mode": "DISCORD_BEHAVIORAL_INTELLIGENCE_REVIEW_ONLY",
+            "discord_events": [
+                {"event_id": "wallet", "channel": "#wallet-review", "message": "wallet update"},
+                {"event_id": "research", "channel": "#research-updates", "message": "research update"},
+                {"event_id": "missing", "channel": "#regime-monitor", "message": "regime update"},
+            ],
+        }
+
+        with mock.patch("notifications.discord_dispatcher.urlopen") as mocked_urlopen:
+            mocked_urlopen.return_value.__enter__.return_value.status = 204
+            plan = build_dispatch_plan(
+                report,
+                webhook_url="",
+                channel_webhooks={
+                    "#wallet-review": "https://discord.com/api/webhooks/wallet",
+                    "research-updates": "https://discord.com/api/webhooks/research",
+                },
+                send=True,
+            )
+
+        self.assertTrue(plan["dispatch_enabled"])
+        self.assertEqual(plan["events_ready"], 3)
+        self.assertEqual(plan["events_sent"], 2)
+        self.assertEqual(plan["events_blocked"], 1)
+        self.assertEqual(plan["events_failed"], 0)
+        self.assertEqual(plan["blocked_events"][0]["event_id"], "missing")
+        self.assertEqual(mocked_urlopen.call_count, 2)

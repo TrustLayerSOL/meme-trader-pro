@@ -1842,6 +1842,64 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_archival_mint_snapshot_request_bundle_payload_is_review_only(self):
+        payload = desktop_api.build_archival_mint_snapshot_request_bundle_payload({
+            "archival_mint_snapshot_request_bundle": {
+                "mode": "ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REVIEW_ONLY",
+                "summary": {"requests_bundled": 34},
+                "batch_jsonrpc_payload": [{"id": 1, "method": "getAccountInfo"}],
+            }
+        })
+
+        self.assertEqual(payload["mode"], "ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["review_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["provider_calls_performed"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertFalse(payload["auto_trust_mutation_allowed"])
+        self.assertFalse(payload["wallet_trust_mutation_allowed"])
+        self.assertEqual(payload["count"], 1)
+
+    def test_archival_mint_snapshot_request_bundle_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_archival_mint_snapshot_request_bundle_payload", return_value={"mode": "ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/archival-mint-snapshot-request-bundle")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
+    def test_archival_mint_snapshot_response_import_payload_is_review_only(self):
+        payload = desktop_api.build_archival_mint_snapshot_response_import_payload({
+            "archival_mint_snapshot_response_import": {
+                "mode": "ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REVIEW_ONLY",
+                "summary": {"snapshots_imported": 0},
+                "import_rows": [{"token_mint": "MintA", "status": "blocked_missing_response"}],
+            }
+        })
+
+        self.assertEqual(payload["mode"], "ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["review_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["provider_calls_performed"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertFalse(payload["auto_trust_mutation_allowed"])
+        self.assertFalse(payload["wallet_trust_mutation_allowed"])
+        self.assertEqual(payload["count"], 1)
+
+    def test_archival_mint_snapshot_response_import_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_archival_mint_snapshot_response_import_payload", return_value={"mode": "ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/archival-mint-snapshot-response-import")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_archival_mint_supply_reconstruction_payload_is_review_only(self):
         payload = desktop_api.build_archival_mint_supply_reconstruction_payload({
             "archival_mint_supply_reconstruction": {

@@ -55,6 +55,8 @@ from wallets.archival_mint_history_collector import build_archival_mint_history_
 from wallets.archival_mint_pagination_planner import build_archival_mint_pagination_plan_report
 from wallets.archival_mint_history_progress import build_archival_mint_history_progress_report
 from wallets.archival_mint_snapshot_collector import build_archival_mint_snapshot_collection_report
+from wallets.archival_mint_snapshot_request_bundle import build_archival_mint_snapshot_request_bundle_report
+from wallets.archival_mint_snapshot_response_import import build_archival_mint_snapshot_response_import_report
 from wallets.archival_mint_supply_reconstruction import build_archival_mint_supply_reconstruction_report
 from wallets.archival_supply_evidence import build_archival_supply_evidence_report
 from wallets.archival_supply_recovery_plan import build_archival_supply_recovery_plan
@@ -141,6 +143,8 @@ SCORE_READY_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "reports" / "historical
 ARCHIVAL_SUPPLY_RECOVERY_PLAN_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_recovery_plan.json"
 ARCHIVAL_SUPPLY_EVIDENCE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_report.json"
 ARCHIVAL_MINT_SNAPSHOT_COLLECTION_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_supply_snapshot_collection_report.json"
+ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_snapshot_request_bundle_report.json"
+ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_snapshot_response_import_report.json"
 ARCHIVAL_MINT_SUPPLY_RECONSTRUCTION_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_supply_reconstruction_report.json"
 ARCHIVAL_MINT_HISTORY_COLLECTION_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_history_collection_report.json"
 ARCHIVAL_MINT_HISTORY_PROGRESS_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_history_progress_report.json"
@@ -412,6 +416,8 @@ def read_state_files():
         "archival_supply_recovery_plan": read_json(ARCHIVAL_SUPPLY_RECOVERY_PLAN_REPORT_FILE, {}),
         "archival_supply_evidence": read_json(ARCHIVAL_SUPPLY_EVIDENCE_REPORT_FILE, {}),
         "archival_mint_snapshot_collection": read_json(ARCHIVAL_MINT_SNAPSHOT_COLLECTION_REPORT_FILE, {}),
+        "archival_mint_snapshot_request_bundle": read_json(ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REPORT_FILE, {}),
+        "archival_mint_snapshot_response_import": read_json(ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REPORT_FILE, {}),
         "archival_mint_supply_reconstruction": read_json(ARCHIVAL_MINT_SUPPLY_RECONSTRUCTION_REPORT_FILE, {}),
         "archival_mint_history_collection": read_json(ARCHIVAL_MINT_HISTORY_COLLECTION_REPORT_FILE, {}),
         "archival_mint_history_progress": read_json(ARCHIVAL_MINT_HISTORY_PROGRESS_REPORT_FILE, {}),
@@ -4698,6 +4704,71 @@ def build_archival_mint_snapshot_collection_payload(state=None):
     }
 
 
+def build_archival_mint_snapshot_request_bundle_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("archival_mint_snapshot_request_bundle")
+    if isinstance(existing, dict) and existing.get("mode") == "ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REVIEW_ONLY":
+        rows = existing.get("batch_jsonrpc_payload") if isinstance(existing.get("batch_jsonrpc_payload"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "provider_calls_performed": False,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "wallet_trust_mutation_allowed": False,
+            "source": "archival_mint_snapshot_request_bundle_json",
+            "source_detail": str(ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    collection = state.get("archival_mint_snapshot_collection") if isinstance(state.get("archival_mint_snapshot_collection"), dict) else {}
+    report = build_archival_mint_snapshot_request_bundle_report(
+        snapshot_collection_report=collection,
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "archival_mint_snapshot_request_bundle_computed",
+        "source_detail": str(ARCHIVAL_MINT_SNAPSHOT_REQUEST_BUNDLE_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("batch_jsonrpc_payload") if isinstance(report.get("batch_jsonrpc_payload"), list) else []),
+    }
+
+
+def build_archival_mint_snapshot_response_import_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("archival_mint_snapshot_response_import")
+    if isinstance(existing, dict) and existing.get("mode") == "ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REVIEW_ONLY":
+        rows = existing.get("import_rows") if isinstance(existing.get("import_rows"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "provider_calls_performed": False,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "wallet_trust_mutation_allowed": False,
+            "source": "archival_mint_snapshot_response_import_json",
+            "source_detail": str(ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    collection = state.get("archival_mint_snapshot_collection") if isinstance(state.get("archival_mint_snapshot_collection"), dict) else {}
+    report = build_archival_mint_snapshot_response_import_report(
+        snapshot_collection_report=collection,
+        raw_provider_response=[],
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "archival_mint_snapshot_response_import_computed_without_saved_response",
+        "source_detail": str(ARCHIVAL_MINT_SNAPSHOT_RESPONSE_IMPORT_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("import_rows") if isinstance(report.get("import_rows"), list) else []),
+    }
+
+
 def build_archival_mint_supply_reconstruction_payload(state=None):
     state = state or read_state_files()
     existing = state.get("archival_mint_supply_reconstruction")
@@ -5684,6 +5755,10 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_archival_supply_evidence_payload())
     if path == "/api/archival-mint-snapshot-collection":
         return json_response(build_archival_mint_snapshot_collection_payload())
+    if path == "/api/archival-mint-snapshot-request-bundle":
+        return json_response(build_archival_mint_snapshot_request_bundle_payload())
+    if path == "/api/archival-mint-snapshot-response-import":
+        return json_response(build_archival_mint_snapshot_response_import_payload())
     if path == "/api/archival-mint-supply-reconstruction":
         return json_response(build_archival_mint_supply_reconstruction_payload())
     if path == "/api/archival-mint-history-collection":

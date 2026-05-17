@@ -2,7 +2,7 @@
 
 Permanent instructions for agents working in this repo.
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 ## Purpose
 
@@ -17,7 +17,7 @@ Current project priority:
 - Route new automated social/catalyst inputs into the canonical decision ledger instead of creating a separate social dashboard truth.
 - Separate pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection.
 - Do not describe the slow watchdog as sub-second rug protection.
-- Treat Discord as a sparse behavioral-intelligence review layer, not a trade-alert feed. Discord output must preserve proof limitations, stay disabled unless locally configured, and never imply live execution is safe.
+- Treat Discord as a sparse behavioral-intelligence review layer, not a trade-alert feed. Discord output must preserve proof limitations, stay disabled unless locally configured, and never imply live execution is safe. Channel-specific webhook URLs belong only in ignored local config such as `data/discord_webhooks.local.json` or local env vars.
 
 ## Milestone Reporting Format
 

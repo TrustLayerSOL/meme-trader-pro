@@ -8818,3 +8818,110 @@ Interpretation:
 Remaining:
 
 - Next logical step is to obtain one real archival response for `4BBPVEzF9AyVwt8Zog1z41ATKbZMVqah738sTYwvpump` at or before slot `419937176`, save it to the requested raw response path, and run saved-response validation.
+
+### 2026-05-17 - Added Archival Mint Snapshot Batch Import Handoff
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint Snapshot Batch Import Handoff: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_snapshot_request_bundle.py`
+- `tests/test_archival_mint_snapshot_response_import.py`
+- `tests/test_desktop_api.py`
+- `utils/build_archival_mint_snapshot_request_bundle.py`
+- `utils/import_archival_mint_supply_snapshots.py`
+- `wallets/archival_mint_snapshot_request_bundle.py`
+- `wallets/archival_mint_snapshot_response_import.py`
+
+What changed:
+
+- Added a review-only batch request bundle for the `34` pending archival mint-account supply requests.
+- Added a saved-response importer that accepts only historical mint-account responses whose provider context slot is at or before the decision slot.
+- Added `/api/archival-mint-snapshot-request-bundle`.
+- Added `/api/archival-mint-snapshot-response-import`.
+- The importer writes compatible archival supply snapshots for downstream evidence only when a saved provider response is valid.
+- It blocks missing, future-slot, and invalid snapshots instead of inventing supply or substituting current state.
+
+Current local reports:
+
+- request bundle: `34` requests bundled, `34` target tokens, `0` provider calls, `0` wallet-list mutations, `0` auto trust mutations,
+- response import: `34` requests scanned, `0` raw responses scanned, `0` snapshots imported, `34` blocked by missing provider response,
+- live execution remains locked.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_snapshot_request_bundle tests.test_archival_mint_snapshot_response_import tests.test_desktop_api`
+- `./trading_env/bin/python utils/build_archival_mint_snapshot_request_bundle.py`
+- `./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py`
+
+Remaining:
+
+- Next logical step is to obtain saved archival mint-account responses for the bundled requests, import only decision-time-safe snapshots, and rerun archival supply evidence.
+
+### 2026-05-17 - Hardened Discord Intelligence Setup
+
+Active milestone:
+
+- Stage 9 - Behavioral Intelligence Layer / sparse notification review surface
+
+Milestone completion:
+
+- Discord Behavioral Intelligence Setup: `100%`
+
+Changed files:
+
+- `AGENT_WORKFLOW.md`
+- `WORK_LOG.md`
+- `docs/DISCORD_INTELLIGENCE_SETUP.md`
+- `notifications/discord_dispatcher.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_discord_dispatcher.py`
+- `utils/dispatch_discord_intelligence.py`
+
+Local-only ignored file created:
+
+- `data/discord_webhooks.local.json`
+
+What changed:
+
+- Added channel-aware Discord dispatch routing.
+- The dispatcher can now route events to channel-specific webhooks for `#wallet-review`, `#behavioral-patterns`, `#replay-validation`, `#regime-monitor`, `#wallet-degradation`, and `#research-updates`.
+- Added local setup docs and an ignored local webhook config scaffold.
+- Dry-run remains the default. `--send` is still required before any Discord post.
+- Missing channel webhooks block only those channel events.
+- Discord output still cannot mutate wallet trust, wallet lists, paper trades, or live execution.
+
+Browser/setup note:
+
+- Chrome is logged into Discord on a `Threat Radar Alerts` server.
+- I did not wire MemeTraderPro into that existing server because the project workflow requires keeping projects separated unless intentionally shared.
+- The safe project-specific setup path is to use a MemeTraderPro-specific Discord server/category and paste generated channel webhook URLs into `data/discord_webhooks.local.json`.
+
+Current local dispatch plan:
+
+- events ready: `5`,
+- events sent: `0`,
+- events blocked: `5`,
+- reasons: missing webhook URL and dry-run,
+- live execution locked: `true`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_discord_dispatcher`
+- `./trading_env/bin/python utils/build_discord_intelligence_layer.py`
+- `./trading_env/bin/python utils/dispatch_discord_intelligence.py`
+
+Remaining:
+
+- Next logical step is to create MemeTraderPro-specific Discord channels/webhooks, paste webhook URLs into `data/discord_webhooks.local.json`, dry-run once, then send one controlled route-check message.
