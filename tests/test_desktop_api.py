@@ -1703,6 +1703,33 @@ class DesktopApiTests(unittest.TestCase):
         self.assertTrue(json.loads(body)["live_execution_locked"])
         build_payload.assert_called_once_with()
 
+    def test_score_ready_market_context_payload_is_review_only(self):
+        payload = desktop_api.build_score_ready_market_context_payload({
+            "score_ready_market_context": {
+                "mode": "SCORE_READY_MARKET_CONTEXT_REVIEW_ONLY",
+                "summary": {"score_ready_records": 0, "archival_supply_candidate_rows": 86},
+                "records": [{"token_mint": "MintA"}],
+            }
+        })
+
+        self.assertEqual(payload["mode"], "SCORE_READY_MARKET_CONTEXT_REVIEW_ONLY")
+        self.assertTrue(payload["read_only"])
+        self.assertTrue(payload["review_only"])
+        self.assertTrue(payload["live_execution_locked"])
+        self.assertFalse(payload["wallet_list_apply_allowed"])
+        self.assertFalse(payload["wallet_list_mutated"])
+        self.assertFalse(payload["auto_trust_mutation_allowed"])
+        self.assertEqual(payload["count"], 1)
+
+    def test_score_ready_market_context_route_is_read_only(self):
+        with mock.patch.object(desktop_api, "build_score_ready_market_context_payload", return_value={"mode": "SCORE_READY_MARKET_CONTEXT_REVIEW_ONLY", "live_execution_locked": True}) as build_payload:
+            status, content_type, body = desktop_api.route_request("GET", "/api/score-ready-market-context")
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn("application/json", content_type)
+        self.assertTrue(json.loads(body)["live_execution_locked"])
+        build_payload.assert_called_once_with()
+
     def test_wallet_review_decision_route_writes_approval_metadata_only(self):
         current = {"decisions": []}
         body = json.dumps({

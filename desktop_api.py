@@ -46,6 +46,7 @@ from research.similar_rug_patterns import build_similar_rug_patterns_report
 from research.validation_proof_layer import build_validation_proof_layer_report
 from research.wallet_ecosystem_intelligence import build_wallet_ecosystem_intelligence_report
 from research.wallet_promotion_demotion_system import build_wallet_promotion_demotion_system_report
+from wallets.score_ready_market_context import build_score_ready_market_context_report
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
 from utils.apply_wallet_review import run_apply as run_wallet_review_apply
@@ -123,6 +124,7 @@ VALIDATION_PROOF_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "replay_validat
 BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_intelligence" / "behavioral_intelligence_layer_report.json"
 BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_validation" / "behavioral_trust_validation_report.json"
 PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "proof_readiness_blocker_reduction_report.json"
+SCORE_READY_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "score_ready_market_context_report.json"
 PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE = ROOT / "data" / "reports" / "productization" / "operator_workflow_report.json"
 BAD_WALLETS_FILE = ROOT / "data" / "bad_wallets.json"
 LOG_DIR = ROOT / "logs"
@@ -380,6 +382,7 @@ def read_state_files():
         "behavioral_intelligence_layer": read_json(BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE, {}),
         "behavioral_trust_validation": read_json(BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE, {}),
         "proof_readiness_blocker_reduction": read_json(PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE, {}),
+        "score_ready_market_context": read_json(SCORE_READY_MARKET_CONTEXT_REPORT_FILE, {}),
         "productization_operator_workflow": read_json(PRODUCTIZATION_OPERATOR_WORKFLOW_REPORT_FILE, {}),
     }
     with STATE_CACHE_LOCK:
@@ -4496,6 +4499,36 @@ def build_proof_readiness_blocker_reduction_payload(state=None):
     }
 
 
+def build_score_ready_market_context_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("score_ready_market_context")
+    if isinstance(existing, dict) and existing.get("mode") == "SCORE_READY_MARKET_CONTEXT_REVIEW_ONLY":
+        rows = existing.get("records") if isinstance(existing.get("records"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "source": "score_ready_market_context_json",
+            "source_detail": str(SCORE_READY_MARKET_CONTEXT_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_score_ready_market_context_report(
+        onchain_market_context_records=state.get("onchain_market_context", {}).get("records", []) if isinstance(state.get("onchain_market_context"), dict) else [],
+        supply_evidence_records=state.get("onchain_supply_evidence", {}).get("records", []) if isinstance(state.get("onchain_supply_evidence"), dict) else [],
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "score_ready_market_context_computed",
+        "source_detail": str(SCORE_READY_MARKET_CONTEXT_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("records") if isinstance(report.get("records"), list) else []),
+    }
+
+
 def build_productization_operator_workflow_payload(state=None):
     state = state or read_state_files()
     existing = state.get("productization_operator_workflow")
@@ -5212,6 +5245,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_behavioral_trust_validation_payload())
     if path == "/api/proof-readiness-blocker-reduction":
         return json_response(build_proof_readiness_blocker_reduction_payload())
+    if path == "/api/score-ready-market-context":
+        return json_response(build_score_ready_market_context_payload())
     if path == "/api/productization-operator-workflow":
         return json_response(build_productization_operator_workflow_payload())
     if path == "/api/wallet-review-apply":

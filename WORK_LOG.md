@@ -139,6 +139,55 @@ Remaining risk / next step:
 
 - The next grounded implementation step is to work the first queue item: recover or classify score-ready decision-time market context, beginning with archival supply / market-cap evidence for rows that already have price/liquidity evidence. Do not substitute current supply or current price.
 
+2026-05-17 update - Score-Ready Market Context Classifier:
+
+Active milestone:
+
+- Proof-readiness blocker reduction / score-ready market-context lane
+
+Milestone completion:
+
+- Score-Ready Market Context Classifier: `100%`
+- Proof readiness: `0%`
+- Stage 10 Semi-Autonomous Risk Engine: `0%` and intentionally deferred
+
+Changed files:
+
+- `wallets/score_ready_market_context.py`
+- `utils/build_score_ready_market_context.py`
+- `desktop_api.py`
+- `tests/test_score_ready_market_context.py`
+- `tests/test_desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/historical_backfill/score_ready_market_context_report.json`
+- `data/reports/historical_backfill/score_ready_market_context_records.jsonl`
+
+What changed:
+
+- Added a read-only score-ready market-context classifier.
+- Added `/api/score-ready-market-context`.
+- The classifier separates rows that are close to score-ready from rows still blocked by price or liquidity gaps.
+- Current local report:
+  - records scanned: `643`,
+  - score-ready records: `0`,
+  - near-score-ready records: `86`,
+  - archival supply candidate rows: `86`,
+  - tokens needing archival supply: `34`,
+  - wallets needing archival supply: `23`,
+  - rows still missing price: `442`,
+  - rows still missing liquidity: `115`,
+  - wallet-list mutations: `0`.
+- This narrows the first proof-readiness queue item from all `643` context rows to the `86` rows that already have price and liquidity and now need decision-time supply / market-cap evidence.
+
+Remaining risk / next step:
+
+- The next grounded implementation step is archival supply recovery planning for those `34` tokens / `86` rows. Supply must come from decision-time-safe historical mint-account evidence, not current supply.
+
 2026-05-16 update - Validation / Proof Layer Gate:
 
 Active milestone:
