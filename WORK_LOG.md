@@ -7576,3 +7576,47 @@ Verification:
 Remaining:
 
 - Next logical milestone is Stage 5 - Wallet Ecosystem Intelligence. Start turning repeated co-entry pairs into a first-class relationship graph while keeping wallet trust mutation locked.
+
+### 2026-05-16 - Completed Stage 5 Wallet Ecosystem Intelligence Gate
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/wallet_ecosystem_intelligence.py`
+- `tests/test_desktop_api.py`
+- `tests/test_wallet_ecosystem_intelligence.py`
+- `utils/build_wallet_ecosystem_intelligence.py`
+
+What changed:
+
+- Added a read-only Stage 5 completion report at `data/reports/wallet_ecosystems/wallet_ecosystem_intelligence_report.json`.
+- Added `/api/wallet-ecosystem-intelligence`.
+- The new report turns wallet replay scorecard co-entry evidence into wallet nodes, ranked co-entry edges, cluster candidates, source-readiness status, and explicit missing-source blockers for funding overlap and deployer links.
+- Stage 5 is now complete as review-only infrastructure. It can rank repeated wallet relationships and identify ecosystem clusters for research review, but it still cannot auto-promote, auto-demote, mutate wallet lists, fetch new source data, or trade.
+
+Current local Stage 5 report:
+
+- Stage 5 completion: `100%`
+- Wallet nodes: `261`
+- Co-entry edges: `50`
+- Repeated co-entry edges: `50`
+- Cluster candidates: `7`
+- Relationship data readiness: `33%`
+- Funding-overlap records: `0`
+- Deployer-link records: `0`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Verification:
+
+- Wrote failing tests first for the Stage 5 report and desktop API route.
+- Focused Stage 5 tests passed.
+- `utils/build_wallet_ecosystem_intelligence.py` generated the report successfully.
+- `/api/wallet-ecosystem-intelligence` is wired as read-only and keeps `live_execution_locked=true`, `wallet_list_mutated=false`, and `auto_trust_mutation_allowed=false`.
+
+Remaining:
+
+- Next logical milestone is Stage 7 - Regime Detection. Start turning existing market-regime tags into a first-class review gate so wallet behavior can be evaluated by market condition without making regime labels score-driving until validated.

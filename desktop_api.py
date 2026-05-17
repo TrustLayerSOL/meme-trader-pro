@@ -39,6 +39,7 @@ from research.replayable_token_timelines import build_replayable_token_timelines
 from research.signal_context_layer import build_signal_context_layer_report
 from research.similar_rug_patterns import build_similar_rug_patterns_report
 from research.validation_proof_layer import build_validation_proof_layer_report
+from research.wallet_ecosystem_intelligence import build_wallet_ecosystem_intelligence_report
 from research.wallet_promotion_demotion_system import build_wallet_promotion_demotion_system_report
 from core.wallet_lifecycle import build_wallet_lifecycle_report
 from core.wallet_quant import build_wallet_quant_report
@@ -93,6 +94,7 @@ WALLET_CANDIDATE_CONTEXT_RECOVERY_FILE = ROOT / "data" / "reports" / "wallet_rev
 WALLET_CANDIDATE_CONTEXT_RECOVERY_RUNNER_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_candidate_context_recovery_runner.json"
 WALLET_CANDIDATE_CONTEXT_RECOVERY_CLOSEOUT_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_candidate_context_recovery_closeout.json"
 WALLET_PROMOTION_DEMOTION_SYSTEM_REPORT_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_promotion_demotion_system_report.json"
+WALLET_ECOSYSTEM_INTELLIGENCE_REPORT_FILE = ROOT / "data" / "reports" / "wallet_ecosystems" / "wallet_ecosystem_intelligence_report.json"
 WALLET_HISTORY_BACKFILL_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_history_backfill_report.json"
 WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_evidence_enrichment_report.json"
 WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_missing_market_context_report.json"
@@ -322,6 +324,7 @@ def read_state_files():
         "wallet_candidate_context_recovery_runner": read_json(WALLET_CANDIDATE_CONTEXT_RECOVERY_RUNNER_FILE, {}),
         "wallet_candidate_context_recovery_closeout": read_json(WALLET_CANDIDATE_CONTEXT_RECOVERY_CLOSEOUT_FILE, {}),
         "wallet_promotion_demotion_system": read_json(WALLET_PROMOTION_DEMOTION_SYSTEM_REPORT_FILE, {}),
+        "wallet_ecosystem_intelligence": read_json(WALLET_ECOSYSTEM_INTELLIGENCE_REPORT_FILE, {}),
         "wallet_history_backfill": read_json(WALLET_HISTORY_BACKFILL_REPORT_FILE, {}),
         "wallet_evidence_enrichment": read_json(WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE, {}),
         "wallet_missing_market_context": read_json(WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE, {}),
@@ -4148,6 +4151,32 @@ def build_wallet_promotion_demotion_system_payload(state=None):
     }
 
 
+def build_wallet_ecosystem_intelligence_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("wallet_ecosystem_intelligence")
+    if isinstance(existing, dict) and existing.get("mode") == "WALLET_ECOSYSTEM_INTELLIGENCE_STAGE5_REVIEW_ONLY":
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "source": "wallet_ecosystem_intelligence_json",
+            "source_detail": str(WALLET_ECOSYSTEM_INTELLIGENCE_REPORT_FILE.relative_to(ROOT)),
+        }
+    report = build_wallet_ecosystem_intelligence_report(
+        replay_scorecard=state.get("wallet_replay_scorecard") if isinstance(state.get("wallet_replay_scorecard"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "wallet_ecosystem_intelligence_computed",
+        "source_detail": str(WALLET_ECOSYSTEM_INTELLIGENCE_REPORT_FILE.relative_to(ROOT)),
+    }
+
+
 def build_replayable_token_timelines_payload(state=None):
     state = state or read_state_files()
     existing = state.get("replayable_token_timelines")
@@ -4968,6 +4997,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_signal_context_layer_payload())
     if path == "/api/wallet-promotion-demotion-system":
         return json_response(build_wallet_promotion_demotion_system_payload())
+    if path == "/api/wallet-ecosystem-intelligence":
+        return json_response(build_wallet_ecosystem_intelligence_payload())
     if path == "/api/replayable-token-timelines":
         return json_response(build_replayable_token_timelines_payload())
     if path == "/api/similar-rug-patterns":
