@@ -7533,3 +7533,46 @@ Verification:
 Remaining:
 
 - Next step is to move from Stage 2 context integrity to the next near-complete milestone: finish Stage 4 promotion/demotion workflow hardening without automatic trust mutation.
+
+### 2026-05-16 - Completed Stage 4 Promotion/Demotion Workflow Gate
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/wallet_promotion_demotion_system.py`
+- `tests/test_desktop_api.py`
+- `tests/test_wallet_promotion_demotion_system.py`
+- `utils/build_wallet_promotion_demotion_system.py`
+
+What changed:
+
+- Added a read-only Stage 4 completion report at `data/reports/wallet_reviews/wallet_promotion_demotion_system_report.json`.
+- Added `/api/wallet-promotion-demotion-system`.
+- The new gate verifies that the Stage 4 promotion/demotion report chain is visible, live execution is locked, wallet-list mutation is blocked, draft decisions remain unapproved, blockers are explicit, and auto trust mutation is disabled.
+- Stage 4 is now complete as review-only infrastructure. It can classify, route, draft, explain, and close out wallet promotion/demotion workflow state, but it still cannot auto-promote, auto-demote, mutate wallet lists, or trade.
+
+Current local Stage 4 report:
+
+- Stage 4 completion: `100%`
+- Wallets in review pipeline: `54`
+- Collection targets: `49`
+- Context recovery targets: `36`
+- Remaining blocked wallets: `36`
+- Risk-review-required wallets: `4`
+- Insufficient-evidence wallets: `45`
+- Auto-applied changes: `0`
+- Trusted promotions allowed: `0`
+
+Verification:
+
+- Wrote failing tests first for the Stage 4 completion report and desktop API route.
+- Focused Stage 4 tests passed.
+- `utils/build_wallet_promotion_demotion_system.py` generated the report successfully.
+- `/api/wallet-promotion-demotion-system` returned `200`, `WALLET_PROMOTION_DEMOTION_SYSTEM_REVIEW_ONLY`, `stage4_promotion_demotion_completion_pct=100`, `auto_applied=0`, and `trusted_promotions_allowed=0`.
+
+Remaining:
+
+- Next logical milestone is Stage 5 - Wallet Ecosystem Intelligence. Start turning repeated co-entry pairs into a first-class relationship graph while keeping wallet trust mutation locked.
