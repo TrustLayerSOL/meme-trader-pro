@@ -8498,3 +8498,58 @@ Interpretation:
 Remaining:
 
 - Next logical step is provider evaluation for historical mint-account supply snapshots, while optionally continuing very small pagination batches for untouched tokens to find any low-history mints.
+
+### 2026-05-17 - Added Archival Account-State Provider Evaluation
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Account-State Provider Evaluation: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_account_state_provider_evaluation.py`
+- `tests/test_desktop_api.py`
+- `utils/build_archival_account_state_provider_evaluation.py`
+- `wallets/archival_account_state_provider_evaluation.py`
+
+What changed:
+
+- Added `data/reports/historical_backfill/archival_account_state_provider_evaluation_report.json`.
+- Added `/api/archival-account-state-provider-evaluation`.
+- The report evaluates provider lanes for historical mint-account supply snapshots without calling providers or importing supply.
+- Safety criteria in the report:
+  - provider response must be at or before decision slot,
+  - raw provider response must be preserved,
+  - mint supply must come from historical account state or complete mint/burn history,
+  - current account state must not be substituted for historical state,
+  - provider probe must use a known mint and known decision slot before import.
+
+Current local report:
+
+- providers evaluated: `3`,
+- active local lanes: `1`,
+- candidate providers: `1`,
+- providers rejected: `1`,
+- provider probe required: `true`,
+- tokens planned: `34`,
+- provider recommended tokens: `1`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Provider interpretation:
+
+- `home_built_mint_history_reconstruction`: active but incomplete.
+- `helius_getaccountinfo_current_rpc`: rejected for historical supply import because current/incremental account reads do not prove point-in-time account state.
+- `quicknode_solana_mainnet_archive`: candidate only; requires a manual known-slot probe before it can be trusted as a historical supply source.
+
+Remaining:
+
+- Next logical step is to build a manual provider-probe harness that can test a candidate archival provider against a known mint/slot and reject responses after the decision slot.
