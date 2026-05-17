@@ -44,6 +44,62 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-17 update - Discord Behavioral Intelligence Layer:
+
+Active milestone:
+
+- Stage 9 - Behavioral Intelligence Layer / sparse notification review surface
+
+Milestone completion:
+
+- Discord Behavioral Intelligence Layer: `100%`
+- Proof readiness: `0%`
+- Behavioral trust justified: `false`
+- Discord dispatch: disabled by default
+
+Changed files:
+
+- `research/discord_intelligence_layer.py`
+- `notifications/__init__.py`
+- `notifications/discord_dispatcher.py`
+- `utils/build_discord_intelligence_layer.py`
+- `utils/dispatch_discord_intelligence.py`
+- `desktop_api.py`
+- `tests/test_discord_intelligence_layer.py`
+- `tests/test_discord_dispatcher.py`
+- `tests/test_desktop_api.py`
+- `AGENT_WORKFLOW.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/notifications/discord_intelligence_layer_report.json`
+
+What changed:
+
+- Added a sparse, research-first Discord intelligence layer.
+- Added `/api/discord-intelligence-layer`.
+- Added a local dry-run dispatcher that requires both a local webhook URL and `--send` before posting.
+- Current local report:
+  - Discord layer completion: `100%`,
+  - events prepared: `5`,
+  - channels touched: `5`,
+  - raw wallet rows suppressed: `18`,
+  - proof readiness: `0%`,
+  - behavioral trust justified: `false`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`,
+  - dispatch enabled: `false`.
+- The prepared event classes are wallet-review transition, unusual wallet cluster behavior, replay-validation blocker, regime-monitor gap, and evidence recovery status.
+- Every prepared message carries proof limitations and states that live execution remains locked.
+- No browser/Discord setup was performed. No webhook was used. No network send occurred.
+
+Remaining risk / next step:
+
+- The next grounded milestone remains proof-readiness blocker reduction: recover archival supply / market-cap evidence or collect replay-safe 15m outcomes. Discord should stay disabled until the operator explicitly configures it locally and approves a send test.
+
 2026-05-17 update - Behavioral Trust Validation Gate:
 
 Active milestone:

@@ -17,6 +17,7 @@ Current project priority:
 - Route new automated social/catalyst inputs into the canonical decision ledger instead of creating a separate social dashboard truth.
 - Separate pre-entry rejection, fast open-position monitoring, and slower deep watchdog inspection.
 - Do not describe the slow watchdog as sub-second rug protection.
+- Treat Discord as a sparse behavioral-intelligence review layer, not a trade-alert feed. Discord output must preserve proof limitations, stay disabled unless locally configured, and never imply live execution is safe.
 
 ## Milestone Reporting Format
 
@@ -104,6 +105,7 @@ Do not make broad rewrites of these areas unless the user explicitly asks or the
 - Only hard reject mechanics known to be dangerous, such as permanent delegate, non-transferable tokens, default frozen accounts, or hostile transfer restrictions.
 - Keep sell-route/quote feasibility as a required future live-execution gate.
 - Do not promise or imply guaranteed trading profits in UI, docs, or marketing assets.
+- Do not send raw wallet spam or hype alerts to Discord. Only send meaningful behavioral review transitions, proof/readiness events, regime shifts, evidence milestones, or wallet degradation/promotion review items.
 
 ## Runtime State Rules
 

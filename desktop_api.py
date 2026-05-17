@@ -35,6 +35,7 @@ from core.wallet_discovery import normalize_tracked_wallets
 from research.alerting_dashboard_layer import build_alerting_dashboard_layer_report
 from research.behavioral_intelligence_layer import build_behavioral_intelligence_layer_report
 from research.behavioral_trust_validation import build_behavioral_trust_validation_report
+from research.discord_intelligence_layer import build_discord_intelligence_layer_report
 from research.evidence_layer_completion import build_evidence_layer_completion_report
 from research.live_signal_foundation import build_live_signal_foundation_report
 from research.market_regime_detection import build_market_regime_detection_report
@@ -135,6 +136,7 @@ VALIDATION_PROOF_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "replay_validat
 BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_intelligence" / "behavioral_intelligence_layer_report.json"
 BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE = ROOT / "data" / "reports" / "behavioral_validation" / "behavioral_trust_validation_report.json"
 PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE = ROOT / "data" / "reports" / "replay_validation" / "proof_readiness_blocker_reduction_report.json"
+DISCORD_INTELLIGENCE_LAYER_REPORT_FILE = ROOT / "data" / "reports" / "notifications" / "discord_intelligence_layer_report.json"
 SCORE_READY_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "score_ready_market_context_report.json"
 ARCHIVAL_SUPPLY_RECOVERY_PLAN_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_recovery_plan.json"
 ARCHIVAL_SUPPLY_EVIDENCE_REPORT_FILE = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_report.json"
@@ -405,6 +407,7 @@ def read_state_files():
         "behavioral_intelligence_layer": read_json(BEHAVIORAL_INTELLIGENCE_LAYER_REPORT_FILE, {}),
         "behavioral_trust_validation": read_json(BEHAVIORAL_TRUST_VALIDATION_REPORT_FILE, {}),
         "proof_readiness_blocker_reduction": read_json(PROOF_READINESS_BLOCKER_REDUCTION_REPORT_FILE, {}),
+        "discord_intelligence_layer": read_json(DISCORD_INTELLIGENCE_LAYER_REPORT_FILE, {}),
         "score_ready_market_context": read_json(SCORE_READY_MARKET_CONTEXT_REPORT_FILE, {}),
         "archival_supply_recovery_plan": read_json(ARCHIVAL_SUPPLY_RECOVERY_PLAN_REPORT_FILE, {}),
         "archival_supply_evidence": read_json(ARCHIVAL_SUPPLY_EVIDENCE_REPORT_FILE, {}),
@@ -4534,6 +4537,41 @@ def build_proof_readiness_blocker_reduction_payload(state=None):
     }
 
 
+def build_discord_intelligence_layer_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("discord_intelligence_layer")
+    if isinstance(existing, dict) and existing.get("mode") == "DISCORD_BEHAVIORAL_INTELLIGENCE_REVIEW_ONLY":
+        rows = existing.get("discord_events") if isinstance(existing.get("discord_events"), list) else []
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "behavioral_trust_changes_allowed": False,
+            "discord_dispatch_enabled": False,
+            "source": "discord_intelligence_layer_json",
+            "source_detail": str(DISCORD_INTELLIGENCE_LAYER_REPORT_FILE.relative_to(ROOT)),
+            "count": len(rows),
+        }
+    report = build_discord_intelligence_layer_report(
+        wallet_promotion_demotion=state.get("wallet_promotion_demotion_system") if isinstance(state.get("wallet_promotion_demotion_system"), dict) else {},
+        behavioral_intelligence=state.get("behavioral_intelligence_layer") if isinstance(state.get("behavioral_intelligence_layer"), dict) else {},
+        behavioral_trust_validation=state.get("behavioral_trust_validation") if isinstance(state.get("behavioral_trust_validation"), dict) else {},
+        proof_readiness_blocker_reduction=state.get("proof_readiness_blocker_reduction") if isinstance(state.get("proof_readiness_blocker_reduction"), dict) else {},
+        market_regime_detection=state.get("market_regime_detection") if isinstance(state.get("market_regime_detection"), dict) else {},
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "discord_intelligence_layer_computed",
+        "source_detail": str(DISCORD_INTELLIGENCE_LAYER_REPORT_FILE.relative_to(ROOT)),
+        "count": len(report.get("discord_events") if isinstance(report.get("discord_events"), list) else []),
+    }
+
+
 def build_score_ready_market_context_payload(state=None):
     state = state or read_state_files()
     existing = state.get("score_ready_market_context")
@@ -5636,6 +5674,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_behavioral_trust_validation_payload())
     if path == "/api/proof-readiness-blocker-reduction":
         return json_response(build_proof_readiness_blocker_reduction_payload())
+    if path == "/api/discord-intelligence-layer":
+        return json_response(build_discord_intelligence_layer_payload())
     if path == "/api/score-ready-market-context":
         return json_response(build_score_ready_market_context_payload())
     if path == "/api/archival-supply-recovery-plan":
