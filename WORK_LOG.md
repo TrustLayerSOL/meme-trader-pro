@@ -8107,3 +8107,56 @@ Verification:
 Remaining:
 
 - Next logical step is a bounded mint-history collector that fetches `getSignaturesForAddress` / `getTransaction` history for each of the `34` mint accounts, proves whether history is complete through each decision slot, and feeds only complete mint/burn histories into this reconstruction gate.
+
+### 2026-05-17 - Added Archival Mint History Collector
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint History Collector: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_history_collector.py`
+- `tests/test_desktop_api.py`
+- `utils/collect_archival_mint_history.py`
+- `wallets/archival_mint_history_collector.py`
+
+What changed:
+
+- Added a read-only mint-history collector at `data/reports/historical_backfill/archival_mint_history_collection_report.json`.
+- Added `/api/archival-mint-history-collection`.
+- The collector targets the `34` mint accounts that need historical supply.
+- Dry-run is default. Network collection requires explicit `--execute`.
+- Completeness is conservative: a mint is marked complete only when signature pagination reaches the end of account history.
+- Partial pagination, page-limit exhaustion, transaction-budget truncation, missing transaction fetches, missing signatures, and missing RPC client all stay blocked.
+- The collector writes:
+  - `data/reports/historical_backfill/archival_mint_history_collection_report.json`,
+  - `data/wallet_backfills/raw_transactions/archival_mint_history_raw.jsonl`,
+  - `data/reports/historical_backfill/archival_mint_history_completeness.json`.
+- Current local dry-run:
+  - mint history targets: `34`,
+  - mint histories complete: `0`,
+  - raw transactions preserved: `0`,
+  - pending mint history collection: `34`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`.
+
+Verification:
+
+- Wrote failing tests first for dry-run target creation, complete-history detection, partial-history blocking, transaction-budget blocking, missing-transaction blocking, writer outputs, and desktop API route.
+- Focused collector tests passed.
+- Focused desktop API route tests passed.
+- Generated the dry-run collection report.
+- Reran reconstruction, archival supply evidence, and score-ready market-context reports.
+
+Remaining:
+
+- Next logical step is to run a small bounded `--execute` mint-history collection batch with conservative page/transaction limits, review RPC cost/error behavior, then rerun reconstruction. If history stays partial, keep all rows blocked.
