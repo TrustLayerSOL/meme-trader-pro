@@ -7899,3 +7899,51 @@ Remaining:
 
 - Stage 10 remains intentionally deferred because proof readiness is still `0%`.
 - Next logical work is proof-readiness blocker reduction: improve known outcome labels and score-ready decision-time market context before any semi-autonomous risk/trust automation.
+
+### 2026-05-17 - Added Archival Supply Recovery Plan
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Supply Recovery Plan: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_supply_recovery_plan.py`
+- `tests/test_desktop_api.py`
+- `utils/build_archival_supply_recovery_plan.py`
+- `wallets/archival_supply_recovery_plan.py`
+
+What changed:
+
+- Added a review-only archival supply recovery planner at `data/reports/historical_backfill/archival_supply_recovery_plan.json`.
+- Added `/api/archival-supply-recovery-plan`.
+- The planner reads the score-ready market-context records and preserved raw transaction history, then groups the rows needing archival mint supply by token.
+- Current local report:
+  - candidate rows: `86`,
+  - rows with decision slots: `86`,
+  - rows missing decision slots: `0`,
+  - token requirements: `34`,
+  - tokens ready for archival supply fetch: `34`,
+  - wallets affected: `23`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`.
+- This is only a bounded evidence shopping list. It does not fetch supply, infer supply, substitute current supply, promote wallets, demote wallets, mutate lists, or touch execution.
+
+Verification:
+
+- Wrote failing tests first for the archival supply planner and desktop API route.
+- Focused archival supply planner tests passed.
+- Focused desktop API route tests passed.
+- Generated the live local report successfully.
+
+Remaining:
+
+- Next logical step is to implement the bounded archival supply fetch adapter or fixture importer that can fill these `34` token supply requirements from historical mint-account evidence at or before each decision slot, still without using current supply or mutating wallet trust.
