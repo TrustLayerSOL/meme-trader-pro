@@ -34,6 +34,7 @@ from core.wallet_discovery import apply_review_policy
 from core.wallet_discovery import normalize_tracked_wallets
 from research.alerting_dashboard_layer import build_alerting_dashboard_layer_report
 from research.evidence_layer_completion import build_evidence_layer_completion_report
+from research.market_regime_detection import build_market_regime_detection_report
 from research.productization_operator_workflow import build_productization_operator_workflow_report
 from research.replayable_token_timelines import build_replayable_token_timelines_report
 from research.signal_context_layer import build_signal_context_layer_report
@@ -65,6 +66,8 @@ from wallets.wallet_replay_review import build_wallet_replay_review
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "desktop_gui"
 DB_FILE = ROOT / "data" / "memetrader.db"
+HISTORICAL_REPLAY_SUMMARY_FILE = ROOT / "data" / "historical_replay" / "summary.json"
+HISTORICAL_REPLAY_EVENTS_FILE = ROOT / "data" / "historical_replay" / "replay_events.jsonl"
 PAPER_TRADES_FILE = ROOT / "data" / "paper_trades.json"
 WATCHLIST_FILE = ROOT / "data" / "manual_watchlist.json"
 SOCIAL_STATE_FILE = ROOT / "data" / "social_state.json"
@@ -95,6 +98,7 @@ WALLET_CANDIDATE_CONTEXT_RECOVERY_RUNNER_FILE = ROOT / "data" / "reports" / "wal
 WALLET_CANDIDATE_CONTEXT_RECOVERY_CLOSEOUT_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_candidate_context_recovery_closeout.json"
 WALLET_PROMOTION_DEMOTION_SYSTEM_REPORT_FILE = ROOT / "data" / "reports" / "wallet_reviews" / "wallet_promotion_demotion_system_report.json"
 WALLET_ECOSYSTEM_INTELLIGENCE_REPORT_FILE = ROOT / "data" / "reports" / "wallet_ecosystems" / "wallet_ecosystem_intelligence_report.json"
+MARKET_REGIME_DETECTION_REPORT_FILE = ROOT / "data" / "reports" / "market_regimes" / "market_regime_detection_report.json"
 WALLET_HISTORY_BACKFILL_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_history_backfill_report.json"
 WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_evidence_enrichment_report.json"
 WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE = ROOT / "data" / "wallet_backfills" / "wallet_missing_market_context_report.json"
@@ -285,6 +289,28 @@ def quote_runtime_health(item, item_age, fresh):
     return fresh, state or "unknown", runtime_component_detail(item, state, fresh)
 
 
+def read_jsonl_file(path, limit=None):
+    if not Path(path).exists():
+        return []
+    rows = []
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    rows.append(value)
+                if limit is not None and len(rows) >= int(limit):
+                    break
+    except OSError:
+        return []
+    return rows
+
+
 def read_state_files():
     now = time.time()
     with STATE_CACHE_LOCK:
@@ -325,6 +351,7 @@ def read_state_files():
         "wallet_candidate_context_recovery_closeout": read_json(WALLET_CANDIDATE_CONTEXT_RECOVERY_CLOSEOUT_FILE, {}),
         "wallet_promotion_demotion_system": read_json(WALLET_PROMOTION_DEMOTION_SYSTEM_REPORT_FILE, {}),
         "wallet_ecosystem_intelligence": read_json(WALLET_ECOSYSTEM_INTELLIGENCE_REPORT_FILE, {}),
+        "market_regime_detection": read_json(MARKET_REGIME_DETECTION_REPORT_FILE, {}),
         "wallet_history_backfill": read_json(WALLET_HISTORY_BACKFILL_REPORT_FILE, {}),
         "wallet_evidence_enrichment": read_json(WALLET_EVIDENCE_ENRICHMENT_REPORT_FILE, {}),
         "wallet_missing_market_context": read_json(WALLET_MISSING_MARKET_CONTEXT_REPORT_FILE, {}),
@@ -4177,6 +4204,34 @@ def build_wallet_ecosystem_intelligence_payload(state=None):
     }
 
 
+def build_market_regime_detection_payload(state=None):
+    state = state or read_state_files()
+    existing = state.get("market_regime_detection")
+    if isinstance(existing, dict) and existing.get("mode") == "MARKET_REGIME_DETECTION_STAGE7_REVIEW_ONLY":
+        return {
+            **existing,
+            "read_only": True,
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_apply_allowed": False,
+            "wallet_list_mutated": False,
+            "auto_trust_mutation_allowed": False,
+            "regime_score_driving_allowed": False,
+            "source": "market_regime_detection_json",
+            "source_detail": str(MARKET_REGIME_DETECTION_REPORT_FILE.relative_to(ROOT)),
+        }
+    report = build_market_regime_detection_report(
+        replay_summary=read_json(HISTORICAL_REPLAY_SUMMARY_FILE, {}),
+        replay_events=read_jsonl_file(HISTORICAL_REPLAY_EVENTS_FILE),
+    )
+    return {
+        **report,
+        "read_only": True,
+        "source": "market_regime_detection_computed",
+        "source_detail": str(MARKET_REGIME_DETECTION_REPORT_FILE.relative_to(ROOT)),
+    }
+
+
 def build_replayable_token_timelines_payload(state=None):
     state = state or read_state_files()
     existing = state.get("replayable_token_timelines")
@@ -4999,6 +5054,8 @@ def route_request(method, raw_path, body=None, headers=None):
         return json_response(build_wallet_promotion_demotion_system_payload())
     if path == "/api/wallet-ecosystem-intelligence":
         return json_response(build_wallet_ecosystem_intelligence_payload())
+    if path == "/api/market-regime-detection":
+        return json_response(build_market_regime_detection_payload())
     if path == "/api/replayable-token-timelines":
         return json_response(build_replayable_token_timelines_payload())
     if path == "/api/similar-rug-patterns":

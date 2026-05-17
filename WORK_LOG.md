@@ -7620,3 +7620,46 @@ Verification:
 Remaining:
 
 - Next logical milestone is Stage 7 - Regime Detection. Start turning existing market-regime tags into a first-class review gate so wallet behavior can be evaluated by market condition without making regime labels score-driving until validated.
+
+### 2026-05-16 - Completed Stage 7 Market Regime Detection Gate
+
+Changed files:
+
+- `WORK_LOG.md`
+- `desktop_api.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/market_regime_detection.py`
+- `tests/test_desktop_api.py`
+- `tests/test_market_regime_detection.py`
+- `utils/build_market_regime_detection.py`
+
+What changed:
+
+- Added a read-only Stage 7 completion report at `data/reports/market_regimes/market_regime_detection_report.json`.
+- Added `/api/market-regime-detection`.
+- The new report segments historical replay events by decision-time market-regime tags, preserves accepted/rejected/failed decision separation, tracks fillability by regime, separates 15m later outcomes by regime, and keeps unknown-regime rows visible.
+- Stage 7 is now complete as review-only infrastructure. It can segment wallet behavior by market condition for research, but it still cannot drive wallet trust, auto-promote, auto-demote, mutate wallet lists, or trade.
+
+Current local Stage 7 report:
+
+- Stage 7 completion: `100%`
+- Replay events analyzed: `6,042`
+- Regime tags observed: `1`
+- Unknown-regime events: `6,042`
+- Known 15m outcomes: `2`
+- Regime data readiness: `0%`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+- Regime score-driving allowed: `false`
+
+Verification:
+
+- Wrote failing tests first for the Stage 7 report and desktop API route.
+- Focused Stage 7 tests passed.
+- `utils/build_market_regime_detection.py` generated the report successfully.
+- `/api/market-regime-detection` is wired as read-only and keeps `live_execution_locked=true`, `wallet_list_mutated=false`, `auto_trust_mutation_allowed=false`, and `regime_score_driving_allowed=false`.
+
+Remaining:
+
+- Next logical milestone is Stage 9 - Behavioral Intelligence Layer. Start joining Stage 5 ecosystem clusters with Stage 7 regime segmentation and Stage 8 validation status into review-only behavioral pattern candidates, without treating those candidates as proven edge.
