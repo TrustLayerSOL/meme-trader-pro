@@ -51,6 +51,7 @@ def write_archival_mint_history_collection_report(
     signature_page_limit: int = 100,
     max_pages_per_mint: int = 5,
     max_transactions_per_mint: int = 500,
+    max_targets: int | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     plan_path = Path(plan_path)
@@ -64,6 +65,7 @@ def write_archival_mint_history_collection_report(
         signature_page_limit=signature_page_limit,
         max_pages_per_mint=max_pages_per_mint,
         max_transactions_per_mint=max_transactions_per_mint,
+        max_targets=max_targets,
         generated_at=generated_at,
     )
     raw_rows = report.pop("raw_transactions", [])
@@ -93,6 +95,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--signature-page-limit", type=int, default=100)
     parser.add_argument("--max-pages-per-mint", type=int, default=5)
     parser.add_argument("--max-transactions-per-mint", type=int, default=500)
+    parser.add_argument("--max-targets", type=int, default=None, help="Limit how many mint targets are processed in this run.")
     parser.add_argument("--rpc-timeout", type=int, default=15)
     return parser.parse_args(argv)
 
@@ -111,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         signature_page_limit=args.signature_page_limit,
         max_pages_per_mint=args.max_pages_per_mint,
         max_transactions_per_mint=args.max_transactions_per_mint,
+        max_targets=args.max_targets,
     )
     print(json.dumps(report["summary"], indent=2, sort_keys=True))
     return 0

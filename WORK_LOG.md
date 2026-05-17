@@ -8209,3 +8209,56 @@ Interpretation:
 Remaining:
 
 - Next logical step is a larger but still bounded execute batch with enough signature pages to determine whether any of the `34` mint accounts have short enough history to prove complete through their decision slots. Keep all rows blocked unless pagination reaches the end and all eligible decision-time transactions are fetched.
+
+### 2026-05-17 - Added Target-Limited Mint History Execute Control
+
+Active milestone:
+
+- Proof-readiness blocker reduction after Stage 9
+
+Milestone completion:
+
+- Archival Mint History Collector: `100%`
+- Bounded Execute Control: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `tests/test_archival_mint_history_collector.py`
+- `utils/collect_archival_mint_history.py`
+- `wallets/archival_mint_history_collector.py`
+
+What changed:
+
+- Added `--max-targets` to the archival mint-history collector so execute runs can be capped to a small number of mint accounts.
+- The report now records:
+  - total requirements available,
+  - requirements scanned in this run,
+  - target limit used.
+- This prevents accidental full-batch RPC usage while we learn provider behavior.
+
+Bounded 3-target probe:
+
+- requirements available: `34`,
+- requirements scanned: `3`,
+- target limit: `3`,
+- mint histories complete: `0`,
+- blocked partial history: `3`,
+- block reason: `signature_page_limit_reached`,
+- RPC failures: `0`,
+- raw transactions preserved: `0`,
+- wallet-list mutations: `0`,
+- auto trust mutations: `0`.
+
+Downstream result:
+
+- Reran archival mint supply reconstruction.
+- Reconstruction remained blocked:
+  - requirements scanned: `34`,
+  - snapshots reconstructed: `0`,
+  - blocked incomplete mint history: `34`.
+
+Remaining:
+
+- Next logical step is to raise `max_pages_per_mint` only for a tiny target batch and see whether any low-history mint can reach complete pagination. If all sampled mints still hit the page cap, this lane will likely need either deeper pagination runs or a true archival account-state provider.

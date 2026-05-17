@@ -179,11 +179,19 @@ def collect_mint_history(
     return target, raw_rows, completeness
 
 
-def build_summary(targets: list[dict[str, Any]], raw_transactions: list[dict[str, Any]]) -> dict[str, Any]:
+def build_summary(
+    targets: list[dict[str, Any]],
+    raw_transactions: list[dict[str, Any]],
+    *,
+    requirements_available: int | None = None,
+    target_limit: int | None = None,
+) -> dict[str, Any]:
     statuses = Counter(str(row.get("status") or "unknown") for row in targets)
     blocks = Counter(reason for row in targets for reason in row.get("block_reasons") or [])
     return {
+        "requirements_available": len(targets) if requirements_available is None else int(requirements_available),
         "requirements_scanned": len(targets),
+        "target_limit": target_limit,
         "mint_history_targets": len(targets),
         "mint_histories_complete": statuses.get("mint_history_complete_through_decision_slot", 0),
         "blocked_incomplete_history": statuses.get("blocked_partial_mint_history", 0),
@@ -205,9 +213,13 @@ def build_archival_mint_history_collection_report(
     signature_page_limit: int = 100,
     max_pages_per_mint: int = 5,
     max_transactions_per_mint: int = 500,
+    max_targets: int | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
-    targets = [build_target(row) for row in ready_requirements(archival_supply_plan)]
+    requirements = ready_requirements(archival_supply_plan)
+    target_limit = max(0, int(max_targets)) if max_targets is not None else None
+    limited_requirements = requirements[:target_limit] if target_limit is not None else requirements
+    targets = [build_target(row) for row in limited_requirements]
     raw_transactions: list[dict[str, Any]] = []
     completeness: dict[str, Any] = {}
 
@@ -239,7 +251,13 @@ def build_archival_mint_history_collection_report(
         "auto_trust_mutation_allowed": False,
         "wallet_trust_mutation_allowed": False,
         "execute_requested": bool(execute),
-        "summary": build_summary(targets, raw_transactions),
+        "target_limit": target_limit,
+        "summary": build_summary(
+            targets,
+            raw_transactions,
+            requirements_available=len(requirements),
+            target_limit=target_limit,
+        ),
         "targets": targets,
         "history_completeness": completeness,
         "raw_transactions": raw_transactions,

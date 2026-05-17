@@ -83,6 +83,24 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
         self.assertEqual(report["targets"][0]["status"], "pending_mint_history_collection")
         self.assertEqual(report["targets"][0]["token_mint"], "MintA")
 
+    def test_max_targets_limits_execute_scope_without_mutating_plan(self):
+        report = build_archival_mint_history_collection_report(
+            archival_supply_plan=plan(token_requirements=[
+                requirement(token_mint="MintA"),
+                requirement(token_mint="MintB"),
+                requirement(token_mint="MintC"),
+            ]),
+            execute=False,
+            max_targets=2,
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["target_limit"], 2)
+        self.assertEqual(report["summary"]["requirements_available"], 3)
+        self.assertEqual(report["summary"]["requirements_scanned"], 2)
+        self.assertEqual([row["token_mint"] for row in report["targets"]], ["MintA", "MintB"])
+        self.assertFalse(report["wallet_list_mutated"])
+
     def test_execute_marks_history_complete_only_when_signature_pagination_ends(self):
         rpc = FakeRpc(
             signatures_by_mint={
