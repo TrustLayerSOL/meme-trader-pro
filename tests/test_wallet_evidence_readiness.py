@@ -128,6 +128,23 @@ class WalletEvidenceReadinessTests(unittest.TestCase):
         self.assertEqual(report["summary"]["score_ready_market_context_records"], 43)
         self.assertEqual(report["summary"]["wallet_score_readiness_pct"], 2)
 
+    def test_stage3_readiness_accepts_forward_evidence_file_count(self):
+        enrichment = self.enrichment_report()
+        enrichment["summary"]["total_evidence_rows"] = 1037
+
+        report = build_wallet_evidence_readiness_report(
+            candidate_backfill_targets=self.target_report(),
+            wallet_history_backfill=self.history_report(),
+            wallet_evidence_enrichment=enrichment,
+            wallet_missing_market_context=self.missing_context_report(),
+            trusted_historical_market_context=self.score_ready_context_report(),
+            evidence_duplicate_count=0,
+            evidence_file_rows=1037,
+        )
+
+        self.assertEqual(report["summary"]["evidence_rows"], 1037)
+        self.assertEqual(report["summary"]["stage3_evidence_contract_completion_pct"], 100)
+
 
 if __name__ == "__main__":
     unittest.main()

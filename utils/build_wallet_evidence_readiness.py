@@ -67,6 +67,10 @@ def duplicate_evidence_count(evidence_path: Path | str) -> int:
     return duplicates
 
 
+def evidence_file_row_count(evidence_path: Path | str) -> int:
+    return len(read_jsonl(evidence_path))
+
+
 def relative_path(path: Path) -> str:
     try:
         return str(path.relative_to(ROOT))
@@ -99,6 +103,7 @@ def write_wallet_evidence_readiness_report(
         wallet_missing_market_context=read_json(missing_market_context_path),
         trusted_historical_market_context=read_json(trusted_market_context_path),
         evidence_duplicate_count=duplicate_evidence_count(evidence_path),
+        evidence_file_rows=evidence_file_row_count(evidence_path),
     )
     report["input_paths"] = {
         "candidate_backfill_targets": relative_path(candidate_targets_path),

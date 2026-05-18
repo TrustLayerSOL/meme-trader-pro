@@ -52,6 +52,7 @@ def build_wallet_evidence_readiness_report(
     wallet_missing_market_context: dict[str, Any],
     trusted_historical_market_context: dict[str, Any],
     evidence_duplicate_count: int = 0,
+    evidence_file_rows: int | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
@@ -66,7 +67,8 @@ def build_wallet_evidence_readiness_report(
     wallets_processed = safe_int(history_summary.get("wallets_processed"))
     wallets_blocked = safe_int(history_summary.get("wallets_blocked"))
     ready_for_candidate_review = safe_int(history_summary.get("ready_for_candidate_review"))
-    evidence_total_after_merge = safe_int(wallet_history_backfill.get("evidence_total_rows_after_merge"))
+    history_evidence_total_after_merge = safe_int(wallet_history_backfill.get("evidence_total_rows_after_merge"))
+    evidence_total_after_merge = safe_int(evidence_file_rows, history_evidence_total_after_merge)
     enriched_rows = safe_int(enrichment_summary.get("total_evidence_rows"))
     rows_with_entry_context = safe_int(enrichment_summary.get("rows_with_entry_context"))
     rows_with_known_outcome = safe_int(enrichment_summary.get("rows_with_known_outcome"))

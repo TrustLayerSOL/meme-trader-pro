@@ -9793,3 +9793,58 @@ Verification:
 Remaining:
 
 - Continue bounded local boundary/reconstruction attempts against lower-cost candidates, but the faster route remains a real archival account-state provider or saved historical mint-account responses for the existing request chunks.
+
+### 2026-05-18 - Forward Wallet Activity Evidence Lane
+
+Active milestone:
+
+- Stage 3 - Wallet Evidence Engine / current wallet evidence capture
+
+Milestone completion:
+
+- Stage 3 infrastructure remains `100%`
+- Wallet score readiness remains `12%`
+
+Changed files:
+
+- `wallets/forward_wallet_activity.py`
+- `utils/run_forward_wallet_activity.py`
+- `research/wallet_evidence_readiness.py`
+- `utils/build_wallet_evidence_readiness.py`
+- `tests/test_forward_wallet_activity.py`
+- `tests/test_wallet_evidence_readiness.py`
+- `research/DATA_SOURCE_MAP.md`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Confirmed current wallet discovery was stale before this work: the latest wallet-discovery status was from May 15 and no wallet-discovery process was running.
+- Ran a fresh safe wallet-discovery cycle. It produced `226` candidate wallets and `16,392` paper-watch wallets, with `21` approved review decisions still skipped in dry-run mode.
+- Added a read-only forward wallet-activity collector that samples recent tracked and paper-watch wallet transactions, parses token buy/sell deltas through the existing wallet-history parser, preserves raw transactions, and merges current rows into the same wallet evidence file.
+- Current forward rows are marked with `collection_source=forward_wallet_activity`, `forward_observation=true`, and `later_token_outcome= pending_forward_outcome` so they do not pretend to have matured outcomes.
+- Fixed Stage 3 evidence-readiness accounting so forward/current evidence rows count against the actual merged evidence file instead of making the enrichment gate look stale.
+- Rebuilt the Stage 3 evidence reports after the sample forward run.
+
+Current sample result:
+
+- Forward wallet sample: `2` wallets processed, `1` collected, `4` evidence rows created, `4` old signatures skipped, `4` raw transactions preserved.
+- Evidence file rows: `1,037`.
+- Enriched evidence rows: `1,037`.
+- Stage 3 evidence contract completion: `100%`.
+- Wallet score readiness: `12%`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_forward_wallet_activity`
+- `./trading_env/bin/python -m unittest tests.test_wallet_evidence_readiness tests.test_forward_wallet_activity tests.test_wallet_history_backfill`
+- `./trading_env/bin/python -m py_compile wallets/forward_wallet_activity.py utils/run_forward_wallet_activity.py`
+- `./trading_env/bin/python utils/enrich_wallet_history_evidence.py`
+- `./trading_env/bin/python utils/build_wallet_evidence_readiness.py`
+- `./trading_env/bin/python utils/build_wallet_evidence_recommendations.py`
+- `./trading_env/bin/python utils/build_wallet_evidence_scorecard.py`
+
+Remaining:
+
+- The forward collector is now available, but it should be run on a controlled schedule or added to a durable supervisor before we call the current-data loop fully automated.
+- Current forward rows need later outcome labeling after enough time has passed; until then they improve observation density but do not prove wallet trust.
