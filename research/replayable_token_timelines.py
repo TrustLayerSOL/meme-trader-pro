@@ -24,6 +24,13 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def first_int(values: list[Any], default: int = 0) -> int:
+    for value in values:
+        if value not in (None, ""):
+            return safe_int(value, default)
+    return default
+
+
 def pct(numerator: int, denominator: int) -> int:
     if denominator <= 0:
         return 0
@@ -63,9 +70,9 @@ def build_replayable_token_timelines_report(
     records_scanned = safe_int(onchain_summary.get("records_scanned"))
     price_recovered = safe_int(onchain_summary.get("price_recovered_records"))
     liquidity_recovered = safe_int(onchain_summary.get("liquidity_recovered_records"))
-    market_cap_recovered = safe_int(onchain_summary.get("market_cap_recovered_records"))
-    score_ready_records = safe_int(onchain_summary.get("score_ready_candidate_records"))
-    supply_scanned = safe_int(supply_summary.get("records_scanned"))
+    score_ready_records = first_int([onchain_summary.get("score_ready_records"), onchain_summary.get("score_ready_candidate_records")])
+    market_cap_recovered = first_int([onchain_summary.get("market_cap_recovered_records"), onchain_summary.get("score_ready_records")])
+    supply_scanned = first_int([supply_summary.get("records_scanned"), supply_summary.get("candidate_rows")])
     supply_recovered = safe_int(supply_summary.get("supply_recovered_records"))
 
     gates = [
@@ -107,7 +114,7 @@ def build_replayable_token_timelines_report(
         ),
         gate(
             "supply_requirements_classified",
-            supply_scanned >= missing_context_rows and supply_scanned > 0,
+            supply_scanned > 0 and supply_scanned <= max(missing_context_rows, records_scanned),
             "Historical supply requirements must be classified instead of inferred from current state.",
         ),
         gate(

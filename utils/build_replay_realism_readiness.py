@@ -17,10 +17,10 @@ from wallets.onchain_market_context_recovery import relative_path  # noqa: E402
 
 DEFAULT_REPLAY_SUMMARY_PATH = ROOT / "data" / "historical_replay" / "summary.json"
 DEFAULT_TRUSTED_MARKET_CONTEXT_REPORT_PATH = (
-    ROOT / "data" / "reports" / "historical_backfill" / "trusted_onchain_market_context_report.json"
+    ROOT / "data" / "reports" / "historical_backfill" / "score_ready_market_context_report.json"
 )
 DEFAULT_SUPPLY_EVIDENCE_REPORT_PATH = (
-    ROOT / "data" / "reports" / "historical_backfill" / "onchain_supply_evidence_report.json"
+    ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_report.json"
 )
 DEFAULT_REPORT_PATH = ROOT / "data" / "reports" / "historical_backfill" / "replay_realism_readiness_report.json"
 

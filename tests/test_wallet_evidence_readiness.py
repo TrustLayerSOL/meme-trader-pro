@@ -72,6 +72,17 @@ class WalletEvidenceReadinessTests(unittest.TestCase):
             },
         }
 
+    def score_ready_context_report(self):
+        return {
+            "mode": "SCORE_READY_MARKET_CONTEXT_REVIEW_ONLY",
+            "live_execution_locked": True,
+            "summary": {
+                "records_scanned": 643,
+                "score_ready_records": 43,
+                "near_score_ready_records": 589,
+            },
+        }
+
     def test_stage3_contract_can_complete_while_score_readiness_is_low(self):
         report = build_wallet_evidence_readiness_report(
             candidate_backfill_targets=self.target_report(),
@@ -103,6 +114,19 @@ class WalletEvidenceReadinessTests(unittest.TestCase):
 
         self.assertLess(report["summary"]["stage3_evidence_contract_completion_pct"], 100)
         self.assertIn("evidence_file_has_duplicates", report["failed_gates"])
+
+    def test_stage3_readiness_accepts_score_ready_market_context_classifier(self):
+        report = build_wallet_evidence_readiness_report(
+            candidate_backfill_targets=self.target_report(),
+            wallet_history_backfill=self.history_report(),
+            wallet_evidence_enrichment=self.enrichment_report(),
+            wallet_missing_market_context=self.missing_context_report(),
+            trusted_historical_market_context=self.score_ready_context_report(),
+            evidence_duplicate_count=0,
+        )
+
+        self.assertEqual(report["summary"]["score_ready_market_context_records"], 43)
+        self.assertEqual(report["summary"]["wallet_score_readiness_pct"], 2)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from research.replayable_token_timelines import build_replayable_token_timelines_report
+from utils.build_replayable_token_timelines import write_replayable_token_timelines_report
 
 
 class ReplayableTokenTimelinesTests(unittest.TestCase):
@@ -176,6 +179,145 @@ class ReplayableTokenTimelinesTests(unittest.TestCase):
         self.assertEqual(report["summary"]["timeline_data_readiness_pct"], 2)
         self.assertIn("trust_changes_blocked", report["passed_gates"])
         self.assertFalse(report["wallet_list_mutated"])
+
+    def test_timeline_layer_accepts_score_ready_and_archival_supply_summaries(self):
+        report = build_replayable_token_timelines_report(
+            evidence_layer_completion={
+                "live_execution_locked": True,
+                "wallet_list_mutated": False,
+                "summary": {
+                    "evidence_layer_completion_pct": 100,
+                    "wallet_score_readiness_pct": 2,
+                },
+            },
+            recovery_closeout={
+                "live_execution_locked": True,
+                "summary": {
+                    "still_blocked_wallets": 36,
+                    "needs_market_context": 32,
+                    "needs_outcome_labels": 36,
+                    "needs_transaction_linkage": 0,
+                },
+            },
+            missing_market_context={
+                "live_execution_locked": True,
+                "summary": {
+                    "target_mints": 77,
+                    "missing_market_context_rows": 643,
+                },
+            },
+            onchain_market_context={
+                "live_execution_locked": True,
+                "summary": {
+                    "records_scanned": 643,
+                    "price_recovered_records": 634,
+                    "liquidity_recovered_records": 632,
+                    "score_ready_records": 43,
+                },
+            },
+            supply_evidence={
+                "live_execution_locked": True,
+                "summary": {
+                    "candidate_rows": 591,
+                    "supply_recovered_records": 2,
+                },
+            },
+            stage6_readiness={
+                "live_execution_locked": True,
+                "summary": {
+                    "stage6_realism_contract_completion_pct": 100,
+                    "data_score_readiness_pct": 7,
+                },
+                "blocking_data_gaps": ["historical_supply_still_missing"],
+            },
+            stage8_readiness={
+                "live_execution_locked": True,
+                "wallet_list_mutated": False,
+                "summary": {
+                    "stage8_validation_contract_completion_pct": 100,
+                    "proof_readiness_pct": 6,
+                },
+            },
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["score_ready_records"], 43)
+        self.assertEqual(report["summary"]["supply_records_scanned"], 591)
+        self.assertEqual(report["summary"]["supply_recovered_records"], 2)
+        self.assertEqual(report["summary"]["timeline_data_readiness_pct"], 6)
+
+    def test_writer_merges_onchain_inventory_with_score_ready_classifier(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence_path = root / "evidence.json"
+            closeout_path = root / "closeout.json"
+            missing_path = root / "missing.json"
+            onchain_path = root / "onchain.json"
+            score_ready_path = root / "score_ready.json"
+            supply_path = root / "supply.json"
+            stage6_path = root / "stage6.json"
+            stage8_path = root / "stage8.json"
+            output_path = root / "timeline.json"
+
+            evidence_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "wallet_list_mutated": False,
+                "summary": {"evidence_layer_completion_pct": 100, "wallet_score_readiness_pct": 2},
+            }), encoding="utf-8")
+            closeout_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "summary": {"still_blocked_wallets": 36, "needs_market_context": 32, "needs_outcome_labels": 36, "needs_transaction_linkage": 0},
+            }), encoding="utf-8")
+            missing_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "summary": {"target_mints": 77, "missing_market_context_rows": 643},
+            }), encoding="utf-8")
+            onchain_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "summary": {
+                    "records_scanned": 643,
+                    "price_recovered_records": 634,
+                    "liquidity_recovered_records": 632,
+                    "market_cap_recovered_records": 41,
+                    "score_ready_candidate_records": 41,
+                },
+            }), encoding="utf-8")
+            score_ready_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "summary": {"records_scanned": 643, "score_ready_records": 43},
+            }), encoding="utf-8")
+            supply_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "summary": {"candidate_rows": 591, "supply_recovered_records": 2},
+            }), encoding="utf-8")
+            stage6_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "summary": {"stage6_realism_contract_completion_pct": 100, "data_score_readiness_pct": 7},
+                "blocking_data_gaps": ["historical_supply_still_missing"],
+            }), encoding="utf-8")
+            stage8_path.write_text(__import__("json").dumps({
+                "live_execution_locked": True,
+                "wallet_list_mutated": False,
+                "summary": {"stage8_validation_contract_completion_pct": 100, "proof_readiness_pct": 7},
+            }), encoding="utf-8")
+
+            report = write_replayable_token_timelines_report(
+                evidence_layer_path=evidence_path,
+                recovery_closeout_path=closeout_path,
+                missing_market_context_path=missing_path,
+                onchain_market_context_path=onchain_path,
+                score_ready_market_context_path=score_ready_path,
+                supply_evidence_path=supply_path,
+                stage6_readiness_path=stage6_path,
+                stage8_readiness_path=stage8_path,
+                output_path=output_path,
+            )
+
+            self.assertEqual(report["summary"]["replayable_token_timelines_completion_pct"], 100)
+            self.assertEqual(report["summary"]["price_recovered_records"], 634)
+            self.assertEqual(report["summary"]["liquidity_recovered_records"], 632)
+            self.assertEqual(report["summary"]["score_ready_records"], 43)
+            self.assertEqual(report["summary"]["supply_records_scanned"], 591)
 
 
 if __name__ == "__main__":

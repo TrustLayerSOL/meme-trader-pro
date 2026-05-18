@@ -23,6 +23,13 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def first_int(values: list[Any], default: int = 0) -> int:
+    for value in values:
+        if value not in (None, ""):
+            return safe_int(value, default)
+    return default
+
+
 def expected_window_labels() -> list[str]:
     return [label for label, _seconds in DEFAULT_EVALUATION_WINDOWS]
 
@@ -35,6 +42,32 @@ def pct(numerator: int, denominator: int) -> int:
     if denominator <= 0:
         return 0
     return int(round((numerator / denominator) * 100))
+
+
+def derived_trust_gate_pct(summary: dict[str, Any], *, records_scanned: int, score_ready_records: int) -> int:
+    explicit = summary.get("trust_gate_completion_pct")
+    if explicit not in (None, ""):
+        return safe_int(explicit)
+    classified_rows = (
+        score_ready_records
+        + safe_int(summary.get("near_score_ready_records"))
+        + safe_int(summary.get("blocked_missing_price_rows"))
+        + safe_int(summary.get("blocked_missing_liquidity_rows"))
+        + safe_int(summary.get("blocked_not_decision_time_safe_rows"))
+        + safe_int(summary.get("needs_market_cap_recompute_rows"))
+    )
+    return pct(classified_rows, records_scanned)
+
+
+def required_field_counts(summary: dict[str, Any]) -> dict[str, int]:
+    explicit = as_dict(summary.get("required_field_counts"))
+    if explicit:
+        return {str(key): safe_int(value) for key, value in explicit.items()}
+    return {
+        "price": safe_int(summary.get("blocked_missing_price_rows")),
+        "liquidity": safe_int(summary.get("blocked_missing_liquidity_rows")),
+        "market_cap": safe_int(summary.get("near_score_ready_records")) + safe_int(summary.get("needs_market_cap_recompute_rows")),
+    }
 
 
 def build_replay_realism_readiness_report(
@@ -55,9 +88,13 @@ def build_replay_realism_readiness_report(
     score_ready_records = safe_int(trusted_summary.get("score_ready_records"))
     scanned_records = safe_int(trusted_summary.get("records_scanned"))
     supply_recovered = safe_int(supply_summary.get("supply_recovered_records"))
-    supply_scanned = safe_int(supply_summary.get("records_scanned"))
+    supply_scanned = first_int([supply_summary.get("records_scanned"), supply_summary.get("candidate_rows")])
     unsafe_current_supply = safe_int(supply_summary.get("unsafe_current_only_records"))
-    trusted_gate_pct = safe_int(trusted_summary.get("trust_gate_completion_pct"))
+    trusted_gate_pct = derived_trust_gate_pct(
+        trusted_summary,
+        records_scanned=scanned_records,
+        score_ready_records=score_ready_records,
+    )
     home_built_pct = safe_int(trusted_summary.get("home_built_onchain_reconstruction_pct"))
 
     gates = [
@@ -100,9 +137,9 @@ def build_replay_realism_readiness_report(
     blocking_data_gaps: list[str] = []
     if score_ready_records <= 0:
         blocking_data_gaps.append("no_score_ready_historical_market_context")
-    if supply_recovered <= 0 and supply_scanned > 0:
+    if supply_recovered < supply_scanned and supply_scanned > 0:
         blocking_data_gaps.append("historical_supply_still_missing")
-    required_fields = as_dict(trusted_summary.get("required_field_counts"))
+    required_fields = required_field_counts(trusted_summary)
     for field in ("price", "liquidity", "market_cap"):
         if safe_int(required_fields.get(field)) > 0:
             blocking_data_gaps.append(f"missing_{field}")

@@ -19,6 +19,9 @@ from wallets.historical_market_context_backfill import relative_path  # noqa: E4
 
 DEFAULT_PLAN_PATH = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_recovery_plan.json"
 DEFAULT_SNAPSHOTS_PATH = ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_supply_snapshots.jsonl"
+DEFAULT_RECONSTRUCTION_SNAPSHOTS_PATH = (
+    ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_supply_reconstruction_snapshots.jsonl"
+)
 DEFAULT_REPORT_PATH = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_report.json"
 DEFAULT_RECORDS_PATH = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_records.jsonl"
 
@@ -37,22 +40,28 @@ def write_archival_supply_evidence_report(
     *,
     plan_path: Path | str = DEFAULT_PLAN_PATH,
     snapshots_path: Path | str = DEFAULT_SNAPSHOTS_PATH,
+    extra_snapshots_paths: list[Path | str] | None = None,
     report_path: Path | str = DEFAULT_REPORT_PATH,
     output_records_path: Path | str = DEFAULT_RECORDS_PATH,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     plan_path = Path(plan_path)
     snapshots_path = Path(snapshots_path)
+    extra_paths = [Path(path) for path in (extra_snapshots_paths or [])]
     report_path = Path(report_path)
     output_records_path = Path(output_records_path)
+    supply_snapshots = read_jsonl(snapshots_path)
+    for path in extra_paths:
+        supply_snapshots.extend(read_jsonl(path))
     report = build_archival_supply_evidence_report(
         archival_supply_plan=read_json(plan_path, {"candidate_rows": [], "token_requirements": []}),
-        supply_snapshots=read_jsonl(snapshots_path),
+        supply_snapshots=supply_snapshots,
         generated_at=generated_at,
     )
     report["input_paths"] = {
         "plan": relative_path(plan_path, ROOT),
         "snapshots": relative_path(snapshots_path, ROOT),
+        "extra_snapshots": [relative_path(path, ROOT) for path in extra_paths],
     }
     report["output_paths"] = {
         "report": relative_path(report_path, ROOT),
@@ -71,6 +80,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a read-only archival supply evidence report.")
     parser.add_argument("--plan-path", type=Path, default=DEFAULT_PLAN_PATH)
     parser.add_argument("--snapshots-path", type=Path, default=DEFAULT_SNAPSHOTS_PATH)
+    parser.add_argument(
+        "--extra-snapshots-path",
+        action="append",
+        type=Path,
+        default=None,
+        help="Additional historical supply snapshot JSONL path. Defaults to local mint/burn reconstruction output.",
+    )
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--records-path", type=Path, default=DEFAULT_RECORDS_PATH)
     return parser.parse_args(argv)
@@ -81,6 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     report = write_archival_supply_evidence_report(
         plan_path=args.plan_path,
         snapshots_path=args.snapshots_path,
+        extra_snapshots_paths=args.extra_snapshots_path
+        if args.extra_snapshots_path is not None
+        else [DEFAULT_RECONSTRUCTION_SNAPSHOTS_PATH],
         report_path=args.report_path,
         output_records_path=args.records_path,
     )

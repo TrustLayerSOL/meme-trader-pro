@@ -19,7 +19,7 @@ DEFAULT_CANDIDATE_TARGETS = ROOT / "data" / "wallet_candidate_backfill_targets.j
 DEFAULT_HISTORY_BACKFILL = ROOT / "data" / "wallet_backfills" / "wallet_history_backfill_report.json"
 DEFAULT_EVIDENCE_ENRICHMENT = ROOT / "data" / "wallet_backfills" / "wallet_evidence_enrichment_report.json"
 DEFAULT_MISSING_MARKET_CONTEXT = ROOT / "data" / "wallet_backfills" / "wallet_missing_market_context_report.json"
-DEFAULT_TRUSTED_MARKET_CONTEXT = ROOT / "data" / "reports" / "historical_backfill" / "trusted_onchain_market_context_report.json"
+DEFAULT_TRUSTED_MARKET_CONTEXT = ROOT / "data" / "reports" / "historical_backfill" / "score_ready_market_context_report.json"
 DEFAULT_EVIDENCE = ROOT / "data" / "wallet_evidence" / "wallet_history_evidence.jsonl"
 DEFAULT_REPORT = ROOT / "data" / "reports" / "wallet_backfills" / "wallet_evidence_readiness_report.json"
 

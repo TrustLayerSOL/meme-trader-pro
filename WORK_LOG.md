@@ -9479,3 +9479,64 @@ Verification:
 Remaining:
 
 - Next logical step is to configure a real archival account-state provider endpoint locally, run `utils/capture_archival_mint_supply_provider_responses.py --execute`, and then import only responses whose context slots are at or before each decision slot.
+
+### 2026-05-18 - Home-Built Archival Supply Recovery Push
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Stage 8 proof readiness: `11%`
+- Top-level proof readiness: `2%`
+
+Changed files:
+
+- `wallets/archival_mint_supply_reconstruction.py`
+- `utils/build_archival_supply_evidence.py`
+- `utils/build_replay_realism_readiness.py`
+- `utils/build_replayable_token_timelines.py`
+- `utils/build_wallet_evidence_readiness.py`
+- `research/replay_realism_readiness.py`
+- `research/replayable_token_timelines.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- relevant tests
+
+What changed:
+
+- Added replay-safe decimal recovery for mint/burn reconstruction from the same historical transaction token-balance metadata when parsed mint instructions omit decimals.
+- Wired reconstructed complete-history mint supply snapshots into the archival supply evidence importer.
+- Updated Stage 3, Stage 6, and timeline report builders to consume the current score-ready market-context classifier and archival supply evidence instead of stale intermediate supply/context reports.
+- Ran bounded read-only mint-history pagination from local/on-chain evidence only. No current supply, current market cap, wallet trust mutation, live execution, or provider substitution was used.
+
+Current report state:
+
+- Mint requirements scanned: `75`
+- Checkpointed tokens: `75`
+- Tokens reached decision slot: `43`
+- Complete mint-account histories: `10`
+- Reconstructed supply snapshots: `10`
+- Valid archival supply evidence rows: `36`
+- Rows upgraded from near-score-ready to score-ready: `36`
+- Score-ready market-context rows: `77`
+- Near-score-ready rows still needing archival supply: `555`
+- Stage 6 data score readiness: `12%`
+- Stage 8 proof readiness: `11%`
+- Top-level proof readiness: `2%`
+
+Important limitation:
+
+- The top-level proof-readiness gate cannot honestly reach `100%` from this recovery lane alone. It remains pinned at `2%` because wallet evidence score readiness is limited by only `24` known-outcome rows out of `1,033` wallet evidence rows, and fillability remains `52%` vs the `70%` proof threshold.
+
+Verification:
+
+- Focused reconstruction/evidence/report tests pass.
+- The full report chain was rebuilt through proof-readiness export.
+- Live execution remained locked and wallet-list mutations remained `0`.
+
+Remaining:
+
+- Next logical step is to attack the outcome-label density blocker for wallet evidence, then continue archival supply recovery/provider validation for the remaining `555` near-score-ready rows.

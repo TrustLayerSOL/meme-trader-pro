@@ -161,6 +161,36 @@ class ArchivalSupplyEvidenceTests(unittest.TestCase):
             saved = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["mode"], "ARCHIVAL_SUPPLY_EVIDENCE_REVIEW_ONLY")
 
+    def test_writer_merges_reconstructed_supply_snapshots_with_provider_snapshots(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "archival_supply_recovery_plan.json"
+            provider_snapshots_path = root / "provider_snapshots.jsonl"
+            reconstructed_snapshots_path = root / "reconstructed_snapshots.jsonl"
+            report_path = root / "archival_supply_evidence_report.json"
+            records_path = root / "archival_supply_evidence_records.jsonl"
+            plan_path.write_text(
+                json.dumps(plan(candidate_rows=[candidate(token_mint="MintB", decision_slot=120)])),
+                encoding="utf-8",
+            )
+            provider_snapshots_path.write_text("", encoding="utf-8")
+            reconstructed_snapshots_path.write_text(
+                json.dumps(snapshot(token_mint="MintB", slot=100, source="mint_burn_history_reconstruction")) + "\n",
+                encoding="utf-8",
+            )
+
+            report = write_archival_supply_evidence_report(
+                plan_path=plan_path,
+                snapshots_path=provider_snapshots_path,
+                extra_snapshots_paths=[reconstructed_snapshots_path],
+                report_path=report_path,
+                output_records_path=records_path,
+                generated_at=123.0,
+            )
+
+            self.assertEqual(report["summary"]["supply_recovered_records"], 1)
+            self.assertEqual(report["records"][0]["source"], "mint_burn_history_reconstruction")
+
 
 if __name__ == "__main__":
     unittest.main()

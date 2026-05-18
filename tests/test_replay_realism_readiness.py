@@ -46,6 +46,31 @@ class ReplayRealismReadinessTests(unittest.TestCase):
             },
         }
 
+    def score_ready_context_report(self):
+        return {
+            "mode": "SCORE_READY_MARKET_CONTEXT_REVIEW_ONLY",
+            "live_execution_locked": True,
+            "summary": {
+                "records_scanned": 643,
+                "score_ready_records": 43,
+                "blocked_missing_price_rows": 9,
+                "blocked_missing_liquidity_rows": 2,
+                "near_score_ready_records": 589,
+            },
+        }
+
+    def archival_supply_report(self):
+        return {
+            "mode": "ARCHIVAL_SUPPLY_EVIDENCE_REVIEW_ONLY",
+            "live_execution_locked": True,
+            "summary": {
+                "candidate_rows": 591,
+                "supply_recovered_records": 2,
+                "blocked_missing_snapshot_records": 589,
+                "unsafe_current_only_records": 0,
+            },
+        }
+
     def test_readiness_marks_stage6_contract_complete_but_data_not_score_ready(self):
         report = build_replay_realism_readiness_report(
             replay_summary=self.replay_summary(),
@@ -98,6 +123,21 @@ class ReplayRealismReadinessTests(unittest.TestCase):
             self.assertTrue(out_path.exists())
             self.assertEqual(report["summary"]["stage6_realism_contract_completion_pct"], 100)
             self.assertIn("input_paths", report)
+
+    def test_readiness_accepts_score_ready_classifier_and_archival_supply_schema(self):
+        report = build_replay_realism_readiness_report(
+            replay_summary=self.replay_summary(),
+            trusted_market_context_report=self.score_ready_context_report(),
+            supply_evidence_report=self.archival_supply_report(),
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["score_ready_records"], 43)
+        self.assertEqual(report["summary"]["historical_market_context_records_scanned"], 643)
+        self.assertEqual(report["summary"]["supply_recovered_records"], 2)
+        self.assertEqual(report["summary"]["supply_records_scanned"], 591)
+        self.assertEqual(report["summary"]["data_score_readiness_pct"], 7)
+        self.assertIn("historical_supply_still_missing", report["blocking_data_gaps"])
 
 
 if __name__ == "__main__":

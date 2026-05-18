@@ -67,6 +67,22 @@ def all_instructions(row: dict[str, Any]) -> list[dict[str, Any]]:
     return top_level_instructions(row) + inner_instructions(row)
 
 
+def balance_decimals_by_mint(row: dict[str, Any]) -> dict[str, int]:
+    body = tx_body(row)
+    meta = as_dict(body.get("meta"))
+    decimals: dict[str, int] = {}
+    for field in ("preTokenBalances", "postTokenBalances"):
+        for balance in meta.get(field) or []:
+            if not isinstance(balance, dict):
+                continue
+            mint = str(balance.get("mint") or "").strip()
+            ui_amount = as_dict(balance.get("uiTokenAmount"))
+            parsed_decimals = safe_int(ui_amount.get("decimals"), -1)
+            if mint and parsed_decimals >= 0:
+                decimals[mint] = parsed_decimals
+    return decimals
+
+
 def token_amount(info: dict[str, Any]) -> tuple[int | None, int | None]:
     token_amount_row = as_dict(info.get("tokenAmount"))
     amount = info.get("amount", token_amount_row.get("amount"))
@@ -87,6 +103,7 @@ def parsed_supply_events(raw_transactions: list[dict[str, Any]]) -> list[dict[st
         if slot is None:
             continue
         signature = tx_signature(row)
+        balance_decimals = balance_decimals_by_mint(row)
         for instruction in all_instructions(row):
             parsed = as_dict(instruction.get("parsed"))
             event_type = str(parsed.get("type") or "").strip()
@@ -97,6 +114,8 @@ def parsed_supply_events(raw_transactions: list[dict[str, Any]]) -> list[dict[st
             amount, decimals = token_amount(info)
             if not mint or amount is None:
                 continue
+            if decimals is None:
+                decimals = balance_decimals.get(mint)
             direction = 1 if event_type in MINT_EVENT_TYPES else -1
             events.append({
                 "version": VERSION,

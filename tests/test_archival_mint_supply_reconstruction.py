@@ -48,6 +48,13 @@ def tx(slot, signature, instructions):
     }
 
 
+def tx_with_meta_balances(slot, signature, instructions, balances):
+    row = tx(slot, signature, instructions)
+    row["transaction"]["meta"]["preTokenBalances"] = balances
+    row["transaction"]["meta"]["postTokenBalances"] = balances
+    return row
+
+
 def mint_to(amount, decimals=6, mint="MintA"):
     return {
         "program": "spl-token",
@@ -59,6 +66,19 @@ def mint_to(amount, decimals=6, mint="MintA"):
                     "amount": str(amount),
                     "decimals": decimals,
                 },
+            },
+        },
+    }
+
+
+def mint_to_without_decimals(amount, mint="MintA"):
+    return {
+        "program": "spl-token",
+        "parsed": {
+            "type": "mintTo",
+            "info": {
+                "mint": mint,
+                "amount": str(amount),
             },
         },
     }
@@ -104,6 +124,25 @@ class ArchivalMintSupplyReconstructionTests(unittest.TestCase):
         self.assertEqual(report["snapshots"][0]["decimals"], 6)
         self.assertEqual(report["snapshots"][0]["source"], "mint_burn_history_reconstruction")
         self.assertTrue(report["snapshots"][0]["decision_time_safe"])
+
+    def test_recovers_missing_instruction_decimals_from_same_transaction_token_balances(self):
+        report = build_archival_mint_supply_reconstruction_report(
+            archival_supply_plan=plan(),
+            raw_transactions=[
+                tx_with_meta_balances(
+                    10,
+                    "SigMint",
+                    [mint_to_without_decimals(1_000_000_000)],
+                    [{"mint": "MintA", "uiTokenAmount": {"decimals": 6}}],
+                ),
+            ],
+            history_completeness={"MintA": {"complete_through_slot": 120, "source": "fixture_complete_history"}},
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["snapshots_reconstructed"], 1)
+        self.assertEqual(report["snapshots"][0]["raw_supply"], "1000000000")
+        self.assertEqual(report["snapshots"][0]["decimals"], 6)
 
     def test_blocks_local_transaction_artifacts_when_mint_history_completeness_is_unknown(self):
         report = build_archival_mint_supply_reconstruction_report(
