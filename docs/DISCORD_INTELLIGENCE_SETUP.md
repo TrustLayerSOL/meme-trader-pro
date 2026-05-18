@@ -88,3 +88,9 @@ Send only after webhooks are configured and the report has been reviewed:
 - Missing channel webhooks block only those channel events.
 - Dispatch never changes wallet trust, wallet lists, paper trades, or live execution.
 - Live execution remains locked.
+
+## Troubleshooting
+
+- If a webhook post returns `403`, verify the copied Discord webhook URL with a single controlled test post before changing routing logic.
+- MemeTraderPro sends Discord posts with an explicit `User-Agent` header because Discord can reject default Python request clients.
+- Do not paste webhook URLs into logs, committed docs, or chat transcripts.

@@ -8925,3 +8925,53 @@ Verification:
 Remaining:
 
 - Next logical step is to create MemeTraderPro-specific Discord channels/webhooks, paste webhook URLs into `data/discord_webhooks.local.json`, dry-run once, then send one controlled route-check message.
+
+### 2026-05-17 - Discord Intelligence Server Route Check
+
+Active milestone:
+
+- Stage 9 - Behavioral Intelligence Layer / sparse notification review surface
+
+Milestone completion:
+
+- Discord Behavioral Intelligence Routing: `100%` for the first controlled route.
+
+Discord setup completed:
+
+- Created the dedicated `MemeTraderPro Intelligence` Discord server.
+- Created project-specific channels:
+  - `#wallet-review`
+  - `#behavioral-patterns`
+  - `#replay-validation`
+  - `#regime-monitor`
+  - `#wallet-degradation`
+  - `#research-updates`
+- Created and stored the `#research-updates` webhook locally in `data/discord_webhooks.local.json`.
+- The webhook file remains ignored and was not committed.
+
+Code fix:
+
+- Discord accepted a controlled `curl` test post but rejected the Python sender with `403`.
+- Root cause: the Python sender used the default Python request identity.
+- Fixed `notifications/discord_dispatcher.py` to send a Discord-compatible `User-Agent`.
+- Added regression coverage in `tests/test_discord_dispatcher.py`.
+- Added troubleshooting notes to `docs/DISCORD_INTELLIGENCE_SETUP.md`.
+
+Current dispatch result:
+
+- events ready: `5`
+- events sent: `1`
+- events blocked: `4`
+- blocked reason: missing channel webhook for the unconfigured channels
+- failed events: `0`
+- live execution locked: `true`
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_discord_dispatcher -v`
+- `./trading_env/bin/python utils/dispatch_discord_intelligence.py`
+- `./trading_env/bin/python utils/dispatch_discord_intelligence.py --send`
+
+Remaining:
+
+- Next logical step is to add the remaining channel webhooks one at a time, dry-run after each route, and keep Discord sparse until the proof layer produces stronger evidence.

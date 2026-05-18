@@ -1,7 +1,8 @@
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 
-from notifications.discord_dispatcher import build_dispatch_plan
+from notifications.discord_dispatcher import build_dispatch_plan, post_discord_webhook
 
 
 class DiscordDispatcherTests(unittest.TestCase):
@@ -65,3 +66,24 @@ class DiscordDispatcherTests(unittest.TestCase):
         self.assertEqual(plan["events_failed"], 0)
         self.assertEqual(plan["blocked_events"][0]["event_id"], "missing")
         self.assertEqual(mocked_urlopen.call_count, 2)
+
+    def test_discord_post_uses_discord_compatible_user_agent(self):
+        captured_request = None
+
+        @contextmanager
+        def fake_urlopen(request, timeout):
+            nonlocal captured_request
+            captured_request = request
+            response = mock.Mock()
+            response.status = 204
+            yield response
+
+        with mock.patch("notifications.discord_dispatcher.urlopen", side_effect=fake_urlopen):
+            status = post_discord_webhook(
+                "https://discord.com/api/webhooks/test",
+                {"content": "route check"},
+            )
+
+        self.assertEqual(status, 204)
+        self.assertIsNotNone(captured_request)
+        self.assertIn("MemeTraderPro", captured_request.headers.get("User-agent", ""))

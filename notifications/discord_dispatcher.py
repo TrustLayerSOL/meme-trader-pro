@@ -32,7 +32,10 @@ def post_discord_webhook(webhook_url: str, payload: dict[str, Any], timeout: flo
     request = Request(
         webhook_url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "MemeTraderPro/1.0 DiscordIntelligence",
+        },
         method="POST",
     )
     with urlopen(request, timeout=timeout) as response:
