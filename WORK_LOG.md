@@ -9420,3 +9420,62 @@ Verification:
 Remaining:
 
 - Next logical step is to validate a real archival account-state provider response against one of the generated request chunks, then import the saved response batch only if provider context slots are at or before the requested decision slots.
+
+### 2026-05-18 - Chunked Archival Mint Snapshot Provider Capture
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Archival provider capture lane: `100%`
+- Proof readiness: `2%`
+
+Changed files:
+
+- `wallets/archival_mint_snapshot_provider_capture.py`
+- `utils/capture_archival_mint_supply_provider_responses.py`
+- `tests/test_archival_mint_snapshot_provider_capture.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a review-only batch capture lane for the existing archival mint snapshot request chunks.
+- The capture lane can post the `6` generated request chunks only when explicitly executed with a configured archival provider endpoint.
+- Captured provider responses are combined into `data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json`, which is the saved-response file already consumed by the importer.
+- Reports preserve proof-readiness status without storing provider URLs or API keys, importing supply, promoting wallets, demoting wallets, mutating lists, or touching live execution.
+
+Current report state:
+
+- request chunks available: `6`
+- requests available: `550`
+- provider endpoint configured locally: `false`
+- provider calls performed: `0`
+- raw response chunks preserved: `0`
+- combined responses: `0`
+- imported provider responses: `0`
+- valid archival supply rows: `0`
+- rows upgraded from near-score-ready to score-ready: `0`
+- proof readiness: `2%`
+
+Important limitation:
+
+- This closes the local capture tooling gap but does not recover evidence by itself. A real archival account-state endpoint or saved historical response batch is still required before decision-time supply / market-cap proof can improve.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_snapshot_provider_capture -v`
+- `./trading_env/bin/python utils/capture_archival_mint_supply_provider_responses.py`
+- `./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py`
+- `./trading_env/bin/python utils/build_archival_supply_evidence.py`
+- `./trading_env/bin/python utils/build_score_ready_market_context.py`
+- `./trading_env/bin/python utils/build_proof_readiness_blocker_reduction.py`
+- `./trading_env/bin/python utils/export_archival_supply_proof_readiness.py`
+
+Remaining:
+
+- Next logical step is to configure a real archival account-state provider endpoint locally, run `utils/capture_archival_mint_supply_provider_responses.py --execute`, and then import only responses whose context slots are at or before each decision slot.
