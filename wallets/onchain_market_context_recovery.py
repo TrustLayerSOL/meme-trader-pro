@@ -18,6 +18,7 @@ WSOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 STABLE_USD_QUOTE_MINTS = {USDC_MINT, USDT_MINT}
+LAMPORTS_PER_SOL = 1_000_000_000
 
 
 def positive_float(value: Any) -> float | None:
@@ -48,6 +49,36 @@ def balance_rows_by_owner(tx: dict[str, Any], field: str) -> dict[str, dict[str,
         owners.setdefault(owner, {})
         owners[owner][mint] = owners[owner].get(mint, 0.0) + (token_amount(row) or 0.0)
     return owners
+
+
+def account_key_pubkeys(tx: dict[str, Any]) -> list[str]:
+    message = as_dict(as_dict(tx.get("transaction")).get("message"))
+    pubkeys: list[str] = []
+    for row in message.get("accountKeys") or []:
+        if isinstance(row, dict):
+            pubkey = str(row.get("pubkey") or "").strip()
+        else:
+            pubkey = str(row or "").strip()
+        pubkeys.append(pubkey)
+    return pubkeys
+
+
+def native_sol_balances_by_account(tx: dict[str, Any]) -> dict[str, dict[str, float]]:
+    meta = as_dict(tx.get("meta"))
+    pubkeys = account_key_pubkeys(tx)
+    pre_balances = meta.get("preBalances") or []
+    post_balances = meta.get("postBalances") or []
+    balances: dict[str, dict[str, float]] = {}
+    for index, pubkey in enumerate(pubkeys):
+        if not pubkey:
+            continue
+        pre = safe_float(pre_balances[index] if index < len(pre_balances) else None, 0.0) or 0.0
+        post = safe_float(post_balances[index] if index < len(post_balances) else None, 0.0) or 0.0
+        balances[pubkey] = {
+            "pre": pre / LAMPORTS_PER_SOL,
+            "post": post / LAMPORTS_PER_SOL,
+        }
+    return balances
 
 
 def quote_usd_price_from_context(
@@ -94,6 +125,7 @@ def pool_candidates_from_transaction(
     tx = as_dict(raw.get("transaction"))
     pre_by_owner = balance_rows_by_owner(tx, "preTokenBalances")
     post_by_owner = balance_rows_by_owner(tx, "postTokenBalances")
+    native_sol_by_account = native_sol_balances_by_account(tx)
     owners = set(pre_by_owner) | set(post_by_owner)
     quote_mints = [quote_mint] if quote_mint else []
     quote_mints.extend(mint for mint in QUOTE_MINTS if mint not in quote_mints)
@@ -113,6 +145,13 @@ def pool_candidates_from_transaction(
                 continue
             quote_pre = safe_float(pre.get(candidate_quote_mint), 0.0) or 0.0
             quote_post = safe_float(post.get(candidate_quote_mint), 0.0) or 0.0
+            quote_reserve_source = "token_balance_owner"
+            if candidate_quote_mint == WSOL_MINT and quote_pre <= 0 and quote_post <= 0:
+                native = native_sol_by_account.get(owner) or {}
+                quote_pre = safe_float(native.get("pre"), 0.0) or 0.0
+                quote_post = safe_float(native.get("post"), 0.0) or 0.0
+                if quote_pre > 0 or quote_post > 0:
+                    quote_reserve_source = "native_sol_account_balance"
             if quote_pre <= 0 and quote_post <= 0:
                 continue
             candidates.append(
@@ -123,6 +162,7 @@ def pool_candidates_from_transaction(
                     "pool_token_reserve_post": token_post,
                     "pool_quote_reserve_pre": quote_pre,
                     "pool_quote_reserve_post": quote_post,
+                    "pool_quote_reserve_source": quote_reserve_source,
                     "rank_quote_reserve": max(quote_pre, quote_post),
                 }
             )
@@ -234,6 +274,32 @@ def recover_record(
         else:
             candidate = candidates[0]
             quote_mint = candidate.get("quote_mint") or quote_mint
+            quote_post = positive_float(candidate.get("pool_quote_reserve_post"))
+            quote_pre = positive_float(candidate.get("pool_quote_reserve_pre"))
+            quote_reserve = quote_post if quote_post is not None else quote_pre
+            token_post = positive_float(candidate.get("pool_token_reserve_post"))
+            token_pre = positive_float(candidate.get("pool_token_reserve_pre"))
+            token_reserve = token_post if token_post is not None else token_pre
+            context.update(
+                {
+                    "source": context.get("source") or "raw_transaction_history",
+                    "quote_mint": quote_mint,
+                    "pool_context_source": "raw_transaction_pool_balances",
+                    "pool_owner": candidate["pool_owner"],
+                    "pool_quote_mint": candidate["quote_mint"],
+                    "pool_quote_reserve_pre": candidate["pool_quote_reserve_pre"],
+                    "pool_quote_reserve_post": candidate["pool_quote_reserve_post"],
+                    "pool_quote_reserve_source": candidate.get("pool_quote_reserve_source"),
+                    "pool_token_reserve_pre": candidate["pool_token_reserve_pre"],
+                    "pool_token_reserve_post": candidate["pool_token_reserve_post"],
+                    "decision_time_safe": True,
+                }
+            )
+            if positive_float(context.get("price_in_quote")) is None and token_reserve is not None and quote_reserve is not None:
+                context["price_in_quote"] = quote_reserve / token_reserve
+                context["price_quote_per_token"] = quote_reserve / token_reserve
+                context["price_in_quote_source"] = "onchain_pool_reserve_ratio"
+
             quote_usd_info = quote_usd_price_from_context(
                 context,
                 timestamp=timestamp,
@@ -249,7 +315,6 @@ def recover_record(
                 quote_usd_info = None
             else:
                 quote_usd_info = as_dict(quote_usd_info)
-                context["quote_mint"] = quote_mint
                 context["quote_usd_price"] = quote_usd
                 context["quote_usd_price_source"] = quote_usd_info.get("source")
                 if quote_usd_info.get("timestamp") is not None:
@@ -257,12 +322,6 @@ def recover_record(
                 if quote_usd_info.get("age_seconds") is not None:
                     context["quote_usd_price_age_seconds"] = quote_usd_info.get("age_seconds")
 
-                quote_post = positive_float(candidate.get("pool_quote_reserve_post"))
-                quote_pre = positive_float(candidate.get("pool_quote_reserve_pre"))
-                quote_reserve = quote_post if quote_post is not None else quote_pre
-                token_post = positive_float(candidate.get("pool_token_reserve_post"))
-                token_pre = positive_float(candidate.get("pool_token_reserve_pre"))
-                token_reserve = token_post if token_post is not None else token_pre
                 if quote_reserve is None:
                     block_reasons.add("blocked_missing_liquidity")
                     block_reasons.add("blocked_missing_onchain_pool_reserves")
@@ -272,10 +331,6 @@ def recover_record(
 
             if quote_usd is not None:
                 price_recovered_from_pool = False
-                if positive_float(context.get("price_in_quote")) is None and token_reserve is not None:
-                    context["price_in_quote"] = quote_reserve / token_reserve
-                    context["price_quote_per_token"] = quote_reserve / token_reserve
-                    context["price_in_quote_source"] = "onchain_pool_reserve_ratio"
                 if positive_float(context.get("price")) is None and positive_float(context.get("price_in_quote")) is not None:
                     context["price"] = positive_float(context.get("price_in_quote")) * quote_usd
                     context["price_usd"] = context["price"]
@@ -290,14 +345,7 @@ def recover_record(
                         "liquidity": liquidity_usd,
                         "liquidity_usd": liquidity_usd,
                         "liquidity_source": "onchain_pool_balance_reconstruction",
-                        "pool_context_source": "raw_transaction_pool_balances",
-                        "pool_owner": candidate["pool_owner"],
-                        "pool_quote_mint": candidate["quote_mint"],
                         "pool_quote_usd_price": quote_usd,
-                        "pool_quote_reserve_pre": candidate["pool_quote_reserve_pre"],
-                        "pool_quote_reserve_post": candidate["pool_quote_reserve_post"],
-                        "pool_token_reserve_pre": candidate["pool_token_reserve_pre"],
-                        "pool_token_reserve_post": candidate["pool_token_reserve_post"],
                         "pre_liquidity_usd": pre_liquidity_usd,
                         "post_liquidity_usd": liquidity_usd,
                         "decision_time_safe": True,

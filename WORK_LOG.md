@@ -9166,3 +9166,65 @@ Verification:
 Remaining:
 
 - Next logical step is to reduce the fillability blocker by improving local pool/reserve reconstruction for `blocked_missing_onchain_pool_reserves` and `blocked_missing_quote_usd_price` rows. Stage 10 remains deferred.
+
+### 2026-05-17 - Native SOL Pool Reserve Recovery
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Proof-readiness blocker reduction queue: `100%`
+- Stage 6 data score readiness: `6%`
+- Proof readiness: `2%`
+
+Changed files:
+
+- `wallets/onchain_market_context_recovery.py`
+- `tests/test_onchain_market_context_recovery.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added native-SOL pool reserve reconstruction for Pump-style rows where the quote side is stored as lamports on the pool/bonding account instead of a WSOL token-balance row.
+- Preserved quote-denominated pool evidence even when USD quote conversion is still blocked, so remaining quote-price gaps are auditable instead of hidden.
+- Used the existing CoinGecko SOL/USD quote-enrichment path as a temporary provider-backed validation/fallback bridge for local historical rows. This is not the long-term proprietary source of truth.
+- Rebuilt the on-chain recovery and downstream proof-readiness report chain.
+
+Current report state:
+
+- on-chain market context rows scanned: `643`
+- price recovered records: `634`
+- liquidity recovered records: `632`
+- market cap recovered records: `41`
+- score-ready market-context records: `41`
+- blocked missing on-chain pool reserves: `11`
+- blocked missing price rows: `9`
+- blocked missing liquidity rows: `2`
+- near-score-ready archival-supply rows: `591`
+- validation proof readiness: `2%`
+- wallet-list mutations: `0`
+- auto trust mutations: `0`
+
+Important limitation:
+
+- This improved market-context reconstruction, but proof readiness remains `2%` because wallet score readiness and behavioral trust are still evidence-limited. The dominant next blocker is historical supply / market-cap proof for the `591` rows that now have price and liquidity.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_onchain_market_context_recovery -v`
+- `./trading_env/bin/python utils/recover_onchain_market_context.py`
+- `./trading_env/bin/python utils/enrich_historical_quote_prices.py --source-records data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl --fetch-coingecko --fetch-timeout 20 --report-path data/reports/historical_backfill/onchain_quote_price_enrichment_report.json --records-path data/reports/historical_backfill/onchain_quote_price_enrichment_records.jsonl`
+- `./trading_env/bin/python utils/build_trusted_historical_market_snapshot_report.py --source-records data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl --report-path data/reports/historical_backfill/trusted_onchain_market_context_report.json --records-path data/reports/historical_backfill/trusted_onchain_market_context_records.jsonl`
+- `./trading_env/bin/python utils/build_score_ready_market_context.py`
+- `./trading_env/bin/python utils/build_replay_realism_readiness.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+- `./trading_env/bin/python utils/build_proof_readiness_blocker_reduction.py`
+
+Remaining:
+
+- Next logical step is archival supply / market-cap recovery for the `591` near-score-ready rows. Do not substitute current supply, current price, or future snapshots.

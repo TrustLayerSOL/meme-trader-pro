@@ -300,7 +300,57 @@ class OnchainMarketContextRecoveryTests(unittest.TestCase):
         recovered = report["records"][0]
         self.assertEqual(recovered["status"], "blocked_missing_quote_usd_price")
         self.assertIsNone(recovered["decision_time_context"].get("price"))
+        self.assertEqual(recovered["decision_time_context"].get("price_in_quote"), 0.00005)
+        self.assertEqual(recovered["decision_time_context"].get("pool_quote_reserve_post"), 25.0)
+        self.assertEqual(recovered["decision_time_context"].get("pool_quote_reserve_source"), "token_balance_owner")
         self.assertIn("blocked_missing_quote_usd_price", recovered["block_reasons"])
+
+
+    def test_recovers_native_sol_pool_reserves_from_owner_lamports(self):
+        raw = raw_tx(pool_quote_pre=0, pool_quote_post=0)
+        tx = raw["transaction"]
+        tx["transaction"]["message"] = {
+            "accountKeys": [
+                {"pubkey": "WalletA"},
+                {"pubkey": "PoolOwnerA"},
+            ]
+        }
+        tx["meta"]["preBalances"] = [5_000_000_000, 20_000_000_000]
+        tx["meta"]["postBalances"] = [4_500_000_000, 19_500_000_000]
+
+        report = build_onchain_market_context_recovery_report(
+            backfill_records=[
+                backfill_record(
+                    status="blocked_missing_price",
+                    block_reasons=["blocked_missing_price", "blocked_missing_liquidity", "blocked_missing_market_cap"],
+                    missing_fields=["entry_price", "liquidity", "market_cap"],
+                    decision_time_context={
+                        "decision_time_safe": True,
+                        "timestamp": 1000,
+                        "price": None,
+                        "price_in_quote": None,
+                        "quote_mint": None,
+                        "market_cap": None,
+                        "liquidity": None,
+                    },
+                )
+            ],
+            raw_transactions=[raw],
+            quote_price_series=[{"timestamp": 990, "price_usd": 2.0}],
+            generated_at=1234,
+        )
+
+        recovered = report["records"][0]
+        context = recovered["decision_time_context"]
+        self.assertEqual(recovered["status"], "onchain_price_liquidity_recovered")
+        self.assertEqual(context["quote_mint"], WSOL)
+        self.assertEqual(context["pool_quote_reserve_pre"], 20.0)
+        self.assertEqual(context["pool_quote_reserve_post"], 19.5)
+        self.assertEqual(context["pool_quote_reserve_source"], "native_sol_account_balance")
+        self.assertEqual(context["liquidity"], 78.0)
+        self.assertEqual(context["price_in_quote"], 19.5 / 510_000)
+        self.assertEqual(context["price"], (19.5 / 510_000) * 2.0)
+        self.assertNotIn("blocked_missing_onchain_pool_reserves", recovered["block_reasons"])
 
     def test_writer_persists_report_and_records(self):
         with tempfile.TemporaryDirectory() as tmp:
