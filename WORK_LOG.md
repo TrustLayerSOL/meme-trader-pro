@@ -9540,3 +9540,58 @@ Verification:
 Remaining:
 
 - Next logical step is to attack the outcome-label density blocker for wallet evidence, then continue archival supply recovery/provider validation for the remaining `555` near-score-ready rows.
+
+### 2026-05-18 - Wallet Evidence Outcome Density Lift
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Stage 8 proof readiness: `11%`
+- Top-level proof readiness: `11%` (moved from `2%`)
+
+Changed files:
+
+- `wallets/wallet_history_parser.py`
+- `wallets/wallet_evidence_models.py`
+- `wallets/wallet_evidence_enrichment.py`
+- `utils/refresh_wallet_evidence_from_raw_transactions.py`
+- `tests/test_wallet_history_backfill.py`
+- `tests/test_wallet_evidence_enrichment.py`
+
+What changed:
+
+- Added same-transaction quote execution extraction for wallet-history evidence rows when raw transaction token-balance deltas include SOL/USDC/USDT quote-side movement.
+- Added a read-only raw-transaction refresh utility that updates existing wallet evidence with quote execution context from preserved local raw transactions.
+- Added wallet lifecycle exit labeling: a buy can now receive a later outcome only when the same wallet later sells the same mint and both sides have compatible historical price/quote execution context.
+- Tightened replay fallback labeling so replay outcomes are timestamp-linked and do not overwrite known snapshot outcomes.
+- Rebuilt the evidence/proof report chain without wallet-list mutation, trust mutation, live execution changes, current-price substitution, or fabricated outcomes.
+
+Current report state:
+
+- Evidence rows scanned: `1,033`
+- Raw parsed rows: `891`
+- Evidence rows refreshed with quote execution: `383`
+- Rows with known wallet evidence outcomes: `121` (was `24`)
+- Wallet score readiness: `12%` (was `2%`)
+- Alert/dashboard research readiness: `11%` (was `2%`)
+- Top-level validation proof readiness: `11%` (was `2%`)
+- Fillable rate remains `52%` against the `70%` proof threshold.
+- Remaining blocked wallets: `36`
+
+Important limitation:
+
+- Behavioral trust is still not justified. Proof readiness is now pinned by replayable timeline / similar-rug readiness at `11%`, Stage 6 data score readiness at `12%`, and fillability at `52%`. The next proof jump requires liquidity/fillability recovery and more score-ready market context, not more wallet-trust automation.
+
+Verification:
+
+- Targeted wallet evidence enrichment and wallet history parser tests pass.
+- Full evidence-to-proof report chain rebuilt through `validation_proof_layer` and `proof_readiness_blocker_reduction`.
+- Live execution remained locked and wallet-list mutations remained `0`.
+
+Remaining:
+
+- Next logical step is to improve fillability from `52%` toward `70%` by reducing unknown liquidity / missing pool-reserve context, then continue archival supply recovery for the remaining near-score-ready rows.

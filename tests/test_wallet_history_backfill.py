@@ -106,6 +106,46 @@ class WalletHistoryBackfillTests(unittest.TestCase):
 
         self.assertEqual([row["token_mint"] for row in rows], ["MintA"])
 
+    def test_parser_records_quote_execution_price_from_same_transaction(self):
+        from wallets.wallet_history_parser import parse_wallet_token_deltas
+
+        rows = parse_wallet_token_deltas(
+            {
+                "blockTime": 123,
+                "meta": {
+                    "preTokenBalances": [
+                        {
+                            "owner": "WalletA",
+                            "mint": "So11111111111111111111111111111111111111112",
+                            "uiTokenAmount": {"uiAmount": 3},
+                        }
+                    ],
+                    "postTokenBalances": [
+                        {
+                            "owner": "WalletA",
+                            "mint": "So11111111111111111111111111111111111111112",
+                            "uiTokenAmount": {"uiAmount": 2},
+                        },
+                        {
+                            "owner": "WalletA",
+                            "mint": "MintA",
+                            "uiTokenAmount": {"uiAmount": 100},
+                        },
+                    ],
+                },
+            },
+            wallet="WalletA",
+            signature="Sig111",
+        )
+
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["quote_mint"], "So11111111111111111111111111111111111111112")
+        self.assertEqual(row["quote_amount_delta"], -1)
+        self.assertEqual(row["execution_price_quote"], 0.01)
+        self.assertEqual(row["estimated_entry_context"]["execution_price_quote"], 0.01)
+        self.assertEqual(row["estimated_entry_context"]["quote_mint"], "So11111111111111111111111111111111111111112")
+
     def test_collects_bounded_wallet_history_for_collection_targets(self):
         report = build_wallet_history_backfill_report(
             backfill_targets={

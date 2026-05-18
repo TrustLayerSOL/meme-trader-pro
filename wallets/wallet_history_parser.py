@@ -41,6 +41,22 @@ def balance_map(balances: Any, wallet: str) -> dict[str, float]:
     return out
 
 
+def quote_delta_map(pre: dict[str, float], post: dict[str, float]) -> dict[str, float]:
+    return {
+        mint: post.get(mint, 0.0) - pre.get(mint, 0.0)
+        for mint in sorted((set(pre) | set(post)) & QUOTE_MINTS)
+        if abs(post.get(mint, 0.0) - pre.get(mint, 0.0)) >= 1e-12
+    }
+
+
+def primary_quote_delta(pre: dict[str, float], post: dict[str, float]) -> tuple[str | None, float | None]:
+    deltas = quote_delta_map(pre, post)
+    if not deltas:
+        return None, None
+    mint, delta = max(deltas.items(), key=lambda item: abs(item[1]))
+    return mint, delta
+
+
 def transaction_signature(tx: dict[str, Any], fallback: str = "") -> str:
     signatures = as_dict(tx.get("transaction")).get("signatures")
     if isinstance(signatures, list) and signatures:
@@ -61,6 +77,7 @@ def parse_wallet_token_deltas(
     meta = as_dict(tx.get("meta"))
     pre = balance_map(meta.get("preTokenBalances"), wallet)
     post = balance_map(meta.get("postTokenBalances"), wallet)
+    quote_mint, quote_delta = primary_quote_delta(pre, post)
     sig = transaction_signature(tx, signature)
     rows = []
     for mint in sorted(set(pre) | set(post)):
@@ -69,16 +86,27 @@ def parse_wallet_token_deltas(
         delta = post.get(mint, 0.0) - pre.get(mint, 0.0)
         if abs(delta) < 1e-12:
             continue
-        rows.append(
-            build_evidence_record(
-                wallet=wallet,
-                token_mint=mint,
-                observed_action="buy" if delta > 0 else "sell",
-                timestamp=tx.get("blockTime"),
-                transaction_signature=sig,
-                token_amount_delta=delta,
-                later_token_outcome=(outcome_by_mint or {}).get(mint),
-                risk_flags=risk_flags or [],
-            )
+        row = build_evidence_record(
+            wallet=wallet,
+            token_mint=mint,
+            observed_action="buy" if delta > 0 else "sell",
+            timestamp=tx.get("blockTime"),
+            transaction_signature=sig,
+            token_amount_delta=delta,
+            later_token_outcome=(outcome_by_mint or {}).get(mint),
+            risk_flags=risk_flags or [],
         )
+        if quote_mint and quote_delta not in (None, 0):
+            execution_price = abs(float(quote_delta) / float(delta))
+            row["quote_mint"] = quote_mint
+            row["quote_amount_delta"] = quote_delta
+            row["execution_price_quote"] = execution_price
+            row["estimated_entry_context"] = {
+                **as_dict(row.get("estimated_entry_context")),
+                "quote_mint": quote_mint,
+                "quote_amount_delta": quote_delta,
+                "execution_price_quote": execution_price,
+                "execution_price_source": "same_transaction_token_balance_delta",
+            }
+        rows.append(row)
     return rows

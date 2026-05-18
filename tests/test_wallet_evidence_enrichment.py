@@ -88,6 +88,260 @@ class WalletEvidenceEnrichmentTests(unittest.TestCase):
         self.assertIn("no prior market snapshot", row["enrichment_notes"])
         self.assertEqual(report["summary"]["missing_market_context_rows"], 1)
 
+    def test_replay_fallback_prefers_known_outcome_over_first_unknown_event(self):
+        evidence = [
+            {
+                "wallet": "WalletC",
+                "token_mint": "MintReplay",
+                "observed_action": "buy",
+                "timestamp": 1010.0,
+                "transaction_signature": "SigC",
+                "estimated_entry_context": {"price": None, "decision_time_safe": True},
+                "estimated_exit_context": {"price": None, "decision_time_safe": True},
+                "later_token_outcome": {"outcome_type": "unknown", "windows": {}},
+                "outcome_window_labels": {},
+                "risk_flags": [],
+            }
+        ]
+        replay_events = [
+            {
+                "event_id": "unknown-first",
+                "mint": "MintReplay",
+                "signal_timestamp": 900.0,
+                "later_outcome": {
+                    "outcome_type": "unknown",
+                    "runner": False,
+                    "rug": False,
+                    "dead": False,
+                    "windows": {},
+                },
+            },
+            {
+                "event_id": "known-second",
+                "mint": "MintReplay",
+                "signal_timestamp": 1015.0,
+                "later_outcome": {
+                    "outcome_type": "runner",
+                    "runner": True,
+                    "rug": False,
+                    "dead": False,
+                    "windows": {
+                        "15m": {
+                            "outcome_type": "runner",
+                            "runner": True,
+                            "rug": False,
+                            "dead": False,
+                            "label_confidence": "medium",
+                        }
+                    },
+                },
+            },
+        ]
+
+        report = build_wallet_evidence_enrichment_report(
+            evidence_records=evidence,
+            market_snapshots=[],
+            replay_events=replay_events,
+            generated_at=1234.0,
+        )
+
+        row = report["evidence_records"][0]
+        self.assertEqual(row["later_token_outcome"]["outcome_type"], "runner")
+        self.assertEqual(row["later_token_outcome"]["event_id"], "known-second")
+        self.assertTrue(row["outcome_window_labels"]["15m"]["runner"])
+        self.assertEqual(row["estimated_entry_context"]["price"], None)
+        self.assertEqual(report["summary"]["rows_with_known_outcome"], 1)
+
+    def test_replay_fallback_rejects_known_outcome_before_evidence_timestamp(self):
+        evidence = [
+            {
+                "wallet": "WalletBefore",
+                "token_mint": "MintReplayBefore",
+                "observed_action": "buy",
+                "timestamp": 1010.0,
+                "transaction_signature": "SigBefore",
+                "estimated_entry_context": {"price": None, "decision_time_safe": True},
+                "estimated_exit_context": {"price": None, "decision_time_safe": True},
+                "later_token_outcome": {"outcome_type": "unknown", "windows": {}},
+                "outcome_window_labels": {},
+                "risk_flags": [],
+            }
+        ]
+        replay_events = [
+            {
+                "event_id": "known-before",
+                "mint": "MintReplayBefore",
+                "signal_timestamp": 1005.0,
+                "later_outcome": {
+                    "outcome_type": "rug",
+                    "runner": False,
+                    "rug": True,
+                    "dead": False,
+                    "windows": {},
+                },
+            }
+        ]
+
+        report = build_wallet_evidence_enrichment_report(
+            evidence_records=evidence,
+            market_snapshots=[],
+            replay_events=replay_events,
+            generated_at=1234.0,
+        )
+
+        row = report["evidence_records"][0]
+        self.assertEqual(row["later_token_outcome"]["outcome_type"], "unknown")
+        self.assertEqual(report["summary"]["rows_with_known_outcome"], 0)
+
+    def test_wallet_lifecycle_exit_labels_buy_without_snapshot_or_replay_outcome(self):
+        evidence = [
+            {
+                "wallet": "WalletLife",
+                "token_mint": "MintLife",
+                "observed_action": "buy",
+                "timestamp": 1000.0,
+                "transaction_signature": "BuySig",
+                "estimated_entry_context": {
+                    "price": 1.0,
+                    "liquidity": 1000.0,
+                    "market_cap": 10_000.0,
+                    "source": "fixture_decision_context",
+                    "decision_time_safe": True,
+                },
+                "estimated_exit_context": {"price": None},
+                "later_token_outcome": {"outcome_type": "unknown", "windows": {}},
+                "outcome_window_labels": {},
+                "risk_flags": [],
+            },
+            {
+                "wallet": "WalletLife",
+                "token_mint": "MintLife",
+                "observed_action": "sell",
+                "timestamp": 1100.0,
+                "transaction_signature": "SellSig",
+                "estimated_entry_context": {
+                    "price": 1.6,
+                    "liquidity": 1400.0,
+                    "market_cap": 16_000.0,
+                    "source": "fixture_sell_context",
+                    "decision_time_safe": True,
+                },
+                "estimated_exit_context": {"price": None},
+                "later_token_outcome": {"outcome_type": "unknown", "windows": {}},
+                "outcome_window_labels": {},
+                "risk_flags": [],
+            },
+        ]
+        report = build_wallet_evidence_enrichment_report(
+            evidence_records=evidence,
+            market_snapshots=[],
+            replay_events=[],
+            generated_at=1234.0,
+        )
+
+        buy = report["evidence_records"][0]
+        self.assertEqual(buy["later_token_outcome"]["source"], "wallet_lifecycle_exit")
+        self.assertEqual(buy["later_token_outcome"]["outcome_type"], "runner")
+        self.assertEqual(buy["estimated_entry_context"]["price"], 1.0)
+        self.assertEqual(buy["estimated_exit_context"]["price"], 1.6)
+        self.assertFalse(buy["estimated_exit_context"]["decision_time_safe"])
+        self.assertTrue(buy["estimated_exit_context"]["future_outcome_separated"])
+        self.assertEqual(report["summary"]["rows_with_known_outcome"], 1)
+
+    def test_wallet_lifecycle_exit_can_use_matching_quote_execution_prices(self):
+        evidence = [
+            {
+                "wallet": "WalletQuoteLife",
+                "token_mint": "MintQuoteLife",
+                "observed_action": "buy",
+                "timestamp": 1000.0,
+                "transaction_signature": "BuyQuoteSig",
+                "estimated_entry_context": {
+                    "execution_price_quote": 0.01,
+                    "quote_mint": "So11111111111111111111111111111111111111112",
+                    "decision_time_safe": True,
+                },
+                "estimated_exit_context": {"price": None},
+                "later_token_outcome": {"outcome_type": "unknown", "windows": {}},
+                "outcome_window_labels": {},
+                "risk_flags": [],
+            },
+            {
+                "wallet": "WalletQuoteLife",
+                "token_mint": "MintQuoteLife",
+                "observed_action": "sell",
+                "timestamp": 1100.0,
+                "transaction_signature": "SellQuoteSig",
+                "estimated_entry_context": {
+                    "execution_price_quote": 0.016,
+                    "quote_mint": "So11111111111111111111111111111111111111112",
+                    "decision_time_safe": True,
+                },
+                "estimated_exit_context": {"price": None},
+                "later_token_outcome": {"outcome_type": "unknown", "windows": {}},
+                "outcome_window_labels": {},
+                "risk_flags": [],
+            },
+        ]
+
+        report = build_wallet_evidence_enrichment_report(
+            evidence_records=evidence,
+            market_snapshots=[],
+            replay_events=[],
+            generated_at=1234.0,
+        )
+
+        buy = report["evidence_records"][0]
+        self.assertEqual(buy["later_token_outcome"]["outcome_type"], "runner")
+        self.assertEqual(buy["estimated_exit_context"]["price"], 0.016)
+        self.assertEqual(buy["estimated_exit_context"]["source"], "wallet_lifecycle_quote_execution_context")
+
+    def test_replay_fallback_does_not_overwrite_snapshot_known_outcome(self):
+        evidence = [
+            {
+                "wallet": "WalletD",
+                "token_mint": "MintSnapshotWins",
+                "observed_action": "buy",
+                "timestamp": 1000.0,
+                "transaction_signature": "SigD",
+                "estimated_entry_context": {"price": None, "decision_time_safe": True},
+                "estimated_exit_context": {"price": None, "decision_time_safe": True},
+                "later_token_outcome": {"outcome_type": "unknown", "windows": {}},
+                "outcome_window_labels": {},
+                "risk_flags": [],
+            }
+        ]
+        snapshots = [
+            {"mint": "MintSnapshotWins", "time": 1000.0, "price": 1.0, "liquidity": 1000},
+            {"mint": "MintSnapshotWins", "time": 1010.0, "price": 0.2, "liquidity": 900},
+        ]
+        replay_events = [
+            {
+                "event_id": "replay-runner",
+                "mint": "MintSnapshotWins",
+                "signal_timestamp": 1000.0,
+                "later_outcome": {
+                    "outcome_type": "runner",
+                    "runner": True,
+                    "rug": False,
+                    "dead": False,
+                    "windows": {},
+                },
+            }
+        ]
+
+        report = build_wallet_evidence_enrichment_report(
+            evidence_records=evidence,
+            market_snapshots=snapshots,
+            replay_events=replay_events,
+            generated_at=1234.0,
+        )
+
+        row = report["evidence_records"][0]
+        self.assertEqual(row["later_token_outcome"]["source"], "token_snapshots")
+        self.assertEqual(row["later_token_outcome"]["outcome_type"], "rug")
+        self.assertNotEqual(row["later_token_outcome"].get("event_id"), "replay-runner")
+
     def test_writes_report_and_jsonl_outputs(self):
         report = build_wallet_evidence_enrichment_report(
             evidence_records=[

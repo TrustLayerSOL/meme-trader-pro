@@ -44,25 +44,57 @@ def empty_window_labels() -> dict[str, dict[str, Any]]:
     }
 
 
-def replay_outcomes_by_mint(replay_events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    outcomes: dict[str, dict[str, Any]] = {}
+def known_outcome_type(outcome_type: Any) -> bool:
+    return str(outcome_type or "").strip().lower() not in {"", "unknown", "open", "pending"}
+
+
+def has_known_window(windows: dict[str, Any]) -> bool:
+    return any(known_outcome_type(as_dict(row).get("outcome_type")) for row in as_dict(windows).values())
+
+
+def replay_outcome_is_known(outcome: dict[str, Any]) -> bool:
+    return known_outcome_type(outcome.get("outcome_type")) or has_known_window(as_dict(outcome.get("windows")))
+
+
+def replay_outcome_from_event(event: dict[str, Any]) -> dict[str, Any]:
+    later = as_dict(event.get("later_outcome"))
+    windows = as_dict(later.get("windows"))
+    return {
+        "source": "historical_replay",
+        "event_id": event.get("event_id"),
+        "signal_timestamp": event.get("signal_timestamp"),
+        "outcome_type": later.get("outcome_type") or "unknown",
+        "runner": bool(later.get("runner")),
+        "rug": bool(later.get("rug")),
+        "dead": bool(later.get("dead")),
+        "windows": {label: as_dict(windows.get(label)) or empty_window_labels()[label] for label in OUTCOME_WINDOWS},
+    }
+
+
+def replay_outcome_candidates_by_mint(replay_events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    outcomes: dict[str, list[dict[str, Any]]] = {}
     for event in replay_events or []:
         if not isinstance(event, dict):
             continue
         mint = str(event.get("mint") or "").strip()
-        if not mint or mint in outcomes:
+        if not mint:
             continue
-        later = as_dict(event.get("later_outcome"))
-        windows = as_dict(later.get("windows"))
-        outcomes[mint] = {
-            "source": "historical_replay",
-            "event_id": event.get("event_id"),
-            "outcome_type": later.get("outcome_type") or "unknown",
-            "runner": bool(later.get("runner")),
-            "rug": bool(later.get("rug")),
-            "dead": bool(later.get("dead")),
-            "windows": {label: as_dict(windows.get(label)) or empty_window_labels()[label] for label in OUTCOME_WINDOWS},
-        }
+        outcomes.setdefault(mint, []).append(replay_outcome_from_event(event))
+    for rows in outcomes.values():
+        rows.sort(key=lambda item: safe_float(item.get("signal_timestamp"), float("inf")) or float("inf"))
+    return outcomes
+
+
+def replay_outcomes_by_mint(replay_events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    outcomes: dict[str, dict[str, Any]] = {}
+    for mint, candidates in replay_outcome_candidates_by_mint(replay_events).items():
+        for candidate in candidates:
+            current = outcomes.get(mint)
+            if current is None:
+                outcomes[mint] = candidate
+                continue
+            if not replay_outcome_is_known(current) and replay_outcome_is_known(candidate):
+                outcomes[mint] = candidate
     return outcomes
 
 
