@@ -9023,3 +9023,61 @@ Verification:
 Remaining:
 
 - Next logical step returns to proof-readiness blocker reduction: import real archival mint snapshot responses if available, then rebuild archival supply evidence and score-ready market-context coverage. Stage 10 remains deferred.
+
+### 2026-05-17 - Archival Mint Snapshot Provider Handoff Packet
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Proof-readiness blocker reduction queue: `100%` infrastructure; proof readiness remains `0%` until real historical supply/outcome evidence is imported.
+
+Changed files:
+
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_archival_mint_snapshot_request_bundle.py`
+- `utils/build_archival_mint_snapshot_request_bundle.py`
+- `wallets/archival_mint_snapshot_request_bundle.py`
+
+Generated ignored handoff files:
+
+- `data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.json`
+- `data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.json`
+
+What changed:
+
+- Confirmed no saved archival mint snapshot responses exist locally.
+- Confirmed no archival account-state provider URL is configured.
+- Rebuilt the request/import/evidence/score-ready chain and kept the blocker state honest:
+  - `34` pending mint snapshot requests,
+  - `0` raw responses scanned,
+  - `0` snapshots imported,
+  - `86` archival supply candidate rows still blocked,
+  - `0` score-ready market-context rows.
+- Added provider-ready handoff output to the archival mint snapshot request bundle:
+  - a direct JSON-RPC batch request file,
+  - an empty response template with expected request IDs/token mints,
+  - exact post-import commands for rebuilding archival supply evidence, score-ready context, and proof-readiness blockers.
+- No provider calls were made.
+- No current supply, current price, or inferred market cap was used.
+- Live execution and wallet trust/list mutation remained locked.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_snapshot_request_bundle tests.test_archival_mint_snapshot_response_import tests.test_archival_supply_evidence tests.test_score_ready_market_context tests.test_proof_readiness_blocker_reduction -v`
+- `./trading_env/bin/python -m py_compile wallets/archival_mint_snapshot_request_bundle.py utils/build_archival_mint_snapshot_request_bundle.py`
+- `git diff --check`
+- `git check-ignore -v data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.json data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.json data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json`
+- `./trading_env/bin/python utils/build_archival_mint_snapshot_request_bundle.py`
+- `./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py`
+- `./trading_env/bin/python utils/build_archival_supply_evidence.py`
+- `./trading_env/bin/python utils/build_score_ready_market_context.py`
+- `./trading_env/bin/python utils/build_proof_readiness_blocker_reduction.py`
+
+Remaining:
+
+- Next logical step is to obtain real historical mint-account responses for the batch request, save them to `data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json`, then run the post-import command chain. Without those saved historical responses, proof readiness must stay blocked.

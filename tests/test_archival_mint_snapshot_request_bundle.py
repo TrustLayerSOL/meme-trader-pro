@@ -1,5 +1,9 @@
+import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from utils.build_archival_mint_snapshot_request_bundle import write_archival_mint_snapshot_request_bundle_report
 from wallets.archival_mint_snapshot_request_bundle import build_archival_mint_snapshot_request_bundle_report
 
 
@@ -50,7 +54,50 @@ class ArchivalMintSnapshotRequestBundleTests(unittest.TestCase):
             "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json",
         )
 
+    def test_includes_provider_handoff_template_and_rebuild_commands(self):
+        report = build_archival_mint_snapshot_request_bundle_report(
+            snapshot_collection_report=collection_report(),
+            raw_response_path="data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json",
+            batch_request_path="data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.json",
+            response_template_path="data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.json",
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["request_packet_ready"], 1)
+        self.assertEqual(report["batch_request_save_path"], "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.json")
+        self.assertEqual(report["response_template_save_path"], "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.json")
+        self.assertEqual(report["response_template"]["responses"], [])
+        self.assertEqual(report["response_template"]["expected_responses"][0]["request_id"], "1")
+        self.assertEqual(report["response_template"]["expected_responses"][0]["token_mint"], "MintA")
+        joined_commands = "\n".join(report["post_import_commands"])
+        self.assertIn("build_archival_supply_evidence.py", joined_commands)
+        self.assertIn("build_score_ready_market_context.py", joined_commands)
+
+    def test_writer_persists_report_request_packet_and_response_template(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            collection_path = root / "collection.json"
+            report_path = root / "bundle_report.json"
+            batch_path = root / "batch_request.json"
+            template_path = root / "response_template.json"
+            collection_path.write_text(json.dumps(collection_report()), encoding="utf-8")
+
+            report = write_archival_mint_snapshot_request_bundle_report(
+                collection_report_path=collection_path,
+                report_path=report_path,
+                raw_response_path="raw_response.json",
+                batch_request_path=batch_path,
+                response_template_path=template_path,
+                generated_at=123.0,
+            )
+
+            self.assertTrue(report_path.exists())
+            self.assertTrue(batch_path.exists())
+            self.assertTrue(template_path.exists())
+            self.assertEqual(report["summary"]["requests_bundled"], 2)
+            self.assertEqual(json.loads(batch_path.read_text(encoding="utf-8"))[0]["id"], 1)
+            self.assertEqual(json.loads(template_path.read_text(encoding="utf-8"))["expected_responses"][1]["request_id"], "2")
+
 
 if __name__ == "__main__":
     unittest.main()
-
