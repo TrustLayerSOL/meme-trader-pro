@@ -87,3 +87,30 @@ class DiscordDispatcherTests(unittest.TestCase):
         self.assertEqual(status, 204)
         self.assertIsNotNone(captured_request)
         self.assertIn("MemeTraderPro", captured_request.headers.get("User-agent", ""))
+
+    def test_dispatch_plan_skips_already_sent_events(self):
+        report = {
+            "mode": "DISCORD_BEHAVIORAL_INTELLIGENCE_REVIEW_ONLY",
+            "discord_events": [
+                {"event_id": "event-1", "channel": "#wallet-review", "message": "already sent"},
+                {"event_id": "event-2", "channel": "#wallet-review", "message": "new event"},
+            ],
+        }
+
+        with mock.patch("notifications.discord_dispatcher.urlopen") as mocked_urlopen:
+            mocked_urlopen.return_value.__enter__.return_value.status = 204
+            plan = build_dispatch_plan(
+                report,
+                webhook_url="",
+                channel_webhooks={"#wallet-review": "https://discord.com/api/webhooks/wallet"},
+                send=True,
+                sent_event_ids={"event-1"},
+            )
+
+        self.assertTrue(plan["dispatch_enabled"])
+        self.assertEqual(plan["events_ready"], 2)
+        self.assertEqual(plan["events_sent"], 1)
+        self.assertEqual(plan["events_blocked"], 1)
+        self.assertEqual(plan["blocked_events"][0]["reason"], "already_sent")
+        self.assertEqual(plan["newly_sent_event_ids"], ["event-2"])
+        self.assertEqual(mocked_urlopen.call_count, 1)

@@ -49,8 +49,10 @@ def build_dispatch_plan(
     channel_webhooks: dict[str, str] | None = None,
     send: bool = False,
     timeout: float = 5.0,
+    sent_event_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     events = [row for row in as_list(report.get("discord_events")) if isinstance(row, dict)]
+    already_sent = {str(event_id) for event_id in (sent_event_ids or set()) if str(event_id or "").strip()}
     normalized_webhooks = {
         normalize_channel(channel): str(url)
         for channel, url in (channel_webhooks or {}).items()
@@ -67,11 +69,22 @@ def build_dispatch_plan(
         block_reasons.append("invalid_report_mode")
 
     sent = 0
+    newly_sent_event_ids: list[str] = []
     failed: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     if enabled:
         for row in events:
             channel = normalize_channel(row.get("channel"))
+            event_id = str(row.get("event_id") or "")
+            if event_id and event_id in already_sent:
+                blocked.append(
+                    {
+                        "event_id": row.get("event_id"),
+                        "channel": channel,
+                        "reason": "already_sent",
+                    }
+                )
+                continue
             event_webhook = normalized_webhooks.get(channel) or webhook_url
             if not event_webhook:
                 blocked.append(
@@ -86,6 +99,8 @@ def build_dispatch_plan(
                 status = post_discord_webhook(str(event_webhook), discord_payload(row), timeout=timeout)
                 if 200 <= status < 300:
                     sent += 1
+                    if event_id:
+                        newly_sent_event_ids.append(event_id)
                 else:
                     failed.append({"event_id": row.get("event_id"), "channel": channel, "status": status})
             except Exception as exc:  # pragma: no cover - network failures are environment-specific.
@@ -103,4 +118,5 @@ def build_dispatch_plan(
         "block_reasons": block_reasons,
         "blocked_events": blocked,
         "failed_events": failed,
+        "newly_sent_event_ids": newly_sent_event_ids,
     }

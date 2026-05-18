@@ -8975,3 +8975,51 @@ Verification:
 Remaining:
 
 - Next logical step is to add the remaining channel webhooks one at a time, dry-run after each route, and keep Discord sparse until the proof layer produces stronger evidence.
+
+### 2026-05-17 - Completed Discord Channel Routes and Duplicate Guard
+
+Active milestone:
+
+- Stage 9 - Behavioral Intelligence Layer / sparse notification review surface
+
+Milestone completion:
+
+- Discord Behavioral Intelligence Routing: `100%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `docs/DISCORD_INTELLIGENCE_SETUP.md`
+- `notifications/discord_dispatcher.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `tests/test_discord_dispatcher.py`
+- `utils/dispatch_discord_intelligence.py`
+
+Local-only ignored files updated:
+
+- `data/discord_webhooks.local.json`
+- `data/discord_dispatch_ledger.local.json`
+
+What changed:
+
+- Added the remaining local Discord webhook routes for:
+  - `#replay-validation`
+  - `#regime-monitor`
+  - `#wallet-degradation`
+- Confirmed all six MemeTraderPro Intelligence channels are configured locally.
+- Added a local duplicate-send ledger so repeat dispatcher runs skip already-sent event IDs instead of reposting the same intelligence messages.
+- Sent one controlled review-only dispatch across the configured channels: `5` events sent, `0` failed, `0` blocked, live execution still locked.
+- Re-ran `--send` after the controlled dispatch and confirmed the same `5` event IDs were blocked as `already_sent` with `0` new posts.
+- Webhook URLs stayed in ignored local config and were not printed, logged, or committed.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_discord_dispatcher -v`
+- `./trading_env/bin/python utils/dispatch_discord_intelligence.py`
+- `./trading_env/bin/python utils/dispatch_discord_intelligence.py --send`
+- `git check-ignore -v data/discord_webhooks.local.json data/discord_dispatch_ledger.local.json`
+
+Remaining:
+
+- Next logical step returns to proof-readiness blocker reduction: import real archival mint snapshot responses if available, then rebuild archival supply evidence and score-ready market-context coverage. Stage 10 remains deferred.

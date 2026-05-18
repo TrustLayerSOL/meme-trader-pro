@@ -18,6 +18,7 @@ from notifications.discord_dispatcher import build_dispatch_plan
 
 DEFAULT_REPORT = ROOT / "data" / "reports" / "notifications" / "discord_intelligence_layer_report.json"
 DEFAULT_WEBHOOK_CONFIG = ROOT / "data" / "discord_webhooks.local.json"
+DEFAULT_SENT_LEDGER = ROOT / "data" / "discord_dispatch_ledger.local.json"
 CHANNEL_WEBHOOK_ENV = {
     "#wallet-review": "MTP_DISCORD_WEBHOOK_WALLET_REVIEW",
     "#behavioral-patterns": "MTP_DISCORD_WEBHOOK_BEHAVIORAL_PATTERNS",
@@ -53,6 +54,17 @@ def load_channel_webhooks(path: Path) -> dict[str, str]:
     return webhooks
 
 
+def load_sent_event_ids(path: Path) -> set[str]:
+    ledger = read_json(path, {})
+    event_ids = ledger.get("sent_event_ids") if isinstance(ledger.get("sent_event_ids"), list) else []
+    return {str(event_id) for event_id in event_ids if str(event_id or "").strip()}
+
+
+def write_sent_event_ids(path: Path, event_ids: set[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"sent_event_ids": sorted(event_ids)}, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dry-run or send sparse MemeTraderPro Discord intelligence events.")
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
@@ -64,13 +76,24 @@ def main() -> int:
         default=DEFAULT_WEBHOOK_CONFIG,
         help="Local JSON mapping of Discord channel names to webhook URLs. This file must stay out of git.",
     )
+    parser.add_argument(
+        "--sent-ledger",
+        type=Path,
+        default=DEFAULT_SENT_LEDGER,
+        help="Local JSON ledger of Discord event IDs that have already been sent. This file must stay out of git.",
+    )
     args = parser.parse_args()
+    sent_event_ids = load_sent_event_ids(args.sent_ledger)
     plan = build_dispatch_plan(
         read_json(args.report, {}),
         webhook_url=args.webhook_url,
         channel_webhooks=load_channel_webhooks(args.webhook_config),
         send=args.send,
+        sent_event_ids=sent_event_ids,
     )
+    if args.send and plan.get("newly_sent_event_ids"):
+        sent_event_ids.update(str(event_id) for event_id in plan["newly_sent_event_ids"])
+        write_sent_event_ids(args.sent_ledger, sent_event_ids)
     print(json.dumps(plan, indent=2, sort_keys=True))
     return 0
 

@@ -81,10 +81,19 @@ Send only after webhooks are configured and the report has been reviewed:
 ./trading_env/bin/python utils/dispatch_discord_intelligence.py --send
 ```
 
+Successful sends are recorded locally in:
+
+```text
+data/discord_dispatch_ledger.local.json
+```
+
+That ledger is ignored by git through the existing `data/*.json` rule and prevents repeat dispatcher runs from reposting the same event IDs.
+
 ## Safety Rules
 
 - Default mode is dry-run.
 - `--send` is required before any Discord post.
+- Already-sent event IDs are skipped by the local dispatch ledger.
 - Missing channel webhooks block only those channel events.
 - Dispatch never changes wallet trust, wallet lists, paper trades, or live execution.
 - Live execution remains locked.
