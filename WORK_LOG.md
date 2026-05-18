@@ -9694,3 +9694,54 @@ Verification:
 Remaining:
 
 - The honest next step is not wallet promotion. The next step is archival supply / decision-time market-cap recovery for the `531` near-score-ready rows, preferably by importing valid historical mint-account provider responses for the existing request chunks. Local crawling can continue, but it is slow and has hit signature pagination limits on many mints.
+
+### 2026-05-18 - Wallet Trust Validation Gate Check-In
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / wallet trust validation blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Stage 8 proof readiness: `11%`
+- Behavioral trust validation gate: `100%` infrastructure, current result blocked
+- Wallet score readiness: `12%`
+
+Changed files:
+
+- `WORK_LOG.md`
+
+What changed:
+
+- Reached the wallet trust validation gate again after refreshing the evidence/proof chain.
+- Confirmed the current trust gate is functioning correctly: it runs, preserves safety, and refuses wallet trust because replay-safe proof is still too thin.
+- Checked provider configuration without exposing secrets. Only `HELIUS_API_KEY` is locally present; no `ARCHIVAL_ACCOUNT_STATE_PROVIDER_RPC_URL`, `QUICKNODE_ARCHIVAL_RPC_URL`, or `SOLANA_ARCHIVAL_RPC_URL` is configured for the existing archival provider capture lane.
+- Attempted a bounded local mint-history pagination pass against `5` continue-pagination targets. The run was stopped after it failed to finish in a useful window; rebuilding progress showed no new complete-history tokens.
+
+Current report state:
+
+- Behavioral trust justified: `false`
+- Trust-ready patterns: `0`
+- Proof readiness: `11%`
+- Wallet score readiness: `12%`
+- Complete mint histories: `11`
+- Tokens reached decision slot: `46`
+- Continue-pagination tokens: `29`
+- Provider-recommended tokens: `35`
+- Score-ready market-context records: `101`
+- Near-score-ready records still blocked on archival supply: `531`
+- Supply recovered records: `60`
+- Remaining blocked wallets: `36`
+
+Verification:
+
+- Rebuilt archival mint-history progress and pagination-plan reports after the interrupted bounded pagination pass.
+- Rechecked behavioral trust, proof-readiness, score-ready market-context, archival supply, and wallet-evidence summaries.
+- Live execution remained locked.
+- Wallet-list mutations remained `0`.
+- Auto trust mutations remained `0`.
+
+Remaining:
+
+- Wallet trust validation is not actionable yet. The next useful move is to either configure a true archival account-state source that can return mint state at or before the decision slot, or continue the slower home-built complete-history reconstruction lane. Standard current-account RPC reads must remain rejected because they do not prove decision-time supply.
