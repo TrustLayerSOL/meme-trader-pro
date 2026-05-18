@@ -41,6 +41,25 @@ def tx(slot, signature):
     }
 
 
+def tx_with_instructions(slot, signature, instructions):
+    row = tx(slot, signature)
+    row["transaction"]["transaction"]["message"]["instructions"] = instructions
+    return row
+
+
+def initialize_mint(mint="MintA"):
+    return {
+        "program": "spl-token",
+        "parsed": {
+            "type": "initializeMint2",
+            "info": {
+                "mint": mint,
+                "decimals": 6,
+            },
+        },
+    }
+
+
 class FakeRpc:
     def __init__(self, signatures_by_mint, transactions_by_signature):
         self.signatures_by_mint = signatures_by_mint
@@ -196,6 +215,36 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
         self.assertEqual(report["targets"][0]["status"], "blocked_partial_mint_history")
         self.assertIn("signature_page_limit_reached", report["targets"][0]["block_reasons"])
         self.assertEqual(report["history_completeness"], {})
+
+    def test_execute_allows_mint_initialization_boundary_before_decision_without_full_pagination(self):
+        rpc = FakeRpc(
+            signatures_by_mint={
+                "MintA": [
+                    {"signature": "SigDecision", "slot": 100},
+                    {"signature": "SigInit", "slot": 10},
+                ]
+            },
+            transactions_by_signature={
+                "SigDecision": tx(100, "SigDecision"),
+                "SigInit": tx_with_instructions(10, "SigInit", [initialize_mint()]),
+            },
+        )
+
+        report = build_archival_mint_history_collection_report(
+            archival_supply_plan=plan(),
+            rpc=rpc,
+            execute=True,
+            signature_page_limit=2,
+            max_pages_per_mint=1,
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["mint_histories_complete"], 1)
+        self.assertEqual(report["summary"]["raw_transactions_preserved"], 2)
+        self.assertEqual(report["targets"][0]["status"], "mint_history_complete_through_decision_slot")
+        self.assertEqual(report["targets"][0]["history_boundary"], "mint_initialization_detected")
+        self.assertEqual(report["history_completeness"]["MintA"]["complete_through_slot"], 100)
+        self.assertEqual(report["history_completeness"]["MintA"]["history_boundary"], "mint_initialization_detected")
 
     def test_execute_blocks_when_transaction_budget_would_truncate_decision_history(self):
         rpc = FakeRpc(

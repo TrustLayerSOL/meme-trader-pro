@@ -9745,3 +9745,51 @@ Verification:
 Remaining:
 
 - Wallet trust validation is not actionable yet. The next useful move is to either configure a true archival account-state source that can return mint state at or before the decision slot, or continue the slower home-built complete-history reconstruction lane. Standard current-account RPC reads must remain rejected because they do not prove decision-time supply.
+
+### 2026-05-18 - Mint Initialization Boundary Collector Hardening
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / wallet trust validation blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Stage 8 proof readiness: `11%`
+- Wallet trust validation: blocked by evidence quality
+
+Changed files:
+
+- `wallets/archival_mint_history_collector.py`
+- `tests/test_archival_mint_history_collector.py`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a conservative mint-initialization boundary check to the read-only archival mint-history collector.
+- The collector can now mark mint history complete through the decision slot when:
+  - checkpointed signatures already reach at or before the decision slot,
+  - all eligible transactions through the decision slot are fetched,
+  - a same-mint `initializeMint`, `initializeMint2`, or `initializeMint3` instruction is found,
+  - and all existing transaction/safety checks pass.
+- This removes an overly strict requirement for full account-history pagination when a token's mint initialization boundary is already proven inside the captured history.
+- It does not use current supply, infer supply, mutate wallet trust, mutate wallet lists, or change live execution.
+
+Current local run result:
+
+- Tested three bounded local boundary candidates using existing checkpointed signatures.
+- Preserved `355`, `667`, and `1,009` transaction rows for inspection in local ignored artifacts.
+- None of those three candidates contained a mint-initialization boundary, so all three remained blocked correctly.
+- Existing trust status remains unchanged: `behavioral_trust_justified=false`, `trust_ready_patterns=0`, and proof readiness remains `11%`.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_history_collector tests.test_archival_mint_supply_reconstruction tests.test_archival_mint_history_progress tests.test_archival_mint_pagination_planner`
+- `./trading_env/bin/python -m py_compile wallets/archival_mint_history_collector.py utils/collect_archival_mint_history.py`
+- Live execution remained locked.
+- Wallet-list mutations remained `0`.
+- Auto trust mutations remained `0`.
+
+Remaining:
+
+- Continue bounded local boundary/reconstruction attempts against lower-cost candidates, but the faster route remains a real archival account-state provider or saved historical mint-account responses for the existing request chunks.

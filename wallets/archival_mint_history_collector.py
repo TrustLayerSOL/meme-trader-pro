@@ -5,11 +5,12 @@ from collections import Counter
 from typing import Any
 
 from wallets.archival_mint_supply_reconstruction import tx_slot
-from wallets.wallet_evidence_models import safe_int
+from wallets.wallet_evidence_models import as_dict, safe_int
 
 
 MODE = "ARCHIVAL_MINT_HISTORY_COLLECTION_REVIEW_ONLY"
 VERSION = "archival_mint_history_collection.v1"
+MINT_INITIALIZATION_TYPES = {"initializeMint", "initializeMint2", "initializeMint3"}
 
 
 def token_mint(row: dict[str, Any]) -> str:
@@ -51,6 +52,50 @@ def fetch_transaction(rpc: Any, signature: str) -> dict[str, Any] | None:
         ],
     )
     return result if isinstance(result, dict) else None
+
+
+def tx_body(row: dict[str, Any]) -> dict[str, Any]:
+    tx = as_dict(row.get("transaction"))
+    return tx if tx else row
+
+
+def top_level_instructions(row: dict[str, Any]) -> list[dict[str, Any]]:
+    body = tx_body(row)
+    transaction = as_dict(body.get("transaction"))
+    if "message" not in transaction and isinstance(transaction.get("transaction"), dict):
+        transaction = as_dict(transaction.get("transaction"))
+    message = as_dict(transaction.get("message"))
+    instructions = message.get("instructions")
+    return [item for item in instructions or [] if isinstance(item, dict)]
+
+
+def inner_instructions(row: dict[str, Any]) -> list[dict[str, Any]]:
+    body = tx_body(row)
+    meta = as_dict(body.get("meta"))
+    rows: list[dict[str, Any]] = []
+    for group in meta.get("innerInstructions") or []:
+        if not isinstance(group, dict):
+            continue
+        for item in group.get("instructions") or []:
+            if isinstance(item, dict):
+                rows.append(item)
+    return rows
+
+
+def all_instructions(row: dict[str, Any]) -> list[dict[str, Any]]:
+    return top_level_instructions(row) + inner_instructions(row)
+
+
+def has_mint_initialization(row: dict[str, Any], mint: str) -> bool:
+    for instruction in all_instructions(row):
+        parsed = as_dict(instruction.get("parsed"))
+        if str(parsed.get("type") or "").strip() not in MINT_INITIALIZATION_TYPES:
+            continue
+        info = as_dict(parsed.get("info"))
+        parsed_mint = str(info.get("mint") or "").strip()
+        if parsed_mint == mint:
+            return True
+    return False
 
 
 def normalize_signature_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -163,11 +208,6 @@ def collect_mint_history(
         target["block_reasons"] = ["no_mint_signatures"]
         target["rpc_failures"] = rpc_failures(rpc)
         return target, [], None, build_signature_checkpoint(target, signatures)
-    if not pagination_complete or page_limit_reached:
-        target["status"] = "blocked_partial_mint_history"
-        target["block_reasons"] = ["signature_page_limit_reached"]
-        target["rpc_failures"] = rpc_failures(rpc)
-        return target, [], None, build_signature_checkpoint(target, signatures)
     if decision_slot <= 0:
         target["status"] = "blocked_missing_decision_slot"
         target["block_reasons"] = ["missing_decision_slot"]
@@ -184,6 +224,14 @@ def collect_mint_history(
         target["block_reasons"] = ["transaction_budget_exhausted"]
         target["eligible_signatures_before_decision"] = len(eligible_signatures)
         target["transaction_budget"] = transaction_budget
+        target["rpc_failures"] = rpc_failures(rpc)
+        return target, [], None, build_signature_checkpoint(target, signatures)
+
+    oldest_signature_slot = safe_int(target.get("oldest_signature_slot"), 0)
+    can_test_boundary = pagination_complete or (oldest_signature_slot > 0 and oldest_signature_slot <= decision_slot)
+    if (not pagination_complete or page_limit_reached) and not can_test_boundary:
+        target["status"] = "blocked_partial_mint_history"
+        target["block_reasons"] = ["signature_page_limit_reached"]
         target["rpc_failures"] = rpc_failures(rpc)
         return target, [], None, build_signature_checkpoint(target, signatures)
 
@@ -216,9 +264,26 @@ def collect_mint_history(
         target["rpc_failures"] = rpc_failures(rpc)
         return target, raw_rows, None, build_signature_checkpoint(target, signatures)
 
+    history_boundary = "signature_pagination_end"
+    if not pagination_complete or page_limit_reached:
+        initialization_rows = [row for row in raw_rows if has_mint_initialization(row, mint)]
+        if not initialization_rows:
+            target["status"] = "blocked_partial_mint_history"
+            target["block_reasons"] = ["signature_page_limit_reached", "mint_initialization_boundary_not_found"]
+            target["rpc_failures"] = rpc_failures(rpc)
+            return target, raw_rows, None, build_signature_checkpoint(target, signatures)
+        history_boundary = "mint_initialization_detected"
+        target["history_boundary"] = history_boundary
+        target["mint_initialization_signature"] = min(
+            initialization_rows,
+            key=lambda row: safe_int(row.get("slot"), 0),
+        ).get("signature")
+
     target["status"] = "mint_history_complete_through_decision_slot"
     completeness = {
         "source": "archival_mint_history_collection",
+        "history_boundary": history_boundary,
+        "mint_initialization_signature": target.get("mint_initialization_signature"),
         "complete_through_slot": decision_slot,
         "signatures_fetched": len(signatures),
         "transactions_preserved": len(raw_rows),
