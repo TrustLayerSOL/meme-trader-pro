@@ -9654,3 +9654,43 @@ Verification:
 Remaining:
 
 - Next logical step is archival supply / score-ready market-context recovery. The blocker queue now has `643` rows needing historical mint-supply / market-cap proof before wallet scores can be trusted.
+
+### 2026-05-18 - Wallet Trust Validation Readiness Check
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Stage 8 proof readiness: `11%`
+- Behavioral trust validation gate: `100%` infrastructure, `false` trust result
+- Wallet score readiness: `12%`
+
+Changed files:
+
+- `WORK_LOG.md`
+
+What changed:
+
+- Rebuilt the proof and behavioral-trust report chain from the current local artifacts.
+- Confirmed the system is mechanically ready to run wallet trust validation reports, but it is not ready to approve wallet trust decisions.
+- Local home-built recovery has moved archival supply evidence and score-ready market context forward, but not enough to justify wallet trust:
+  - supply recovered records: `60`,
+  - score-ready market-context records: `101`,
+  - near-score-ready records still blocked on archival supply: `531`,
+  - remaining blocked wallets: `36`,
+  - trust-ready patterns: `0`,
+  - behavioral trust justified: `false`.
+
+Verification:
+
+- Rebuilt archival supply evidence, score-ready market context, wallet evidence readiness, evidence layer completion, replay realism, replay validation, replayable token timelines, similar-rug pattern matching, alerting/dashboard readiness, validation/proof, proof-readiness blocker reduction, behavioral intelligence, behavioral trust validation, Discord intelligence, and archival supply proof-readiness export.
+- Live execution remained locked.
+- Wallet-list mutations remained `0`.
+- Auto trust mutations remained `0`.
+
+Remaining:
+
+- The honest next step is not wallet promotion. The next step is archival supply / decision-time market-cap recovery for the `531` near-score-ready rows, preferably by importing valid historical mint-account provider responses for the existing request chunks. Local crawling can continue, but it is slow and has hit signature pagination limits on many mints.
