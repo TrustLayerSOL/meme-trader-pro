@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -143,6 +144,81 @@ class OnchainMarketContextRecoveryTests(unittest.TestCase):
         self.assertNotIn("market_cap", record["missing_fields"])
         self.assertEqual(report["summary"]["score_ready_candidate_records"], 1)
 
+    def test_recovers_market_cap_from_prior_local_market_snapshot(self):
+        report = build_onchain_market_context_recovery_report(
+            backfill_records=[backfill_record()],
+            raw_transactions=[raw_tx()],
+            historical_market_snapshots=[
+                {
+                    "mint": "MintA",
+                    "timestamp": 900,
+                    "market_cap": 2_500_000,
+                    "price": 0.0025,
+                    "source": "local_token_snapshots",
+                }
+            ],
+            generated_at=1234,
+        )
+
+        record = report["records"][0]
+        context = record["decision_time_context"]
+        self.assertEqual(record["status"], "onchain_liquidity_market_cap_recovered")
+        self.assertEqual(context["market_cap"], 2_500_000)
+        self.assertEqual(context["market_cap_source"], "prior_decision_time_market_snapshot")
+        self.assertEqual(context["market_cap_snapshot_time"], 900.0)
+        self.assertEqual(context["market_cap_snapshot_age_seconds"], 100.0)
+        self.assertTrue(record["score_ready_candidate"])
+        self.assertNotIn("blocked_missing_market_cap", record["block_reasons"])
+        self.assertNotIn("blocked_missing_supply", record["block_reasons"])
+
+    def test_does_not_use_future_market_snapshot_for_market_cap(self):
+        report = build_onchain_market_context_recovery_report(
+            backfill_records=[backfill_record()],
+            raw_transactions=[raw_tx()],
+            historical_market_snapshots=[
+                {
+                    "mint": "MintA",
+                    "timestamp": 1001,
+                    "market_cap": 2_500_000,
+                    "source": "local_token_snapshots",
+                }
+            ],
+            generated_at=1234,
+        )
+
+        record = report["records"][0]
+        self.assertEqual(record["status"], "onchain_liquidity_recovered")
+        self.assertIsNone(record["decision_time_context"].get("market_cap"))
+        self.assertIn("blocked_missing_market_cap", record["block_reasons"])
+        self.assertFalse(record["score_ready_candidate"])
+
+    def test_does_not_use_stale_market_snapshot_for_market_cap(self):
+        report = build_onchain_market_context_recovery_report(
+            backfill_records=[
+                backfill_record(
+                    timestamp=10_000,
+                    decision_time_context={**backfill_record()["decision_time_context"], "timestamp": 10_000},
+                )
+            ],
+            raw_transactions=[raw_tx()],
+            historical_market_snapshots=[
+                {
+                    "mint": "MintA",
+                    "timestamp": 100,
+                    "market_cap": 2_500_000,
+                    "source": "local_token_snapshots",
+                }
+            ],
+            max_market_snapshot_age_seconds=7200,
+            generated_at=1234,
+        )
+
+        record = report["records"][0]
+        self.assertEqual(record["status"], "onchain_liquidity_recovered")
+        self.assertIsNone(record["decision_time_context"].get("market_cap"))
+        self.assertIn("blocked_missing_market_cap", record["block_reasons"])
+        self.assertFalse(record["score_ready_candidate"])
+
     def test_blocks_when_no_non_wallet_pool_owner_has_target_and_quote_reserves(self):
         report = build_onchain_market_context_recovery_report(
             backfill_records=[backfill_record()],
@@ -254,6 +330,54 @@ class OnchainMarketContextRecoveryTests(unittest.TestCase):
             self.assertEqual(report["quote_price_points"], 1)
             output_rows = [json.loads(line) for line in output_records_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(output_rows[0]["transaction_signature"], "SigA")
+
+    def test_writer_loads_prior_local_token_snapshots_from_sqlite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records_path = root / "historical_quote_price_enrichment_records.jsonl"
+            raw_dir = root / "raw_transactions"
+            quote_series_path = root / "sol_usd_price_series.jsonl"
+            db_path = root / "memetrader.db"
+            report_path = root / "onchain_market_context_recovery_report.json"
+            output_records_path = root / "onchain_market_context_recovery_records.jsonl"
+            raw_dir.mkdir()
+            records_path.write_text(json.dumps(backfill_record()) + "\n", encoding="utf-8")
+            quote_series_path.write_text("", encoding="utf-8")
+            (raw_dir / "raw.jsonl").write_text(json.dumps(raw_tx()) + "\n", encoding="utf-8")
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    "create table token_snapshots (time real, mint text, source text, context text, price real, liquidity real, risk_label text, payload_json text)"
+                )
+                conn.execute(
+                    "insert into token_snapshots (time, mint, source, context, price, liquidity, risk_label, payload_json) values (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        900,
+                        "MintA",
+                        "rejected_signal_context",
+                        "{}",
+                        0.0025,
+                        5_000,
+                        None,
+                        json.dumps({"market_cap": 2_500_000}),
+                    ),
+                )
+
+            report = write_onchain_market_context_recovery_report(
+                source_records_path=records_path,
+                raw_transactions_dir=raw_dir,
+                quote_price_series_path=quote_series_path,
+                token_snapshot_db_path=db_path,
+                report_path=report_path,
+                output_records_path=output_records_path,
+                generated_at=1234,
+            )
+
+            self.assertEqual(report["historical_market_snapshot_points"], 1)
+            output_rows = [json.loads(line) for line in output_records_path.read_text(encoding="utf-8").splitlines()]
+            context = output_rows[0]["decision_time_context"]
+            self.assertEqual(output_rows[0]["status"], "onchain_liquidity_market_cap_recovered")
+            self.assertEqual(context["market_cap"], 2_500_000)
+            self.assertEqual(context["market_cap_source"], "prior_decision_time_market_snapshot")
 
 
 if __name__ == "__main__":

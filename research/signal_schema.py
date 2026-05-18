@@ -133,7 +133,7 @@ def build_signal_outcome_record(
 
 def build_record_from_rejection(row: dict[str, Any]) -> dict[str, Any]:
     row = as_dict(row)
-    ctx = as_dict(row.get("signal context") or row.get("signal_context"))
+    ctx = normalize_rejection_signal_context(row)
     return build_signal_outcome_record(
         signal_context=ctx,
         decision={
@@ -141,9 +141,32 @@ def build_record_from_rejection(row: dict[str, Any]) -> dict[str, Any]:
             "should_trade": False,
             "paper_lane": row.get("lane") or ctx.get("paper_lane"),
             "reason": row.get("rejection reason") or row.get("rejection_reason"),
+            "timestamp": first_present(row.get("recorded_at"), row.get("timestamp"), ctx.get("entry_timestamp")),
         },
         later_token_outcome=as_dict(row.get("what would have happened afterward if traded") or row.get("counterfactual")),
         rejection_reason=row.get("rejection reason") or row.get("rejection_reason"),
+        source=row.get("source") or ctx.get("source"),
+    )
+
+
+def normalize_rejection_signal_context(row: dict[str, Any]) -> dict[str, Any]:
+    ctx = as_dict(row.get("signal context") or row.get("signal_context"))
+    if ctx.get("schema_version") == 2 and isinstance(ctx.get("market"), dict) and ctx.get("entry_timestamp") is not None:
+        return ctx
+    payload = dict(ctx)
+    payload.setdefault("mint", first_present(row.get("mint"), row.get("token_mint")))
+    payload.setdefault("decision_id", row.get("decision_id"))
+    payload.setdefault("paper_lane", row.get("lane"))
+    payload.setdefault("timestamp", first_present(row.get("recorded_at"), row.get("timestamp")))
+    return build_signal_context(
+        payload,
+        {
+            "action": "skip",
+            "should_trade": False,
+            "reason": row.get("rejection reason") or row.get("rejection_reason"),
+            "timestamp": first_present(row.get("recorded_at"), row.get("timestamp")),
+            "paper_lane": row.get("lane"),
+        },
         source=row.get("source") or ctx.get("source"),
     )
 

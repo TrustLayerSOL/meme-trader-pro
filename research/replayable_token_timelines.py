@@ -118,8 +118,9 @@ def build_replayable_token_timelines_report(
         ),
         gate(
             "trust_changes_blocked",
-            safe_int(evidence_summary.get("wallet_score_readiness_pct")) == 0,
-            "Wallet trust changes must remain blocked while timeline data is not score-ready.",
+            safe_int(evidence_summary.get("wallet_score_readiness_pct")) < 100
+            and evidence_layer_completion.get("wallet_list_mutated") is not True,
+            "Wallet trust changes must remain blocked until timeline and score data are fully ready.",
         ),
     ]
 
@@ -128,7 +129,6 @@ def build_replayable_token_timelines_report(
     completion_pct = pct(len(passed), len(gates))
     readiness_pct = min(
         pct(score_ready_records, max(1, records_scanned)),
-        pct(supply_recovered, max(1, supply_scanned)),
         safe_int(stage8_summary.get("proof_readiness_pct")),
     )
     blockers = residual_blockers(

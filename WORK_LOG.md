@@ -9081,3 +9081,88 @@ Verification:
 Remaining:
 
 - Next logical step is to obtain real historical mint-account responses for the batch request, save them to `data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json`, then run the post-import command chain. Without those saved historical responses, proof readiness must stay blocked.
+
+### 2026-05-17 - Proof Readiness Local Evidence Recovery
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Proof-readiness blocker reduction queue: `100%`
+- Proof readiness: `2%`
+
+Changed files:
+
+- `WORK_LOG.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `research/replayable_token_timelines.py`
+- `research/signal_schema.py`
+- `tests/test_onchain_market_context_recovery.py`
+- `tests/test_replayable_token_timelines.py`
+- `tests/test_research_signal_schema.py`
+- `tests/test_score_ready_market_context.py`
+- `tests/test_wallet_outcome_ledger_builder.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `utils/recover_onchain_market_context.py`
+- `wallets/onchain_market_context_recovery.py`
+- `wallets/score_ready_market_context.py`
+
+What changed:
+
+- Normalized legacy rejected-signal rows into the unified signal schema so `recorded_at`, `mint`, and `market_info` become decision-time-safe context fields.
+- Added snapshot-derived later outcome windows to the wallet outcome ledger while keeping later outcomes out of decision-time context.
+- Added a local-only market-cap recovery path from prior SQLite `token_snapshots`; future snapshots and stale snapshots remain blocked.
+- Updated score-ready market context so rows with prior decision-time local market-cap snapshots do not also require archival supply evidence.
+- Updated timeline readiness so score-ready market-context rows count even when separate supply recovery remains blocked for other rows.
+- Rebuilt the proof-readiness chain.
+
+Current report state:
+
+- historical replay events: `6,042`
+- unsafe replay events: `0`
+- known 15m outcomes: `662`
+- fillable rate: `52%` vs `70%` required
+- on-chain market context rows scanned: `643`
+- price recovered records: `201`
+- liquidity recovered records: `86`
+- market cap recovered records: `11`
+- score-ready market-context records: `11`
+- wallet score readiness: `2%`
+- validation proof readiness: `2%`
+- behavioral trust justified: `false`
+- wallet-list mutations: `0`
+- auto trust mutations: `0`
+
+Important limitation:
+
+- This did not reach proof-readiness `100%` because the local evidence does not support that claim. Remaining blockers are mainly `52%` fillability versus `70%` required and `643` historical market-context rows still needing better reconstruction/classification. Current-only prices, current supply, future snapshots, and fabricated liquidity were not used.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_research_signal_schema tests.test_wallet_outcome_ledger_builder tests.test_onchain_market_context_recovery tests.test_score_ready_market_context tests.test_replayable_token_timelines -v`
+- `./trading_env/bin/python utils/build_wallet_outcome_ledger.py`
+- `./trading_env/bin/python utils/build_historical_replay_dataset.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+- `./trading_env/bin/python utils/recover_onchain_market_context.py`
+- `./trading_env/bin/python utils/build_trusted_historical_market_snapshot_report.py --source-records data/reports/historical_backfill/onchain_market_context_recovery_records.jsonl --report-path data/reports/historical_backfill/trusted_onchain_market_context_report.json --records-path data/reports/historical_backfill/trusted_onchain_market_context_records.jsonl`
+- `./trading_env/bin/python utils/build_onchain_supply_evidence.py`
+- `./trading_env/bin/python utils/build_score_ready_market_context.py`
+- `./trading_env/bin/python utils/build_replay_realism_readiness.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+- `./trading_env/bin/python utils/build_wallet_evidence_readiness.py`
+- `./trading_env/bin/python utils/build_wallet_evidence_scorecard.py`
+- `./trading_env/bin/python utils/build_evidence_layer_completion.py`
+- `./trading_env/bin/python utils/build_replayable_token_timelines.py`
+- `./trading_env/bin/python utils/build_similar_rug_patterns.py`
+- `./trading_env/bin/python utils/build_alerting_dashboard_layer.py`
+- `./trading_env/bin/python utils/build_validation_proof_layer.py`
+- `./trading_env/bin/python utils/build_behavioral_trust_validation.py`
+- `./trading_env/bin/python utils/build_proof_readiness_blocker_reduction.py`
+
+Remaining:
+
+- Next logical step is to reduce the fillability blocker by improving local pool/reserve reconstruction for `blocked_missing_onchain_pool_reserves` and `blocked_missing_quote_usd_price` rows. Stage 10 remains deferred.

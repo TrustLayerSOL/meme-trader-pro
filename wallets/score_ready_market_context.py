@@ -57,6 +57,7 @@ def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str
     price = positive_float(context.get("price") or context.get("price_usd"))
     liquidity = positive_float(context.get("liquidity") or context.get("liquidity_usd"))
     market_cap = positive_float(context.get("market_cap"))
+    market_cap_source = str(context.get("market_cap_source") or "")
     token_supply = positive_float(context.get("token_supply") or supply.get("ui_supply"))
     if market_cap is None and price is not None and token_supply is not None:
         market_cap = price * token_supply
@@ -88,7 +89,11 @@ def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str
         readiness = "needs_market_cap_recompute"
         blocked_by.append("market_cap_not_materialized")
         next_action = "RECOMPUTE_MARKET_CAP_FROM_DECISION_TIME_SUPPLY"
-    elif not supply_decision_time_safe and supply_status != "missing_supply_evidence":
+    elif (
+        market_cap_source in {"decision_time_token_supply", "archival_supply_evidence"}
+        and not supply_decision_time_safe
+        and supply_status != "missing_supply_evidence"
+    ):
         readiness = "blocked_supply_not_decision_time_safe"
         blocked_by.append("supply_not_decision_time_safe")
         next_action = "FETCH_ARCHIVAL_SUPPLY_AT_OR_BEFORE_DECISION_SLOT"

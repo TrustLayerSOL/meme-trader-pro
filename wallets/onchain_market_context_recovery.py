@@ -143,12 +143,63 @@ def remove_values(values: list[Any], remove: set[str]) -> list[str]:
     return sorted({str(value) for value in values if str(value).strip() and str(value) not in remove})
 
 
+def normalize_historical_market_snapshots(rows: list[dict[str, Any]] | None) -> dict[str, list[dict[str, Any]]]:
+    indexed: dict[str, list[dict[str, Any]]] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        token_mint = str(row.get("mint") or row.get("token_mint") or "").strip()
+        timestamp = safe_float(row.get("timestamp") or row.get("snapshot_time") or row.get("created_at"), None)
+        market_cap = positive_float(row.get("market_cap") or row.get("market_cap_usd"))
+        if not token_mint or timestamp is None or market_cap is None:
+            continue
+        normalized = {
+            "token_mint": token_mint,
+            "timestamp": float(timestamp),
+            "market_cap": market_cap,
+            "price": positive_float(row.get("price") or row.get("price_usd")),
+            "source": str(row.get("source") or "local_token_snapshot"),
+        }
+        indexed.setdefault(token_mint, []).append(normalized)
+    for snapshots in indexed.values():
+        snapshots.sort(key=lambda item: item["timestamp"])
+    return indexed
+
+
+def nearest_prior_market_snapshot(
+    snapshots_by_mint: dict[str, list[dict[str, Any]]],
+    token_mint: str,
+    timestamp: float | None,
+    *,
+    max_market_snapshot_age_seconds: float,
+) -> dict[str, Any] | None:
+    if timestamp is None or not token_mint:
+        return None
+    best: dict[str, Any] | None = None
+    for snapshot in snapshots_by_mint.get(token_mint) or []:
+        snapshot_time = safe_float(snapshot.get("timestamp"), None)
+        if snapshot_time is None or snapshot_time > timestamp:
+            continue
+        age_seconds = timestamp - snapshot_time
+        if age_seconds < 0 or age_seconds > max_market_snapshot_age_seconds:
+            continue
+        best = snapshot
+    if best is None:
+        return None
+    return {
+        **best,
+        "age_seconds": round(timestamp - float(best["timestamp"]), 6),
+    }
+
+
 def recover_record(
     record: dict[str, Any],
     raw_by_signature: dict[str, dict[str, Any]],
     *,
     quote_price_series: list[dict[str, float]] | None = None,
     max_quote_age_seconds: float = 7200.0,
+    historical_market_snapshots_by_mint: dict[str, list[dict[str, Any]]] | None = None,
+    max_market_snapshot_age_seconds: float = 7200.0,
 ) -> dict[str, Any]:
     wallet = str(record.get("wallet") or "").strip()
     token_mint = str(record.get("token_mint") or "").strip()
@@ -276,10 +327,34 @@ def recover_record(
                     missing_fields.discard("market_cap")
                     status = "onchain_liquidity_market_cap_recovered"
                 else:
-                    block_reasons.add("blocked_missing_market_cap")
-                    block_reasons.add("blocked_missing_supply")
-                    missing_fields.add("market_cap")
-                    recovery_notes.append("market_cap_requires_decision_time_supply")
+                    prior_snapshot = nearest_prior_market_snapshot(
+                        historical_market_snapshots_by_mint or {},
+                        token_mint,
+                        timestamp,
+                        max_market_snapshot_age_seconds=max_market_snapshot_age_seconds,
+                    )
+                    if prior_snapshot:
+                        context.update(
+                            {
+                                "market_cap": prior_snapshot["market_cap"],
+                                "market_cap_source": "prior_decision_time_market_snapshot",
+                                "market_cap_snapshot_source": prior_snapshot.get("source"),
+                                "market_cap_snapshot_time": prior_snapshot["timestamp"],
+                                "market_cap_snapshot_age_seconds": prior_snapshot["age_seconds"],
+                            }
+                        )
+                        if prior_snapshot.get("price") is not None:
+                            context["market_cap_snapshot_price"] = prior_snapshot.get("price")
+                        block_reasons.discard("blocked_missing_market_cap")
+                        block_reasons.discard("blocked_missing_supply")
+                        missing_fields.discard("market_cap")
+                        status = "onchain_liquidity_market_cap_recovered"
+                        recovery_notes.append("market_cap_recovered_from_prior_local_market_snapshot")
+                    else:
+                        block_reasons.add("blocked_missing_market_cap")
+                        block_reasons.add("blocked_missing_supply")
+                        missing_fields.add("market_cap")
+                        recovery_notes.append("market_cap_requires_decision_time_supply_or_prior_market_snapshot")
 
     score_ready_candidate = (
         positive_float(context.get("price")) is not None
@@ -350,17 +425,23 @@ def build_onchain_market_context_recovery_report(
     raw_transactions: list[dict[str, Any]],
     quote_price_series: list[dict[str, Any]] | None = None,
     max_quote_age_seconds: float = 7200.0,
+    historical_market_snapshots: list[dict[str, Any]] | None = None,
+    max_market_snapshot_age_seconds: float = 7200.0,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     raw_by_signature = index_raw_transactions(raw_transactions)
     normalized_quote_prices = normalize_quote_price_series(quote_price_series or [])
+    historical_market_snapshots_by_mint = normalize_historical_market_snapshots(historical_market_snapshots)
+    market_snapshot_points = sum(len(rows) for rows in historical_market_snapshots_by_mint.values())
     records = [
         recover_record(
             record,
             raw_by_signature,
             quote_price_series=normalized_quote_prices,
             max_quote_age_seconds=max_quote_age_seconds,
+            historical_market_snapshots_by_mint=historical_market_snapshots_by_mint,
+            max_market_snapshot_age_seconds=max_market_snapshot_age_seconds,
         )
         for record in backfill_records or []
         if isinstance(record, dict)
@@ -373,6 +454,8 @@ def build_onchain_market_context_recovery_report(
         "onchain_recovery_version": RECOVERY_VERSION,
         "quote_price_points": len(normalized_quote_prices),
         "max_quote_age_seconds": max_quote_age_seconds,
+        "historical_market_snapshot_points": market_snapshot_points,
+        "max_market_snapshot_age_seconds": max_market_snapshot_age_seconds,
         "provider_policy": {
             "primary_source": "home_built_onchain_reconstruction",
             "provider_snapshots_allowed_for": ["temporary_validation", "fallback_gap_analysis"],

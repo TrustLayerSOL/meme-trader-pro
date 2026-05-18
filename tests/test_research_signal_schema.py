@@ -64,6 +64,37 @@ class ResearchSignalSchemaTests(unittest.TestCase):
         self.assertEqual(record["decision"]["reason"], "weak wallet score")
         self.assertEqual(record["later_token_outcome"]["status"], "unknown")
 
+    def test_rejection_adapter_normalizes_legacy_market_info_and_recorded_at(self):
+        row = {
+            "decision_id": "dec-legacy",
+            "recorded_at": 456.0,
+            "source": "market_radar",
+            "lane": "market_radar",
+            "rejection reason": "liquidity_below_hot_lane",
+            "mint": "MintLegacy",
+            "signal context": {
+                "mint": "MintLegacy",
+                "signal_type": "market_radar_hot",
+                "market_info": {
+                    "liquidity": 4_149.91,
+                    "market_cap": 5_882.29,
+                    "price": 0.00000587,
+                },
+                "total_score": 15,
+                "score_threshold": 70,
+            },
+            "what would have happened afterward if traded": {"status": "unknown"},
+        }
+
+        record = build_record_from_rejection(row)
+
+        self.assertEqual(record["signal_context"]["entry_timestamp"], 456.0)
+        self.assertEqual(record["decision"]["decision_timestamp"], 456.0)
+        self.assertEqual(record["signal_context"]["market"]["liquidity"], 4_149.91)
+        self.assertEqual(record["signal_context"]["market"]["market_cap"], 5_882.29)
+        self.assertEqual(record["signal_context"]["market"]["price"], 0.00000587)
+        self.assertEqual(record["replay_assumptions"]["liquidity_usd"], 4_149.91)
+
     def test_trade_adapter_extracts_later_outcome_without_future_decision_inputs(self):
         trade = {
             "decision_id": "dec-3",

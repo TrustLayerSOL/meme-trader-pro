@@ -135,6 +135,32 @@ class ScoreReadyMarketContextTests(unittest.TestCase):
         self.assertTrue(record["supply_decision_time_safe"])
         self.assertEqual(record["supply_source"], "archival_supply_evidence")
 
+    def test_prior_decision_time_market_snapshot_does_not_require_supply_evidence(self):
+        report = build_score_ready_market_context_report(
+            onchain_market_context_records=[
+                onchain_row(
+                    score_ready_candidate=True,
+                    decision_time_context={
+                        "decision_time_safe": True,
+                        "price": 0.01,
+                        "liquidity": 10_000,
+                        "market_cap": 2_500_000,
+                        "market_cap_source": "prior_decision_time_market_snapshot",
+                        "market_cap_snapshot_time": 900,
+                    },
+                    block_reasons=[],
+                    missing_fields=[],
+                )
+            ],
+            supply_evidence_records=[supply_row(status="needs_archival_supply", decision_time_safe=False)],
+            generated_at=123.0,
+        )
+
+        record = report["records"][0]
+        self.assertEqual(record["readiness_status"], "score_ready")
+        self.assertEqual(record["next_action"], "NO_ACTION_SCORE_READY")
+        self.assertEqual(report["summary"]["score_ready_records"], 1)
+
     def test_keeps_missing_price_or_liquidity_rows_blocked(self):
         report = build_score_ready_market_context_report(
             onchain_market_context_records=[

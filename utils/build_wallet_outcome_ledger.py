@@ -182,13 +182,17 @@ def build_records(
 
     for trade in paper_trade_rows(read_json(paper_path, {})):
         try:
-            records.append(build_record_from_trade(trade))
+            record = build_record_from_trade(trade)
+            attach_snapshot_outcomes(record, snapshot_db_path, outcome_horizon_seconds)
+            records.append(record)
         except Exception:
             continue
 
     for rejection in read_jsonl(rejection_path, limit=rejection_limit):
         try:
-            records.append(build_record_from_rejection(rejection))
+            record = build_record_from_rejection(rejection)
+            attach_snapshot_outcomes(record, snapshot_db_path, outcome_horizon_seconds)
+            records.append(record)
         except Exception:
             continue
 
@@ -223,6 +227,40 @@ def build_records(
             continue
 
     return records
+
+
+def attach_snapshot_outcomes(record: dict[str, Any], db_path: Path, horizon_seconds: float) -> None:
+    mint = first_present(record.get("mint"), as_dict(record.get("signal_context")).get("mint"))
+    signal_time = first_present(
+        as_dict(record.get("decision")).get("decision_timestamp"),
+        as_dict(record.get("signal_context")).get("entry_timestamp"),
+        as_dict(record.get("signal_context")).get("captured_at"),
+    )
+    later_snapshots = snapshot_rows_for_signal(db_path, str(mint or ""), signal_time, horizon_seconds)
+    if not later_snapshots:
+        return
+    snapshot_outcome = build_later_outcome_from_snapshots(
+        mint=str(mint or ""),
+        signal_time=signal_time,
+        snapshots=later_snapshots,
+        horizon_seconds=horizon_seconds,
+    )
+    snapshot_windows = build_windowed_outcomes_from_snapshots(
+        mint=str(mint or ""),
+        signal_time=signal_time,
+        snapshots=later_snapshots,
+    )
+    current = as_dict(record.get("later_token_outcome"))
+    current_outcome_type = str(current.get("outcome_type") or "unknown").lower()
+    if current_outcome_type in {"", "unknown", "open"}:
+        merged = dict(snapshot_outcome)
+        if current:
+            merged.setdefault("original_outcome_reference", current)
+    else:
+        merged = dict(current)
+    merged["windows"] = snapshot_windows
+    merged["outcome_windows_source"] = "token_snapshots"
+    record["later_token_outcome"] = merged
 
 
 def main() -> int:
