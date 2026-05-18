@@ -64,13 +64,26 @@ def build_snapshot(request: dict[str, Any], response: dict[str, Any]) -> tuple[d
     return (
         {
             "version": VERSION,
+            "evidence_key": request.get("evidence_key"),
+            "request_id": request_id(request),
             "token_mint": str(request.get("token_mint") or "").strip(),
             "slot": slot,
+            "provider_response_slot": slot,
             "requested_snapshot_slot": request.get("requested_snapshot_slot"),
+            "requested_snapshot_time": request.get("requested_snapshot_time"),
             "max_acceptable_snapshot_slot": request.get("max_acceptable_snapshot_slot"),
             "raw_supply": raw_supply,
             "decimals": decimals,
             "source": "saved_archival_rpc_getAccountInfo_response",
+            "provider_source": "saved_archival_rpc_getAccountInfo_response",
+            "provider_metadata": {
+                "response_id": response_id(response),
+                "response_context_slot": slot,
+                "source": "saved_response_file",
+            },
+            "wallets": list(request.get("wallets") or []),
+            "transaction_signatures": list(request.get("transaction_signatures") or []),
+            "candidate_references": list(request.get("candidate_references") or []),
             "decision_time_safe": True,
             "can_mutate_wallet_trust": False,
         },
@@ -126,8 +139,15 @@ def build_archival_mint_snapshot_response_import_report(
             import_rows.append(
                 {
                     "version": VERSION,
+                    "evidence_key": request.get("evidence_key"),
                     "token_mint": token_mint,
                     "request_id": rid,
+                    "requested_snapshot_slot": request.get("requested_snapshot_slot"),
+                    "requested_snapshot_time": request.get("requested_snapshot_time"),
+                    "max_acceptable_snapshot_slot": request.get("max_acceptable_snapshot_slot"),
+                    "wallets": list(request.get("wallets") or []),
+                    "transaction_signatures": list(request.get("transaction_signatures") or []),
+                    "candidate_references": list(request.get("candidate_references") or []),
                     "status": "blocked_missing_response",
                     "block_reasons": ["missing_provider_response"],
                     "decision_time_safe": False,
@@ -138,12 +158,19 @@ def build_archival_mint_snapshot_response_import_report(
         import_rows.append(
             {
                 "version": VERSION,
+                "evidence_key": request.get("evidence_key"),
                 "token_mint": token_mint,
                 "request_id": rid,
                 "status": status,
                 "block_reasons": block_reasons,
                 "snapshot_slot": snapshot.get("slot") if snapshot else response_slot(response),
+                "provider_response_slot": snapshot.get("provider_response_slot") if snapshot else response_slot(response),
+                "requested_snapshot_slot": request.get("requested_snapshot_slot"),
+                "requested_snapshot_time": request.get("requested_snapshot_time"),
                 "max_acceptable_snapshot_slot": request.get("max_acceptable_snapshot_slot"),
+                "wallets": list(request.get("wallets") or []),
+                "transaction_signatures": list(request.get("transaction_signatures") or []),
+                "candidate_references": list(request.get("candidate_references") or []),
                 "decision_time_safe": bool(snapshot),
             }
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from collections import Counter
 from typing import Any, Callable
@@ -48,6 +49,8 @@ def ready_candidate_targets(plan: dict[str, Any]) -> list[dict[str, Any]]:
                 "row_count": 0,
                 "wallets": set(),
                 "transaction_signatures": set(),
+                "decision_times": set(),
+                "candidate_references": [],
                 "target_source": "candidate_decision_slot",
             },
         )
@@ -58,15 +61,37 @@ def ready_candidate_targets(plan: dict[str, Any]) -> list[dict[str, Any]]:
         signature = str(row.get("transaction_signature") or "").strip()
         if signature:
             target["transaction_signatures"].add(signature)
+        decision_time = row.get("decision_block_time", row.get("timestamp"))
+        parsed_time = safe_int(decision_time, 0)
+        if parsed_time > 0:
+            target["decision_times"].add(parsed_time)
+        target["candidate_references"].append(
+            {
+                "wallet": wallet,
+                "transaction_signature": signature,
+                "decision_slot": slot,
+                "decision_time": parsed_time or None,
+            }
+        )
 
     targets: list[dict[str, Any]] = []
     for target in grouped.values():
         wallets = sorted(target.pop("wallets"))
         signatures = sorted(target.pop("transaction_signatures"))
+        decision_times = sorted(target.pop("decision_times"))
         target["wallet_count"] = len(wallets)
         target["wallets"] = wallets[:50]
         target["transaction_signature_count"] = len(signatures)
         target["transaction_signatures"] = signatures[:50]
+        target["requested_snapshot_time"] = decision_times[0] if decision_times else None
+        target["latest_decision_time"] = decision_times[-1] if decision_times else None
+        target["candidate_references"] = sorted(
+            target.get("candidate_references") or [],
+            key=lambda row: (
+                str(row.get("wallet") or ""),
+                str(row.get("transaction_signature") or ""),
+            ),
+        )[:50]
         targets.append(target)
     targets.sort(key=lambda row: (str(row.get("token_mint") or ""), safe_int(row.get("max_acceptable_snapshot_slot"), 0)))
     return targets
@@ -108,6 +133,12 @@ def build_rpc_payload(token: str, request_id: int) -> dict[str, Any]:
     }
 
 
+def evidence_key(token: str, slot: int | None, signatures: list[str]) -> str:
+    digest_source = "|".join(sorted(signature for signature in signatures if signature)) or token
+    digest = hashlib.sha1(digest_source.encode("utf-8")).hexdigest()[:16]
+    return f"mint-snapshot:{token}:{slot or 'missing-slot'}:{digest}"
+
+
 def parsed_mint_info(response: dict[str, Any]) -> dict[str, Any]:
     result = as_dict(response.get("result"))
     value = as_dict(result.get("value"))
@@ -142,17 +173,23 @@ def build_request(row: dict[str, Any], request_id: int) -> dict[str, Any]:
     requested_slot = safe_int(row.get("requested_snapshot_slot"), 0)
     max_slot = safe_int(row.get("max_acceptable_snapshot_slot"), 0)
     latest_slot = safe_int(row.get("latest_decision_slot"), 0)
+    signatures = list(row.get("transaction_signatures") or [])[:50]
     return {
         "version": VERSION,
+        "evidence_key": evidence_key(token, max_slot or requested_slot or latest_slot, signatures),
         "token_mint": token,
         "requested_snapshot_slot": requested_slot or None,
+        "requested_snapshot_time": safe_int(row.get("requested_snapshot_time"), 0) or None,
         "max_acceptable_snapshot_slot": max_slot or None,
         "latest_decision_slot": latest_slot or None,
+        "latest_decision_time": safe_int(row.get("latest_decision_time"), 0) or None,
         "row_count": safe_int(row.get("row_count"), 0),
         "wallet_count": safe_int(row.get("wallet_count"), 0),
+        "wallets": list(row.get("wallets") or [])[:50],
         "target_source": row.get("target_source"),
         "transaction_signature_count": safe_int(row.get("transaction_signature_count"), 0),
-        "transaction_signatures": list(row.get("transaction_signatures") or [])[:50],
+        "transaction_signatures": signatures,
+        "candidate_references": list(row.get("candidate_references") or [])[:50],
         "status": "pending_archival_provider",
         "block_reasons": [],
         "jsonrpc_payload": build_rpc_payload(token, request_id),
@@ -195,13 +232,20 @@ def collect_snapshot(
     request["snapshot_slot"] = slot
     return {
         "version": VERSION,
+        "evidence_key": request.get("evidence_key"),
         "token_mint": request["token_mint"],
         "slot": slot,
+        "provider_response_slot": slot,
         "requested_snapshot_slot": request.get("requested_snapshot_slot"),
+        "requested_snapshot_time": request.get("requested_snapshot_time"),
         "max_acceptable_snapshot_slot": request.get("max_acceptable_snapshot_slot"),
         "raw_supply": raw_supply,
         "decimals": decimals,
         "source": "archival_rpc_getAccountInfo",
+        "provider_source": "archival_rpc_getAccountInfo",
+        "wallets": list(request.get("wallets") or []),
+        "transaction_signatures": list(request.get("transaction_signatures") or []),
+        "candidate_references": list(request.get("candidate_references") or []),
         "decision_time_safe": True,
         "can_mutate_wallet_trust": False,
     }
@@ -217,6 +261,11 @@ def build_summary(requests: list[dict[str, Any]], snapshots: list[dict[str, Any]
         "blocked_too_new_snapshots": statuses.get("blocked_snapshot_after_decision_slot", 0),
         "blocked_rpc_errors": statuses.get("blocked_rpc_error", 0),
         "pending_archival_provider": statuses.get("pending_archival_provider", 0),
+        "requests_missing_audit_references": sum(
+            1
+            for row in requests
+            if row.get("target_source") == "candidate_decision_slot" and not row.get("candidate_references")
+        ),
         "tokens_affected": len({row.get("token_mint") for row in requests if row.get("token_mint")}),
         "wallet_list_mutations": 0,
         "auto_trust_mutations": 0,

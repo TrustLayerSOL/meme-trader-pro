@@ -9347,3 +9347,76 @@ Verification:
 Remaining:
 
 - Next logical step is either to supply saved archival provider responses into `data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json` and run the importer, or build a provider-specific archive-account-state adapter once an endpoint is available and confirmed to return historical account state by slot.
+
+### 2026-05-18 - Archival Supply Proof Export and Request Traceability
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Archival supply proof export lane: `100%`
+- Proof readiness: `2%`
+
+Changed files:
+
+- `wallets/archival_mint_snapshot_collector.py`
+- `wallets/archival_mint_snapshot_response_import.py`
+- `wallets/archival_supply_proof_exports.py`
+- `utils/export_archival_supply_proof_readiness.py`
+- `tests/test_archival_mint_snapshot_collector.py`
+- `tests/test_archival_mint_snapshot_response_import.py`
+- `tests/test_archival_supply_proof_exports.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added stable archival mint snapshot evidence keys.
+- Preserved wallet references, transaction signatures, decision slots, decision times, and candidate references in row-level archival snapshot requests.
+- Extended saved-response imports so accepted snapshots and rejected rows preserve evidence keys, provider response slots, requested decision boundaries, source metadata, wallet references, and transaction references.
+- Added the proof-readiness export layer that writes:
+  - `data/reports/replay_validation/archival_supply_proof_readiness_report.md`
+  - `data/reports/historical_backfill/archival_supply_evidence_table.csv`
+  - `data/reports/historical_backfill/archival_supply_rejected_rows.csv`
+  - `data/reports/replay_validation/archival_supply_proof_readiness_summary.json`
+
+Current report state:
+
+- total request rows: `550`
+- request chunks: `6`
+- imported provider responses: `0`
+- matched rows: `0`
+- valid archival supply rows: `0`
+- rejected/quarantined request-or-candidate rows: `1,141`
+- rows upgraded from near-score-ready to score-ready: `0`
+- proof readiness: `2%`
+- wallet-list mutations: `0`
+- auto trust mutations: `0`
+
+Important limitation:
+
+- The new export layer improves auditability, not evidence density. No archival provider responses exist locally yet, so the same decision-time supply / market-cap blocker remains.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_snapshot_collector tests.test_archival_mint_snapshot_response_import tests.test_archival_supply_proof_exports -v`
+- `./trading_env/bin/python utils/build_archival_supply_recovery_plan.py`
+- `./trading_env/bin/python utils/collect_archival_mint_supply_snapshots.py`
+- `./trading_env/bin/python utils/build_archival_mint_snapshot_request_bundle.py`
+- `./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py`
+- `./trading_env/bin/python utils/build_archival_supply_evidence.py`
+- `./trading_env/bin/python utils/build_score_ready_market_context.py`
+- `./trading_env/bin/python utils/build_replay_realism_readiness.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+- `./trading_env/bin/python utils/build_proof_readiness_blocker_reduction.py`
+- `./trading_env/bin/python utils/export_archival_supply_proof_readiness.py`
+- `./trading_env/bin/python -m unittest discover -v`
+- `./trading_env/bin/python -m compileall wallets utils research tests`
+
+Remaining:
+
+- Next logical step is to validate a real archival account-state provider response against one of the generated request chunks, then import the saved response batch only if provider context slots are at or before the requested decision slots.

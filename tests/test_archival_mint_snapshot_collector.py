@@ -35,6 +35,7 @@ def candidate(**overrides):
         "token_mint": "MintA",
         "transaction_signature": "SigA",
         "decision_slot": 100,
+        "decision_block_time": 1000,
         "timestamp": 1000,
     }
     row.update(overrides)
@@ -104,6 +105,29 @@ class ArchivalMintSnapshotCollectorTests(unittest.TestCase):
         self.assertEqual(report["requests"][1]["max_acceptable_snapshot_slot"], 120)
         self.assertEqual(report["requests"][1]["row_count"], 2)
         self.assertEqual(report["requests"][1]["wallet_count"], 2)
+
+    def test_row_level_requests_keep_audit_references_and_stable_evidence_key(self):
+        report = build_archival_mint_snapshot_collection_report(
+            archival_supply_plan=plan(
+                candidate_rows=[
+                    candidate(wallet="WalletA", transaction_signature="SigA", decision_slot=120, decision_block_time=1200),
+                    candidate(wallet="WalletB", transaction_signature="SigB", decision_slot=120, decision_block_time=1200),
+                ]
+            ),
+            execute=False,
+            generated_at=123.0,
+        )
+
+        request = report["requests"][0]
+        self.assertEqual(request["requested_snapshot_slot"], 120)
+        self.assertEqual(request["requested_snapshot_time"], 1200)
+        self.assertEqual(request["wallets"], ["WalletA", "WalletB"])
+        self.assertEqual(request["transaction_signatures"], ["SigA", "SigB"])
+        self.assertEqual(request["candidate_references"][0]["wallet"], "WalletA")
+        self.assertEqual(request["candidate_references"][0]["decision_slot"], 120)
+        self.assertEqual(request["candidate_references"][0]["decision_time"], 1200)
+        self.assertTrue(request["evidence_key"].startswith("mint-snapshot:MintA:120:"))
+        self.assertEqual(report["summary"]["requests_missing_audit_references"], 0)
 
     def test_execute_accepts_only_snapshot_at_or_before_decision_slot(self):
         calls = []

@@ -16,23 +16,38 @@ def collection_report():
         "requests": [
             {
                 "token_mint": "MintA",
+                "evidence_key": "mint-snapshot:MintA:100:SigA",
                 "status": "pending_archival_provider",
                 "requested_snapshot_slot": 100,
+                "requested_snapshot_time": 1000,
                 "max_acceptable_snapshot_slot": 100,
+                "wallets": ["WalletA"],
+                "transaction_signatures": ["SigA"],
+                "candidate_references": [
+                    {"wallet": "WalletA", "transaction_signature": "SigA", "decision_slot": 100, "decision_time": 1000}
+                ],
                 "jsonrpc_payload": {"id": 1, "method": "getAccountInfo", "params": ["MintA", {"encoding": "jsonParsed"}]},
             },
             {
                 "token_mint": "MintB",
+                "evidence_key": "mint-snapshot:MintB:200:SigB",
                 "status": "pending_archival_provider",
                 "requested_snapshot_slot": 200,
+                "requested_snapshot_time": 2000,
                 "max_acceptable_snapshot_slot": 200,
+                "wallets": ["WalletB"],
+                "transaction_signatures": ["SigB"],
                 "jsonrpc_payload": {"id": 2, "method": "getAccountInfo", "params": ["MintB", {"encoding": "jsonParsed"}]},
             },
             {
                 "token_mint": "MintC",
+                "evidence_key": "mint-snapshot:MintC:300:SigC",
                 "status": "pending_archival_provider",
                 "requested_snapshot_slot": 300,
+                "requested_snapshot_time": 3000,
                 "max_acceptable_snapshot_slot": 300,
+                "wallets": ["WalletC"],
+                "transaction_signatures": ["SigC"],
                 "jsonrpc_payload": {"id": 3, "method": "getAccountInfo", "params": ["MintC", {"encoding": "jsonParsed"}]},
             },
         ],
@@ -80,8 +95,18 @@ class ArchivalMintSnapshotResponseImportTests(unittest.TestCase):
         self.assertEqual(report["summary"]["blocked_too_new_snapshots"], 1)
         self.assertEqual(report["summary"]["blocked_missing_response"], 1)
         self.assertEqual(report["snapshots"][0]["token_mint"], "MintA")
+        self.assertEqual(report["snapshots"][0]["evidence_key"], "mint-snapshot:MintA:100:SigA")
+        self.assertEqual(report["snapshots"][0]["requested_snapshot_slot"], 100)
+        self.assertEqual(report["snapshots"][0]["requested_snapshot_time"], 1000)
+        self.assertEqual(report["snapshots"][0]["provider_response_slot"], 90)
+        self.assertEqual(report["snapshots"][0]["provider_source"], "saved_archival_rpc_getAccountInfo_response")
+        self.assertEqual(report["snapshots"][0]["wallets"], ["WalletA"])
+        self.assertEqual(report["snapshots"][0]["transaction_signatures"], ["SigA"])
         self.assertEqual(report["snapshots"][0]["slot"], 90)
         self.assertTrue(report["snapshots"][0]["decision_time_safe"])
+        self.assertEqual(report["import_rows"][1]["status"], "blocked_snapshot_after_decision_slot")
+        self.assertEqual(report["import_rows"][1]["evidence_key"], "mint-snapshot:MintB:200:SigB")
+        self.assertIn("snapshot_slot_after_decision_slot", report["import_rows"][1]["block_reasons"])
 
     def test_writer_persists_report_and_compatible_snapshot_jsonl(self):
         with TemporaryDirectory() as tmp:
@@ -110,4 +135,3 @@ class ArchivalMintSnapshotResponseImportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
