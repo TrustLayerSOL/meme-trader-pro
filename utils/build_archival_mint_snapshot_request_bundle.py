@@ -44,6 +44,7 @@ def write_archival_mint_snapshot_request_bundle_report(
     raw_response_path: str = DEFAULT_RAW_RESPONSE_PATH,
     batch_request_path: Path | str = DEFAULT_BATCH_REQUEST_PATH,
     response_template_path: Path | str = DEFAULT_RESPONSE_TEMPLATE_PATH,
+    batch_chunk_size: int = 100,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     collection_report_path = Path(collection_report_path)
@@ -57,6 +58,7 @@ def write_archival_mint_snapshot_request_bundle_report(
         raw_response_path=raw_response_path,
         batch_request_path=batch_request_relative,
         response_template_path=response_template_relative,
+        batch_chunk_size=batch_chunk_size,
         generated_at=generated_at,
     )
     report["input_paths"] = {
@@ -68,11 +70,20 @@ def write_archival_mint_snapshot_request_bundle_report(
         "response_template": response_template_relative,
         "raw_provider_response": raw_response_path,
     }
+    for chunk in report.get("batch_request_chunks", []):
+        chunk_path = Path(str(chunk.get("path") or ""))
+        absolute_path = chunk_path if chunk_path.is_absolute() else ROOT / chunk_path
+        chunk["absolute_path"] = str(absolute_path)
+
     report_path.parent.mkdir(parents=True, exist_ok=True)
     batch_request_path.parent.mkdir(parents=True, exist_ok=True)
     response_template_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     batch_request_path.write_text(json.dumps(report["batch_jsonrpc_payload"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    for chunk in report.get("batch_request_chunks", []):
+        chunk_file = Path(str(chunk["absolute_path"]))
+        chunk_file.parent.mkdir(parents=True, exist_ok=True)
+        chunk_file.write_text(json.dumps(chunk["jsonrpc_payload"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
     response_template_path.write_text(json.dumps(report["response_template"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
@@ -84,6 +95,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--raw-response-path", default=DEFAULT_RAW_RESPONSE_PATH)
     parser.add_argument("--batch-request-path", type=Path, default=DEFAULT_BATCH_REQUEST_PATH)
     parser.add_argument("--response-template-path", type=Path, default=DEFAULT_RESPONSE_TEMPLATE_PATH)
+    parser.add_argument("--batch-chunk-size", type=int, default=100)
     return parser.parse_args(argv)
 
 
@@ -95,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         raw_response_path=args.raw_response_path,
         batch_request_path=args.batch_request_path,
         response_template_path=args.response_template_path,
+        batch_chunk_size=args.batch_chunk_size,
     )
     print(json.dumps(report["summary"], indent=2, sort_keys=True))
     return 0

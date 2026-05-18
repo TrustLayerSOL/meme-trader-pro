@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from pathlib import PurePosixPath
 from typing import Any
 
 
@@ -23,13 +24,55 @@ def pending_requests(snapshot_collection_report: dict[str, Any]) -> list[dict[st
     return requests
 
 
-def build_summary(requests: list[dict[str, Any]]) -> dict[str, Any]:
+def normalize_chunk_size(batch_chunk_size: int | None) -> int:
+    try:
+        size = int(batch_chunk_size or 0)
+    except (TypeError, ValueError):
+        size = 0
+    return size if size > 0 else 100
+
+
+def chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    if not items:
+        return []
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def chunk_path(batch_request_path: str, index: int) -> str:
+    path = PurePosixPath(batch_request_path)
+    suffix = path.suffix or ".json"
+    stem = path.name[: -len(suffix)] if path.name.endswith(suffix) else path.name
+    return str(path.with_name(f"{stem}.part{index:03d}{suffix}"))
+
+
+def build_batch_request_chunks(requests: list[dict[str, Any]], batch_request_path: str, chunk_size: int) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    for index, rows in enumerate(chunked(requests, chunk_size), start=1):
+        payloads = [row["jsonrpc_payload"] for row in rows]
+        request_ids = [str(payload.get("id") or "") for payload in payloads if isinstance(payload, dict)]
+        chunks.append(
+            {
+                "index": index,
+                "path": chunk_path(batch_request_path, index),
+                "request_count": len(rows),
+                "request_ids": request_ids,
+                "first_request_id": request_ids[0] if request_ids else None,
+                "last_request_id": request_ids[-1] if request_ids else None,
+                "jsonrpc_payload": payloads,
+            }
+        )
+    return chunks
+
+
+def build_summary(requests: list[dict[str, Any]], *, chunk_count: int = 0, chunk_size: int = 100) -> dict[str, Any]:
     statuses = Counter(str(row.get("status") or "unknown") for row in requests)
     return {
         "requests_bundled": len(requests),
         "target_tokens": len({row.get("token_mint") for row in requests if row.get("token_mint")}),
         "provider_calls_performed": 0,
         "request_packet_ready": 1 if requests else 0,
+        "request_chunk_count": chunk_count,
+        "max_requests_per_chunk": chunk_size,
         "wallet_list_mutations": 0,
         "auto_trust_mutations": 0,
         "status_counts": dict(sorted(statuses.items())),
@@ -68,10 +111,13 @@ def build_archival_mint_snapshot_request_bundle_report(
     raw_response_path: str = "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json",
     batch_request_path: str = "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.json",
     response_template_path: str = "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.json",
+    batch_chunk_size: int = 100,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     requests = pending_requests(snapshot_collection_report)
     batch_payload = [row["jsonrpc_payload"] for row in requests]
+    chunk_size = normalize_chunk_size(batch_chunk_size)
+    batch_chunks = build_batch_request_chunks(requests, batch_request_path, chunk_size)
     response_import_command = (
         "./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py "
         f"--raw-response-path {raw_response_path}"
@@ -94,7 +140,7 @@ def build_archival_mint_snapshot_request_bundle_report(
         "wallet_list_mutated": False,
         "auto_trust_mutation_allowed": False,
         "wallet_trust_mutation_allowed": False,
-        "summary": build_summary(requests),
+        "summary": build_summary(requests, chunk_count=len(batch_chunks), chunk_size=chunk_size),
         "source_collection_mode": snapshot_collection_report.get("mode") if isinstance(snapshot_collection_report, dict) else None,
         "batch_request_save_path": batch_request_path,
         "response_template_save_path": response_template_path,
@@ -102,6 +148,7 @@ def build_archival_mint_snapshot_request_bundle_report(
         "response_import_command": response_import_command,
         "post_import_commands": post_import_commands,
         "batch_jsonrpc_payload": batch_payload,
+        "batch_request_chunks": batch_chunks,
         "response_template": build_response_template(requests, raw_response_path),
         "requests": requests,
         "operator_note": (

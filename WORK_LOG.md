@@ -9288,3 +9288,62 @@ Verification:
 Remaining:
 
 - Next logical step is obtaining or locally reconstructing decision-time mint-account supply snapshots for the `550` row-level request targets. Until those responses exist, market-cap proof and wallet trust remain blocked.
+
+### 2026-05-18 - Chunked Archival Supply Request Bundles
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Archival supply request handoff: `100%`
+- Proof readiness: `2%`
+
+Changed files:
+
+- `wallets/archival_mint_snapshot_request_bundle.py`
+- `utils/build_archival_mint_snapshot_request_bundle.py`
+- `tests/test_archival_mint_snapshot_request_bundle.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added chunked JSON-RPC request packets for the archival mint-account snapshot handoff.
+- The current `550` pending row-level provider requests are now split into `6` bounded part files, capped at `100` requests per file.
+- Kept the original full batch packet and response template for compatibility.
+- Preserved the rule that this lane performs `0` provider calls, stores `0` provider URLs/API keys, mutates `0` wallet lists, and applies `0` wallet trust changes.
+
+Current report state:
+
+- archival provider requests bundled: `550`
+- target tokens: `75`
+- request chunks: `6`
+- max requests per chunk: `100`
+- raw provider responses scanned: `0`
+- supply snapshots imported: `0`
+- rows still blocked by missing archival snapshot: `591`
+- score-ready market-context records: `41`
+- proof readiness: `2%`
+
+Important limitation:
+
+- This made the provider/operator handoff practical, but it did not recover supply. Market-cap proof remains blocked until real archival mint-account responses at or before each decision slot are imported.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_snapshot_request_bundle -v`
+- `./trading_env/bin/python utils/build_archival_mint_snapshot_request_bundle.py`
+- `./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py`
+- `./trading_env/bin/python utils/build_archival_supply_evidence.py`
+- `./trading_env/bin/python utils/build_score_ready_market_context.py`
+- `./trading_env/bin/python utils/build_replay_realism_readiness.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+- `./trading_env/bin/python utils/build_proof_readiness_blocker_reduction.py`
+
+Remaining:
+
+- Next logical step is either to supply saved archival provider responses into `data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json` and run the importer, or build a provider-specific archive-account-state adapter once an endpoint is available and confirmed to return historical account state by slot.

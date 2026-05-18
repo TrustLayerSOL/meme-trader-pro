@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
 
 ## Legend
 
@@ -56,7 +56,7 @@ Reason:
 - Archival account-state provider probing now exposes `/api/archival-account-state-provider-probe`: `1` manual probe target selected, provider `quicknode_solana_mainnet_archive`, token `4BBPVEzF9AyVwt8Zog1z41ATKbZMVqah738sTYwvpump`, decision slot `419937176`, `0` raw responses evaluated, and `0` supply snapshot imports. It is a dry-run/manual validation harness only.
 - Archival provider probe request bundling now exposes `/api/archival-account-state-provider-probe-request`: `1` request bundle prepared, token `4BBPVEzF9AyVwt8Zog1z41ATKbZMVqah738sTYwvpump`, max acceptable context slot `419937176`, `0` provider calls performed, and `0` supply snapshot imports. It provides the manual request and validation handoff without storing secrets.
 - Archival mint snapshot collection now exposes `/api/archival-mint-snapshot-collection` and writes a provider-ready dry-run request manifest for the `75` token requirements. Current local dry-run prepares `550` row-level decision-slot requests across `75` tokens, leaves all `550` pending archival provider, collects `0` snapshots, and keeps `0` trust/list mutations. It only accepts provider snapshots whose response slot is at or before each candidate decision slot.
-- Archival mint snapshot request bundling now exposes `/api/archival-mint-snapshot-request-bundle`: `550` pending provider requests bundled across `75` target tokens, `0` provider calls, `0` wallet-list mutations, and `0` auto trust mutations. It writes a direct JSON-RPC request packet, a response template, and post-import rebuild commands without storing provider URLs or secrets.
+- Archival mint snapshot request bundling now exposes `/api/archival-mint-snapshot-request-bundle`: `550` pending provider requests bundled across `75` target tokens, `0` provider calls, `0` wallet-list mutations, and `0` auto trust mutations. It writes a direct JSON-RPC request packet, `6` chunked request part files capped at `100` requests each, a response template, and post-import rebuild commands without storing provider URLs or secrets.
 - Archival mint snapshot response import now exposes `/api/archival-mint-snapshot-response-import`: `550` requests scanned, `0` raw responses scanned, `0` snapshots imported, and `550` rows blocked by missing provider responses. It only imports saved historical mint-account responses with context slots at or before decision slots.
 - Archival mint supply reconstruction now exposes `/api/archival-mint-supply-reconstruction` and can reconstruct supply from complete mint/burn history only. Current local run has `75` requirements scanned, `0` snapshots reconstructed, and `75` requirements blocked because current local raw wallet transactions do not prove complete mint history through the decision slot.
 - Archival supply evidence import now exposes `/api/archival-supply-evidence` and can consume historical mint-account snapshots when provided. Current local run has `591` candidate rows, `0` recovered supply rows, `591` rows blocked by missing archival snapshots, `75` tokens affected, and `33` wallets affected. Score-ready rows remain limited to prior local market-cap snapshots until historical mint-account snapshots are imported.
