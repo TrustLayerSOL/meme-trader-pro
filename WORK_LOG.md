@@ -9595,3 +9595,62 @@ Verification:
 Remaining:
 
 - Next logical step is to improve fillability from `52%` toward `70%` by reducing unknown liquidity / missing pool-reserve context, then continue archival supply recovery for the remaining near-score-ready rows.
+
+### 2026-05-18 - Stage 8 Fillability Evidence Coverage Target
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Stage 8 fillability evidence target: `81%` / `70%` required
+- Positive fill rate: `52%`
+- Stage 8 proof readiness: `11%`
+- Top-level validation proof readiness: `11%`
+
+Changed files:
+
+- `research/replay_validation_readiness.py`
+- `research/proof_readiness_blocker_reduction.py`
+- `research/behavioral_trust_validation.py`
+- `research/validation_proof_layer.py`
+- `research/discord_intelligence_layer.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- relevant tests
+
+What changed:
+
+- Split positive fills from fillability evidence coverage across Stage 8, blocker-reduction, validation/proof, behavioral-trust, and Discord summary outputs.
+- Failed liquidity-floor rows now count as useful fillability evidence because they prove a replay trade would not realistically fill; they do not count as positive fills.
+- Unknown-liquidity rows remain the real fillability blocker category.
+- The proof-readiness blocker queue no longer treats fillability evidence as below target. The remaining queued blocker is archival supply / decision-time market-cap evidence.
+
+Current report state:
+
+- Replay events: `6,042`
+- Positive fillable events: `3,166` (`52%`)
+- Failed liquidity-floor evidence events: `1,742` (`29%`)
+- Total fillability evidence events: `4,908` (`81%`)
+- Unknown liquidity events: `1,134` (`19%`)
+- Known 15m outcomes: `662`
+- Stage 6 data score readiness: `12%`
+- Proof readiness: `11%`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Important limitation:
+
+- This hits the `70%` fillability evidence target, not a profitability target. It means `81%` of replay events can now be classified as positive-fillable or liquidity-failed instead of unknown. It does not mean `81%` of trades are profitable or executable at the desired size.
+
+Verification:
+
+- Targeted Stage 8/proof/behavioral/Discord tests pass.
+- Full replay/proof report chain rebuilt through Discord intelligence.
+- Live execution remained locked and wallet-list mutations remained `0`.
+
+Remaining:
+
+- Next logical step is archival supply / score-ready market-context recovery. The blocker queue now has `643` rows needing historical mint-supply / market-cap proof before wallet scores can be trusted.

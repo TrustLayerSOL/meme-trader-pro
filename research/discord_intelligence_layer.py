@@ -56,7 +56,7 @@ def proof_phrase(proof_summary: dict[str, Any]) -> str:
         f"Proof readiness: {safe_int(proof_summary.get('proof_readiness_pct'))}%. "
         f"Known 15m outcomes: {safe_int(proof_summary.get('known_15m_outcomes'))}/"
         f"{safe_int(proof_summary.get('known_15m_required'))}. "
-        f"Fillable rate: {safe_int(proof_summary.get('fillable_rate'))}%/"
+        f"Fillability evidence: {safe_int(proof_summary.get('fillability_evidence_rate'), safe_int(proof_summary.get('fillable_rate')))}%/"
         f"{safe_int(proof_summary.get('fillable_rate_required'))}% required."
     )
 
@@ -348,4 +348,3 @@ def build_discord_intelligence_layer_report(
             "state transitions without sending raw wallet spam, implying profitability, or touching execution."
         ),
     }
-

@@ -72,14 +72,18 @@ def build_behavioral_trust_validation_report(
     patterns = [row for row in as_list(behavioral.get("behavioral_pattern_candidates")) if isinstance(row, dict)]
     proof_readiness = safe_int(proof_summary.get("proof_readiness_pct"))
     known_15m = safe_int(stage8_summary.get("known_15m_outcomes"))
-    fillable_rate = safe_int(stage8_summary.get("fillable_rate"))
+    positive_fill_rate = safe_int(stage8_summary.get("fillable_rate"))
+    fillability_evidence_rate = safe_int(
+        stage8_summary.get("fillability_evidence_rate"),
+        positive_fill_rate,
+    )
     score_ready_market_context = safe_int(evidence_summary.get("score_ready_market_context_records"))
     pattern_rows = [
         validate_pattern(
             pattern,
             proof_readiness=proof_readiness,
             known_15m=known_15m,
-            fillable_rate=fillable_rate,
+            fillability_evidence_rate=fillability_evidence_rate,
             score_ready_market_context=score_ready_market_context,
         )
         for pattern in patterns
@@ -88,7 +92,7 @@ def build_behavioral_trust_validation_report(
     blockers = blocked_data_issues(
         proof_readiness=proof_readiness,
         known_15m=known_15m,
-        fillable_rate=fillable_rate,
+        fillability_evidence_rate=fillability_evidence_rate,
         score_ready_market_context=score_ready_market_context,
         pattern_count=len(pattern_rows),
     )
@@ -147,7 +151,9 @@ def build_behavioral_trust_validation_report(
             "proof_readiness_pct": proof_readiness,
             "known_15m_outcomes": known_15m,
             "known_15m_required": MIN_KNOWN_15M_OUTCOMES,
-            "fillable_rate": fillable_rate,
+            "positive_fill_rate": positive_fill_rate,
+            "fillable_rate": positive_fill_rate,
+            "fillability_evidence_rate": fillability_evidence_rate,
             "fillable_rate_required": MIN_FILLABLE_RATE,
             "score_ready_market_context_records": score_ready_market_context,
             "wallet_score_readiness_pct": safe_int(evidence_summary.get("wallet_score_readiness_pct")),
@@ -173,7 +179,7 @@ def validate_pattern(
     *,
     proof_readiness: int,
     known_15m: int,
-    fillable_rate: int,
+    fillability_evidence_rate: int,
     score_ready_market_context: int,
 ) -> dict[str, Any]:
     reasons = []
@@ -181,7 +187,7 @@ def validate_pattern(
         reasons.append("proof_readiness_below_threshold")
     if known_15m < MIN_KNOWN_15M_OUTCOMES:
         reasons.append("insufficient_known_outcome_density")
-    if fillable_rate < MIN_FILLABLE_RATE:
+    if fillability_evidence_rate < MIN_FILLABLE_RATE:
         reasons.append("fillable_rate_below_threshold")
     if score_ready_market_context < MIN_SCORE_READY_MARKET_CONTEXT:
         reasons.append("market_context_not_score_ready")
@@ -196,7 +202,7 @@ def validate_pattern(
         "regime_known_15m_outcomes": safe_int(pattern.get("regime_known_15m_outcomes")),
         "proof_readiness_pct": proof_readiness,
         "known_15m_outcomes": known_15m,
-        "fillable_rate": fillable_rate,
+        "fillability_evidence_rate": fillability_evidence_rate,
         "score_ready_market_context_records": score_ready_market_context,
         "trust_verdict": verdict,
         "blocking_reasons": reasons,
@@ -209,7 +215,7 @@ def blocked_data_issues(
     *,
     proof_readiness: int,
     known_15m: int,
-    fillable_rate: int,
+    fillability_evidence_rate: int,
     score_ready_market_context: int,
     pattern_count: int,
 ) -> list[str]:
@@ -220,9 +226,8 @@ def blocked_data_issues(
         blockers.append("proof_readiness_below_threshold")
     if known_15m < MIN_KNOWN_15M_OUTCOMES:
         blockers.append("insufficient_known_outcome_density")
-    if fillable_rate < MIN_FILLABLE_RATE:
+    if fillability_evidence_rate < MIN_FILLABLE_RATE:
         blockers.append("fillable_rate_below_threshold")
     if score_ready_market_context < MIN_SCORE_READY_MARKET_CONTEXT:
         blockers.append("score_ready_market_context_absent")
     return blockers
-

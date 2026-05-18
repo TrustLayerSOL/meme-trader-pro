@@ -22,6 +22,7 @@ def behavioral_trust_validation():
             "known_15m_outcomes": 2,
             "known_15m_required": 30,
             "fillable_rate": 6,
+            "fillability_evidence_rate": 25,
             "fillable_rate_required": 70,
             "score_ready_market_context_records": 0,
             "proof_readiness_pct": 0,
@@ -48,6 +49,7 @@ def validation_proof_layer():
             "blocked_criteria_count": 12,
             "stage8_known_15m_outcomes": 2,
             "stage8_fillable_rate": 6,
+            "stage8_fillability_evidence_rate": 25,
             "stage8_data_score_readiness_pct": 0,
         },
         "proof_criteria": [
@@ -69,6 +71,8 @@ def stage8_validation():
             "known_15m_outcomes": 2,
             "fillable_events": 353,
             "fillable_rate": 6,
+            "fillability_evidence_events": 1400,
+            "fillability_evidence_rate": 25,
             "proof_readiness_pct": 0,
         },
         "evidence_gaps": ["low_known_outcome_coverage", "low_market_context_score_readiness"],
@@ -181,7 +185,8 @@ class ProofReadinessBlockerReductionTests(unittest.TestCase):
         self.assertEqual(report["summary"]["blocker_reduction_completion_pct"], 100)
         self.assertFalse(report["summary"]["behavioral_trust_justified"])
         self.assertEqual(report["summary"]["known_15m_needed"], 28)
-        self.assertEqual(report["summary"]["fillable_rate_gap"], 64)
+        self.assertEqual(report["summary"]["fillability_evidence_gap"], 45)
+        self.assertEqual(report["summary"]["positive_fill_rate"], 6)
         self.assertEqual(report["summary"]["score_ready_market_context_records"], 0)
         self.assertGreaterEqual(report["summary"]["next_action_count"], 3)
         self.assertEqual(report["reduction_queue"][0]["priority"], 1)

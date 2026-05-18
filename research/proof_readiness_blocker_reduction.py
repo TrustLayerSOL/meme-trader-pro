@@ -90,10 +90,16 @@ def build_proof_readiness_blocker_reduction_report(
         proof_summary.get("stage8_known_15m_outcomes"),
     )
     known_required = max(safe_int(trust_summary.get("known_15m_required")), MIN_KNOWN_15M_OUTCOMES)
-    fillable_rate = first_positive_int(
+    positive_fill_rate = first_positive_int(
         trust_summary.get("fillable_rate"),
         stage8_summary.get("fillable_rate"),
         proof_summary.get("stage8_fillable_rate"),
+    )
+    fillability_evidence_rate = first_positive_int(
+        trust_summary.get("fillability_evidence_rate"),
+        stage8_summary.get("fillability_evidence_rate"),
+        proof_summary.get("stage8_fillability_evidence_rate"),
+        positive_fill_rate,
     )
     fillable_required = max(safe_int(trust_summary.get("fillable_rate_required")), MIN_FILLABLE_RATE)
     score_ready_context = first_positive_int(
@@ -106,7 +112,7 @@ def build_proof_readiness_blocker_reduction_report(
     reduction_queue = build_reduction_queue(
         known_15m=known_15m,
         known_required=known_required,
-        fillable_rate=fillable_rate,
+        fillability_evidence_rate=fillability_evidence_rate,
         fillable_required=fillable_required,
         score_ready_context=score_ready_context,
         evidence_summary=evidence_summary,
@@ -183,10 +189,15 @@ def build_proof_readiness_blocker_reduction_report(
             "known_15m_outcomes": known_15m,
             "known_15m_required": known_required,
             "known_15m_needed": max(0, known_required - known_15m),
-            "fillable_rate": fillable_rate,
+            "positive_fill_rate": positive_fill_rate,
+            "fillable_rate": positive_fill_rate,
+            "fillability_evidence_rate": fillability_evidence_rate,
             "fillable_rate_required": fillable_required,
-            "fillable_rate_gap": max(0, fillable_required - fillable_rate),
+            "fillable_rate_gap": max(0, fillable_required - fillability_evidence_rate),
+            "fillability_evidence_gap": max(0, fillable_required - fillability_evidence_rate),
             "fillable_events": safe_int(stage8_summary.get("fillable_events")),
+            "fillability_evidence_events": safe_int(stage8_summary.get("fillability_evidence_events")),
+            "unknown_liquidity_events": safe_int(stage8_summary.get("unknown_liquidity_events")),
             "score_ready_market_context_records": score_ready_context,
             "score_ready_market_context_required": MIN_SCORE_READY_MARKET_CONTEXT,
             "remaining_blocked_wallets": safe_int(evidence_summary.get("remaining_blocked_wallets")),
@@ -223,7 +234,7 @@ def build_reduction_queue(
     *,
     known_15m: int,
     known_required: int,
-    fillable_rate: int,
+    fillability_evidence_rate: int,
     fillable_required: int,
     score_ready_context: int,
     evidence_summary: dict[str, Any],
@@ -261,13 +272,13 @@ def build_reduction_queue(
             "next_action": "Backfill 15m outcome labels from replay-safe token timelines while keeping later outcomes separate from decision-time context.",
             "can_drive_wallet_trust": False,
         })
-    if fillable_rate < fillable_required:
+    if fillability_evidence_rate < fillable_required:
         queue.append({
             "priority": 3,
-            "category": "fillable_rate",
-            "current": fillable_rate,
+            "category": "fillability_evidence_coverage",
+            "current": fillability_evidence_rate,
             "target": fillable_required,
-            "gap": max(0, fillable_required - fillable_rate),
+            "gap": max(0, fillable_required - fillability_evidence_rate),
             "affected_rows": safe_int(timeline_summary.get("missing_market_context_rows")),
             "blocked_by": fillability_blockers(onchain_block_reasons),
             "next_action": "Reduce unknown-liquidity and missing-reserve rows before treating replay fills as realistic.",

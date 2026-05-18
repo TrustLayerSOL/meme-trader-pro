@@ -29,6 +29,7 @@ class ValidationProofLayerTests(unittest.TestCase):
                     "proof_readiness_pct": 0,
                     "known_15m_outcomes": 2,
                     "fillable_rate": 6,
+                    "fillability_evidence_rate": 25,
                     "stage6_data_score_readiness_pct": 0,
                 },
                 "evidence_gaps": ["low_known_outcome_coverage", "low_market_context_score_readiness"],
@@ -43,6 +44,7 @@ class ValidationProofLayerTests(unittest.TestCase):
         self.assertEqual(report["summary"]["proof_readiness_pct"], 0)
         self.assertEqual(report["summary"]["criteria_count"], 3)
         self.assertEqual(report["summary"]["blocked_criteria_count"], 3)
+        self.assertEqual(report["summary"]["stage8_fillability_evidence_rate"], 25)
         self.assertEqual(report["proof_criteria"][0]["status"], "blocked")
         self.assertIn("decision-time market", report["proof_criteria"][0]["requirement"])
         self.assertIn("live_execution_locked", report["passed_gates"])

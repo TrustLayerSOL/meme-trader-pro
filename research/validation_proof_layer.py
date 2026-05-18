@@ -176,6 +176,10 @@ def build_validation_proof_layer_report(
             "blocked_criteria_count": blocked_count,
             "stage8_known_15m_outcomes": safe_int(stage8_summary.get("known_15m_outcomes")),
             "stage8_fillable_rate": safe_int(stage8_summary.get("fillable_rate")),
+            "stage8_fillability_evidence_rate": safe_int(
+                stage8_summary.get("fillability_evidence_rate"),
+                safe_int(stage8_summary.get("fillable_rate")),
+            ),
             "stage8_data_score_readiness_pct": safe_int(stage8_summary.get("stage6_data_score_readiness_pct")),
         },
         "proof_criteria": proof_criteria,

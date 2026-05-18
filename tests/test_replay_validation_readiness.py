@@ -74,9 +74,34 @@ class ReplayValidationReadinessTests(unittest.TestCase):
         self.assertLess(report["summary"]["proof_readiness_pct"], 100)
         self.assertEqual(report["summary"]["known_15m_outcome_rate"], 10)
         self.assertEqual(report["summary"]["fillable_rate"], 20)
+        self.assertEqual(report["summary"]["fillability_evidence_rate"], 25)
         self.assertIn("replay_scorecard_matches_event_count", report["passed_gates"])
         self.assertIn("low_known_outcome_coverage", report["evidence_gaps"])
         self.assertIn("Stage 8 validation loop is complete; edge proof remains evidence-limited.", report["operator_summary"])
+
+    def test_fillability_target_uses_known_fillability_evidence_not_positive_fills_only(self):
+        replay = self.replay_summary()
+        replay["fill_status_counts"] = {
+            "fillable_with_assumptions": 20,
+            "failed_liquidity_floor": 55,
+            "unknown_liquidity": 25,
+        }
+        stage6 = self.stage6_report()
+        stage6["summary"]["data_score_readiness_pct"] = 80
+
+        report = build_replay_validation_readiness_report(
+            replay_summary=replay,
+            stage6_readiness=stage6,
+            wallet_replay_scorecard=self.scorecard(),
+            wallet_outcome_ledger=self.ledger(),
+            wallet_candidate_backfill_targets=self.backfill_targets(),
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["fillable_rate"], 20)
+        self.assertEqual(report["summary"]["failed_liquidity_rate"], 55)
+        self.assertEqual(report["summary"]["fillability_evidence_rate"], 75)
+        self.assertNotIn("low_fillable_coverage", report["evidence_gaps"])
 
     def test_validation_contract_flags_stale_scorecard(self):
         scorecard = self.scorecard()

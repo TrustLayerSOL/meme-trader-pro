@@ -59,6 +59,7 @@ def validation_proof():
             "blocked_criteria_count": 2,
             "stage8_known_15m_outcomes": 2,
             "stage8_fillable_rate": 6,
+            "stage8_fillability_evidence_rate": 25,
             "stage8_data_score_readiness_pct": 0,
         },
         "proof_criteria": [
@@ -80,6 +81,7 @@ def stage8_validation():
             "known_15m_outcomes": 2,
             "known_15m_outcome_rate": 0,
             "fillable_rate": 6,
+            "fillability_evidence_rate": 25,
             "proof_readiness_pct": 0,
             "stage6_data_score_readiness_pct": 0,
         },
@@ -173,4 +175,3 @@ class BehavioralTrustValidationTests(unittest.TestCase):
             self.assertTrue(out_path.exists())
             saved = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["mode"], "BEHAVIORAL_TRUST_VALIDATION_REVIEW_ONLY")
-

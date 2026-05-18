@@ -58,6 +58,17 @@ def fillable_count(replay_summary: dict[str, Any]) -> int:
     )
 
 
+def failed_liquidity_count(replay_summary: dict[str, Any]) -> int:
+    fills = as_dict(replay_summary.get("fill_status_counts"))
+    return safe_int(fills.get("failed_liquidity_floor"))
+
+
+def fillability_evidence_count(replay_summary: dict[str, Any]) -> int:
+    # Failed liquidity-floor rows are not positive fills, but they are still
+    # usable fillability evidence because replay can model why entry failed.
+    return fillable_count(replay_summary) + failed_liquidity_count(replay_summary)
+
+
 def candidate_gap_total(summary: dict[str, Any]) -> int:
     return (
         safe_int(summary.get("needs_wallet_history"))
@@ -138,13 +149,19 @@ def build_replay_validation_readiness_report(
 
     known_15m = known_15m_outcome_count(replay_summary)
     fillable = fillable_count(replay_summary)
+    failed_liquidity = failed_liquidity_count(replay_summary)
+    fillability_evidence = fillability_evidence_count(replay_summary)
     known_15m_rate = percent(known_15m, replay_events)
     fillable_rate = percent(fillable, replay_events)
-    proof_readiness_pct = min(known_15m_rate, fillable_rate, data_score_readiness_pct)
+    failed_liquidity_rate = percent(failed_liquidity, replay_events)
+    fillability_evidence_rate = percent(fillability_evidence, replay_events)
+    unknown_liquidity = safe_int(as_dict(replay_summary.get("fill_status_counts")).get("unknown_liquidity"))
+    unknown_liquidity_rate = percent(unknown_liquidity, replay_events)
+    proof_readiness_pct = min(known_15m_rate, fillability_evidence_rate, data_score_readiness_pct)
 
     evidence_gaps = evidence_gap_rows(
         known_15m_rate=known_15m_rate,
-        fillable_rate=fillable_rate,
+        fillability_evidence_rate=fillability_evidence_rate,
         data_score_readiness_pct=data_score_readiness_pct,
         target_summary=target_summary,
         stage6_gaps=explicit_stage6_gaps,
@@ -174,6 +191,12 @@ def build_replay_validation_readiness_report(
             "known_15m_outcome_rate": known_15m_rate,
             "fillable_events": fillable,
             "fillable_rate": fillable_rate,
+            "failed_liquidity_events": failed_liquidity,
+            "failed_liquidity_rate": failed_liquidity_rate,
+            "fillability_evidence_events": fillability_evidence,
+            "fillability_evidence_rate": fillability_evidence_rate,
+            "unknown_liquidity_events": unknown_liquidity,
+            "unknown_liquidity_rate": unknown_liquidity_rate,
             "stage6_realism_contract_completion_pct": stage6_pct,
             "stage6_data_score_readiness_pct": data_score_readiness_pct,
             "wallets_in_scorecard": safe_int(scorecard_counts.get("wallets")),
@@ -193,7 +216,7 @@ def build_replay_validation_readiness_report(
 def evidence_gap_rows(
     *,
     known_15m_rate: int,
-    fillable_rate: int,
+    fillability_evidence_rate: int,
     data_score_readiness_pct: int,
     target_summary: dict[str, Any],
     stage6_gaps: list[str],
@@ -201,7 +224,7 @@ def evidence_gap_rows(
     gaps: list[str] = []
     if known_15m_rate < 70:
         gaps.append("low_known_outcome_coverage")
-    if fillable_rate < 70:
+    if fillability_evidence_rate < 70:
         gaps.append("low_fillable_coverage")
     if data_score_readiness_pct < 70:
         gaps.append("low_market_context_score_readiness")
