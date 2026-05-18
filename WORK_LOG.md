@@ -9228,3 +9228,63 @@ Verification:
 Remaining:
 
 - Next logical step is archival supply / market-cap recovery for the `591` near-score-ready rows. Do not substitute current supply, current price, or future snapshots.
+
+### 2026-05-17 - Row-Level Archival Supply Snapshot Requests
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Archival supply request lane: `100%`
+- Proof readiness: `2%`
+
+Changed files:
+
+- `wallets/archival_mint_snapshot_collector.py`
+- `tests/test_archival_mint_snapshot_collector.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Changed the archival mint snapshot dry-run manifest from one request per token to one request per token/decision-slot target when candidate rows exist.
+- This prevents later wallet evidence rows from being forced to use the earliest token snapshot, which would be decision-time safe but potentially stale.
+- Regenerated the archival supply/report chain after the native-SOL recovery expansion.
+
+Current report state:
+
+- archival supply candidate rows: `591`
+- rows with decision slot: `591`
+- token-level supply requirements: `75`
+- row-level provider snapshot requests: `550`
+- pending archival provider responses: `550`
+- supply snapshots imported: `0`
+- supply recovered rows: `0`
+- rows still blocked by missing archival snapshot: `591`
+- wallet-list mutations: `0`
+- auto trust mutations: `0`
+
+Important limitation:
+
+- The request bundle is a handoff/validation manifest only. It does not call a provider, store secrets, use current supply, infer supply, or make wallet trust changes.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_snapshot_collector -v`
+- `./trading_env/bin/python utils/build_archival_supply_recovery_plan.py`
+- `./trading_env/bin/python utils/collect_archival_mint_supply_snapshots.py`
+- `./trading_env/bin/python utils/build_archival_mint_snapshot_request_bundle.py`
+- `./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py`
+- `./trading_env/bin/python utils/build_archival_supply_evidence.py`
+- `./trading_env/bin/python utils/build_score_ready_market_context.py`
+- `./trading_env/bin/python utils/build_replay_realism_readiness.py`
+- `./trading_env/bin/python utils/build_replay_validation_readiness.py`
+- `./trading_env/bin/python utils/build_proof_readiness_blocker_reduction.py`
+
+Remaining:
+
+- Next logical step is obtaining or locally reconstructing decision-time mint-account supply snapshots for the `550` row-level request targets. Until those responses exist, market-cap proof and wallet trust remain blocked.

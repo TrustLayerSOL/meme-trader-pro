@@ -29,6 +29,18 @@ def plan(**overrides):
     return row
 
 
+def candidate(**overrides):
+    row = {
+        "wallet": "WalletA",
+        "token_mint": "MintA",
+        "transaction_signature": "SigA",
+        "decision_slot": 100,
+        "timestamp": 1000,
+    }
+    row.update(overrides)
+    return row
+
+
 def rpc_response(slot=90, supply="1000000000", decimals=6):
     return {
         "jsonrpc": "2.0",
@@ -70,6 +82,28 @@ class ArchivalMintSnapshotCollectorTests(unittest.TestCase):
         self.assertEqual(report["requests"][0]["max_acceptable_snapshot_slot"], 100)
         self.assertEqual(report["requests"][0]["status"], "pending_archival_provider")
         self.assertEqual(report["snapshots"], [])
+
+    def test_dry_run_prepares_row_level_decision_slot_requests_when_candidates_exist(self):
+        report = build_archival_mint_snapshot_collection_report(
+            archival_supply_plan=plan(
+                candidate_rows=[
+                    candidate(wallet="WalletA", transaction_signature="SigA", decision_slot=100),
+                    candidate(wallet="WalletB", transaction_signature="SigB", decision_slot=120),
+                    candidate(wallet="WalletC", transaction_signature="SigC", decision_slot=120),
+                ]
+            ),
+            execute=False,
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["requests_prepared"], 2)
+        self.assertEqual(report["summary"]["tokens_affected"], 1)
+        self.assertEqual(report["requests"][0]["token_mint"], "MintA")
+        self.assertEqual(report["requests"][0]["max_acceptable_snapshot_slot"], 100)
+        self.assertEqual(report["requests"][0]["row_count"], 1)
+        self.assertEqual(report["requests"][1]["max_acceptable_snapshot_slot"], 120)
+        self.assertEqual(report["requests"][1]["row_count"], 2)
+        self.assertEqual(report["requests"][1]["wallet_count"], 2)
 
     def test_execute_accepts_only_snapshot_at_or_before_decision_slot(self):
         calls = []

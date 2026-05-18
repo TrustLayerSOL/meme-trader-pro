@@ -27,6 +27,73 @@ def ready_requirements(plan: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def ready_candidate_targets(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = plan.get("candidate_rows") if isinstance(plan, dict) else []
+    grouped: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        token = token_mint(row)
+        slot = safe_int(row.get("decision_slot"), 0)
+        if not token or slot <= 0:
+            continue
+        key = (token, slot)
+        target = grouped.setdefault(
+            key,
+            {
+                "token_mint": token,
+                "requested_snapshot_slot": slot,
+                "max_acceptable_snapshot_slot": slot,
+                "latest_decision_slot": slot,
+                "row_count": 0,
+                "wallets": set(),
+                "transaction_signatures": set(),
+                "target_source": "candidate_decision_slot",
+            },
+        )
+        target["row_count"] += 1
+        wallet = str(row.get("wallet") or "").strip()
+        if wallet:
+            target["wallets"].add(wallet)
+        signature = str(row.get("transaction_signature") or "").strip()
+        if signature:
+            target["transaction_signatures"].add(signature)
+
+    targets: list[dict[str, Any]] = []
+    for target in grouped.values():
+        wallets = sorted(target.pop("wallets"))
+        signatures = sorted(target.pop("transaction_signatures"))
+        target["wallet_count"] = len(wallets)
+        target["wallets"] = wallets[:50]
+        target["transaction_signature_count"] = len(signatures)
+        target["transaction_signatures"] = signatures[:50]
+        targets.append(target)
+    targets.sort(key=lambda row: (str(row.get("token_mint") or ""), safe_int(row.get("max_acceptable_snapshot_slot"), 0)))
+    return targets
+
+
+def snapshot_targets(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    candidate_targets = ready_candidate_targets(plan)
+    if candidate_targets:
+        return candidate_targets
+    targets: list[dict[str, Any]] = []
+    for row in ready_requirements(plan):
+        earliest_slot = safe_int(row.get("earliest_decision_slot"), 0)
+        latest_slot = safe_int(row.get("latest_decision_slot"), 0)
+        targets.append(
+            {
+                "token_mint": token_mint(row),
+                "requested_snapshot_slot": earliest_slot or None,
+                "max_acceptable_snapshot_slot": earliest_slot or None,
+                "latest_decision_slot": latest_slot or None,
+                "row_count": safe_int(row.get("row_count"), 0),
+                "wallet_count": safe_int(row.get("wallet_count"), 0),
+                "target_source": "token_earliest_decision_slot",
+            }
+        )
+    return targets
+
+
 def build_rpc_payload(token: str, request_id: int) -> dict[str, Any]:
     return {
         "jsonrpc": "2.0",
@@ -72,16 +139,20 @@ def response_supply(response: dict[str, Any]) -> tuple[str | None, int | None]:
 
 def build_request(row: dict[str, Any], request_id: int) -> dict[str, Any]:
     token = token_mint(row)
-    earliest_slot = safe_int(row.get("earliest_decision_slot"), 0)
+    requested_slot = safe_int(row.get("requested_snapshot_slot"), 0)
+    max_slot = safe_int(row.get("max_acceptable_snapshot_slot"), 0)
     latest_slot = safe_int(row.get("latest_decision_slot"), 0)
     return {
         "version": VERSION,
         "token_mint": token,
-        "requested_snapshot_slot": earliest_slot or None,
-        "max_acceptable_snapshot_slot": earliest_slot or None,
+        "requested_snapshot_slot": requested_slot or None,
+        "max_acceptable_snapshot_slot": max_slot or None,
         "latest_decision_slot": latest_slot or None,
         "row_count": safe_int(row.get("row_count"), 0),
         "wallet_count": safe_int(row.get("wallet_count"), 0),
+        "target_source": row.get("target_source"),
+        "transaction_signature_count": safe_int(row.get("transaction_signature_count"), 0),
+        "transaction_signatures": list(row.get("transaction_signatures") or [])[:50],
         "status": "pending_archival_provider",
         "block_reasons": [],
         "jsonrpc_payload": build_rpc_payload(token, request_id),
@@ -163,7 +234,7 @@ def build_archival_mint_snapshot_collection_report(
     timeout: int = 10,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
-    requests = [build_request(row, idx + 1) for idx, row in enumerate(ready_requirements(archival_supply_plan))]
+    requests = [build_request(row, idx + 1) for idx, row in enumerate(snapshot_targets(archival_supply_plan))]
     snapshots: list[dict[str, Any]] = []
 
     if execute:
