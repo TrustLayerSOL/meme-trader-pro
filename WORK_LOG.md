@@ -10436,3 +10436,52 @@ Next:
 - Use Solscan's historical filters to export a tight decision-time slice for each top manual candidate.
 - Continue using Dexscreener 1s historical market-cap chart evidence as `B_STRONG_PARTIAL` unless exact replay-safe supply proof is found.
 - Keep looking for a free or low-cost way to retrieve historical mint account state at or before the decision slot.
+
+### 2026-05-19 - Current Supply Stability Gate
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `wallets/supply_stability_evidence.py`
+- `utils/collect_current_mint_supply_snapshots.py`
+- `utils/build_supply_stability_evidence.py`
+- `utils/build_archival_supply_evidence.py`
+- `tests/test_current_mint_supply_snapshots.py`
+- `tests/test_supply_stability_evidence.py`
+- `tests/test_archival_supply_evidence.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a read-only current `getTokenSupply` collector for the 75 archival-supply requirement mints.
+- Added bounded retry/backoff so temporary RPC rate limits do not silently leave rows uncollected.
+- Added a supply-stability gate that only treats current supply as decision-time compatible when local mint history is complete enough to prove no post-decision supply changes.
+- Wired stability-proven supply snapshots into the archival supply evidence builder alongside true archival provider snapshots and local complete-history reconstruction snapshots.
+
+Current result:
+
+- Current supply snapshots collected: `75/75`
+- Stable-current-supply tokens proven: `11`
+- Tokens blocked by incomplete post-decision mint history: `64`
+- Archival supply evidence rows recovered: `60`
+- Near-score-ready rows still blocked on missing archival supply: `531`
+
+Interpretation:
+
+- This creates a safe free-data lane, but it did not raise proof readiness because the 11 stability-proven tokens overlap with tokens already covered by complete-history reconstruction.
+- Current supply remains blocked for the other 64 tokens because using it without complete post-decision history would create fake historical market-cap evidence.
+
+Next:
+
+- Run targeted deeper pagination for the 25 continue-pagination mint-history tokens first. That is the most realistic free/home-built path to turn more current supply snapshots into replay-safe supply proof without paying for archival account-state snapshots.

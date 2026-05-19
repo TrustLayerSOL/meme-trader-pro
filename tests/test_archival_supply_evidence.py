@@ -191,6 +191,36 @@ class ArchivalSupplyEvidenceTests(unittest.TestCase):
             self.assertEqual(report["summary"]["supply_recovered_records"], 1)
             self.assertEqual(report["records"][0]["source"], "mint_burn_history_reconstruction")
 
+    def test_writer_merges_supply_stability_snapshots_with_provider_snapshots(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "archival_supply_recovery_plan.json"
+            provider_snapshots_path = root / "provider_snapshots.jsonl"
+            stability_snapshots_path = root / "stability_snapshots.jsonl"
+            report_path = root / "archival_supply_evidence_report.json"
+            records_path = root / "archival_supply_evidence_records.jsonl"
+            plan_path.write_text(
+                json.dumps(plan(candidate_rows=[candidate(token_mint="MintB", decision_slot=120)])),
+                encoding="utf-8",
+            )
+            provider_snapshots_path.write_text("", encoding="utf-8")
+            stability_snapshots_path.write_text(
+                json.dumps(snapshot(token_mint="MintB", slot=120, source="current_supply_stability_proof")) + "\n",
+                encoding="utf-8",
+            )
+
+            report = write_archival_supply_evidence_report(
+                plan_path=plan_path,
+                snapshots_path=provider_snapshots_path,
+                extra_snapshots_paths=[stability_snapshots_path],
+                report_path=report_path,
+                output_records_path=records_path,
+                generated_at=123.0,
+            )
+
+            self.assertEqual(report["summary"]["supply_recovered_records"], 1)
+            self.assertEqual(report["records"][0]["source"], "current_supply_stability_proof")
+
 
 if __name__ == "__main__":
     unittest.main()

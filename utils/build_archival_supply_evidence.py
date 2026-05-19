@@ -22,6 +22,9 @@ DEFAULT_SNAPSHOTS_PATH = ROOT / "data" / "reports" / "historical_backfill" / "ar
 DEFAULT_RECONSTRUCTION_SNAPSHOTS_PATH = (
     ROOT / "data" / "reports" / "historical_backfill" / "archival_mint_supply_reconstruction_snapshots.jsonl"
 )
+DEFAULT_STABILITY_SNAPSHOTS_PATH = (
+    ROOT / "data" / "reports" / "historical_backfill" / "supply_stability_evidence_snapshots.jsonl"
+)
 DEFAULT_REPORT_PATH = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_report.json"
 DEFAULT_RECORDS_PATH = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_records.jsonl"
 
@@ -99,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         snapshots_path=args.snapshots_path,
         extra_snapshots_paths=args.extra_snapshots_path
         if args.extra_snapshots_path is not None
-        else [DEFAULT_RECONSTRUCTION_SNAPSHOTS_PATH],
+        else [DEFAULT_RECONSTRUCTION_SNAPSHOTS_PATH, DEFAULT_STABILITY_SNAPSHOTS_PATH],
         report_path=args.report_path,
         output_records_path=args.records_path,
     )
