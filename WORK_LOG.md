@@ -9949,3 +9949,57 @@ Verification:
 Remaining:
 
 - Local pagination is now preserving evidence safely, but the current bottleneck is still historical supply proof. The next practical step is either deeper bounded pagination for the remaining `27` continue-pagination tokens or a validated archival account-state provider/import path for the `37` history-start-not-proven tokens.
+
+### 2026-05-18 - Targeted Archival Mint Pagination Runner
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `utils/run_targeted_archival_mint_pagination.py`
+- `tests/test_targeted_archival_mint_pagination.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a read-only targeted pagination runner that consumes the archival mint pagination plan directly.
+- The runner selects only `CONTINUE_PAGINATION_TOWARD_DECISION_SLOT` rows, filters them by estimated page cost and target count, writes a filtered plan, and delegates collection to the existing bounded mint-history collector.
+- Ran a dry-run with `--max-estimated-pages 10 --max-targets 10`; it selected `8` low-cost targets.
+- Ran an execute pass against those `8` targets with bounded page and transaction limits. All `8` remained blocked as incomplete history, `0` new complete histories were proven, and `0` new raw transactions were preserved in that pass.
+- Rebuilt the archival progress, pagination, reconstruction, supply evidence, score-ready market-context, replay timeline, Stage 6, Stage 8, validation/proof, behavioral validation, and blocker-reduction reports.
+
+Current report state:
+
+- Mint requirements scanned: `75`
+- Checkpointed tokens: `75`
+- Tokens that reached decision slot: `48`
+- Complete mint histories: `11`
+- Continue-pagination tokens: `27`
+- Provider-recommended / history-start-not-proven tokens: `37`
+- Supply recovered rows: `60`
+- Score-ready market-context records: `101`
+- Near-score-ready rows still blocked on archival supply: `531`
+- Behavioral trust justified: `false`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_targeted_archival_mint_pagination`
+- `./trading_env/bin/python -m py_compile utils/run_targeted_archival_mint_pagination.py`
+- Full report rebuild chain completed without enabling execution or wallet trust mutation.
+
+Remaining:
+
+- Local targeted pagination is now easier and safer to rerun, but this pass did not move proof readiness.
+- The next practical step is either deeper bounded pagination by page-cost buckets for the remaining `27` continue-pagination tokens, or a validated archival account-state import path for the `37` history-start-not-proven tokens.
