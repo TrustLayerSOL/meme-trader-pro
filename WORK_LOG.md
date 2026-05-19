@@ -10113,3 +10113,59 @@ Remaining:
 
 - This prepares a cheaper, focused archival provider handoff but does not improve proof readiness until real provider responses are saved and imported.
 - Next logical step is to adapt the existing batch provider capture/import lane so it can optionally consume the focused provider-recommended request bundle and raw-response path, then validate any saved responses through the existing decision-slot checks.
+
+### 2026-05-18 - Focused Provider Capture/Import Lane
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `wallets/archival_mint_snapshot_response_import.py`
+- `utils/import_archival_mint_supply_snapshots.py`
+- `utils/import_provider_recommended_archival_mint_supply_snapshots.py`
+- `utils/capture_provider_recommended_archival_mint_supply_provider_responses.py`
+- `tests/test_archival_mint_snapshot_response_import.py`
+- `tests/test_provider_recommended_archival_mint_supply_import.py`
+- `tests/test_provider_recommended_archival_mint_provider_capture.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added allow-list filtering to the saved-response importer so focused response files can be measured against only their intended token subset.
+- Added a provider-recommended capture wrapper that defaults to the focused `337` request bundle and focused raw-response path.
+- Added a provider-recommended import wrapper that defaults to the focused raw-response path and filters pending requests by pagination-plan provider-recommended mints.
+- Ran both wrappers in safe local mode:
+  - focused capture saw `4` chunks / `337` requests, made `0` provider calls, and blocked as expected without execution,
+  - focused import scanned `337` provider-recommended requests, filtered out `213` broad-batch rows, imported `0` snapshots, and blocked `337` rows as `missing_provider_response`.
+
+Current report state:
+
+- Focused provider-recommended requests ready: `337`
+- Focused provider responses imported: `0`
+- Focused snapshots imported: `0`
+- Near-score-ready rows still blocked on archival supply: `531`
+- Behavioral trust justified: `false`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_provider_recommended_archival_mint_supply_import tests.test_archival_mint_snapshot_response_import`
+- `./trading_env/bin/python -m unittest tests.test_provider_recommended_archival_mint_provider_capture`
+- `./trading_env/bin/python utils/capture_provider_recommended_archival_mint_supply_provider_responses.py`
+- `./trading_env/bin/python utils/import_provider_recommended_archival_mint_supply_snapshots.py`
+
+Remaining:
+
+- The focused lane is now ready for real saved archival provider responses, but proof readiness cannot move until valid historical mint-account responses are supplied.
+- Next logical step is either configure an affordable archival provider for the focused batch or continue lower-cost local reconstruction on the remaining continue-pagination tokens.

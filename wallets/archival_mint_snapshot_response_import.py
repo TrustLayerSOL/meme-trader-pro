@@ -26,6 +26,20 @@ def pending_requests(snapshot_collection_report: dict[str, Any]) -> list[dict[st
     return requests
 
 
+def normalize_allowed_token_mints(allowed_token_mints: set[str] | list[str] | tuple[str, ...] | None) -> set[str] | None:
+    if allowed_token_mints is None:
+        return None
+    return {str(token).strip() for token in allowed_token_mints if str(token).strip()}
+
+
+def filter_requests_by_token_mints(requests: list[dict[str, Any]], allowed_token_mints: set[str] | None) -> list[dict[str, Any]]:
+    if allowed_token_mints is None:
+        return requests
+    if not allowed_token_mints:
+        return []
+    return [row for row in requests if str(row.get("token_mint") or "").strip() in allowed_token_mints]
+
+
 def normalize_raw_responses(raw_provider_response: Any) -> list[dict[str, Any]]:
     if isinstance(raw_provider_response, list):
         return [row for row in raw_provider_response if isinstance(row, dict)]
@@ -95,6 +109,9 @@ def build_snapshot(request: dict[str, Any], response: dict[str, Any]) -> tuple[d
 def build_summary(
     *,
     requests: list[dict[str, Any]],
+    all_requests_count: int,
+    allowed_token_count: int | None,
+    source_filter: str | None,
     raw_responses: list[dict[str, Any]],
     import_rows: list[dict[str, Any]],
     snapshots: list[dict[str, Any]],
@@ -114,6 +131,9 @@ def build_summary(
         ),
         "wallet_list_mutations": 0,
         "auto_trust_mutations": 0,
+        "allowed_token_count": allowed_token_count,
+        "filtered_out_requests": all_requests_count - len(requests),
+        "source_filter": source_filter,
         "status_counts": dict(sorted(statuses.items())),
         "block_reasons": dict(sorted(block_reasons.items())),
     }
@@ -123,9 +143,13 @@ def build_archival_mint_snapshot_response_import_report(
     *,
     snapshot_collection_report: dict[str, Any],
     raw_provider_response: Any,
+    allowed_token_mints: set[str] | list[str] | tuple[str, ...] | None = None,
+    source_filter: str | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
-    requests = pending_requests(snapshot_collection_report)
+    all_requests = pending_requests(snapshot_collection_report)
+    allowed_tokens = normalize_allowed_token_mints(allowed_token_mints)
+    requests = filter_requests_by_token_mints(all_requests, allowed_tokens)
     raw_responses = normalize_raw_responses(raw_provider_response)
     responses_by_id = {response_id(row): row for row in raw_responses if response_id(row)}
     import_rows: list[dict[str, Any]] = []
@@ -191,6 +215,9 @@ def build_archival_mint_snapshot_response_import_report(
         "provider_calls_performed": False,
         "summary": build_summary(
             requests=requests,
+            all_requests_count=len(all_requests),
+            allowed_token_count=len(allowed_tokens) if allowed_tokens is not None else None,
+            source_filter=source_filter,
             raw_responses=raw_responses,
             import_rows=import_rows,
             snapshots=snapshots,

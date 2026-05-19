@@ -38,6 +38,8 @@ def write_archival_mint_snapshot_response_import_report(
     raw_response_path: Path | str = DEFAULT_RAW_RESPONSE_PATH,
     report_path: Path | str = DEFAULT_REPORT_PATH,
     snapshots_path: Path | str = DEFAULT_SNAPSHOTS_PATH,
+    allowed_token_mints: set[str] | list[str] | tuple[str, ...] | None = None,
+    source_filter: str | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     collection_report_path = Path(collection_report_path)
@@ -47,6 +49,8 @@ def write_archival_mint_snapshot_response_import_report(
     report = build_archival_mint_snapshot_response_import_report(
         snapshot_collection_report=read_json(collection_report_path, {"requests": []}),
         raw_provider_response=read_json(raw_response_path, []),
+        allowed_token_mints=allowed_token_mints,
+        source_filter=source_filter,
         generated_at=generated_at,
     )
     report["input_paths"] = {

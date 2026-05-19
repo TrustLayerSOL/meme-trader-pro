@@ -108,6 +108,24 @@ class ArchivalMintSnapshotResponseImportTests(unittest.TestCase):
         self.assertEqual(report["import_rows"][1]["evidence_key"], "mint-snapshot:MintB:200:SigB")
         self.assertIn("snapshot_slot_after_decision_slot", report["import_rows"][1]["block_reasons"])
 
+    def test_import_can_be_filtered_to_allowed_token_mints(self):
+        report = build_archival_mint_snapshot_response_import_report(
+            snapshot_collection_report=collection_report(),
+            raw_provider_response=[mint_response(1, 90, "1000000", 6)],
+            allowed_token_mints={"MintA", "MintC"},
+            source_filter="provider_recommended_archival_account_state",
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["requests_scanned"], 2)
+        self.assertEqual(report["summary"]["raw_responses_scanned"], 1)
+        self.assertEqual(report["summary"]["snapshots_imported"], 1)
+        self.assertEqual(report["summary"]["blocked_missing_response"], 1)
+        self.assertEqual(report["summary"]["allowed_token_count"], 2)
+        self.assertEqual(report["summary"]["filtered_out_requests"], 1)
+        self.assertEqual(report["summary"]["source_filter"], "provider_recommended_archival_account_state")
+        self.assertEqual([row["token_mint"] for row in report["import_rows"]], ["MintA", "MintC"])
+
     def test_writer_persists_report_and_compatible_snapshot_jsonl(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
