@@ -10057,3 +10057,59 @@ Remaining:
 
 - Local pagination preserved more raw evidence and moved one token out of the continue-pagination bucket, but it still did not complete any additional mint histories or move proof readiness.
 - The next practical step is to stop spending broad effort on local signature crawling and build the validated archival account-state import path for the `38` provider-recommended tokens, while keeping local pagination only as a supplemental low-cost lane.
+
+### 2026-05-18 - Provider-Recommended Archival Request Bundle
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `wallets/archival_mint_snapshot_request_bundle.py`
+- `utils/build_archival_mint_snapshot_request_bundle.py`
+- `utils/build_provider_recommended_archival_mint_snapshot_request_bundle.py`
+- `tests/test_archival_mint_snapshot_request_bundle.py`
+- `tests/test_provider_recommended_archival_mint_snapshot_request_bundle.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added an allow-list filter to the archival mint snapshot request bundle so pending provider requests can be narrowed to explicit token mints without weakening the review-only safety gates.
+- Added a provider-recommended request-bundle utility that reads `data/reports/historical_backfill/archival_mint_pagination_plan_report.json`, selects tokens marked `CONSIDER_ARCHIVAL_ACCOUNT_STATE_PROVIDER`, and writes a focused archival provider handoff.
+- Generated the focused handoff:
+  - provider-recommended tokens: `38`
+  - requests bundled: `337`
+  - broad-batch rows filtered out: `213`
+  - request chunks written: `4`
+  - provider calls performed: `0`
+  - wallet-list mutations: `0`
+  - auto trust mutations: `0`
+- The generated request files are ignored local handoff artifacts under `data/reports/historical_backfill/raw_provider_responses/`.
+
+Current report state:
+
+- Complete mint histories: `11`
+- Provider-recommended / history-start-not-proven tokens: `38`
+- Focused provider requests ready: `337`
+- Focused provider response rows imported: `0`
+- Near-score-ready rows still blocked on archival supply: `531`
+- Behavioral trust justified: `false`
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_provider_recommended_archival_mint_snapshot_request_bundle tests.test_archival_mint_snapshot_request_bundle`
+- `./trading_env/bin/python utils/build_provider_recommended_archival_mint_snapshot_request_bundle.py --batch-chunk-size 100`
+
+Remaining:
+
+- This prepares a cheaper, focused archival provider handoff but does not improve proof readiness until real provider responses are saved and imported.
+- Next logical step is to adapt the existing batch provider capture/import lane so it can optionally consume the focused provider-recommended request bundle and raw-response path, then validate any saved responses through the existing decision-slot checks.

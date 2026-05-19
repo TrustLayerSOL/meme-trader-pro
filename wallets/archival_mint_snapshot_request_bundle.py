@@ -38,6 +38,20 @@ def chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]
     return [items[index : index + size] for index in range(0, len(items), size)]
 
 
+def normalize_allowed_token_mints(allowed_token_mints: set[str] | list[str] | tuple[str, ...] | None) -> set[str] | None:
+    if allowed_token_mints is None:
+        return None
+    return {str(token).strip() for token in allowed_token_mints if str(token).strip()}
+
+
+def filter_requests_by_token_mints(requests: list[dict[str, Any]], allowed_token_mints: set[str] | None) -> list[dict[str, Any]]:
+    if allowed_token_mints is None:
+        return requests
+    if not allowed_token_mints:
+        return []
+    return [row for row in requests if str(row.get("token_mint") or "").strip() in allowed_token_mints]
+
+
 def chunk_path(batch_request_path: str, index: int) -> str:
     path = PurePosixPath(batch_request_path)
     suffix = path.suffix or ".json"
@@ -112,12 +126,20 @@ def build_archival_mint_snapshot_request_bundle_report(
     batch_request_path: str = "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.json",
     response_template_path: str = "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.json",
     batch_chunk_size: int = 100,
+    allowed_token_mints: set[str] | list[str] | tuple[str, ...] | None = None,
+    source_filter: str | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
-    requests = pending_requests(snapshot_collection_report)
+    all_requests = pending_requests(snapshot_collection_report)
+    allowed_tokens = normalize_allowed_token_mints(allowed_token_mints)
+    requests = filter_requests_by_token_mints(all_requests, allowed_tokens)
     batch_payload = [row["jsonrpc_payload"] for row in requests]
     chunk_size = normalize_chunk_size(batch_chunk_size)
     batch_chunks = build_batch_request_chunks(requests, batch_request_path, chunk_size)
+    summary = build_summary(requests, chunk_count=len(batch_chunks), chunk_size=chunk_size)
+    summary["source_filter"] = source_filter
+    summary["allowed_token_count"] = len(allowed_tokens) if allowed_tokens is not None else None
+    summary["filtered_out_requests"] = len(all_requests) - len(requests)
     response_import_command = (
         "./trading_env/bin/python utils/import_archival_mint_supply_snapshots.py "
         f"--raw-response-path {raw_response_path}"
@@ -140,7 +162,7 @@ def build_archival_mint_snapshot_request_bundle_report(
         "wallet_list_mutated": False,
         "auto_trust_mutation_allowed": False,
         "wallet_trust_mutation_allowed": False,
-        "summary": build_summary(requests, chunk_count=len(batch_chunks), chunk_size=chunk_size),
+        "summary": summary,
         "source_collection_mode": snapshot_collection_report.get("mode") if isinstance(snapshot_collection_report, dict) else None,
         "batch_request_save_path": batch_request_path,
         "response_template_save_path": response_template_path,

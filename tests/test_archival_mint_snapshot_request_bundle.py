@@ -137,6 +137,24 @@ class ArchivalMintSnapshotRequestBundleTests(unittest.TestCase):
         self.assertEqual(report["batch_request_chunks"][0]["path"], "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.part001.json")
         self.assertEqual(report["batch_request_chunks"][2]["request_ids"], ["5"])
 
+    def test_builds_filtered_request_packet_for_allowed_token_mints(self):
+        report = build_archival_mint_snapshot_request_bundle_report(
+            snapshot_collection_report=collection_report_with_requests(5),
+            batch_request_path="data/reports/historical_backfill/raw_provider_responses/provider_recommended_archival_mint_supply_batch_request.json",
+            batch_chunk_size=2,
+            allowed_token_mints={"Mint2", "Mint4"},
+            source_filter="provider_recommended_archival_account_state",
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["requests_bundled"], 2)
+        self.assertEqual(report["summary"]["target_tokens"], 2)
+        self.assertEqual(report["summary"]["allowed_token_count"], 2)
+        self.assertEqual(report["summary"]["filtered_out_requests"], 3)
+        self.assertEqual(report["summary"]["source_filter"], "provider_recommended_archival_account_state")
+        self.assertEqual([row["id"] for row in report["batch_jsonrpc_payload"]], [2, 4])
+        self.assertEqual(report["response_template"]["expected_responses"][0]["token_mint"], "Mint2")
+
     def test_writer_persists_chunk_files(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

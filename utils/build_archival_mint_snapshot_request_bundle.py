@@ -45,6 +45,8 @@ def write_archival_mint_snapshot_request_bundle_report(
     batch_request_path: Path | str = DEFAULT_BATCH_REQUEST_PATH,
     response_template_path: Path | str = DEFAULT_RESPONSE_TEMPLATE_PATH,
     batch_chunk_size: int = 100,
+    allowed_token_mints: set[str] | list[str] | tuple[str, ...] | None = None,
+    source_filter: str | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     collection_report_path = Path(collection_report_path)
@@ -59,6 +61,8 @@ def write_archival_mint_snapshot_request_bundle_report(
         batch_request_path=batch_request_relative,
         response_template_path=response_template_relative,
         batch_chunk_size=batch_chunk_size,
+        allowed_token_mints=allowed_token_mints,
+        source_filter=source_filter,
         generated_at=generated_at,
     )
     report["input_paths"] = {
