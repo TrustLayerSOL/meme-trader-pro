@@ -1,7 +1,10 @@
 import asyncio
 
+import argparse
 import json
 import os
+import sys
+from pathlib import Path
 
 from infra.rpc_client import SolanaRPC
 from paper_trader import PaperTrader
@@ -11,6 +14,13 @@ from core.market_radar import run_market_radar_loop
 from core.open_position_monitor import run_open_position_monitor
 from core.runtime_status import update_component
 from core.settings_manager import load_settings
+
+
+ROOT = Path(__file__).resolve().parent
+MANUAL_RESEARCH_DIR = ROOT / "data" / "manual_research"
+SCORE_READY_REPORT = ROOT / "data" / "reports" / "historical_backfill" / "score_ready_market_context_report.json"
+RECOVERY_PLAN = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_recovery_plan.json"
+STAGE8_REPORT = ROOT / "data" / "reports" / "replay_validation" / "stage8_validation_readiness_report.json"
 
 
 def runtime_interval(name, default, minimum=0.2):
@@ -55,6 +65,122 @@ def load_paper_watch_wallets():
         elif row:
             wallets.append(str(row))
     return list(dict.fromkeys(wallets))
+
+
+def read_json(path, default):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return default
+
+
+def print_manual_research_instructions():
+    from research.manual_gold_set import MANUAL_RESEARCH_TEXT
+
+    print("\n" + "=" * 72)
+    print(MANUAL_RESEARCH_TEXT)
+    print("=" * 72)
+
+
+def run_proof_candidates(args):
+    from research.manual_gold_set import rank_proof_candidates
+
+    candidates = rank_proof_candidates(
+        read_json(SCORE_READY_REPORT, {"records": []}),
+        read_json(RECOVERY_PLAN, {"candidate_rows": []}),
+        limit=args.limit,
+    )
+    print(json.dumps({"candidates": candidates, "count": len(candidates)}, indent=2, sort_keys=True))
+    print_manual_research_instructions()
+    return 0
+
+
+def run_export_manual_research(args):
+    from research.manual_gold_set import build_manual_research_packet
+
+    packet = build_manual_research_packet(
+        read_json(SCORE_READY_REPORT, {"records": []}),
+        read_json(RECOVERY_PLAN, {"candidate_rows": []}),
+        output_dir=MANUAL_RESEARCH_DIR,
+        limit=args.limit,
+    )
+    print(json.dumps(packet["summary"], indent=2, sort_keys=True))
+    print(f"CSV: {packet['output_paths']['csv']}")
+    print(f"JSON: {packet['output_paths']['json']}")
+    print(f"Template: {packet['output_paths']['manual_evidence_template']}")
+    print_manual_research_instructions()
+    return 0
+
+
+def run_import_manual_evidence(args):
+    from research.manual_gold_set import import_manual_evidence
+
+    report = import_manual_evidence(
+        args.csv_path,
+        score_ready_report=read_json(SCORE_READY_REPORT, {"records": []}),
+        recovery_plan=read_json(RECOVERY_PLAN, {"candidate_rows": []}),
+        output_dir=MANUAL_RESEARCH_DIR,
+    )
+    print(json.dumps(report["summary"], indent=2, sort_keys=True))
+    print(f"Imported evidence: {report['output_paths']['manual_evidence_imported']}")
+    print(f"Tier A supply records: {report['output_paths']['manual_supply_evidence_records']}")
+    print(f"Rejected rows: {report['output_paths']['manual_evidence_rejected']}")
+    print("\nNext: run `python main.py proof-readiness` to see manual-adjusted readiness.")
+    return 0
+
+
+def run_proof_readiness(args):
+    from research.manual_gold_set import build_proof_readiness_report, read_jsonl
+
+    manual_rows = read_jsonl(MANUAL_RESEARCH_DIR / "manual_evidence_imported.jsonl")
+    report = build_proof_readiness_report(
+        score_ready_report=read_json(SCORE_READY_REPORT, {"summary": {}}),
+        stage8_report=read_json(STAGE8_REPORT, {"summary": {}}),
+        manual_evidence_rows=manual_rows,
+    )
+    out = MANUAL_RESEARCH_DIR / "manual_proof_readiness_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(report["summary"], indent=2, sort_keys=True))
+    print(f"Report: {out}")
+    return 0
+
+
+def cli_main(argv=None):
+    parser = argparse.ArgumentParser(description="MemeTraderPro Quant Wallet Tracker V2")
+    subparsers = parser.add_subparsers(dest="command")
+
+    proof_candidates = subparsers.add_parser(
+        "proof-candidates",
+        help="List top blocked proof rows for manual Gold Set research.",
+    )
+    proof_candidates.add_argument("--limit", type=int, default=25)
+    proof_candidates.set_defaults(func=run_proof_candidates)
+
+    export_manual = subparsers.add_parser(
+        "export-manual-research",
+        help="Export manual research packet and evidence template.",
+    )
+    export_manual.add_argument("--limit", type=int, default=25)
+    export_manual.set_defaults(func=run_export_manual_research)
+
+    import_manual = subparsers.add_parser(
+        "import-manual-evidence",
+        help="Import manually researched Gold Set evidence.",
+    )
+    import_manual.add_argument("csv_path", type=Path)
+    import_manual.set_defaults(func=run_import_manual_evidence)
+
+    proof_readiness = subparsers.add_parser(
+        "proof-readiness",
+        help="Report current and manual-adjusted proof readiness.",
+    )
+    proof_readiness.set_defaults(func=run_proof_readiness)
+
+    args = parser.parse_args(argv)
+    if not getattr(args, "command", None):
+        return None
+    return args.func(args)
 
 
 async def heartbeat(paper_trader, interval=30):
@@ -151,6 +277,9 @@ async def main():
 
 
 if __name__ == "__main__":
+    cli_result = cli_main(sys.argv[1:])
+    if cli_result is not None:
+        raise SystemExit(cli_result)
     try:
         configure_event_loop()
         asyncio.run(main())

@@ -37,16 +37,17 @@ def index_supply_records(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str
 def merged_supply_records(
     supply_evidence_records: list[dict[str, Any]],
     archival_supply_records: list[dict[str, Any]] | None = None,
+    manual_supply_records: list[dict[str, Any]] | None = None,
 ) -> dict[tuple[str, str, str], dict[str, Any]]:
     indexed = index_supply_records(supply_evidence_records)
-    for row in archival_supply_records or []:
+    for row in (archival_supply_records or []) + (manual_supply_records or []):
         if not isinstance(row, dict) or row.get("status") != "archival_supply_recovered":
             continue
         indexed[record_key(row)] = {
             **row,
             "status": "archival_supply_recovered",
             "decision_time_safe": True,
-            "source": "archival_supply_evidence",
+            "source": row.get("source") or "archival_supply_evidence",
         }
     return indexed
 
@@ -168,9 +169,10 @@ def build_score_ready_market_context_report(
     onchain_market_context_records: list[dict[str, Any]],
     supply_evidence_records: list[dict[str, Any]],
     archival_supply_records: list[dict[str, Any]] | None = None,
+    manual_supply_records: list[dict[str, Any]] | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
-    supply_by_key = merged_supply_records(supply_evidence_records, archival_supply_records)
+    supply_by_key = merged_supply_records(supply_evidence_records, archival_supply_records, manual_supply_records)
     records = [
         classify_record(row, supply_by_key)
         for row in onchain_market_context_records or []

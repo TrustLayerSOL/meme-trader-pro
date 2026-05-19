@@ -10240,3 +10240,118 @@ Remaining:
 
 - Local pagination is still adding raw evidence but not producing new complete mint histories. The next local bucket jumps to `13+` estimated pages and likely has diminishing returns.
 - Next logical step is to either run a smaller `13-25` targeted bucket with strict caps or shift back to getting real archival responses for the now-focused `342` request provider lane.
+
+### 2026-05-19 - Strict 13-25 Page Local Pagination Bucket
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+What changed:
+
+- Ran the strict `13-25` estimated-page continue-pagination bucket in dry-run and execute mode.
+- Selected `4` targets.
+- Execute left all `4` targets blocked as incomplete mint history.
+- No new raw transactions were preserved and no new mint histories were completed.
+- Rebuilt the archival progress, pagination, reconstruction, supply evidence, score-ready context, replay realism, replay timelines, Stage 8 validation, validation/proof, behavioral trust, blocker-reduction, and focused provider request/capture/import reports.
+- Wallet-list mutations remained `0`.
+- Auto trust mutations remained `0`.
+
+Current report state:
+
+- Mint requirements scanned: `75`
+- Checkpointed tokens: `75`
+- Tokens that reached decision slot: `50`
+- Complete mint histories: `11`
+- Continue-pagination tokens: `25`
+- Provider-recommended / history-start-not-proven tokens: `39`
+- Focused provider requests ready: `342`
+- Supply recovered rows: `60`
+- Score-ready market-context records: `101`
+- Near-score-ready rows still blocked on archival supply: `531`
+- Proof readiness: `11%`
+- Behavioral trust justified: `false`
+
+Verification:
+
+- `./trading_env/bin/python utils/run_targeted_archival_mint_pagination.py --min-estimated-pages 13 --max-estimated-pages 25 --max-targets 4 --max-pages-per-mint 10 --signature-page-limit 100 --max-transactions-per-mint 900`
+- `./trading_env/bin/python utils/run_targeted_archival_mint_pagination.py --execute --min-estimated-pages 13 --max-estimated-pages 25 --max-targets 4 --max-pages-per-mint 10 --signature-page-limit 100 --max-transactions-per-mint 900 --rpc-timeout 25`
+- Rebuilt the full proof-readiness report chain.
+
+Remaining:
+
+- This confirms the local signature-crawling lane has sharply diminishing returns for the current proof-readiness blocker.
+- Next logical step is to stop spending broad effort on local pagination and prioritize real archival account-state responses for the focused `342` provider-recommended request rows, while keeping local crawling only as a narrow supplemental lane.
+
+### 2026-05-19 - Manual Gold Set Research Lane
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `.gitignore`
+- `main.py`
+- `research/manual_gold_set.py`
+- `wallets/score_ready_market_context.py`
+- `utils/build_score_ready_market_context.py`
+- `tests/test_manual_gold_set_research.py`
+- `docs/MANUAL_GOLD_SET_RESEARCH.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added `python main.py proof-candidates --limit 25` to rank the top blocked proof rows closest to score-readiness.
+- Added `python main.py export-manual-research --limit 25` to write a local CSV/JSON packet and manual evidence template under `data/manual_research/`.
+- Added `python main.py import-manual-evidence data/manual_research/manual_evidence_template.csv` to import evidence into a separate manual ledger.
+- Added `python main.py proof-readiness` to report current and manual-adjusted proof readiness.
+- Added manual confidence tiers: `A_FULL_REPLAY_SAFE`, `B_STRONG_PARTIAL`, `C_SUGGESTIVE`, and `D_INSUFFICIENT`.
+- Kept B/C/D evidence review-only. Only Tier A rows emit `manual_supply_evidence_records.jsonl` and can be consumed by score-ready market-context classification.
+- Added beginner-friendly manual research documentation.
+- Ignored `data/manual_research/` because it is generated local research data, not source code.
+
+Current local outputs:
+
+- `data/manual_research/manual_research_packet.csv`
+- `data/manual_research/manual_research_packet.json`
+- `data/manual_research/manual_evidence_template.csv`
+- `data/manual_research/manual_proof_readiness_report.json`
+
+Verification so far:
+
+- `./trading_env/bin/python -m unittest tests.test_manual_gold_set_research -v`
+- `./trading_env/bin/python main.py proof-candidates --limit 3`
+- `./trading_env/bin/python main.py export-manual-research --limit 25`
+- `./trading_env/bin/python main.py proof-readiness`
+- `python3 -m pytest -v` - `699 passed`
+- `./trading_env/bin/python -m py_compile main.py research/manual_gold_set.py wallets/score_ready_market_context.py utils/build_score_ready_market_context.py`
+- `git diff --check`
+
+Current report state before manual evidence:
+
+- Exported manual research candidates: `25`
+- Manual Tier A rows: `0`
+- Manual Tier B/C/D rows: `0`
+- Manual-unblocked rows: `0`
+- Remaining near-score-ready blocked rows: `531`
+- Proof readiness: `11%`
+
+Remaining:
+
+- Operator needs to research the first packet rows using free public sources and fill `manual_evidence_template.csv`.
+- Next logical step is to run a full verification pass, then commit this manual Gold Set workflow checkpoint.
