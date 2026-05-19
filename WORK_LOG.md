@@ -10169,3 +10169,74 @@ Remaining:
 
 - The focused lane is now ready for real saved archival provider responses, but proof readiness cannot move until valid historical mint-account responses are supplied.
 - Next logical step is either configure an affordable archival provider for the focused batch or continue lower-cost local reconstruction on the remaining continue-pagination tokens.
+
+### 2026-05-19 - Low-Cost Continue-Pagination Bucket
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local artifacts refreshed:
+
+- `data/reports/historical_backfill/targeted_archival_mint_pagination_report.json`
+- `data/reports/historical_backfill/archival_mint_history_progress_report.json`
+- `data/reports/historical_backfill/archival_mint_pagination_plan_report.json`
+- `data/reports/historical_backfill/archival_mint_supply_reconstruction_report.json`
+- `data/reports/historical_backfill/archival_supply_evidence_report.json`
+- `data/reports/historical_backfill/score_ready_market_context_report.json`
+- `data/reports/historical_backfill/replay_realism_readiness_report.json`
+- `data/reports/historical_backfill/replayable_token_timelines_report.json`
+- `data/reports/replay_validation/stage8_validation_readiness_report.json`
+- `data/reports/replay_validation/validation_proof_layer_report.json`
+- `data/reports/behavioral_validation/behavioral_trust_validation_report.json`
+- `data/reports/replay_validation/proof_readiness_blocker_reduction_report.json`
+- `data/reports/historical_backfill/provider_recommended_archival_mint_snapshot_request_bundle_report.json`
+- `data/reports/historical_backfill/provider_recommended_archival_mint_snapshot_provider_capture_report.json`
+- `data/reports/historical_backfill/provider_recommended_archival_mint_snapshot_response_import_report.json`
+
+What changed:
+
+- Ran the `1-10` estimated-page continue-pagination bucket in dry-run and execute mode.
+- Execute processed `10` selected targets, preserved `279` additional raw mint-account transaction rows, completed `0` new mint histories, and left wallet trust/list mutation at `0`.
+- Rebuilt the downstream report chain.
+- One target moved from continue-pagination into provider-recommended / history-start-not-proven, which means the system now has more raw evidence but still cannot prove complete mint-account history for that token.
+
+Current report state:
+
+- Mint requirements scanned: `75`
+- Checkpointed tokens: `75`
+- Tokens that reached decision slot: `50`
+- Complete mint histories: `11`
+- Continue-pagination tokens: `25`
+- Provider-recommended / history-start-not-proven tokens: `39`
+- Focused provider requests ready: `342`
+- Supply recovered rows: `60`
+- Score-ready market-context records: `101`
+- Near-score-ready rows still blocked on archival supply: `531`
+- Proof readiness: `11%`
+- Behavioral trust justified: `false`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Verification:
+
+- `./trading_env/bin/python utils/run_targeted_archival_mint_pagination.py --min-estimated-pages 1 --max-estimated-pages 10 --max-targets 10 --max-pages-per-mint 10 --signature-page-limit 100 --max-transactions-per-mint 900`
+- `./trading_env/bin/python utils/run_targeted_archival_mint_pagination.py --execute --min-estimated-pages 1 --max-estimated-pages 10 --max-targets 10 --max-pages-per-mint 10 --signature-page-limit 100 --max-transactions-per-mint 900 --rpc-timeout 25`
+- Rebuilt archival progress, pagination, reconstruction, supply evidence, score-ready context, replay realism, replay timelines, Stage 8 validation, validation/proof, behavioral trust, blocker reduction, and focused provider request/capture/import reports.
+
+Remaining:
+
+- Local pagination is still adding raw evidence but not producing new complete mint histories. The next local bucket jumps to `13+` estimated pages and likely has diminishing returns.
+- Next logical step is to either run a smaller `13-25` targeted bucket with strict caps or shift back to getting real archival responses for the now-focused `342` request provider lane.
