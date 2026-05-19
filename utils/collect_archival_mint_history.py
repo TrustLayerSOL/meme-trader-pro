@@ -41,6 +41,44 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict):
+                rows.append(row)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return rows
+
+
+def raw_row_key(row: dict[str, Any]) -> str:
+    signature = str(row.get("signature") or "").strip()
+    token_mint = str(row.get("token_mint") or "").strip()
+    if signature:
+        return f"signature:{signature}"
+    return f"token-slot:{token_mint}:{row.get('slot')}"
+
+
+def merge_raw_rows(existing_rows: list[dict[str, Any]], new_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in existing_rows + new_rows:
+        if not isinstance(row, dict):
+            continue
+        key = raw_row_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
+
+
 def write_archival_mint_history_collection_report(
     *,
     plan_path: Path | str = DEFAULT_PLAN_PATH,
@@ -73,8 +111,14 @@ def write_archival_mint_history_collection_report(
         generated_at=generated_at,
     )
     raw_rows = report.pop("raw_transactions", [])
-    completeness = report.get("history_completeness") if isinstance(report.get("history_completeness"), dict) else {}
+    current_completeness = report.get("history_completeness") if isinstance(report.get("history_completeness"), dict) else {}
+    existing_completeness = read_json(completeness_path, {})
+    completeness = {
+        **(existing_completeness if isinstance(existing_completeness, dict) else {}),
+        **current_completeness,
+    }
     signature_checkpoint = report.pop("signature_checkpoint", {})
+    merged_raw_rows = merge_raw_rows(read_jsonl(raw_transactions_path), raw_rows)
     report["input_paths"] = {"plan": relative_path(plan_path, ROOT)}
     report["output_paths"] = {
         "report": relative_path(report_path, ROOT),
@@ -88,7 +132,7 @@ def write_archival_mint_history_collection_report(
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     completeness_path.write_text(json.dumps(completeness, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     signature_checkpoint_path.write_text(json.dumps(signature_checkpoint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    write_jsonl(raw_transactions_path, raw_rows)
+    write_jsonl(raw_transactions_path, merged_raw_rows)
     report["raw_transactions"] = raw_rows
     report["signature_checkpoint"] = signature_checkpoint
     return report

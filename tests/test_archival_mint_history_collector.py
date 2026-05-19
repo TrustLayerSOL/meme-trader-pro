@@ -336,6 +336,43 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
             self.assertTrue(json.loads(checkpoint_path.read_text(encoding="utf-8"))["MintA"]["pagination_complete"])
             self.assertEqual(json.loads(raw_path.read_text(encoding="utf-8").strip())["signature"], "SigMint")
 
+    def test_writer_preserves_prior_completeness_and_raw_transactions_across_bounded_runs(self):
+        rpc = FakeRpc(
+            signatures_by_mint={"MintA": [{"signature": "SigMint", "slot": 10}]},
+            transactions_by_signature={"SigMint": tx(10, "SigMint")},
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            report_path = root / "report.json"
+            raw_path = root / "raw.jsonl"
+            completeness_path = root / "complete.json"
+            checkpoint_path = root / "checkpoint.json"
+            plan_path.write_text(json.dumps(plan()), encoding="utf-8")
+            completeness_path.write_text(
+                json.dumps({"MintExisting": {"complete_through_slot": 50}}),
+                encoding="utf-8",
+            )
+            raw_path.write_text(json.dumps({"signature": "SigExisting", "token_mint": "MintExisting"}) + "\n", encoding="utf-8")
+
+            write_archival_mint_history_collection_report(
+                plan_path=plan_path,
+                report_path=report_path,
+                raw_transactions_path=raw_path,
+                completeness_path=completeness_path,
+                signature_checkpoint_path=checkpoint_path,
+                rpc=rpc,
+                execute=True,
+                generated_at=123.0,
+            )
+
+            completeness = json.loads(completeness_path.read_text(encoding="utf-8"))
+            raw_rows = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()]
+
+            self.assertEqual(completeness["MintExisting"]["complete_through_slot"], 50)
+            self.assertEqual(completeness["MintA"]["complete_through_slot"], 100)
+            self.assertEqual([row["signature"] for row in raw_rows], ["SigExisting", "SigMint"])
+
 
 if __name__ == "__main__":
     unittest.main()

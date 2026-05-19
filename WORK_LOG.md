@@ -9898,3 +9898,54 @@ Remaining:
 
 - Continue Stage 8 proof-readiness blocker reduction through replay-safe historical market-context / archival supply recovery.
 - Keep forward wallet activity running periodically so current wallet evidence does not go stale, then label outcomes only after enough time has passed.
+
+### 2026-05-18 - Bounded Archival Mint History Recovery
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `utils/collect_archival_mint_history.py`
+- `tests/test_archival_mint_history_collector.py`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a regression test proving bounded archival mint-history runs preserve prior completeness records and prior raw transaction rows.
+- Fixed `utils/collect_archival_mint_history.py` so it merges existing completeness records and dedupes preserved raw transactions instead of replacing them with the current bounded batch.
+- Ran a filtered read-only pagination pass against the `29` mint targets still moving toward their decision slot. The pass updated signature checkpoints but completed `0` mint histories.
+- Ran a second near-boundary pass against `10` lower-cost targets. It preserved `1,154` raw mint-account transaction rows for audit/reconstruction, moved `2` tokens from decision-slot-not-reached into reached-decision-slot-but-not-history-start, and completed `0` new supply histories.
+- Rebuilt the archival progress, pagination, reconstruction, supply evidence, score-ready market-context, replay timeline, Stage 6, Stage 8, proof, behavioral validation, and blocker-reduction reports.
+
+Current report state:
+
+- Mint requirements scanned: `75`
+- Checkpointed tokens: `75`
+- Complete mint histories: `11`
+- Continue-pagination tokens: `27`
+- Provider-recommended / history-start-not-proven tokens: `37`
+- Supply recovered rows: `60`
+- Score-ready market-context records: `101`
+- Near-score-ready rows still blocked on archival supply: `531`
+- Behavioral trust justified: `false`
+- Wallet-list mutations: `0`
+- Auto trust mutations: `0`
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_archival_mint_history_collector.ArchivalMintHistoryCollectorTests.test_writer_preserves_prior_completeness_and_raw_transactions_across_bounded_runs`
+- `./trading_env/bin/python -m py_compile utils/collect_archival_mint_history.py`
+- Report rebuild chain completed without enabling execution or wallet trust mutation.
+
+Remaining:
+
+- Local pagination is now preserving evidence safely, but the current bottleneck is still historical supply proof. The next practical step is either deeper bounded pagination for the remaining `27` continue-pagination tokens or a validated archival account-state provider/import path for the `37` history-start-not-proven tokens.
