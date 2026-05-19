@@ -63,12 +63,55 @@ Open `manual_research_packet.csv` first. It tells you which rows are highest pri
 
 1. Start with row 1 in `manual_research_packet.csv`.
 2. Open the Solscan token link.
-3. Compare the decision timestamp and decision slot against any historical token/account data you can find.
+3. Use the Solscan Activities/Transactions filters to inspect historical activity around the decision timestamp.
 4. Open Solana Explorer for the mint account if Solscan is not enough.
 5. Open Dexscreener only as supporting context, not as proof unless the historical timestamp is clear.
 6. If you can verify supply or market cap at or before the decision time, enter it into `manual_evidence_template.csv`.
 7. Add the source URL and notes explaining what you verified.
 8. If you are unsure, use `C_SUGGESTIVE` or `D_INSUFFICIENT`.
+
+## Solscan Historical Search Path
+
+Solscan now exposes full historical activity search across raw and decoded transaction surfaces. Use it as a low-cost evidence recovery source.
+
+Useful Solscan checks:
+
+- Open the candidate token page.
+- Use the `Activities`, `Transactions`, or `Transfers` tab.
+- Filter by time around the candidate decision timestamp.
+- Filter by token involved, program involved, action, or transfer value when available.
+- Export CSV when Solscan provides a clean historical slice.
+
+Solscan historical rows are useful for confirming:
+
+- swaps near the decision time
+- USD-valued activity near the decision time
+- programs used by the token around the signal
+- whether activity was normal, thin, or suspicious
+
+Solscan historical rows do not automatically prove:
+
+- exact token supply at the decision slot
+- exact replay-safe market cap
+- that a wallet should be promoted
+
+To import a Solscan CSV as partial evidence, run:
+
+```bash
+python main.py import-solscan-evidence path/to/solscan_export.csv \
+  --candidate-id manual_example_candidate_id \
+  --source-url "https://solscan.io/token/MINT#activities"
+```
+
+This stores Solscan evidence separately:
+
+```text
+data/manual_research/solscan_historical_evidence_imported.jsonl
+data/manual_research/solscan_historical_evidence_rejected.csv
+data/manual_research/solscan_historical_evidence_import_report.json
+```
+
+Imported Solscan historical activity evidence is treated as `B_STRONG_PARTIAL` when it has usable USD value, otherwise `C_SUGGESTIVE`. It does not increase proof readiness by itself.
 
 ## How To Fill The Template
 
@@ -94,12 +137,15 @@ Required fields:
 - `mint`
 - `decision_slot`
 - `decision_timestamp`
-- `verified_supply`
 - `evidence_source`
 - `confidence_tier`
 - `notes`
 
-`verified_market_cap` is useful when available, but `verified_supply` is the key field needed to recompute market cap from existing decision-time price.
+`verified_supply` is required only for `A_FULL_REPLAY_SAFE`.
+
+`verified_market_cap` may be used for `B_STRONG_PARTIAL` or `C_SUGGESTIVE` when you have historical chart evidence but no supply proof. Those rows are retained as research evidence but do not unblock proof readiness.
+
+`verified_supply` is the key field needed to recompute market cap from existing decision-time price.
 
 ## How To Import Evidence
 
@@ -114,7 +160,8 @@ The importer rejects rows with:
 
 - Missing candidate ID.
 - Missing mint.
-- Supply less than or equal to zero.
+- Tier A evidence with missing supply.
+- Supply less than or equal to zero when supply is provided.
 - Impossible market cap values.
 - Missing source.
 - Missing notes.

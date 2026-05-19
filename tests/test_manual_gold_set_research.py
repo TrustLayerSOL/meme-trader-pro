@@ -11,6 +11,7 @@ from research.manual_gold_set import (
     build_manual_research_packet,
     build_proof_readiness_report,
     import_manual_evidence,
+    import_solscan_historical_evidence,
     rank_proof_candidates,
 )
 from wallets.score_ready_market_context import build_score_ready_market_context_report
@@ -191,6 +192,101 @@ class ManualGoldSetResearchTests(unittest.TestCase):
             self.assertEqual(records[0]["status"], "archival_supply_recovered")
             self.assertEqual(records[0]["source"], "manual_gold_set")
             self.assertTrue(records[0]["decision_time_safe"])
+
+    def test_import_manual_evidence_accepts_partial_market_cap_without_supply_without_unblocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "manual_evidence.csv"
+            with csv_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "candidate_id",
+                        "mint",
+                        "decision_slot",
+                        "decision_timestamp",
+                        "verified_supply",
+                        "verified_market_cap",
+                        "evidence_source",
+                        "evidence_url",
+                        "screenshot_path",
+                        "confidence_tier",
+                        "notes",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "candidate_id": "manual_MintA_123_SigA",
+                        "mint": "MintA",
+                        "decision_slot": "123",
+                        "decision_timestamp": "1710000000",
+                        "verified_supply": "",
+                        "verified_market_cap": "4700000",
+                        "evidence_source": "Dexscreener 1s historical MCap chart",
+                        "evidence_url": "https://dexscreener.com/solana/MintA",
+                        "confidence_tier": "B_STRONG_PARTIAL",
+                        "notes": "Historical chart was positioned at the candidate decision timestamp, but no supply proof was captured.",
+                    }
+                )
+
+            result = import_manual_evidence(
+                csv_path,
+                score_ready_report=score_ready_report(),
+                recovery_plan=recovery_plan(),
+                output_dir=tmp_path,
+            )
+
+            self.assertEqual(result["summary"]["accepted_rows"], 1)
+            self.assertEqual(result["summary"]["manual_tier_a_supply_records"], 0)
+            records = [
+                json.loads(line)
+                for line in (tmp_path / "manual_evidence_imported.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(records[0]["confidence_tier"], "B_STRONG_PARTIAL")
+            self.assertFalse(records[0]["proof_unblock_allowed"])
+            self.assertFalse((tmp_path / "manual_supply_evidence_records.jsonl").read_text().strip())
+
+    def test_import_solscan_historical_evidence_stores_matching_rows_as_partial_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "solscan_export.csv"
+            with csv_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["Signature", "Time", "Action", "Amount", "Value", "Program"],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "Signature": "SigA",
+                        "Time": "2024-03-09 16:00:00",
+                        "Action": "SWAP",
+                        "Amount": "1000 MintA",
+                        "Value": "$2,000.00",
+                        "Program": "Pump.fun AMM",
+                    }
+                )
+
+            result = import_solscan_historical_evidence(
+                csv_path,
+                candidate_id="manual_MintA_123_SigA",
+                source_url="https://solscan.io/token/MintA#activities",
+                score_ready_report=score_ready_report(),
+                recovery_plan=recovery_plan(),
+                output_dir=tmp_path,
+            )
+
+            self.assertEqual(result["summary"]["accepted_rows"], 1)
+            self.assertEqual(result["summary"]["rejected_rows"], 0)
+            rows = [
+                json.loads(line)
+                for line in (tmp_path / "solscan_historical_evidence_imported.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(rows[0]["candidate_id"], "manual_MintA_123_SigA")
+            self.assertEqual(rows[0]["confidence_tier"], "B_STRONG_PARTIAL")
+            self.assertFalse(rows[0]["proof_unblock_allowed"])
+            self.assertIn("Solscan historical", rows[0]["evidence_source"])
 
     def test_import_manual_evidence_never_overwrites_stronger_evidence_with_weaker(self):
         with tempfile.TemporaryDirectory() as tmp:

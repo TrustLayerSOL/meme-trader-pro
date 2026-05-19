@@ -129,6 +129,30 @@ def run_import_manual_evidence(args):
     return 0
 
 
+def run_import_solscan_evidence(args):
+    from research.manual_gold_set import import_solscan_historical_evidence
+
+    report = import_solscan_historical_evidence(
+        args.csv_path,
+        candidate_id=args.candidate_id,
+        source_url=args.source_url,
+        score_ready_report=read_json(SCORE_READY_REPORT, {"records": []}),
+        recovery_plan=read_json(RECOVERY_PLAN, {"candidate_rows": []}),
+        output_dir=MANUAL_RESEARCH_DIR,
+    )
+    print(json.dumps(report["summary"], indent=2, sort_keys=True))
+    output_paths = report.get("output_paths", {})
+    if output_paths:
+        print(f"Imported Solscan evidence: {output_paths.get('solscan_historical_evidence_imported')}")
+        print(f"Rejected rows: {output_paths.get('solscan_historical_evidence_rejected')}")
+        print(f"Report: {output_paths.get('report')}")
+    print(
+        "\nNote: Solscan historical activity evidence is partial review evidence. "
+        "It does not unlock proof readiness without separate Tier A decision-time supply evidence."
+    )
+    return 0
+
+
 def run_proof_readiness(args):
     from research.manual_gold_set import build_proof_readiness_report, read_jsonl
 
@@ -170,6 +194,15 @@ def cli_main(argv=None):
     )
     import_manual.add_argument("csv_path", type=Path)
     import_manual.set_defaults(func=run_import_manual_evidence)
+
+    import_solscan = subparsers.add_parser(
+        "import-solscan-evidence",
+        help="Import a Solscan historical activity CSV as partial review evidence.",
+    )
+    import_solscan.add_argument("csv_path", type=Path)
+    import_solscan.add_argument("--candidate-id", required=True)
+    import_solscan.add_argument("--source-url", required=True)
+    import_solscan.set_defaults(func=run_import_solscan_evidence)
 
     proof_readiness = subparsers.add_parser(
         "proof-readiness",

@@ -22,8 +22,8 @@ TIER_STRENGTH = {tier: len(CONFIDENCE_TIERS) - idx for idx, tier in enumerate(CO
 MANUAL_RESEARCH_TEXT = """MANUAL RESEARCH:
 1. Open the CSV file shown above.
 2. Pick the first row.
-3. Open the Solscan link.
-4. Try to verify supply or market-cap evidence at or before the decision time.
+3. Open the Solscan token/activity link.
+4. Try to verify supply, market-cap, or historical activity evidence at or before the decision time.
 5. If you find evidence, copy the value, source URL, and notes into manual_evidence_template.csv.
 6. Use confidence tier A only if the evidence is clearly decision-time safe.
 7. If you are unsure, use C_SUGGESTIVE or D_INSUFFICIENT.
@@ -43,6 +43,7 @@ PACKET_COLUMNS = [
     "missing_proof_reason",
     "why_high_priority",
     "solscan_token_link",
+    "solscan_activity_link",
     "solana_explorer_link",
     "dexscreener_link",
     "notes",
@@ -122,6 +123,30 @@ def positive_float(value: Any) -> float | None:
     return parsed if parsed is not None and parsed > 0 else None
 
 
+def parse_money(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    multiplier = 1.0
+    suffix = text[-1:].upper()
+    if suffix == "K":
+        multiplier = 1_000.0
+        text = text[:-1]
+    elif suffix == "M":
+        multiplier = 1_000_000.0
+        text = text[:-1]
+    elif suffix == "B":
+        multiplier = 1_000_000_000.0
+        text = text[:-1]
+    cleaned = text.replace("$", "").replace(",", "").strip()
+    parsed = safe_float(cleaned)
+    if parsed is None:
+        return None
+    return parsed * multiplier
+
+
 def safe_int(value: Any) -> int | None:
     try:
         return int(float(value))
@@ -171,6 +196,7 @@ def index_recovery_plan(plan: dict[str, Any]) -> dict[tuple[str, str, str], dict
 def manual_links(mint: str) -> dict[str, str]:
     return {
         "solscan_token_link": f"https://solscan.io/token/{mint}",
+        "solscan_activity_link": f"https://solscan.io/token/{mint}#activities",
         "solana_explorer_link": f"https://explorer.solana.com/address/{mint}",
         "dexscreener_link": f"https://dexscreener.com/solana/{mint}",
     }
@@ -283,6 +309,7 @@ def build_manual_research_packet(
                     "missing_proof_reason": row.get("missing_proof_reason"),
                     "why_high_priority": row.get("why_high_priority"),
                     "solscan_token_link": row.get("solscan_token_link"),
+                    "solscan_activity_link": row.get("solscan_activity_link"),
                     "solana_explorer_link": row.get("solana_explorer_link"),
                     "dexscreener_link": row.get("dexscreener_link"),
                     "notes": "",
@@ -347,19 +374,24 @@ def validate_manual_row(row: dict[str, str], candidates: dict[str, dict[str, Any
     elif mint and mint != candidate.get("token_mint"):
         errors.append("mint_does_not_match_candidate")
 
-    supply = positive_float(row.get("verified_supply"))
+    raw_supply = str(row.get("verified_supply") or "").strip()
+    supply = positive_float(raw_supply)
     market_cap = positive_float(row.get("verified_market_cap"))
-    if supply is None:
+    tier = str(row.get("confidence_tier") or "").strip()
+    if raw_supply and supply is None:
+        errors.append("verified_supply_must_be_positive")
+    if tier == "A_FULL_REPLAY_SAFE" and supply is None:
         errors.append("verified_supply_must_be_positive")
     if market_cap is not None and market_cap > 1_000_000_000_000:
         errors.append("verified_market_cap_impossible")
+    if market_cap is None and str(row.get("verified_market_cap") or "").strip():
+        errors.append("verified_market_cap_must_be_positive")
     source = str(row.get("evidence_source") or "").strip()
     notes = str(row.get("notes") or "").strip()
     if not source:
         errors.append("missing_evidence_source")
     if not notes:
         errors.append("missing_notes")
-    tier = str(row.get("confidence_tier") or "").strip()
     if tier not in CONFIDENCE_TIERS:
         errors.append("invalid_confidence_tier")
     decision_slot = safe_int(row.get("decision_slot"))
@@ -373,7 +405,6 @@ def validate_manual_row(row: dict[str, str], candidates: dict[str, dict[str, Any
         return None, errors
 
     assert candidate is not None
-    assert supply is not None
     evidence_url = str(row.get("evidence_url") or "").strip()
     record = {
         "version": VERSION,
@@ -511,6 +542,153 @@ def import_manual_evidence(
         "operator_note": (
             "Manual evidence is stored separately from provider evidence. Only A_FULL_REPLAY_SAFE rows emit "
             "decision-time-safe supply evidence; B/C/D rows remain review notes."
+        ),
+    }
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
+
+
+def normalized_csv_row(row: dict[str, Any]) -> dict[str, str]:
+    return {str(key or "").strip().lower().replace(" ", "_"): str(value or "").strip() for key, value in row.items()}
+
+
+def import_solscan_historical_evidence(
+    csv_path: Path | str,
+    *,
+    candidate_id: str,
+    source_url: str,
+    score_ready_report: dict[str, Any],
+    recovery_plan: dict[str, Any],
+    output_dir: Path | str,
+    generated_at: float | None = None,
+) -> dict[str, Any]:
+    csv_path = Path(csv_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    imported_path = output_dir / "solscan_historical_evidence_imported.jsonl"
+    rejected_path = output_dir / "solscan_historical_evidence_rejected.csv"
+    report_path = output_dir / "solscan_historical_evidence_import_report.json"
+
+    candidates = candidate_index(score_ready_report, recovery_plan)
+    candidate = candidates.get(str(candidate_id).strip())
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+
+    if candidate is None:
+        report = {
+            "generated_at": time.time() if generated_at is None else float(generated_at),
+            "version": "solscan_historical_evidence.v1",
+            "review_only": True,
+            "live_execution_locked": True,
+            "summary": {
+                "rows_scanned": 0,
+                "accepted_rows": 0,
+                "rejected_rows": 0,
+                "candidate_found": False,
+            },
+            "rejected_rows": [{"candidate_id": candidate_id, "rejection_reasons": "candidate_id_not_in_current_blocked_set"}],
+        }
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return report
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row_number, raw_row in enumerate(reader, start=2):
+            row = normalized_csv_row(raw_row)
+            signature = row.get("signature") or row.get("transaction_signature") or row.get("txn") or ""
+            action = row.get("action") or row.get("type") or ""
+            amount = row.get("amount") or ""
+            value_text = row.get("value") or row.get("usd") or row.get("usd_value") or ""
+            program = row.get("program") or ""
+            observed_time = row.get("time") or row.get("timestamp") or row.get("date") or ""
+            value_usd = parse_money(value_text)
+            errors: list[str] = []
+            if not signature:
+                errors.append("missing_signature")
+            if not action:
+                errors.append("missing_action")
+            if not amount:
+                errors.append("missing_amount")
+            if not source_url:
+                errors.append("missing_source_url")
+            if errors:
+                rejected.append({**raw_row, "row_number": row_number, "rejection_reasons": ";".join(errors)})
+                continue
+            candidate_signature = str(candidate.get("transaction_signature") or "")
+            accepted.append(
+                {
+                    "version": "solscan_historical_evidence.v1",
+                    "candidate_id": candidate_id,
+                    "mint": candidate.get("token_mint"),
+                    "token_mint": candidate.get("token_mint"),
+                    "wallet": candidate.get("wallet"),
+                    "decision_slot": candidate.get("decision_slot"),
+                    "decision_timestamp": candidate.get("decision_timestamp"),
+                    "solscan_signature": signature,
+                    "candidate_signature": candidate_signature,
+                    "signature_matches_candidate": bool(candidate_signature and signature == candidate_signature),
+                    "observed_time": observed_time,
+                    "action": action,
+                    "amount": amount,
+                    "value_text": value_text,
+                    "value_usd": value_usd,
+                    "program": program,
+                    "evidence_source": "Solscan historical activity export",
+                    "evidence_url": source_url,
+                    "source_file": str(csv_path),
+                    "confidence_tier": "B_STRONG_PARTIAL" if value_usd is not None else "C_SUGGESTIVE",
+                    "proof_unblock_allowed": False,
+                    "decision_time_safe": False,
+                    "can_mutate_wallet_trust": False,
+                    "notes": (
+                        "Solscan historical export row. Useful for transaction/value/activity review, "
+                        "but it is not archival mint supply proof by itself."
+                    ),
+                    "imported_at": time.time(),
+                }
+            )
+
+    existing = read_jsonl(imported_path)
+    merged_by_key = {
+        f"{row.get('candidate_id')}|{row.get('solscan_signature')}|{row.get('observed_time')}": row
+        for row in existing
+    }
+    for row in accepted:
+        merged_by_key[f"{row.get('candidate_id')}|{row.get('solscan_signature')}|{row.get('observed_time')}"] = row
+    stored = sorted(merged_by_key.values(), key=lambda row: str(row.get("candidate_id") or "") + str(row.get("solscan_signature") or ""))
+    write_jsonl(imported_path, stored)
+
+    with rejected_path.open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = ["row_number", "rejection_reasons", "Signature", "Time", "Action", "Amount", "Value", "Program"]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rejected:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+    report = {
+        "generated_at": time.time() if generated_at is None else float(generated_at),
+        "version": "solscan_historical_evidence.v1",
+        "review_only": True,
+        "live_execution_locked": True,
+        "wallet_list_apply_allowed": False,
+        "wallet_list_mutated": False,
+        "auto_trust_mutation_allowed": False,
+        "summary": {
+            "rows_scanned": len(accepted) + len(rejected),
+            "accepted_rows": len(accepted),
+            "rejected_rows": len(rejected),
+            "stored_rows": len(stored),
+            "candidate_found": True,
+            "proof_unblock_allowed_rows": 0,
+        },
+        "output_paths": {
+            "solscan_historical_evidence_imported": str(imported_path),
+            "solscan_historical_evidence_rejected": str(rejected_path),
+            "report": str(report_path),
+        },
+        "operator_note": (
+            "Solscan historical activity evidence is stored as partial review evidence. It does not unlock "
+            "proof readiness unless separate decision-time supply evidence is imported through the manual Tier A path."
         ),
     }
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

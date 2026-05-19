@@ -10355,3 +10355,45 @@ Remaining:
 
 - Operator needs to research the first packet rows using free public sources and fill `manual_evidence_template.csv`.
 - Next logical step is to run a full verification pass, then commit this manual Gold Set workflow checkpoint.
+
+### 2026-05-19 - Solscan Historical Evidence Lane
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%` until Tier A decision-time supply evidence is imported
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `main.py`
+- `research/manual_gold_set.py`
+- `tests/test_manual_gold_set_research.py`
+- `docs/MANUAL_GOLD_SET_RESEARCH.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a Solscan activity link to the manual research packet so each row points directly at the historical activity surface.
+- Added `python main.py import-solscan-evidence ... --candidate-id ... --source-url ...` to preserve Solscan CSV/export rows as partial review evidence.
+- Relaxed manual evidence import so `B_STRONG_PARTIAL`, `C_SUGGESTIVE`, and `D_INSUFFICIENT` rows can preserve partial market-cap/chart/activity evidence without positive supply.
+- Kept `A_FULL_REPLAY_SAFE` strict: Tier A still requires positive supply and is the only tier that can emit replay-safe manual supply records.
+- Documented the Solscan historical search workflow and clarified that Solscan/Dexscreener evidence does not unlock proof readiness by itself.
+
+Current safety state:
+
+- Live execution remains locked.
+- Wallet trust is not mutated.
+- Solscan historical activity evidence is review-only unless separate Tier A supply proof is imported.
+
+Remaining:
+
+- The 25-row manual packet has been regenerated with Solscan activity links.
+- Operator can export a Solscan historical activity CSV for a candidate row and import it with the new command.
+- Next proof-readiness increase still requires true Tier A supply evidence or a validated archival account-state response.

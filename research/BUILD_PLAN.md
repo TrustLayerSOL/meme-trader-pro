@@ -747,7 +747,7 @@ Next actions:
 - [x] Runtime health and per-source freshness indicators.
 - [x] Existing wallet discovery, paper-watch, lifecycle review, guarded apply, and behavior rollups.
 - [x] Archival provider response capture lane: request bundle, optional execute capture, saved raw response validation, raw response preservation, probe validation, batch chunk capture, and secret-free read-only reporting. Current local status is blocked until a real archival account-state endpoint response or saved raw response is supplied.
-- [x] Manual Gold Set research lane: ranked proof-candidate CLI, manual research CSV/JSON export, evidence template, manual evidence importer, manual-adjusted proof-readiness report, and beginner-friendly operator docs. This is the low-cost path while paid archival providers are unavailable.
+- [x] Manual Gold Set research lane: ranked proof-candidate CLI, manual research CSV/JSON export, evidence template, manual evidence importer, Solscan historical activity CSV importer, manual-adjusted proof-readiness report, and beginner-friendly operator docs. This is the low-cost path while paid archival providers are unavailable. Solscan/Dexscreener partial evidence can now be preserved without pretending it is Tier A supply proof.
 - [ ] Manual Gold Set review pass: operator researches the first exported packet rows, imports only evidence-backed results, and reruns proof-readiness to measure whether Tier A rows reduce the archival supply blocker.
 
 ## Change Log
