@@ -46,6 +46,7 @@ def token_mint(row: dict[str, Any]) -> str:
 def sorted_target_rows(
     pagination_plan: dict[str, Any],
     *,
+    min_estimated_pages: int | None = None,
     max_estimated_pages: int | None = None,
 ) -> list[dict[str, Any]]:
     rows = [row for row in pagination_plan.get("rows", []) if isinstance(row, dict)]
@@ -57,6 +58,9 @@ def sorted_target_rows(
         if not mint:
             continue
         estimated_pages = row.get("estimated_pages_to_decision_slot")
+        if min_estimated_pages is not None:
+            if estimated_pages is None or safe_int(estimated_pages, -1) < int(min_estimated_pages):
+                continue
         if max_estimated_pages is not None:
             if estimated_pages is None or safe_int(estimated_pages, 10**9) > int(max_estimated_pages):
                 continue
@@ -75,10 +79,15 @@ def select_target_requirements(
     *,
     supply_plan: dict[str, Any],
     pagination_plan: dict[str, Any],
+    min_estimated_pages: int | None = None,
     max_estimated_pages: int | None = None,
     max_targets: int | None = None,
 ) -> list[dict[str, Any]]:
-    target_rows = sorted_target_rows(pagination_plan, max_estimated_pages=max_estimated_pages)
+    target_rows = sorted_target_rows(
+        pagination_plan,
+        min_estimated_pages=min_estimated_pages,
+        max_estimated_pages=max_estimated_pages,
+    )
     if max_targets is not None:
         target_rows = target_rows[: max(0, int(max_targets))]
     selected_mints = {token_mint(row) for row in target_rows}
@@ -104,6 +113,7 @@ def write_targeted_archival_mint_pagination_report(
     signature_checkpoint_path: Path | str = DEFAULT_SIGNATURE_CHECKPOINT_PATH,
     rpc: Any | None = None,
     execute: bool = False,
+    min_estimated_pages: int | None = None,
     max_estimated_pages: int | None = 10,
     max_targets: int | None = None,
     signature_page_limit: int = 100,
@@ -125,6 +135,7 @@ def write_targeted_archival_mint_pagination_report(
     selected_requirements = select_target_requirements(
         supply_plan=supply_plan,
         pagination_plan=pagination_plan,
+        min_estimated_pages=min_estimated_pages,
         max_estimated_pages=max_estimated_pages,
         max_targets=max_targets,
     )
@@ -135,6 +146,7 @@ def write_targeted_archival_mint_pagination_report(
         "source_pagination_plan": relative_path(pagination_plan_path, ROOT),
         "target_selection": {
             "recommended_action": CONTINUE_ACTION,
+            "min_estimated_pages": min_estimated_pages,
             "max_estimated_pages": max_estimated_pages,
             "max_targets": max_targets,
             "selected_targets": len(selected_requirements),
@@ -208,6 +220,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--completeness-path", type=Path, default=DEFAULT_COMPLETENESS_PATH)
     parser.add_argument("--signature-checkpoint-path", type=Path, default=DEFAULT_SIGNATURE_CHECKPOINT_PATH)
     parser.add_argument("--max-estimated-pages", type=int, default=10)
+    parser.add_argument("--min-estimated-pages", type=int, default=None)
     parser.add_argument("--max-targets", type=int, default=None)
     parser.add_argument("--signature-page-limit", type=int, default=100)
     parser.add_argument("--max-pages-per-mint", type=int, default=10)
@@ -231,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         signature_checkpoint_path=args.signature_checkpoint_path,
         rpc=rpc,
         execute=args.execute,
+        min_estimated_pages=args.min_estimated_pages,
         max_estimated_pages=args.max_estimated_pages,
         max_targets=args.max_targets,
         signature_page_limit=args.signature_page_limit,

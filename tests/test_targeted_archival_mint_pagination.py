@@ -52,6 +52,34 @@ class TargetedArchivalMintPaginationTests(unittest.TestCase):
 
         self.assertEqual([row["token_mint"] for row in selected], ["MintA", "MintD"])
 
+    def test_selects_target_bucket_with_min_and_max_page_limits(self):
+        supply_plan = {
+            "token_requirements": [
+                requirement("MintA"),
+                requirement("MintB"),
+                requirement("MintC"),
+                requirement("MintD"),
+            ]
+        }
+        pagination_plan = {
+            "rows": [
+                pagination_row("MintA", estimated_pages=2),
+                pagination_row("MintB", estimated_pages=8),
+                pagination_row("MintC", estimated_pages=12),
+                pagination_row("MintD", estimated_pages=25),
+            ]
+        }
+
+        selected = select_target_requirements(
+            supply_plan=supply_plan,
+            pagination_plan=pagination_plan,
+            min_estimated_pages=8,
+            max_estimated_pages=20,
+            max_targets=None,
+        )
+
+        self.assertEqual([row["token_mint"] for row in selected], ["MintB", "MintC"])
+
     def test_writer_persists_filtered_plan_and_collection_summary(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -84,6 +112,7 @@ class TargetedArchivalMintPaginationTests(unittest.TestCase):
                 completeness_path=completeness_path,
                 signature_checkpoint_path=checkpoint_path,
                 execute=False,
+                min_estimated_pages=1,
                 max_estimated_pages=5,
                 generated_at=123.0,
             )
