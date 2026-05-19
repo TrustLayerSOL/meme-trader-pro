@@ -164,7 +164,16 @@ class SystemHealth:
 
         runtime, _ = self.safe_load_json("data/runtime_status.json")
         if isinstance(runtime, dict):
-            for component in ["bot", "websocket", "scanner", "market", "quotes", "watchdog", "wallet_discovery"]:
+            for component in [
+                "bot",
+                "websocket",
+                "scanner",
+                "market",
+                "quotes",
+                "watchdog",
+                "wallet_discovery",
+                "forward_wallet_activity",
+            ]:
                 item = runtime.get(component, {})
                 age = self.age_seconds(item.get("updated_at")) if isinstance(item, dict) else None
                 is_fresh = age is not None and age < RUNTIME_HEARTBEAT_FRESH_SECONDS

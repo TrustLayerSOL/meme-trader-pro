@@ -15,6 +15,7 @@ DEFAULT_STATUS = {
     "watchdog": {},
     "open_position_monitor": {},
     "wallet_discovery": {},
+    "forward_wallet_activity": {},
 }
 
 

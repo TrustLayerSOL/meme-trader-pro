@@ -4,6 +4,7 @@ from pathlib import Path
 
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
 from wallets.forward_wallet_activity import select_forward_wallets
+from utils.run_forward_wallet_activity import run_forward_wallet_activity_cycle
 from utils.run_forward_wallet_activity import write_forward_wallet_activity_report
 
 
@@ -128,6 +129,39 @@ class ForwardWalletActivityTests(unittest.TestCase):
             self.assertTrue(out.exists())
             self.assertEqual(report["evidence_rows_written"], 1)
             self.assertEqual(len(evidence.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_cycle_updates_runtime_status_without_execution_mutation(self):
+        updates = []
+
+        def fake_update(component, **fields):
+            updates.append((component, fields))
+
+        def fake_writer(**kwargs):
+            return {
+                "live_execution_locked": True,
+                "summary": {
+                    "wallets_processed": 3,
+                    "wallets_collected": 2,
+                    "evidence_rows_created": 5,
+                    "wallets_blocked_rpc_error": 0,
+                },
+            }
+
+        report = run_forward_wallet_activity_cycle(
+            write_report=fake_writer,
+            update_status=fake_update,
+            execute=True,
+            max_wallets=3,
+            interval_seconds=300,
+        )
+
+        self.assertTrue(report["live_execution_locked"])
+        self.assertEqual(updates[0][0], "forward_wallet_activity")
+        self.assertEqual(updates[0][1]["status"], "cycle_running")
+        self.assertEqual(updates[-1][1]["status"], "cycle_ok")
+        self.assertEqual(updates[-1][1]["wallets_processed"], 3)
+        self.assertEqual(updates[-1][1]["evidence_rows_created"], 5)
+        self.assertTrue(updates[-1][1]["live_execution_locked"])
 
 
 if __name__ == "__main__":

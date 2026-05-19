@@ -562,7 +562,18 @@ def summarize_runtime(runtime):
     scanner_fresh = scanner_age is not None and scanner_age <= FRESH_SECONDS
     components = []
     stale = []
-    for name in ("bot", "websocket", "scanner", "market", "quotes", "watchdog", "open_position_monitor", "wallet_discovery", "market_radar"):
+    for name in (
+        "bot",
+        "websocket",
+        "scanner",
+        "market",
+        "quotes",
+        "watchdog",
+        "open_position_monitor",
+        "wallet_discovery",
+        "forward_wallet_activity",
+        "market_radar",
+    ):
         item = runtime.get(name, {}) if isinstance(runtime, dict) else {}
         item_age = age_seconds(item.get("updated_at")) if isinstance(item, dict) else None
         state = item.get("state") or item.get("status") or "unknown" if isinstance(item, dict) else "unknown"

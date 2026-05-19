@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 import time
@@ -14,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from core.env_loader import load_env
 from core.json_store import atomic_write_json, read_json
+from core.runtime_status import update_component
 from utils.discover_candidate_wallets import SyncRpcClient
 from utils.run_wallet_history_backfill import merge_wallet_evidence_rows
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
@@ -25,6 +27,7 @@ DEFAULT_REPORT = ROOT / "data" / "wallet_backfills" / "forward_wallet_activity_r
 DEFAULT_EVIDENCE = ROOT / "data" / "wallet_evidence" / "wallet_history_evidence.jsonl"
 DEFAULT_REPORT_DIR = ROOT / "data" / "reports" / "wallet_backfills"
 DEFAULT_RAW_DIR = ROOT / "data" / "wallet_backfills" / "raw_transactions"
+COMPONENT = "forward_wallet_activity"
 
 
 def display_path(path: Path) -> str:
@@ -98,9 +101,88 @@ def write_forward_wallet_activity_report(
     return report
 
 
+def run_forward_wallet_activity_cycle(
+    *,
+    write_report=write_forward_wallet_activity_report,
+    update_status=update_component,
+    rpc: Any | None = None,
+    execute: bool = False,
+    max_wallets: int = 100,
+    lookback_seconds: int = 86400,
+    signature_limit: int = 40,
+    max_transactions_per_wallet: int = 20,
+    request_pause_seconds: float = 0.0,
+    interval_seconds: int | None = None,
+) -> dict[str, Any]:
+    update_status(
+        COMPONENT,
+        status="cycle_running",
+        live_execution_locked=True,
+        wallet_list_mutated=False,
+        execute=bool(execute),
+        heartbeat_interval=interval_seconds,
+    )
+    report = write_report(
+        rpc=rpc,
+        execute=execute,
+        max_wallets=max_wallets,
+        lookback_seconds=lookback_seconds,
+        signature_limit=signature_limit,
+        max_transactions_per_wallet=max_transactions_per_wallet,
+        request_pause_seconds=request_pause_seconds,
+    )
+    summary = report.get("summary") if isinstance(report, dict) else {}
+    update_status(
+        COMPONENT,
+        status="cycle_ok",
+        last_error=None,
+        live_execution_locked=True,
+        wallet_list_mutated=False,
+        execute=bool(execute),
+        wallets_processed=int(summary.get("wallets_processed", 0) or 0),
+        wallets_collected=int(summary.get("wallets_collected", 0) or 0),
+        evidence_rows_created=int(summary.get("evidence_rows_created", 0) or 0),
+        wallets_blocked_rpc_error=int(summary.get("wallets_blocked_rpc_error", 0) or 0),
+        heartbeat_interval=interval_seconds,
+    )
+    return report
+
+
+async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict[str, Any] | None = None) -> None:
+    config = dict(config or {})
+    config.setdefault("interval_seconds", interval_seconds)
+    while True:
+        try:
+            load_env()
+            rpc = SyncRpcClient() if config.get("execute") else None
+            await asyncio.to_thread(
+                run_forward_wallet_activity_cycle,
+                rpc=rpc,
+                execute=bool(config.get("execute")),
+                max_wallets=int(config.get("max_wallets", 100)),
+                lookback_seconds=int(config.get("lookback_seconds", 86400)),
+                signature_limit=int(config.get("signature_limit", 40)),
+                max_transactions_per_wallet=int(config.get("max_transactions_per_wallet", 20)),
+                request_pause_seconds=float(config.get("request_pause_seconds", 0.2)),
+                interval_seconds=interval_seconds,
+            )
+        except Exception as exc:
+            update_component(
+                COMPONENT,
+                status="cycle_error",
+                live_execution_locked=True,
+                wallet_list_mutated=False,
+                last_error=str(exc)[:240],
+                heartbeat_interval=interval_seconds,
+            )
+        await asyncio.sleep(interval_seconds)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Collect recent tracked/paper-watch wallet activity into review-only evidence.")
     parser.add_argument("--execute", action="store_true", help="Fetch recent read-only wallet activity. Default is dry-run.")
+    parser.add_argument("--loop", action="store_true", help="Run continuously at --interval seconds.")
+    parser.add_argument("--interval", type=int, default=900)
     parser.add_argument("--max-wallets", type=int, default=100)
     parser.add_argument("--lookback-seconds", type=int, default=86400)
     parser.add_argument("--signature-limit", type=int, default=40)
@@ -111,8 +193,24 @@ def main() -> int:
 
     load_env()
     rpc = SyncRpcClient() if args.execute else None
-    report = write_forward_wallet_activity_report(
-        out_path=args.out,
+    if args.loop:
+        print(f"Forward wallet activity scheduler running every {args.interval}s. Live execution remains locked.")
+        asyncio.run(
+            forward_wallet_activity_loop(
+                interval_seconds=args.interval,
+                config={
+                    "execute": args.execute,
+                    "max_wallets": args.max_wallets,
+                    "lookback_seconds": args.lookback_seconds,
+                    "signature_limit": args.signature_limit,
+                    "max_transactions_per_wallet": args.max_transactions_per_wallet,
+                    "request_pause_seconds": args.request_pause_seconds if args.execute else 0.0,
+                },
+            )
+        )
+        return 0
+
+    report = run_forward_wallet_activity_cycle(
         rpc=rpc,
         execute=args.execute,
         max_wallets=args.max_wallets,
@@ -120,6 +218,7 @@ def main() -> int:
         signature_limit=args.signature_limit,
         max_transactions_per_wallet=args.max_transactions_per_wallet,
         request_pause_seconds=args.request_pause_seconds if args.execute else 0.0,
+        interval_seconds=None,
     )
     summary = report["summary"]
     print(

@@ -8,6 +8,7 @@ PROCESS_PATTERNS = {
     "bot": ["main.py"],
     "watchdog": ["core.rug_watchdog"],
     "wallet_discovery": ["utils/run_wallet_discovery_scheduler.py"],
+    "forward_wallet_activity": ["utils/run_forward_wallet_activity.py", "--loop"],
 }
 
 
@@ -37,7 +38,7 @@ class ProcessGuard:
 
     def status_rows(self):
         rows = []
-        for name in ["dashboard", "bot", "watchdog", "wallet_discovery"]:
+        for name in ["dashboard", "bot", "watchdog", "wallet_discovery", "forward_wallet_activity"]:
             pids = self.pids_for(name)
             rows.append({
                 "component": name,

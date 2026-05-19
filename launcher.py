@@ -107,8 +107,8 @@ class MemeTraderLauncher(tk.Tk):
         super().__init__()
 
         self.title("MemeTraderPro")
-        self.geometry("980x520")
-        self.minsize(940, 480)
+        self.geometry("1120x560")
+        self.minsize(1080, 520)
 
         python_bin = str(PYTHON if PYTHON.exists() else sys.executable)
 
@@ -152,6 +152,29 @@ class MemeTraderLauncher(tk.Tk):
             process_key="wallet_discovery",
         )
 
+        self.forward_wallet_activity = ManagedProcess(
+            name="Forward Wallet Activity",
+            command=[
+                python_bin,
+                "-u",
+                "utils/run_forward_wallet_activity.py",
+                "--loop",
+                "--execute",
+                "--interval",
+                "900",
+                "--max-wallets",
+                "20",
+                "--signature-limit",
+                "12",
+                "--max-transactions-per-wallet",
+                "5",
+                "--lookback-seconds",
+                "86400",
+            ],
+            log_file=LOG_DIR / "forward_wallet_activity.log",
+            process_key="forward_wallet_activity",
+        )
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.build_ui()
         self.refresh_status()
@@ -182,11 +205,12 @@ class MemeTraderLauncher(tk.Tk):
         ttk.Button(controls, text="Start Bot", command=self.start_bot).grid(row=0, column=3, padx=8)
         ttk.Button(controls, text="Start Watchdog", command=self.start_watchdog).grid(row=0, column=4, padx=8)
         ttk.Button(controls, text="Start Wallet Discovery", command=self.start_wallet_discovery).grid(row=0, column=5, padx=8)
-        ttk.Button(controls, text="Preflight", command=self.run_preflight).grid(row=0, column=6, padx=8)
-        ttk.Button(controls, text="Protection Check", command=self.run_protection_check).grid(row=0, column=7, padx=8)
-        ttk.Button(controls, text="Sync DB", command=self.sync_database).grid(row=0, column=8, padx=8)
-        ttk.Button(controls, text="Open Logs", command=self.open_logs).grid(row=0, column=9, padx=8)
-        ttk.Button(controls, text="Stop All", command=self.stop_all).grid(row=0, column=10, padx=8)
+        ttk.Button(controls, text="Start Forward Evidence", command=self.start_forward_wallet_activity).grid(row=0, column=6, padx=8)
+        ttk.Button(controls, text="Preflight", command=self.run_preflight).grid(row=0, column=7, padx=8)
+        ttk.Button(controls, text="Protection Check", command=self.run_protection_check).grid(row=0, column=8, padx=8)
+        ttk.Button(controls, text="Sync DB", command=self.sync_database).grid(row=0, column=9, padx=8)
+        ttk.Button(controls, text="Open Logs", command=self.open_logs).grid(row=0, column=10, padx=8)
+        ttk.Button(controls, text="Stop All", command=self.stop_all).grid(row=0, column=11, padx=8)
 
         body = ttk.Frame(self, padding=(18, 8, 18, 18))
         body.grid(row=2, column=0, sticky="nsew")
@@ -213,6 +237,10 @@ class MemeTraderLauncher(tk.Tk):
         self.wallet_discovery_status = ttk.Label(status_frame, text="Stopped")
         self.wallet_discovery_status.grid(row=3, column=1, sticky="w", pady=(8, 0))
 
+        ttk.Label(status_frame, text="Forward Wallet Evidence").grid(row=4, column=0, sticky="w", padx=(0, 14), pady=(8, 0))
+        self.forward_wallet_activity_status = ttk.Label(status_frame, text="Stopped")
+        self.forward_wallet_activity_status.grid(row=4, column=1, sticky="w", pady=(8, 0))
+
         notes = ttk.LabelFrame(body, text="Logs", padding=12)
         notes.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
         notes.columnconfigure(0, weight=1)
@@ -222,6 +250,7 @@ class MemeTraderLauncher(tk.Tk):
             f"Bot log: {LOG_DIR / 'bot.log'}\n\n"
             f"Watchdog log: {LOG_DIR / 'watchdog.log'}\n\n"
             f"Wallet discovery log: {LOG_DIR / 'wallet_discovery.log'}\n\n"
+            f"Forward wallet evidence log: {LOG_DIR / 'forward_wallet_activity.log'}\n\n"
             "Keep this window open while the bot is running. Closing it will stop child processes cleanly."
         )
 
@@ -269,10 +298,18 @@ class MemeTraderLauncher(tk.Tk):
             messagebox.showerror("Wallet discovery failed", str(exc))
         self.refresh_status()
 
+    def start_forward_wallet_activity(self):
+        try:
+            self.forward_wallet_activity.start()
+        except Exception as exc:
+            messagebox.showerror("Forward wallet evidence failed", str(exc))
+        self.refresh_status()
+
     def start_system(self):
         self.start_dashboard()
         self.start_watchdog()
         self.start_wallet_discovery()
+        self.start_forward_wallet_activity()
         self.start_bot()
 
     def run_preflight(self):
@@ -313,6 +350,7 @@ class MemeTraderLauncher(tk.Tk):
         self.preflight_output.insert(tk.END, output)
 
     def stop_all(self):
+        self.forward_wallet_activity.stop()
         self.wallet_discovery.stop()
         self.watchdog.stop()
         self.bot.stop()
@@ -324,10 +362,17 @@ class MemeTraderLauncher(tk.Tk):
         self.bot_status.configure(text=self.bot.status_text())
         self.watchdog_status.configure(text=self.watchdog.status_text())
         self.wallet_discovery_status.configure(text=self.wallet_discovery.status_text())
+        self.forward_wallet_activity_status.configure(text=self.forward_wallet_activity.status_text())
         self.after(1000, self.refresh_status)
 
     def on_close(self):
-        if self.bot.is_running() or self.dashboard.is_running() or self.watchdog.is_running() or self.wallet_discovery.is_running():
+        if (
+            self.bot.is_running()
+            or self.dashboard.is_running()
+            or self.watchdog.is_running()
+            or self.wallet_discovery.is_running()
+            or self.forward_wallet_activity.is_running()
+        ):
             should_close = messagebox.askyesno(
                 "Stop MemeTraderPro?",
                 "Closing this window will stop the bot and dashboard. Continue?",

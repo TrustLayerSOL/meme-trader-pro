@@ -53,6 +53,14 @@ DATA_SOURCES = [
         "owner": "wallet discovery scheduler",
     },
     {
+        "name": "Forward wallet activity",
+        "path": Path("data/wallet_backfills/forward_wallet_activity_report.json"),
+        "kind": "json",
+        "fresh_seconds": 1800,
+        "timestamp_keys": ["generated_at", "updated_at"],
+        "owner": "forward wallet activity scheduler",
+    },
+    {
         "name": "Wallet behavior",
         "path": Path("data/wallet_behavior.json"),
         "kind": "json",

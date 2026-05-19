@@ -2,7 +2,7 @@
 
 Running project diary: what is being worked on, what was completed, blockers, and next actions.
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
 
 ## Current Work
 
@@ -9848,3 +9848,53 @@ Remaining:
 
 - The forward collector is now available, but it should be run on a controlled schedule or added to a durable supervisor before we call the current-data loop fully automated.
 - Current forward rows need later outcome labeling after enough time has passed; until then they improve observation density but do not prove wallet trust.
+
+### 2026-05-18 - Forward Wallet Activity Scheduler Wiring
+
+Active milestone:
+
+- Stage 3 - Wallet Evidence Engine / durable current wallet evidence loop
+
+Milestone completion:
+
+- Stage 3 infrastructure remains `100%`
+- Wallet score readiness is now `16%`
+- Stage 8 proof readiness remains `11%`
+
+Changed files:
+
+- `utils/run_forward_wallet_activity.py`
+- `core/runtime_status.py`
+- `core/process_guard.py`
+- `core/data_freshness.py`
+- `core/system_health.py`
+- `desktop_api.py`
+- `launcher.py`
+- `tests/test_forward_wallet_activity.py`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added cycle and loop mode to the read-only forward wallet activity collector.
+- Added `forward_wallet_activity` to runtime status, process guard, freshness checks, system health, and desktop API runtime summaries.
+- Added launcher-managed controls for forward wallet evidence, including a Start Forward Evidence button, status row, log path, clean stop handling, and start-system integration.
+- Ran a controlled 20-wallet read-only forward capture. It processed `20` wallets, collected `15`, created `66` evidence rows, preserved `79` raw transactions, skipped `21` old signatures, and had `0` RPC-blocked wallets.
+- Rebuilt the wallet evidence and proof reports. Current evidence rows are `1,103`, unique wallets are `61`, unique mints are `133`, rows with known outcomes are `191`, rows with entry context are `324`, and score-ready market-context records are `101`.
+- The detached shell loop did not persist reliably in the Codex environment, so durable continuous operation should be started through the launcher/control center or another real supervisor. The one-shot cycle and launcher-managed process path are working.
+
+Verification:
+
+- `./trading_env/bin/python -m unittest tests.test_forward_wallet_activity tests.test_wallet_evidence_readiness tests.test_wallet_history_backfill tests.test_wallet_evidence_enrichment tests.test_core_logic`
+- `./trading_env/bin/python -m py_compile utils/run_forward_wallet_activity.py wallets/forward_wallet_activity.py research/wallet_evidence_readiness.py utils/build_wallet_evidence_readiness.py core/runtime_status.py core/process_guard.py core/data_freshness.py core/system_health.py desktop_api.py launcher.py`
+- `./trading_env/bin/python utils/system_health_report.py`
+
+System health note:
+
+- `runtime_forward_wallet_activity` has a valid one-shot heartbeat, but it can move to warning once the heartbeat ages because the detached shell loop is not a durable supervisor.
+- The broader system health report still fails because older bot, websocket, scanner, and live-state runtime rows are stale. That is separate from the forward evidence lane and should not be interpreted as live coverage.
+
+Remaining:
+
+- Continue Stage 8 proof-readiness blocker reduction through replay-safe historical market-context / archival supply recovery.
+- Keep forward wallet activity running periodically so current wallet evidence does not go stale, then label outcomes only after enough time has passed.
