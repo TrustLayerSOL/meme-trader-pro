@@ -89,6 +89,10 @@ Solscan historical rows are useful for confirming:
 - programs used by the token around the signal
 - whether activity was normal, thin, or suspicious
 
+The importer supports Solscan's current DeFi activity export format, including `Human Time`,
+`Block Time`, `Amount1`/`Amount2`, `TokenDecimals1`/`TokenDecimals2`, `Token1`/`Token2`,
+`Value`, `From`, and `Programs`.
+
 Solscan historical rows do not automatically prove:
 
 - exact token supply at the decision slot

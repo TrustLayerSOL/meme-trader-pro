@@ -10397,3 +10397,42 @@ Remaining:
 - The 25-row manual packet has been regenerated with Solscan activity links.
 - Operator can export a Solscan historical activity CSV for a candidate row and import it with the new command.
 - Next proof-readiness increase still requires true Tier A supply evidence or a validated archival account-state response.
+
+### 2026-05-19 - Solscan DeFi Export Schema Validation
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+What changed:
+
+- Confirmed Solscan can export a token Activities CSV without paid provider access.
+- Confirmed the current Solscan DeFi export schema uses `Human Time`, `Block Time`, `Token1`, `Amount1`, `TokenDecimals1`, `Token2`, `Amount2`, `TokenDecimals2`, `Value`, `From`, and `Programs`.
+- Updated the Solscan importer to support that actual export schema.
+- Imported the PENGUIN Solscan export for candidate `manual_8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump_420052656_364BGRh989` as partial review evidence.
+
+Current result:
+
+- Solscan rows scanned: `1000`
+- Solscan rows accepted as partial review evidence: `1000`
+- Stored Solscan evidence rows after dedupe: `845`
+- Rows rejected: `0`
+- Proof-unblocking rows: `0`
+
+Interpretation:
+
+- Free Solscan CSV export is useful for activity/value/program evidence and manual review.
+- It does not by itself solve the main blocker: decision-time token supply / market-cap proof.
+- Proof readiness did not increase because no Tier A replay-safe supply evidence was imported.
+
+Next:
+
+- Use Solscan's historical filters to export a tight decision-time slice for each top manual candidate.
+- Continue using Dexscreener 1s historical market-cap chart evidence as `B_STRONG_PARTIAL` unless exact replay-safe supply proof is found.
+- Keep looking for a free or low-cost way to retrieve historical mint account state at or before the decision slot.

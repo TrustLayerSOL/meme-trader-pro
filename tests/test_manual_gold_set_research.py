@@ -288,6 +288,69 @@ class ManualGoldSetResearchTests(unittest.TestCase):
             self.assertFalse(rows[0]["proof_unblock_allowed"])
             self.assertIn("Solscan historical", rows[0]["evidence_source"])
 
+    def test_import_solscan_historical_evidence_accepts_current_solscan_defi_export_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "solscan_defi_export.csv"
+            with csv_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "Signature",
+                        "Block Time",
+                        "Human Time",
+                        "Action",
+                        "From",
+                        "Token1",
+                        "Amount1",
+                        "TokenDecimals1",
+                        "Token2",
+                        "Amount2",
+                        "TokenDecimals2",
+                        "Value",
+                        "Programs",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "Signature": "SigA",
+                        "Block Time": "1710000000",
+                        "Human Time": "2024-03-09T16:00:00.000Z",
+                        "Action": "ACTIVITY_TOKEN_SWAP",
+                        "From": "TraderA",
+                        "Token1": "So11111111111111111111111111111111111111112",
+                        "Amount1": "1000000000",
+                        "TokenDecimals1": "9",
+                        "Token2": "MintA",
+                        "Amount2": "123450000",
+                        "TokenDecimals2": "6",
+                        "Value": "2000",
+                        "Programs": "PumpProgram|Router",
+                    }
+                )
+
+            result = import_solscan_historical_evidence(
+                csv_path,
+                candidate_id="manual_MintA_123_SigA",
+                source_url="https://solscan.io/token/MintA#activities",
+                score_ready_report=score_ready_report(),
+                recovery_plan=recovery_plan(),
+                output_dir=tmp_path,
+            )
+
+            self.assertEqual(result["summary"]["accepted_rows"], 1)
+            self.assertEqual(result["summary"]["rejected_rows"], 0)
+            rows = [
+                json.loads(line)
+                for line in (tmp_path / "solscan_historical_evidence_imported.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(rows[0]["amount"], "123.45 MintA")
+            self.assertEqual(rows[0]["observed_time"], "2024-03-09T16:00:00.000Z")
+            self.assertEqual(rows[0]["program"], "PumpProgram|Router")
+            self.assertEqual(rows[0]["solscan_from"], "TraderA")
+            self.assertFalse(rows[0]["proof_unblock_allowed"])
+
     def test_import_manual_evidence_never_overwrites_stronger_evidence_with_weaker(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

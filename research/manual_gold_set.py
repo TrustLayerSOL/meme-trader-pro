@@ -552,6 +552,34 @@ def normalized_csv_row(row: dict[str, Any]) -> dict[str, str]:
     return {str(key or "").strip().lower().replace(" ", "_"): str(value or "").strip() for key, value in row.items()}
 
 
+def format_solscan_token_amount(raw_amount: str, raw_decimals: str, token: str) -> str:
+    amount = safe_float(raw_amount)
+    decimals = safe_int(raw_decimals)
+    if amount is None or decimals is None or decimals < 0:
+        return str(raw_amount or "").strip()
+    normalized = amount / (10**decimals)
+    text = f"{normalized:.12f}".rstrip("0").rstrip(".")
+    if token:
+        return f"{text} {token}"
+    return text
+
+
+def solscan_amount_for_candidate(row: dict[str, str], mint: str) -> str:
+    if row.get("amount"):
+        return row.get("amount") or ""
+    token1 = row.get("token1") or ""
+    token2 = row.get("token2") or ""
+    if mint and token1 == mint:
+        return format_solscan_token_amount(row.get("amount1") or "", row.get("tokendecimals1") or "", token1)
+    if mint and token2 == mint:
+        return format_solscan_token_amount(row.get("amount2") or "", row.get("tokendecimals2") or "", token2)
+    if row.get("amount1"):
+        return format_solscan_token_amount(row.get("amount1") or "", row.get("tokendecimals1") or "", token1)
+    if row.get("amount2"):
+        return format_solscan_token_amount(row.get("amount2") or "", row.get("tokendecimals2") or "", token2)
+    return ""
+
+
 def import_solscan_historical_evidence(
     csv_path: Path | str,
     *,
@@ -597,10 +625,11 @@ def import_solscan_historical_evidence(
             row = normalized_csv_row(raw_row)
             signature = row.get("signature") or row.get("transaction_signature") or row.get("txn") or ""
             action = row.get("action") or row.get("type") or ""
-            amount = row.get("amount") or ""
+            candidate_mint = str(candidate.get("token_mint") or "")
+            amount = solscan_amount_for_candidate(row, candidate_mint)
             value_text = row.get("value") or row.get("usd") or row.get("usd_value") or ""
-            program = row.get("program") or ""
-            observed_time = row.get("time") or row.get("timestamp") or row.get("date") or ""
+            program = row.get("program") or row.get("programs") or ""
+            observed_time = row.get("time") or row.get("human_time") or row.get("timestamp") or row.get("date") or row.get("block_time") or ""
             value_usd = parse_money(value_text)
             errors: list[str] = []
             if not signature:
@@ -622,6 +651,7 @@ def import_solscan_historical_evidence(
                     "mint": candidate.get("token_mint"),
                     "token_mint": candidate.get("token_mint"),
                     "wallet": candidate.get("wallet"),
+                    "solscan_from": row.get("from") or "",
                     "decision_slot": candidate.get("decision_slot"),
                     "decision_timestamp": candidate.get("decision_timestamp"),
                     "solscan_signature": signature,
