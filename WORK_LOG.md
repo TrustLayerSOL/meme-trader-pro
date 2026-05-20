@@ -11086,3 +11086,50 @@ Verification:
 Next:
 
 - Add fixed-window outcome resolution from forward market-context snapshots over `30s`, `2m`, `5m`, and `15m`, then generate a daily forward calibration report.
+
+### 2026-05-20 - Forward Outcome Resolution and Daily Calibration
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward calibration lane moves from roughly `45%` to `60%`: fixed-window outcome resolution and daily calibration reports are wired, but fresh current-data cycles still need to accumulate enough captured market context and matured windows
+
+Changed files:
+
+- `wallets/forward_outcome_resolution.py`
+- `utils/build_forward_outcome_resolution.py`
+- `tests/test_forward_outcome_resolution.py`
+- `research/DATA_SOURCE_MAP.md`
+- `research/BUILD_PLAN.md`
+
+What changed:
+
+- Added a review-only forward outcome resolver for current wallet evidence.
+- Resolves captured forward market-context snapshots into fixed `30s`, `2m`, `5m`, and `15m` outcome windows.
+- Keeps immature windows as pending instead of guessing.
+- Blocks rows that lack forward entry context instead of using historical/current substitutes.
+- Generates row-level forward outcome records and daily forward calibration reports.
+- Preserves decision-time context separately from later outcomes.
+- Keeps live execution locked and does not mutate wallet trust/lists.
+
+Current local result:
+
+- The resolver scanned `70` existing forward rows.
+- `70` rows are blocked by missing forward entry context because they were collected before the new market-context capture lane existed.
+- `0` known 15m outcomes were produced from the old rows.
+- This is expected; new forward cycles with `--capture-market-context` are needed before the resolver can mature usable windows.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_outcome_resolution.py -q`
+- `python3 -m pytest tests/test_forward_market_context.py tests/test_forward_wallet_activity.py tests/test_forward_outcome_resolution.py tests/test_outcome_linker.py -q`
+- `python3 -m py_compile wallets/forward_outcome_resolution.py utils/build_forward_outcome_resolution.py`
+- `python3 utils/build_forward_outcome_resolution.py`
+
+Next:
+
+- Run bounded current forward collection with market-context capture enabled, then rerun the outcome resolver after `30s`, `2m`, `5m`, and `15m` windows have had time to mature.
