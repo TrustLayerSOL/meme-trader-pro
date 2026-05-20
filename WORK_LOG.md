@@ -44,6 +44,63 @@ Highest-value active workstreams:
 - Wallet supply refresh from runners and paper-watch evidence.
 - Clean wallet-evaluation UI/reporting.
 
+2026-05-19 update - Focused Provider Response Workflow:
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Proof readiness: `11%`
+- Wallet score readiness: `16%`
+
+Changed files:
+
+- `wallets/provider_response_workflow.py`
+- `utils/build_provider_response_workflow.py`
+- `main.py`
+- `docs/FOCUSED_ARCHIVAL_RESPONSE_WORKFLOW.md`
+- `tests/test_provider_response_workflow.py`
+- `tests/test_build_provider_response_workflow.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local report:
+
+- `data/reports/historical_backfill/provider_response_workflow_report.json`
+
+What changed:
+
+- Added a single read-only operator command: `python3 main.py provider-response-workflow`.
+- The command inspects the focused `349` provider-recommended archival request rows, the `4` expected response part files, the combined raw response file, the focused response-import report, and current proof-readiness.
+- Current local status:
+  - focused request rows: `349`,
+  - focused target tokens: `43`,
+  - response part files expected: `4`,
+  - response part files present: `0`,
+  - response part files missing: `4`,
+  - combined raw responses: `0`,
+  - raw responses scanned by import: `0`,
+  - snapshots imported: `0`,
+  - proof readiness: `11%`,
+  - wallet-list mutations: `0`,
+  - auto trust mutations: `0`.
+- The next action is explicitly `fill_missing_response_parts`: save real provider/manual response part files before combining or importing.
+- Added beginner/operator docs for the focused archival response workflow.
+- No provider calls were performed. No evidence was imported. No wallet trust, wallet lists, execution settings, or live trading paths were changed.
+
+Verification performed:
+
+- `python3 -m pytest -q tests/test_provider_response_workflow.py tests/test_build_provider_response_workflow.py`
+- `python3 main.py provider-response-workflow`
+
+Remaining risk / next step:
+
+- The proof blocker is now operationally clearer but not reduced yet. The next grounded step is to obtain or manually produce valid focused response part files, then run the combiner/import/rebuild chain. Until those response part files exist, the `349` focused rows remain blocked by missing provider responses.
+
 2026-05-17 update - Discord Behavioral Intelligence Layer:
 
 Active milestone:

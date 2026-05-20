@@ -170,6 +170,20 @@ def run_proof_readiness(args):
     return 0
 
 
+def run_provider_response_workflow(args):
+    from utils.build_provider_response_workflow import write_provider_response_workflow_report
+
+    report = write_provider_response_workflow_report()
+    print(json.dumps(report["summary"], indent=2, sort_keys=True))
+    print(f"\nNext action: {report['next_action']['code']}")
+    print(report["next_action"]["detail"])
+    print(f"\nReport: {report['output_paths']['report']}")
+    print("\nFocused workflow commands:")
+    for command in report["operator_commands"]:
+        print(f"- {command}")
+    return 0
+
+
 def cli_main(argv=None):
     parser = argparse.ArgumentParser(description="MemeTraderPro Quant Wallet Tracker V2")
     subparsers = parser.add_subparsers(dest="command")
@@ -209,6 +223,12 @@ def cli_main(argv=None):
         help="Report current and manual-adjusted proof readiness.",
     )
     proof_readiness.set_defaults(func=run_proof_readiness)
+
+    provider_workflow = subparsers.add_parser(
+        "provider-response-workflow",
+        help="Inspect the focused archival response handoff and show the next safe operator action.",
+    )
+    provider_workflow.set_defaults(func=run_provider_response_workflow)
 
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
