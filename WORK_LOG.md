@@ -11043,3 +11043,46 @@ Verification:
 Next:
 
 - Fill the simple HTML sheet with raw market-cap values, export the CSV, import it with `python3 main.py import-manual-evidence <downloaded_csv>`, then rebuild `proof-readiness`.
+
+### 2026-05-20 - Forward Market-Context Capture
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward calibration lane moves from roughly `35%` to `45%`: current wallet events can now optionally capture current price/liquidity/market-cap context, but fixed-window outcome resolution and daily calibration reporting remain unwired
+
+Changed files:
+
+- `wallets/forward_market_context.py`
+- `utils/run_forward_wallet_activity.py`
+- `tests/test_forward_market_context.py`
+- `tests/test_forward_wallet_activity.py`
+- `research/DATA_SOURCE_MAP.md`
+- `research/BUILD_PLAN.md`
+
+What changed:
+
+- Added read-only forward market-context snapshot capture for current wallet evidence.
+- Captures one market lookup per unique observed mint, capped by `max_market_context_calls_per_cycle`.
+- Captures Dexscreener current price/liquidity/market-cap snapshots by default when enabled.
+- Enriches evidence rows only when snapshot lag is within `max_event_snapshot_lag_seconds`; stale context is preserved but not treated as entry context.
+- Appends snapshots to `data/wallet_backfills/forward_market_context_snapshots.jsonl`.
+- Persists snapshots into SQLite `token_snapshots` by default for later outcome-window resolution.
+- Keeps live execution locked and does not mutate wallet trust/lists.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_market_context.py tests/test_forward_wallet_activity.py -q`
+- `python3 -m py_compile wallets/forward_market_context.py wallets/forward_wallet_activity.py utils/run_forward_wallet_activity.py`
+- `python3 utils/run_forward_wallet_activity.py --max-wallets 100 --interval 900 --capture-market-context`
+- `python3 utils/run_forward_wallet_activity.py --execute --max-wallets 500 --interval 900 --capture-market-context`
+- `python3 utils/run_forward_wallet_activity.py --max-wallets 100 --interval 900 --capture-market-context`
+- `git diff --check`
+
+Next:
+
+- Add fixed-window outcome resolution from forward market-context snapshots over `30s`, `2m`, `5m`, and `15m`, then generate a daily forward calibration report.

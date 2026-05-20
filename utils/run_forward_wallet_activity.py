@@ -14,10 +14,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.env_loader import load_env
+from core.storage import EventStore
 from core.json_store import atomic_write_json, read_json
 from core.runtime_status import update_component
 from utils.discover_candidate_wallets import SyncRpcClient
 from utils.run_wallet_history_backfill import merge_wallet_evidence_rows
+from wallets.forward_market_context import build_forward_market_context_report
+from wallets.forward_market_context import DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS
+from wallets.forward_market_context import DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE
+from wallets.forward_market_context import DEFAULT_MAX_MARKET_CONTEXT_MINTS
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_CYCLE
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_DAY
@@ -29,6 +34,8 @@ DEFAULT_REPORT = ROOT / "data" / "wallet_backfills" / "forward_wallet_activity_r
 DEFAULT_EVIDENCE = ROOT / "data" / "wallet_evidence" / "wallet_history_evidence.jsonl"
 DEFAULT_REPORT_DIR = ROOT / "data" / "reports" / "wallet_backfills"
 DEFAULT_RAW_DIR = ROOT / "data" / "wallet_backfills" / "raw_transactions"
+DEFAULT_MARKET_CONTEXT = ROOT / "data" / "wallet_backfills" / "forward_market_context_snapshots.jsonl"
+DEFAULT_DB = ROOT / "data" / "memetrader.db"
 COMPONENT = "forward_wallet_activity"
 
 
@@ -47,15 +54,29 @@ def write_jsonl(path: Path | str, rows: list[dict[str, Any]]) -> None:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def persist_market_context_snapshots(snapshots: list[dict[str, Any]], *, db_path: Path | str = DEFAULT_DB) -> int:
+    if not snapshots:
+        return 0
+    store = EventStore(db_path)
+    inserted = 0
+    for snapshot in snapshots:
+        store.insert_token_snapshot(snapshot)
+        inserted += 1
+    return inserted
+
+
 def write_forward_wallet_activity_report(
     *,
     out_path: Path | str = DEFAULT_REPORT,
     evidence_path: Path | str = DEFAULT_EVIDENCE,
     report_dir: Path | str = DEFAULT_REPORT_DIR,
     raw_dir: Path | str = DEFAULT_RAW_DIR,
+    market_context_path: Path | str = DEFAULT_MARKET_CONTEXT,
+    db_path: Path | str = DEFAULT_DB,
     tracked_wallets: Any | None = None,
     paper_watch_wallets: Any | None = None,
     rpc: Any | None = None,
+    market_context_provider=None,
     generated_at: float | None = None,
     lookback_seconds: int = 86400,
     execute: bool = False,
@@ -66,6 +87,11 @@ def write_forward_wallet_activity_report(
     interval_seconds: int | None = None,
     max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
     max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
+    capture_market_context: bool = False,
+    persist_market_context: bool = True,
+    max_market_mints: int = DEFAULT_MAX_MARKET_CONTEXT_MINTS,
+    max_market_context_calls_per_cycle: int = DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE,
+    max_event_snapshot_lag_seconds: float = DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     report = build_forward_wallet_activity_report(
@@ -93,6 +119,56 @@ def write_forward_wallet_activity_report(
     else:
         report["raw_transactions_path"] = None
         report["raw_transactions_preserved"] = 0
+
+    market_snapshots: list[dict[str, Any]] = []
+    if capture_market_context:
+        market_report = build_forward_market_context_report(
+            evidence_records=report.get("evidence_records") if isinstance(report.get("evidence_records"), list) else [],
+            market_provider=market_context_provider,
+            generated_at=generated_at,
+            execute=execute,
+            max_market_mints=max_market_mints,
+            max_market_context_calls_per_cycle=max_market_context_calls_per_cycle,
+            max_event_snapshot_lag_seconds=max_event_snapshot_lag_seconds,
+        )
+        report["evidence_records"] = market_report.get("evidence_records", [])
+        market_snapshots = (
+            market_report.get("market_context_snapshots")
+            if isinstance(market_report.get("market_context_snapshots"), list)
+            else []
+        )
+        report["market_context"] = {
+            "mode": market_report.get("mode"),
+            "summary": market_report.get("summary"),
+            "api_budget": market_report.get("api_budget"),
+            "limits": market_report.get("limits"),
+            "live_execution_locked": market_report.get("live_execution_locked"),
+            "review_only": market_report.get("review_only"),
+        }
+    else:
+        report["market_context"] = {
+            "mode": "FORWARD_MARKET_CONTEXT_DISABLED",
+            "summary": {
+                "snapshots_collected": 0,
+                "evidence_rows_with_forward_context": 0,
+            },
+        }
+
+    if market_snapshots:
+        write_jsonl(market_context_path, market_snapshots)
+        report["market_context_snapshots_path"] = display_path(Path(market_context_path))
+        report["market_context_snapshots_written"] = len(market_snapshots)
+        if persist_market_context:
+            report["market_context_snapshots_persisted"] = persist_market_context_snapshots(
+                market_snapshots,
+                db_path=db_path,
+            )
+        else:
+            report["market_context_snapshots_persisted"] = 0
+    else:
+        report["market_context_snapshots_path"] = None
+        report["market_context_snapshots_written"] = 0
+        report["market_context_snapshots_persisted"] = 0
 
     report_snapshot = Path(report_dir) / f"forward_wallet_activity_{stamp}.json"
     evidence_rows = report.get("evidence_records") if isinstance(report.get("evidence_records"), list) else []
@@ -122,6 +198,11 @@ def run_forward_wallet_activity_cycle(
     request_pause_seconds: float = 0.0,
     max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
     max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
+    capture_market_context: bool = False,
+    persist_market_context: bool = True,
+    max_market_mints: int = DEFAULT_MAX_MARKET_CONTEXT_MINTS,
+    max_market_context_calls_per_cycle: int = DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE,
+    max_event_snapshot_lag_seconds: float = DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS,
     interval_seconds: int | None = None,
 ) -> dict[str, Any]:
     update_status(
@@ -133,6 +214,8 @@ def run_forward_wallet_activity_cycle(
         heartbeat_interval=interval_seconds,
         max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=max_rpc_calls_per_day,
+        capture_market_context=bool(capture_market_context),
+        max_market_context_calls_per_cycle=max_market_context_calls_per_cycle,
     )
     report = write_report(
         rpc=rpc,
@@ -145,9 +228,16 @@ def run_forward_wallet_activity_cycle(
         interval_seconds=interval_seconds,
         max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=max_rpc_calls_per_day,
+        capture_market_context=capture_market_context,
+        persist_market_context=persist_market_context,
+        max_market_mints=max_market_mints,
+        max_market_context_calls_per_cycle=max_market_context_calls_per_cycle,
+        max_event_snapshot_lag_seconds=max_event_snapshot_lag_seconds,
     )
     summary = report.get("summary") if isinstance(report, dict) else {}
     api_budget = report.get("api_budget") if isinstance(report.get("api_budget"), dict) else {}
+    market_context = report.get("market_context") if isinstance(report.get("market_context"), dict) else {}
+    market_summary = market_context.get("summary") if isinstance(market_context.get("summary"), dict) else {}
     update_status(
         COMPONENT,
         status="cycle_ok",
@@ -163,6 +253,14 @@ def run_forward_wallet_activity_cycle(
         api_budget_status=api_budget.get("budget_status"),
         estimated_rpc_calls_per_cycle=int(api_budget.get("estimated_rpc_calls_per_cycle", 0) or 0),
         projected_rpc_calls_per_day=api_budget.get("projected_rpc_calls_per_day"),
+        capture_market_context=bool(capture_market_context),
+        market_context_snapshots_collected=int(market_summary.get("snapshots_collected", 0) or 0),
+        evidence_rows_with_forward_context=int(market_summary.get("evidence_rows_with_forward_context", 0) or 0),
+        market_context_budget_status=(
+            market_context.get("api_budget", {}).get("budget_status")
+            if isinstance(market_context.get("api_budget"), dict)
+            else None
+        ),
         heartbeat_interval=interval_seconds,
     )
     return report
@@ -186,6 +284,14 @@ async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict
                 request_pause_seconds=float(config.get("request_pause_seconds", 0.2)),
                 max_rpc_calls_per_cycle=int(config.get("max_rpc_calls_per_cycle", DEFAULT_MAX_RPC_CALLS_PER_CYCLE)),
                 max_rpc_calls_per_day=int(config.get("max_rpc_calls_per_day", DEFAULT_MAX_RPC_CALLS_PER_DAY)),
+                capture_market_context=bool(config.get("capture_market_context")),
+                max_market_mints=int(config.get("max_market_mints", DEFAULT_MAX_MARKET_CONTEXT_MINTS)),
+                max_market_context_calls_per_cycle=int(
+                    config.get("max_market_context_calls_per_cycle", DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE)
+                ),
+                max_event_snapshot_lag_seconds=float(
+                    config.get("max_event_snapshot_lag_seconds", DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS)
+                ),
                 interval_seconds=interval_seconds,
             )
         except Exception as exc:
@@ -212,6 +318,11 @@ def main() -> int:
     parser.add_argument("--request-pause-seconds", type=float, default=0.2)
     parser.add_argument("--max-rpc-calls-per-cycle", type=int, default=DEFAULT_MAX_RPC_CALLS_PER_CYCLE)
     parser.add_argument("--max-rpc-calls-per-day", type=int, default=DEFAULT_MAX_RPC_CALLS_PER_DAY)
+    parser.add_argument("--capture-market-context", action="store_true", help="Capture current price/liquidity/market-cap context for observed token mints.")
+    parser.add_argument("--max-market-mints", type=int, default=DEFAULT_MAX_MARKET_CONTEXT_MINTS)
+    parser.add_argument("--max-market-context-calls-per-cycle", type=int, default=DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE)
+    parser.add_argument("--max-event-snapshot-lag-seconds", type=float, default=DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS)
+    parser.add_argument("--no-persist-market-context", action="store_true", help="Write context JSONL but skip SQLite token_snapshots persistence.")
     parser.add_argument("--out", type=Path, default=DEFAULT_REPORT)
     args = parser.parse_args()
 
@@ -231,6 +342,10 @@ def main() -> int:
                     "request_pause_seconds": args.request_pause_seconds if args.execute else 0.0,
                     "max_rpc_calls_per_cycle": args.max_rpc_calls_per_cycle,
                     "max_rpc_calls_per_day": args.max_rpc_calls_per_day,
+                    "capture_market_context": args.capture_market_context,
+                    "max_market_mints": args.max_market_mints,
+                    "max_market_context_calls_per_cycle": args.max_market_context_calls_per_cycle,
+                    "max_event_snapshot_lag_seconds": args.max_event_snapshot_lag_seconds,
                 },
             )
         )
@@ -246,12 +361,18 @@ def main() -> int:
         request_pause_seconds=args.request_pause_seconds if args.execute else 0.0,
         max_rpc_calls_per_cycle=args.max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=args.max_rpc_calls_per_day,
+        capture_market_context=args.capture_market_context,
+        persist_market_context=not args.no_persist_market_context,
+        max_market_mints=args.max_market_mints,
+        max_market_context_calls_per_cycle=args.max_market_context_calls_per_cycle,
+        max_event_snapshot_lag_seconds=args.max_event_snapshot_lag_seconds,
         interval_seconds=args.interval,
     )
     summary = report["summary"]
     api_budget = report.get("api_budget", {})
+    market_summary = (report.get("market_context") or {}).get("summary") or {}
     print(
-        "wrote {} execute={} wallets={} collected={} evidence_rows={} old_skipped={} budget={} est_calls={}".format(
+        "wrote {} execute={} wallets={} collected={} evidence_rows={} old_skipped={} budget={} est_calls={} market_snapshots={}".format(
             Path(args.out).relative_to(ROOT),
             bool(args.execute),
             summary["wallets_processed"],
@@ -260,6 +381,7 @@ def main() -> int:
             summary["old_signatures_skipped"],
             api_budget.get("budget_status"),
             api_budget.get("estimated_rpc_calls_per_cycle"),
+            market_summary.get("snapshots_collected", 0),
         )
     )
     return 0

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -167,6 +168,49 @@ class ForwardWalletActivityTests(unittest.TestCase):
             self.assertTrue(out.exists())
             self.assertEqual(report["evidence_rows_written"], 1)
             self.assertEqual(len(evidence.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_writer_can_capture_market_context_before_merging_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = root / "forward_report.json"
+            evidence = root / "wallet_history_evidence.jsonl"
+            report_dir = root / "reports"
+            raw_dir = root / "raw"
+            market_context_path = root / "forward_market_context.jsonl"
+
+            def fake_market_provider(mint):
+                return {
+                    "source": "dexscreener",
+                    "price": 0.02,
+                    "liquidity": 50_000,
+                    "market_cap": 500_000,
+                    "url": f"https://dexscreener.test/{mint}",
+                }
+
+            report = write_forward_wallet_activity_report(
+                out_path=out,
+                evidence_path=evidence,
+                report_dir=report_dir,
+                raw_dir=raw_dir,
+                market_context_path=market_context_path,
+                tracked_wallets=[{"wallet": "WalletA"}],
+                paper_watch_wallets=[],
+                rpc=FakeRpc(),
+                generated_at=205,
+                lookback_seconds=900,
+                execute=True,
+                max_wallets=1,
+                capture_market_context=True,
+                market_context_provider=fake_market_provider,
+                persist_market_context=False,
+            )
+
+            self.assertEqual(report["market_context"]["summary"]["snapshots_collected"], 1)
+            self.assertEqual(report["market_context_snapshots_written"], 1)
+            self.assertTrue(market_context_path.exists())
+            row = json.loads(evidence.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(row["estimated_entry_context"]["price"], 0.02)
+            self.assertEqual(row["estimated_entry_context"]["market_cap"], 500_000)
 
     def test_cycle_updates_runtime_status_without_execution_mutation(self):
         updates = []
