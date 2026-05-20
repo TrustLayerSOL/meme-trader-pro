@@ -10797,6 +10797,43 @@ Next:
 - Let the existing long read-only mint-history collector finish so it does not race writes to the same raw/checkpoint files.
 - Then run a small `collect_post_decision_supply_transactions.py --execute` batch, rebuild post-decision coverage, supply stability, archival supply evidence, score-ready market context, and proof-readiness.
 
+### 2026-05-20 - Minute-Bucket Manual Market-Cap Entry
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Top-level proof readiness remains `12%` until evidence is imported and the proof chain is rebuilt
+
+Changed files:
+
+- `research/manual_gold_set.py`
+- `tests/test_manual_gold_set_research.py`
+- `docs/MANUAL_GOLD_SET_RESEARCH.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Preserved the operator's downloaded manual Dexscreener export at `data/manual_research/user_exports/manual_market_cap_evidence_filled_2026-05-20_0727.csv` for local prefill reuse.
+- Reworked the simple manual market-cap page so it asks for one input per token/local one-minute decision bucket instead of one input per exact second.
+- The generated page now collapses `508` exact candidate rows into `357` visible minute-bucket inputs.
+- Export still expands each entered minute-bucket value back into the exact candidate rows inside that minute and labels them `B_STRONG_PARTIAL`.
+- The page now preloads existing local manual-export values; the current regenerated page loaded `5` prefills.
+- Documentation now states that this is partial Dexscreener calibration evidence, not archival proof.
+
+Verification:
+
+- `python3 -m py_compile main.py research/manual_gold_set.py`
+- `python3 -m pytest tests/test_manual_gold_set_research.py -q`
+- `python3 main.py export-manual-entry-sheet --limit 1000`
+
+Next:
+
+- Continue filling the one-minute HTML sheet, export the CSV, import it with `python3 main.py import-manual-evidence <downloaded_csv>`, then build a B-tier calibration report before treating the evidence as wallet-trust guidance.
+
 ### 2026-05-20 - On-Chain Outcome Integration and Manual Market-Cap Proof Lane
 
 Active milestone:

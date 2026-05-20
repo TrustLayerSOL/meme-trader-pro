@@ -186,6 +186,10 @@ def iso_timestamp(value: Any) -> str:
     parsed = safe_float(value)
     if parsed is None:
         return ""
+    try:
+        return datetime.fromtimestamp(parsed, tz=timezone.utc).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return ""
 
 
 def local_decision_time(value: Any, timezone_name: str = DEFAULT_MANUAL_TIMEZONE) -> str:
@@ -197,10 +201,22 @@ def local_decision_time(value: Any, timezone_name: str = DEFAULT_MANUAL_TIMEZONE
         return datetime.fromtimestamp(parsed, tz=timezone.utc).astimezone(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
     except (OSError, OverflowError, ValueError):
         return ""
-    try:
-        return datetime.fromtimestamp(parsed, tz=timezone.utc).isoformat()
-    except (OSError, OverflowError, ValueError):
+
+
+def minute_decision_time(value: Any, timezone_name: str = DEFAULT_MANUAL_TIMEZONE) -> str:
+    local_time = local_decision_time(value, timezone_name)
+    if len(local_time) >= 23:
+        return f"{local_time[:16]} {local_time[20:]}"
+    return local_time
+
+
+def market_cap_input_value(value: Any) -> str:
+    parsed = positive_float(value)
+    if parsed is None:
         return ""
+    if parsed.is_integer():
+        return str(int(parsed))
+    return f"{parsed:.8f}".rstrip("0").rstrip(".")
 
 
 def evidence_key(wallet: str, mint: str, signature: str) -> tuple[str, str, str]:
@@ -542,16 +558,61 @@ def build_manual_research_group_packet(
     return packet
 
 
-def render_manual_market_cap_entry_page(groups: list[dict[str, Any]], *, title: str) -> str:
+def minute_prefill_key(mint: str, decision_timestamp: Any) -> str:
+    minute = minute_decision_time(decision_timestamp)
+    return f"{mint}|{minute}" if mint and minute else ""
+
+
+def read_market_cap_prefills(output_dir: Path | str) -> dict[str, str]:
+    output_dir = Path(output_dir)
+    values: dict[str, str] = {}
+    conflicts: set[str] = set()
+
+    def add_prefill(row: dict[str, Any]) -> None:
+        mint = str(row.get("mint") or row.get("token_mint") or "").strip()
+        key = minute_prefill_key(mint, row.get("decision_timestamp"))
+        value = market_cap_input_value(row.get("verified_market_cap"))
+        if not key or not value:
+            return
+        existing = values.get(key)
+        if existing and existing != value:
+            conflicts.add(key)
+            return
+        values[key] = value
+
+    imported_path = output_dir / "manual_evidence_imported.jsonl"
+    for row in read_jsonl(imported_path):
+        add_prefill(row)
+
+    exports_dir = output_dir / "user_exports"
+    for csv_path in sorted(exports_dir.glob("*.csv")):
+        try:
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    add_prefill(row)
+        except FileNotFoundError:
+            continue
+
+    for key in conflicts:
+        values.pop(key, None)
+    return values
+
+
+def render_manual_market_cap_entry_page(
+    groups: list[dict[str, Any]], *, title: str, prefills_by_minute: dict[str, str] | None = None
+) -> str:
+    prefills_by_minute = prefills_by_minute or {}
     rows_html: list[str] = []
-    groups_by_mint: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    groups_by_mint: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for row in groups:
         mint = str(row.get("token_mint") or row.get("mint") or "").strip()
-        groups_by_mint[mint].append(row)
+        minute_label = minute_decision_time(row.get("decision_timestamp"))
+        groups_by_mint[mint][minute_label].append(row)
 
     idx = 0
-    for mint, mint_rows in groups_by_mint.items():
-        dexscreener_link = str((mint_rows[0] or {}).get("dexscreener_link") or manual_links(mint)["dexscreener_link"])
+    for mint, minute_rows in groups_by_mint.items():
+        first_row = next((rows[0] for rows in minute_rows.values() if rows), {})
+        dexscreener_link = str((first_row or {}).get("dexscreener_link") or manual_links(mint)["dexscreener_link"])
         rows_html.append(
             "\n".join(
                 [
@@ -561,25 +622,36 @@ def render_manual_market_cap_entry_page(groups: list[dict[str, Any]], *, title: 
                 ]
             )
         )
-        for row in mint_rows:
+        for minute_label, bucket_rows in minute_rows.items():
             idx += 1
-            decision_ts = row.get("decision_timestamp")
-            local_time = local_decision_time(decision_ts)
+            targets = [
+                {
+                    "candidate_id": row.get("representative_candidate_id"),
+                    "mint": mint,
+                    "decision_slot": row.get("decision_slot"),
+                    "decision_timestamp": row.get("decision_timestamp"),
+                    "decision_time_local": local_decision_time(row.get("decision_timestamp")),
+                    "evidence_url": dexscreener_link,
+                }
+                for row in bucket_rows
+            ]
+            minute_key = f"{mint}|{minute_label}"
+            target_json = json.dumps(targets, separators=(",", ":"), sort_keys=True)
+            prefill_value = prefills_by_minute.get(minute_key, "")
             rows_html.append(
                 "\n".join(
                     [
                         '<div class="entry-row">',
                         f'<div class="row-number">{idx}</div>',
-                        f'<div class="decision-time">{html.escape(local_time)}</div>',
+                        f'<div class="decision-time">{html.escape(minute_label)}</div>',
                         (
                             '<input class="market-cap-input" inputmode="decimal" '
                             'placeholder="market cap, ex: 104800" '
-                            f'data-candidate-id="{html.escape(str(row.get("representative_candidate_id") or ""))}" '
+                            f'value="{html.escape(prefill_value)}" '
+                            f'data-minute-key="{html.escape(minute_key)}" '
                             f'data-mint="{html.escape(mint)}" '
-                            f'data-decision-slot="{html.escape(str(row.get("decision_slot") or ""))}" '
-                            f'data-decision-timestamp="{html.escape(str(decision_ts or ""))}" '
-                            f'data-decision-time-local="{html.escape(local_time)}" '
-                            f'data-evidence-url="{html.escape(dexscreener_link)}" '
+                            f'data-minute-label="{html.escape(minute_label)}" '
+                            f'data-targets="{html.escape(target_json)}" '
                             "/>"
                         ),
                         "</div>",
@@ -719,12 +791,12 @@ def render_manual_market_cap_entry_page(groups: list[dict[str, Any]], *, title: 
   </header>
   <main>
     <div class="help">
-      Open the Dexscreener link, set the chart to MCap, find the exact decision time shown here, then type only the raw market cap number in the box. The export button creates an importer-ready CSV with B_STRONG_PARTIAL evidence.
+      Open the Dexscreener link, set the chart to MCap, find the one-minute time bucket shown here, then type only the raw market cap number in the box. The export button creates an importer-ready CSV with B_STRONG_PARTIAL evidence for the exact rows inside that minute bucket.
     </div>
     {body}
   </main>
   <script>
-    const storageKey = "memetraderpro_manual_market_cap_entry_v1";
+    const storageKey = "memetraderpro_manual_market_cap_entry_v2";
     const inputs = Array.from(document.querySelectorAll(".market-cap-input"));
     const statusEl = document.getElementById("filledStatus");
     const saved = JSON.parse(localStorage.getItem(storageKey) || "{{}}");
@@ -742,7 +814,7 @@ def render_manual_market_cap_entry_page(groups: list[dict[str, Any]], *, title: 
       const payload = {{}};
       inputs.forEach(input => {{
         const value = cleanValue(input.value);
-        if (value) payload[input.dataset.candidateId] = value;
+        if (value) payload[input.dataset.minuteKey] = value;
       }});
       localStorage.setItem(storageKey, JSON.stringify(payload));
       updateStatus();
@@ -764,19 +836,22 @@ def render_manual_market_cap_entry_page(groups: list[dict[str, Any]], *, title: 
       inputs.forEach(input => {{
         const value = cleanValue(input.value);
         if (!value) return;
-        rows.push([
-          input.dataset.candidateId,
-          input.dataset.mint,
-          input.dataset.decisionSlot,
-          input.dataset.decisionTimestamp,
-          "",
-          value,
-          "Dexscreener",
-          input.dataset.evidenceUrl,
-          "",
-          "B_STRONG_PARTIAL",
-          `Dexscreener MCap chart at ${{input.dataset.decisionTimeLocal}} shows market cap ${{value}}. Manual public chart evidence, not archival account-state proof.`
-        ]);
+        const targets = JSON.parse(input.dataset.targets || "[]");
+        targets.forEach(target => {{
+          rows.push([
+            target.candidate_id,
+            target.mint,
+            target.decision_slot,
+            target.decision_timestamp,
+            "",
+            value,
+            "Dexscreener",
+            target.evidence_url,
+            "",
+            "B_STRONG_PARTIAL",
+            `Dexscreener MCap chart nearest one-minute bucket ${{input.dataset.minuteLabel}} shows market cap ${{value}}. Applied to exact decision time ${{target.decision_time_local}} as partial calibration evidence only; not archival account-state proof.`
+          ]);
+        }});
       }});
       const csv = rows.map(row => row.map(csvEscape).join(",")).join("\\n") + "\\n";
       const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8" }});
@@ -791,7 +866,7 @@ def render_manual_market_cap_entry_page(groups: list[dict[str, Any]], *, title: 
     }}
 
     inputs.forEach(input => {{
-      if (saved[input.dataset.candidateId]) input.value = saved[input.dataset.candidateId];
+      if (saved[input.dataset.minuteKey]) input.value = saved[input.dataset.minuteKey];
       input.addEventListener("input", save);
     }});
     document.getElementById("exportButton").addEventListener("click", exportCsv);
@@ -821,7 +896,11 @@ def build_manual_market_cap_entry_page(
     groups = rank_proof_candidate_groups(score_ready_report, recovery_plan, limit=limit)
     html_path = output_dir / "manual_market_cap_entry.html"
     title = "MemeTraderPro Manual Market Cap Entry"
-    html_path.write_text(render_manual_market_cap_entry_page(groups, title=title), encoding="utf-8")
+    prefills_by_minute = read_market_cap_prefills(output_dir)
+    html_path.write_text(
+        render_manual_market_cap_entry_page(groups, title=title, prefills_by_minute=prefills_by_minute),
+        encoding="utf-8",
+    )
     return {
         "generated_at": time.time() if generated_at is None else float(generated_at),
         "version": VERSION,
@@ -831,6 +910,7 @@ def build_manual_market_cap_entry_page(
         "summary": {
             "groups_exported": len(groups),
             "covered_candidate_rows": sum(int(row.get("candidate_count") or 0) for row in groups),
+            "minute_prefills_loaded": len(prefills_by_minute),
             "limit": limit,
         },
         "output_paths": {

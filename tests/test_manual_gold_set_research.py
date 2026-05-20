@@ -178,9 +178,29 @@ class ManualGoldSetResearchTests(unittest.TestCase):
     def test_export_manual_market_cap_entry_page_writes_simple_html(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
+            report = score_ready_report()
+            report["records"].append(
+                {
+                    **report["records"][0],
+                    "wallet": "WalletB",
+                    "transaction_signature": "SigA2",
+                    "timestamp": 1710000020,
+                }
+            )
+            plan = recovery_plan()
+            plan["candidate_rows"].append(
+                {
+                    "wallet": "WalletB",
+                    "token_mint": "MintA",
+                    "transaction_signature": "SigA2",
+                    "decision_slot": 125,
+                    "decision_block_time": 1710000020,
+                    "required_evidence": "historical_mint_account_supply_at_or_before_decision_slot",
+                }
+            )
             result = build_manual_market_cap_entry_page(
-                score_ready_report(),
-                recovery_plan(),
+                report,
+                plan,
                 output_dir=out_dir,
                 limit=25,
             )
@@ -188,11 +208,13 @@ class ManualGoldSetResearchTests(unittest.TestCase):
             html_path = out_dir / "manual_market_cap_entry.html"
             self.assertTrue(html_path.exists())
             page = html_path.read_text()
-            self.assertEqual(result["summary"]["groups_exported"], 2)
+            self.assertEqual(result["summary"]["groups_exported"], 3)
             self.assertIn("Open Dexscreener", page)
             self.assertIn("market cap, ex: 104800", page)
             self.assertIn("B_STRONG_PARTIAL", page)
             self.assertIn("manual_market_cap_evidence_filled.csv", page)
+            self.assertEqual(page.count('class="market-cap-input"'), 2)
+            self.assertIn("manual_MintA_125_SigA2", page)
             self.assertNotIn("known_price_min", page)
             self.assertNotIn("why_high_priority", page)
 
