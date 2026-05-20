@@ -91,10 +91,10 @@ data/manual_research/manual_market_cap_entry.html
 This page shows only:
 
 - one Dexscreener link for each token
-- one local one-minute decision bucket underneath it
+- one UTC one-minute decision bucket underneath it
 - one blank market-cap input per token/minute bucket
 
-Type raw market-cap dollars only. For example, `104.80K` becomes `104800`. The page saves typed values in the browser and its `Export CSV` button downloads `manual_market_cap_evidence_filled.csv`. If multiple exact candidate rows fall inside the same token/minute bucket, the export expands that one input into the matching importer rows automatically. Import that downloaded file with:
+Type raw market-cap dollars only. For example, `104.80K` becomes `104800`. The page saves typed values in the browser and its `Export CSV` button downloads `manual_market_cap_evidence_filled.csv`. If multiple exact candidate rows fall inside the same token/minute bucket, the export expands that one input into the matching importer rows automatically. The displayed time buckets are UTC, so keep Dexscreener/other sources aligned to UTC when reviewing. Import that downloaded file with:
 
 ```bash
 python main.py import-manual-evidence path/to/manual_market_cap_evidence_filled.csv

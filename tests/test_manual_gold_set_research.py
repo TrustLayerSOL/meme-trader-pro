@@ -14,6 +14,8 @@ from research.manual_gold_set import (
     build_proof_readiness_report,
     import_manual_evidence,
     import_solscan_historical_evidence,
+    local_decision_time,
+    minute_decision_time,
     rank_proof_candidate_groups,
     rank_proof_candidates,
 )
@@ -98,6 +100,10 @@ def recovery_plan() -> dict:
 
 
 class ManualGoldSetResearchTests(unittest.TestCase):
+    def test_manual_decision_times_default_to_utc(self):
+        self.assertEqual(local_decision_time(1710000000), "2024-03-09 16:00:00 UTC")
+        self.assertEqual(minute_decision_time(1710000020), "2024-03-09 16:00 UTC")
+
     def test_rank_proof_candidates_prioritizes_near_ready_rows_with_repeated_wallets(self):
         rows = rank_proof_candidates(score_ready_report(), recovery_plan(), limit=25)
 

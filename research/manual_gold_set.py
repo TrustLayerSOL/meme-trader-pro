@@ -90,7 +90,7 @@ EVIDENCE_TEMPLATE_COLUMNS = [
     "notes",
 ]
 
-DEFAULT_MANUAL_TIMEZONE = "America/Los_Angeles"
+DEFAULT_MANUAL_TIMEZONE = "UTC"
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -791,7 +791,7 @@ def render_manual_market_cap_entry_page(
   </header>
   <main>
     <div class="help">
-      Open the Dexscreener link, set the chart to MCap, find the one-minute time bucket shown here, then type only the raw market cap number in the box. The export button creates an importer-ready CSV with B_STRONG_PARTIAL evidence for the exact rows inside that minute bucket.
+      Open the Dexscreener link, set the chart to MCap, use UTC time, find the one-minute time bucket shown here, then type only the raw market cap number in the box. The export button creates an importer-ready CSV with B_STRONG_PARTIAL evidence for the exact rows inside that minute bucket.
     </div>
     {body}
   </main>

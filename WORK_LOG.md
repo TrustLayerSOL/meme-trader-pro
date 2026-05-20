@@ -10797,6 +10797,41 @@ Next:
 - Let the existing long read-only mint-history collector finish so it does not race writes to the same raw/checkpoint files.
 - Then run a small `collect_post_decision_supply_transactions.py --execute` batch, rebuild post-decision coverage, supply stability, archival supply evidence, score-ready market context, and proof-readiness.
 
+### 2026-05-20 - Manual Market-Cap Entry Uses UTC
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Top-level proof readiness remains `12%` until imported evidence is processed through the proof chain
+
+Changed files:
+
+- `research/manual_gold_set.py`
+- `tests/test_manual_gold_set_research.py`
+- `docs/MANUAL_GOLD_SET_RESEARCH.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Corrected the Manual Gold Set decision-time display default from `America/Los_Angeles` to `UTC`.
+- Added a regression test proving manual decision-time labels default to UTC.
+- Updated the manual HTML instructions, operator docs, and data-source map to state that the displayed one-minute buckets are UTC.
+- Regenerated `data/manual_research/manual_market_cap_entry.html`; it now contains UTC labels, no PDT/PST labels, `357` visible minute-bucket inputs, and the existing `5` local prefills.
+
+Verification:
+
+- `python3 -m py_compile main.py research/manual_gold_set.py`
+- `python3 -m pytest tests/test_manual_gold_set_research.py -q`
+- `python3 main.py export-manual-entry-sheet --limit 1000`
+
+Next:
+
+- Continue manual market-cap entry using UTC one-minute buckets only, then import the exported CSV as `B_STRONG_PARTIAL` evidence for calibration reporting.
+
 ### 2026-05-20 - Minute-Bucket Manual Market-Cap Entry
 
 Active milestone:
