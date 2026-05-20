@@ -8,10 +8,13 @@ from pathlib import Path
 
 from research.manual_gold_set import (
     CONFIDENCE_TIERS,
+    build_manual_market_cap_entry_page,
     build_manual_research_packet,
+    build_manual_research_group_packet,
     build_proof_readiness_report,
     import_manual_evidence,
     import_solscan_historical_evidence,
+    rank_proof_candidate_groups,
     rank_proof_candidates,
 )
 from wallets.score_ready_market_context import build_score_ready_market_context_report
@@ -123,6 +126,75 @@ class ManualGoldSetResearchTests(unittest.TestCase):
             with (out_dir / "manual_evidence_template.csv").open() as handle:
                 header = next(csv.reader(handle))
             self.assertEqual(header, result["template_columns"])
+
+    def test_rank_proof_candidate_groups_collapses_same_mint_and_decision_time(self):
+        report = score_ready_report()
+        report["records"].append(
+            {
+                **report["records"][0],
+                "wallet": "WalletB",
+                "transaction_signature": "SigA2",
+            }
+        )
+        plan = recovery_plan()
+        plan["candidate_rows"].append(
+            {
+                "wallet": "WalletB",
+                "token_mint": "MintA",
+                "transaction_signature": "SigA2",
+                "decision_slot": 123,
+                "decision_block_time": 1710000000,
+                "required_evidence": "historical_mint_account_supply_at_or_before_decision_slot",
+            }
+        )
+
+        groups = rank_proof_candidate_groups(report, plan, limit=25)
+
+        self.assertEqual(groups[0]["token_mint"], "MintA")
+        self.assertEqual(groups[0]["candidate_count"], 2)
+        self.assertEqual(groups[0]["unique_wallet_count"], 2)
+        self.assertEqual(len(groups[0]["candidate_ids"]), 2)
+        self.assertIn("one Tier A market-cap check can cover this exact-time group", groups[0]["why_high_priority"])
+
+    def test_export_group_packet_writes_csv_json_and_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            result = build_manual_research_group_packet(
+                score_ready_report(),
+                recovery_plan(),
+                output_dir=out_dir,
+                limit=25,
+            )
+
+            self.assertTrue((out_dir / "manual_research_group_packet.csv").exists())
+            self.assertTrue((out_dir / "manual_research_group_packet.json").exists())
+            self.assertTrue((out_dir / "manual_group_evidence_template.csv").exists())
+            packet = json.loads((out_dir / "manual_research_group_packet.json").read_text())
+            self.assertEqual(packet["summary"]["groups_exported"], 2)
+            with (out_dir / "manual_group_evidence_template.csv").open() as handle:
+                header = next(csv.reader(handle))
+            self.assertEqual(header, result["template_columns"])
+
+    def test_export_manual_market_cap_entry_page_writes_simple_html(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            result = build_manual_market_cap_entry_page(
+                score_ready_report(),
+                recovery_plan(),
+                output_dir=out_dir,
+                limit=25,
+            )
+
+            html_path = out_dir / "manual_market_cap_entry.html"
+            self.assertTrue(html_path.exists())
+            page = html_path.read_text()
+            self.assertEqual(result["summary"]["groups_exported"], 2)
+            self.assertIn("Open Dexscreener", page)
+            self.assertIn("market cap, ex: 104800", page)
+            self.assertIn("B_STRONG_PARTIAL", page)
+            self.assertIn("manual_market_cap_evidence_filled.csv", page)
+            self.assertNotIn("known_price_min", page)
+            self.assertNotIn("why_high_priority", page)
 
     def test_import_manual_evidence_rejects_invalid_rows_and_preserves_tier_a_supply_records(self):
         with tempfile.TemporaryDirectory() as tmp:

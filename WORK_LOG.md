@@ -10852,3 +10852,44 @@ Next:
 
 - Use the Manual Gold Set packet to collect Tier A historical market-cap evidence from Dexscreener/Solscan for the top repeated-mint rows, then import it and rebuild the proof chain.
 - If manual browser work remains too slow, build a bounded helper that groups the `508` near-score-ready rows by token/time so one verified market-cap observation can cover repeated rows safely where timestamps match.
+
+### 2026-05-20 - Simple Dexscreener Manual Entry Sheet
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Top-level proof readiness remains `12%` until manually captured evidence is imported and the proof chain is rebuilt
+
+Changed files:
+
+- `main.py`
+- `research/manual_gold_set.py`
+- `tests/test_manual_gold_set_research.py`
+- `docs/MANUAL_GOLD_SET_RESEARCH.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added `python3 main.py export-manual-entry-sheet --limit N`.
+- The command writes `data/manual_research/manual_market_cap_entry.html`, a low-noise browser sheet that shows only one Dexscreener link per token, exact local decision times, and blank market-cap input boxes.
+- The page stores typed values locally in the browser and exports an importer-ready CSV with `B_STRONG_PARTIAL` Dexscreener market-cap evidence.
+- The page is review-only and does not mutate wallet trust, unlock execution, or claim archival proof.
+
+Generated output:
+
+- `473` manual market-cap groups exported
+- `508` candidate rows covered
+- HTML opened at `data/manual_research/manual_market_cap_entry.html`
+
+Verification:
+
+- `python3 -m py_compile main.py research/manual_gold_set.py`
+- `python3 -m pytest tests/test_manual_gold_set_research.py -q`
+
+Next:
+
+- Fill the simple HTML sheet with raw market-cap values, export the CSV, import it with `python3 main.py import-manual-evidence <downloaded_csv>`, then rebuild `proof-readiness`.

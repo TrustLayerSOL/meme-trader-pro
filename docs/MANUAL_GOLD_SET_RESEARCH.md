@@ -57,28 +57,59 @@ These should not be marked Tier A:
 Run:
 
 ```bash
+python main.py proof-candidate-groups --limit 25
+python main.py export-manual-research-groups --limit 25
+python main.py export-manual-entry-sheet --limit 25
 python main.py proof-candidates --limit 25
 python main.py export-manual-research --limit 25
 ```
 
+Use the grouped commands first. They collapse repeated rows with the same mint and exact decision timestamp so one verified Tier A historical market-cap check can cover the matching group safely. The HTML entry sheet is the simplest operator surface when using Dexscreener as `B_STRONG_PARTIAL` manual evidence. The ungrouped packet is still useful when you need to inspect a specific wallet/signature row.
+
 This creates:
 
 ```text
+data/manual_research/manual_research_group_packet.csv
+data/manual_research/manual_research_group_packet.json
+data/manual_research/manual_group_evidence_template.csv
+data/manual_research/manual_market_cap_entry.html
 data/manual_research/manual_research_packet.csv
 data/manual_research/manual_research_packet.json
 data/manual_research/manual_evidence_template.csv
 ```
 
-Open `manual_research_packet.csv` first. It tells you which rows are highest priority and gives links to Solscan, Solana Explorer, and Dexscreener.
+Open `manual_research_group_packet.csv` first. It tells you which exact mint/time groups are highest priority and gives links to Solscan, Solana Explorer, and Dexscreener. Fill `manual_group_evidence_template.csv` when a grouped check is valid.
+
+## Simple Dexscreener Entry Sheet
+
+If the full CSV is too noisy, open:
+
+```text
+data/manual_research/manual_market_cap_entry.html
+```
+
+This page shows only:
+
+- one Dexscreener link for each token
+- exact local decision times underneath it
+- one blank market-cap input per decision time
+
+Type raw market-cap dollars only. For example, `104.80K` becomes `104800`. The page saves typed values in the browser and its `Export CSV` button downloads `manual_market_cap_evidence_filled.csv`. Import that downloaded file with:
+
+```bash
+python main.py import-manual-evidence path/to/manual_market_cap_evidence_filled.csv
+```
+
+The generated CSV uses `B_STRONG_PARTIAL` by default because Dexscreener chart evidence is manual public chart evidence, not archival account-state proof.
 
 ## How To Research A Row
 
-1. Start with row 1 in `manual_research_packet.csv`.
+1. Start with row 1 in `manual_research_group_packet.csv`.
 2. Open the Solscan token link.
 3. Use the Solscan Activities/Transactions filters to inspect historical activity around the decision timestamp.
 4. Open Solana Explorer for the mint account if Solscan is not enough.
 5. Open Dexscreener only as supporting context, not as proof unless the historical timestamp is clear.
-6. If you can verify supply or market cap at or before the decision time, enter it into `manual_evidence_template.csv`.
+6. If you can verify supply or market cap at or before the decision time, enter it into `manual_group_evidence_template.csv`.
 7. Add the source URL and notes explaining what you verified.
 8. If you are unsure, use `C_SUGGESTIVE` or `D_INSUFFICIENT`.
 
@@ -170,9 +201,11 @@ For the focused archival supply workflow, use `raw_supply_base_units`, not displ
 After filling the template, run:
 
 ```bash
-python main.py import-manual-evidence data/manual_research/manual_evidence_template.csv
+python main.py import-manual-evidence data/manual_research/manual_group_evidence_template.csv
 python main.py proof-readiness
 ```
+
+If you used the ungrouped packet instead, import `data/manual_research/manual_evidence_template.csv`.
 
 The importer rejects rows with:
 

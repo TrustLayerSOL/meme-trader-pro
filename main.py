@@ -95,6 +95,23 @@ def run_proof_candidates(args):
     return 0
 
 
+def run_proof_candidate_groups(args):
+    from research.manual_gold_set import rank_proof_candidate_groups
+
+    groups = rank_proof_candidate_groups(
+        read_json(SCORE_READY_REPORT, {"records": []}),
+        read_json(RECOVERY_PLAN, {"candidate_rows": []}),
+        limit=args.limit,
+    )
+    print(json.dumps({"groups": groups, "count": len(groups)}, indent=2, sort_keys=True))
+    print(
+        "\nGrouped rows collapse repeated exact mint/timestamp checks. "
+        "Verify the representative row only when the source clearly shows decision-time-safe evidence."
+    )
+    print_manual_research_instructions()
+    return 0
+
+
 def run_export_manual_research(args):
     from research.manual_gold_set import build_manual_research_packet
 
@@ -109,6 +126,45 @@ def run_export_manual_research(args):
     print(f"JSON: {packet['output_paths']['json']}")
     print(f"Template: {packet['output_paths']['manual_evidence_template']}")
     print_manual_research_instructions()
+    return 0
+
+
+def run_export_manual_research_groups(args):
+    from research.manual_gold_set import build_manual_research_group_packet
+
+    packet = build_manual_research_group_packet(
+        read_json(SCORE_READY_REPORT, {"records": []}),
+        read_json(RECOVERY_PLAN, {"candidate_rows": []}),
+        output_dir=MANUAL_RESEARCH_DIR,
+        limit=args.limit,
+    )
+    print(json.dumps(packet["summary"], indent=2, sort_keys=True))
+    print(f"CSV: {packet['output_paths']['csv']}")
+    print(f"JSON: {packet['output_paths']['json']}")
+    print(f"Template: {packet['output_paths']['manual_evidence_template']}")
+    print(
+        "\nUse the group packet first. One Tier A historical market-cap check can cover "
+        "the exact mint/timestamp group; do not reuse it across different timestamps."
+    )
+    print_manual_research_instructions()
+    return 0
+
+
+def run_export_manual_entry_sheet(args):
+    from research.manual_gold_set import build_manual_market_cap_entry_page
+
+    page = build_manual_market_cap_entry_page(
+        read_json(SCORE_READY_REPORT, {"records": []}),
+        read_json(RECOVERY_PLAN, {"candidate_rows": []}),
+        output_dir=MANUAL_RESEARCH_DIR,
+        limit=args.limit,
+    )
+    print(json.dumps(page["summary"], indent=2, sort_keys=True))
+    print(f"HTML entry sheet: {page['output_paths']['html']}")
+    print(
+        "\nOpen the HTML sheet, type only raw market-cap numbers, then click Export CSV. "
+        "Import the downloaded CSV with `python main.py import-manual-evidence <csv>`."
+    )
     return 0
 
 
@@ -220,12 +276,33 @@ def cli_main(argv=None):
     proof_candidates.add_argument("--limit", type=int, default=25)
     proof_candidates.set_defaults(func=run_proof_candidates)
 
+    proof_candidate_groups = subparsers.add_parser(
+        "proof-candidate-groups",
+        help="List grouped blocked proof rows for manual Gold Set research.",
+    )
+    proof_candidate_groups.add_argument("--limit", type=int, default=25)
+    proof_candidate_groups.set_defaults(func=run_proof_candidate_groups)
+
     export_manual = subparsers.add_parser(
         "export-manual-research",
         help="Export manual research packet and evidence template.",
     )
     export_manual.add_argument("--limit", type=int, default=25)
     export_manual.set_defaults(func=run_export_manual_research)
+
+    export_manual_groups = subparsers.add_parser(
+        "export-manual-research-groups",
+        help="Export grouped manual research packet and evidence template.",
+    )
+    export_manual_groups.add_argument("--limit", type=int, default=25)
+    export_manual_groups.set_defaults(func=run_export_manual_research_groups)
+
+    export_manual_entry = subparsers.add_parser(
+        "export-manual-entry-sheet",
+        help="Export a simple browser entry sheet for Dexscreener market-cap evidence.",
+    )
+    export_manual_entry.add_argument("--limit", type=int, default=25)
+    export_manual_entry.set_defaults(func=run_export_manual_entry_sheet)
 
     import_manual = subparsers.add_parser(
         "import-manual-evidence",

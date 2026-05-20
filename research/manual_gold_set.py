@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import html
 import json
 import math
 import time
@@ -9,6 +10,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 VERSION = "manual_gold_set.v1"
@@ -24,7 +26,7 @@ MANUAL_RESEARCH_TEXT = """MANUAL RESEARCH:
 2. Pick the first row.
 3. Open the Solscan token/activity link.
 4. Try to verify supply, market-cap, or historical activity evidence at or before the decision time.
-5. If you find evidence, copy the value, source URL, and notes into manual_evidence_template.csv.
+5. If you find evidence, copy the value, source URL, and notes into the evidence template shown above.
 6. Use confidence tier A only if the evidence is clearly decision-time safe.
 7. If you are unsure, use C_SUGGESTIVE or D_INSUFFICIENT.
 8. Do not guess."""
@@ -50,6 +52,30 @@ PACKET_COLUMNS = [
     "manual_status",
 ]
 
+GROUP_PACKET_COLUMNS = [
+    "group_id",
+    "representative_candidate_id",
+    "mint",
+    "decision_slot",
+    "decision_timestamp",
+    "decision_time_utc",
+    "candidate_count",
+    "unique_wallet_count",
+    "known_price_min",
+    "known_price_max",
+    "known_liquidity_min",
+    "known_liquidity_max",
+    "why_high_priority",
+    "candidate_ids",
+    "wallets",
+    "solscan_token_link",
+    "solscan_activity_link",
+    "solana_explorer_link",
+    "dexscreener_link",
+    "notes",
+    "manual_status",
+]
+
 EVIDENCE_TEMPLATE_COLUMNS = [
     "candidate_id",
     "mint",
@@ -63,6 +89,8 @@ EVIDENCE_TEMPLATE_COLUMNS = [
     "confidence_tier",
     "notes",
 ]
+
+DEFAULT_MANUAL_TIMEZONE = "America/Los_Angeles"
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -157,6 +185,17 @@ def safe_int(value: Any) -> int | None:
 def iso_timestamp(value: Any) -> str:
     parsed = safe_float(value)
     if parsed is None:
+        return ""
+
+
+def local_decision_time(value: Any, timezone_name: str = DEFAULT_MANUAL_TIMEZONE) -> str:
+    parsed = safe_float(value)
+    if parsed is None:
+        return ""
+    try:
+        tz = ZoneInfo(timezone_name)
+        return datetime.fromtimestamp(parsed, tz=timezone.utc).astimezone(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+    except (OSError, OverflowError, ValueError):
         return ""
     try:
         return datetime.fromtimestamp(parsed, tz=timezone.utc).isoformat()
@@ -275,6 +314,71 @@ def rank_proof_candidates(
     return candidates[: max(0, int(limit))]
 
 
+def group_key_for_candidate(row: dict[str, Any]) -> tuple[str, str]:
+    mint = str(row.get("token_mint") or row.get("mint") or "").strip()
+    timestamp = safe_float(row.get("decision_timestamp"), None)
+    return (mint, f"{timestamp:.6f}" if timestamp is not None else "")
+
+
+def rank_proof_candidate_groups(
+    score_ready_report: dict[str, Any],
+    recovery_plan: dict[str, Any],
+    *,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    candidates = rank_proof_candidates(score_ready_report, recovery_plan, limit=10_000)
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for candidate in candidates:
+        key = group_key_for_candidate(candidate)
+        if all(key):
+            grouped[key].append(candidate)
+
+    groups: list[dict[str, Any]] = []
+    for (mint, timestamp_key), rows in grouped.items():
+        rows.sort(key=lambda row: (-int(row.get("priority_score") or 0), str(row.get("candidate_id") or "")))
+        representative = rows[0]
+        prices = [positive_float(row.get("known_price")) for row in rows]
+        prices = [value for value in prices if value is not None]
+        liquidities = [positive_float(row.get("known_liquidity")) for row in rows]
+        liquidities = [value for value in liquidities if value is not None]
+        wallets = sorted({str(row.get("wallet") or "") for row in rows if row.get("wallet")})
+        candidate_ids = [str(row.get("candidate_id") or "") for row in rows if row.get("candidate_id")]
+        decision_ts = safe_float(representative.get("decision_timestamp"), None)
+        decision_slot = safe_int(representative.get("decision_slot"))
+        priority = max(int(row.get("priority_score") or 0) for row in rows) + len(rows) * 25
+        reasons = [
+            f"{len(rows)} rows share the same mint and exact decision timestamp",
+            "one Tier A market-cap check can cover this exact-time group",
+        ]
+        if len(wallets) > 1:
+            reasons.append(f"{len(wallets)} wallets represented")
+        groups.append(
+            {
+                "group_id": f"manual_group_{mint}_{decision_slot or timestamp_key}",
+                "representative_candidate_id": representative.get("candidate_id"),
+                "token_mint": mint,
+                "mint": mint,
+                "decision_slot": decision_slot,
+                "decision_timestamp": decision_ts,
+                "decision_time_utc": iso_timestamp(decision_ts),
+                "candidate_count": len(rows),
+                "unique_wallet_count": len(wallets),
+                "candidate_ids": candidate_ids,
+                "wallets": wallets,
+                "known_price_min": min(prices) if prices else None,
+                "known_price_max": max(prices) if prices else None,
+                "known_liquidity_min": min(liquidities) if liquidities else None,
+                "known_liquidity_max": max(liquidities) if liquidities else None,
+                "why_high_priority": "; ".join(reasons),
+                "priority_score": priority,
+                **manual_links(mint),
+            }
+        )
+
+    groups.sort(key=lambda row: (-int(row.get("priority_score") or 0), str(row.get("token_mint") or "")))
+    return groups[: max(0, int(limit))]
+
+
 def build_manual_research_packet(
     score_ready_report: dict[str, Any],
     recovery_plan: dict[str, Any],
@@ -343,6 +447,7 @@ def build_manual_research_packet(
             "csv": str(csv_path),
             "json": str(json_path),
             "manual_evidence_template": str(template_path),
+            "manual_group_evidence_template": str(template_path),
         },
         "template_columns": EVIDENCE_TEMPLATE_COLUMNS,
         "candidates": candidates,
@@ -350,6 +455,393 @@ def build_manual_research_packet(
     }
     json_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return packet
+
+
+def build_manual_research_group_packet(
+    score_ready_report: dict[str, Any],
+    recovery_plan: dict[str, Any],
+    *,
+    output_dir: Path | str,
+    limit: int = 25,
+    generated_at: float | None = None,
+) -> dict[str, Any]:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    groups = rank_proof_candidate_groups(score_ready_report, recovery_plan, limit=limit)
+    csv_path = output_dir / "manual_research_group_packet.csv"
+    json_path = output_dir / "manual_research_group_packet.json"
+    template_path = output_dir / "manual_group_evidence_template.csv"
+
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=GROUP_PACKET_COLUMNS)
+        writer.writeheader()
+        for row in groups:
+            writer.writerow(
+                {
+                    "group_id": row.get("group_id"),
+                    "representative_candidate_id": row.get("representative_candidate_id"),
+                    "mint": row.get("token_mint"),
+                    "decision_slot": row.get("decision_slot"),
+                    "decision_timestamp": row.get("decision_timestamp"),
+                    "decision_time_utc": row.get("decision_time_utc"),
+                    "candidate_count": row.get("candidate_count"),
+                    "unique_wallet_count": row.get("unique_wallet_count"),
+                    "known_price_min": row.get("known_price_min"),
+                    "known_price_max": row.get("known_price_max"),
+                    "known_liquidity_min": row.get("known_liquidity_min"),
+                    "known_liquidity_max": row.get("known_liquidity_max"),
+                    "why_high_priority": row.get("why_high_priority"),
+                    "candidate_ids": ";".join(row.get("candidate_ids") or []),
+                    "wallets": ";".join(row.get("wallets") or []),
+                    "solscan_token_link": row.get("solscan_token_link"),
+                    "solscan_activity_link": row.get("solscan_activity_link"),
+                    "solana_explorer_link": row.get("solana_explorer_link"),
+                    "dexscreener_link": row.get("dexscreener_link"),
+                    "notes": "",
+                    "manual_status": "",
+                }
+            )
+
+    with template_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=EVIDENCE_TEMPLATE_COLUMNS)
+        writer.writeheader()
+        for row in groups:
+            writer.writerow(
+                {
+                    "candidate_id": row.get("representative_candidate_id"),
+                    "mint": row.get("token_mint"),
+                    "decision_slot": row.get("decision_slot"),
+                    "decision_timestamp": row.get("decision_timestamp"),
+                    "confidence_tier": "",
+                    "notes": "",
+                }
+            )
+
+    packet = {
+        "generated_at": time.time() if generated_at is None else float(generated_at),
+        "version": VERSION,
+        "review_only": True,
+        "live_execution_locked": True,
+        "wallet_list_apply_allowed": False,
+        "summary": {
+            "groups_exported": len(groups),
+            "covered_candidate_rows": sum(int(row.get("candidate_count") or 0) for row in groups),
+            "limit": limit,
+        },
+        "output_paths": {
+            "csv": str(csv_path),
+            "json": str(json_path),
+            "manual_evidence_template": str(template_path),
+        },
+        "template_columns": EVIDENCE_TEMPLATE_COLUMNS,
+        "group_columns": GROUP_PACKET_COLUMNS,
+        "groups": groups,
+        "manual_research_instructions": MANUAL_RESEARCH_TEXT,
+    }
+    json_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return packet
+
+
+def render_manual_market_cap_entry_page(groups: list[dict[str, Any]], *, title: str) -> str:
+    rows_html: list[str] = []
+    groups_by_mint: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in groups:
+        mint = str(row.get("token_mint") or row.get("mint") or "").strip()
+        groups_by_mint[mint].append(row)
+
+    idx = 0
+    for mint, mint_rows in groups_by_mint.items():
+        dexscreener_link = str((mint_rows[0] or {}).get("dexscreener_link") or manual_links(mint)["dexscreener_link"])
+        rows_html.append(
+            "\n".join(
+                [
+                    '<section class="token-block">',
+                    f'<div class="token-head"><a href="{html.escape(dexscreener_link)}" target="_blank" rel="noreferrer">Open Dexscreener</a>',
+                    f'<span class="mint">{html.escape(mint)}</span></div>',
+                ]
+            )
+        )
+        for row in mint_rows:
+            idx += 1
+            decision_ts = row.get("decision_timestamp")
+            local_time = local_decision_time(decision_ts)
+            rows_html.append(
+                "\n".join(
+                    [
+                        '<div class="entry-row">',
+                        f'<div class="row-number">{idx}</div>',
+                        f'<div class="decision-time">{html.escape(local_time)}</div>',
+                        (
+                            '<input class="market-cap-input" inputmode="decimal" '
+                            'placeholder="market cap, ex: 104800" '
+                            f'data-candidate-id="{html.escape(str(row.get("representative_candidate_id") or ""))}" '
+                            f'data-mint="{html.escape(mint)}" '
+                            f'data-decision-slot="{html.escape(str(row.get("decision_slot") or ""))}" '
+                            f'data-decision-timestamp="{html.escape(str(decision_ts or ""))}" '
+                            f'data-decision-time-local="{html.escape(local_time)}" '
+                            f'data-evidence-url="{html.escape(dexscreener_link)}" '
+                            "/>"
+                        ),
+                        "</div>",
+                    ]
+                )
+            )
+        rows_html.append("</section>")
+
+    body = "\n".join(rows_html)
+    safe_title = html.escape(title)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{safe_title}</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #080c12;
+      --panel: #101722;
+      --panel-2: #0c121b;
+      --line: #243044;
+      --text: #e9eef8;
+      --muted: #9aa6b9;
+      --accent: #5ee0a5;
+      --accent-2: #6aa7ff;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    header {{
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 12, 18, 0.96);
+      backdrop-filter: blur(10px);
+    }}
+    h1 {{ margin: 0; font-size: 20px; }}
+    .sub {{ color: var(--muted); font-size: 13px; margin-top: 4px; }}
+    .actions {{ display: flex; align-items: center; gap: 10px; }}
+    button {{
+      border: 1px solid var(--line);
+      background: #172235;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    button.primary {{ background: var(--accent); color: #03110a; border-color: var(--accent); }}
+    main {{ max-width: 1180px; margin: 0 auto; padding: 20px; }}
+    .help {{
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: var(--panel-2);
+      color: var(--muted);
+      margin-bottom: 16px;
+      line-height: 1.45;
+    }}
+    .token-block {{
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      margin-bottom: 14px;
+      overflow: hidden;
+    }}
+    .token-head {{
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #121b29;
+    }}
+    a {{ color: var(--accent-2); font-weight: 800; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .mint {{
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-wrap: anywhere;
+    }}
+    .entry-row {{
+      display: grid;
+      grid-template-columns: 52px 240px minmax(220px, 360px);
+      gap: 14px;
+      align-items: center;
+      padding: 12px 16px;
+      border-top: 1px solid rgba(36, 48, 68, 0.68);
+    }}
+    .entry-row:first-of-type {{ border-top: 0; }}
+    .row-number {{ color: var(--muted); font-weight: 800; }}
+    .decision-time {{ font-weight: 800; }}
+    input {{
+      width: 100%;
+      min-height: 42px;
+      border-radius: 8px;
+      border: 1px solid #34445f;
+      background: #080d15;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 16px;
+    }}
+    input:focus {{ outline: 2px solid var(--accent-2); border-color: var(--accent-2); }}
+    .status {{ color: var(--muted); font-weight: 700; min-width: 86px; text-align: right; }}
+    @media (max-width: 760px) {{
+      header {{ align-items: flex-start; flex-direction: column; }}
+      .token-head, .entry-row {{ grid-template-columns: 1fr; }}
+      .actions {{ width: 100%; }}
+      button {{ flex: 1; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>{safe_title}</h1>
+      <div class="sub">Only enter raw market-cap dollars. Example: 104.80K becomes 104800.</div>
+    </div>
+    <div class="actions">
+      <div id="filledStatus" class="status">0 filled</div>
+      <button type="button" id="clearButton">Clear</button>
+      <button type="button" id="exportButton" class="primary">Export CSV</button>
+    </div>
+  </header>
+  <main>
+    <div class="help">
+      Open the Dexscreener link, set the chart to MCap, find the exact decision time shown here, then type only the raw market cap number in the box. The export button creates an importer-ready CSV with B_STRONG_PARTIAL evidence.
+    </div>
+    {body}
+  </main>
+  <script>
+    const storageKey = "memetraderpro_manual_market_cap_entry_v1";
+    const inputs = Array.from(document.querySelectorAll(".market-cap-input"));
+    const statusEl = document.getElementById("filledStatus");
+    const saved = JSON.parse(localStorage.getItem(storageKey) || "{{}}");
+
+    function cleanValue(value) {{
+      return String(value || "").replace(/[$, ]/g, "").trim();
+    }}
+
+    function updateStatus() {{
+      const filled = inputs.filter(input => cleanValue(input.value)).length;
+      statusEl.textContent = `${{filled}} filled`;
+    }}
+
+    function save() {{
+      const payload = {{}};
+      inputs.forEach(input => {{
+        const value = cleanValue(input.value);
+        if (value) payload[input.dataset.candidateId] = value;
+      }});
+      localStorage.setItem(storageKey, JSON.stringify(payload));
+      updateStatus();
+    }}
+
+    function csvEscape(value) {{
+      const text = String(value ?? "");
+      if (/[",\\n]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
+      return text;
+    }}
+
+    function exportCsv() {{
+      const columns = [
+        "candidate_id", "mint", "decision_slot", "decision_timestamp",
+        "verified_supply", "verified_market_cap", "evidence_source",
+        "evidence_url", "screenshot_path", "confidence_tier", "notes"
+      ];
+      const rows = [columns];
+      inputs.forEach(input => {{
+        const value = cleanValue(input.value);
+        if (!value) return;
+        rows.push([
+          input.dataset.candidateId,
+          input.dataset.mint,
+          input.dataset.decisionSlot,
+          input.dataset.decisionTimestamp,
+          "",
+          value,
+          "Dexscreener",
+          input.dataset.evidenceUrl,
+          "",
+          "B_STRONG_PARTIAL",
+          `Dexscreener MCap chart at ${{input.dataset.decisionTimeLocal}} shows market cap ${{value}}. Manual public chart evidence, not archival account-state proof.`
+        ]);
+      }});
+      const csv = rows.map(row => row.map(csvEscape).join(",")).join("\\n") + "\\n";
+      const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8" }});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "manual_market_cap_evidence_filled.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }}
+
+    inputs.forEach(input => {{
+      if (saved[input.dataset.candidateId]) input.value = saved[input.dataset.candidateId];
+      input.addEventListener("input", save);
+    }});
+    document.getElementById("exportButton").addEventListener("click", exportCsv);
+    document.getElementById("clearButton").addEventListener("click", () => {{
+      if (!confirm("Clear all entered market caps from this browser?")) return;
+      localStorage.removeItem(storageKey);
+      inputs.forEach(input => input.value = "");
+      updateStatus();
+    }});
+    updateStatus();
+  </script>
+</body>
+</html>
+"""
+
+
+def build_manual_market_cap_entry_page(
+    score_ready_report: dict[str, Any],
+    recovery_plan: dict[str, Any],
+    *,
+    output_dir: Path | str,
+    limit: int = 25,
+    generated_at: float | None = None,
+) -> dict[str, Any]:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    groups = rank_proof_candidate_groups(score_ready_report, recovery_plan, limit=limit)
+    html_path = output_dir / "manual_market_cap_entry.html"
+    title = "MemeTraderPro Manual Market Cap Entry"
+    html_path.write_text(render_manual_market_cap_entry_page(groups, title=title), encoding="utf-8")
+    return {
+        "generated_at": time.time() if generated_at is None else float(generated_at),
+        "version": VERSION,
+        "review_only": True,
+        "live_execution_locked": True,
+        "wallet_list_apply_allowed": False,
+        "summary": {
+            "groups_exported": len(groups),
+            "covered_candidate_rows": sum(int(row.get("candidate_count") or 0) for row in groups),
+            "limit": limit,
+        },
+        "output_paths": {
+            "html": str(html_path),
+            "download_csv_name": "manual_market_cap_evidence_filled.csv",
+        },
+        "operator_note": (
+            "This HTML sheet is an easier entry surface for B_STRONG_PARTIAL Dexscreener market-cap evidence. "
+            "It does not unlock live execution or mutate wallet trust."
+        ),
+    }
 
 
 def candidate_index(score_ready_report: dict[str, Any], recovery_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
