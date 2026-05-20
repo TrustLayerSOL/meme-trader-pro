@@ -380,8 +380,8 @@ def validate_manual_row(row: dict[str, str], candidates: dict[str, dict[str, Any
     tier = str(row.get("confidence_tier") or "").strip()
     if raw_supply and supply is None:
         errors.append("verified_supply_must_be_positive")
-    if tier == "A_FULL_REPLAY_SAFE" and supply is None:
-        errors.append("verified_supply_must_be_positive")
+    if tier == "A_FULL_REPLAY_SAFE" and supply is None and market_cap is None:
+        errors.append("tier_a_requires_verified_supply_or_market_cap")
     if market_cap is not None and market_cap > 1_000_000_000_000:
         errors.append("verified_market_cap_impossible")
     if market_cap is None and str(row.get("verified_market_cap") or "").strip():
@@ -422,8 +422,8 @@ def validate_manual_row(row: dict[str, str], candidates: dict[str, dict[str, Any
         "screenshot_path": str(row.get("screenshot_path") or "").strip(),
         "confidence_tier": tier,
         "notes": notes,
-        "proof_unblock_allowed": tier == "A_FULL_REPLAY_SAFE",
-        "decision_time_safe": tier == "A_FULL_REPLAY_SAFE",
+        "proof_unblock_allowed": tier == "A_FULL_REPLAY_SAFE" and (supply is not None or market_cap is not None),
+        "decision_time_safe": tier == "A_FULL_REPLAY_SAFE" and (supply is not None or market_cap is not None),
         "can_mutate_wallet_trust": False,
         "imported_at": time.time(),
     }
@@ -504,6 +504,13 @@ def import_manual_evidence(
     stored = sorted(existing_by_id.values(), key=lambda row: str(row.get("candidate_id") or ""))
     write_jsonl(imported_path, stored)
     supply_rows = [row for row in (supply_record_from_manual(row) for row in stored) if row is not None]
+    tier_a_market_cap_rows = [
+        row
+        for row in stored
+        if row.get("confidence_tier") == "A_FULL_REPLAY_SAFE"
+        and row.get("proof_unblock_allowed") is True
+        and positive_float(row.get("verified_market_cap")) is not None
+    ]
     write_jsonl(supply_path, supply_rows)
 
     with rejected_path.open("w", newline="", encoding="utf-8") as handle:
@@ -530,7 +537,8 @@ def import_manual_evidence(
             "stored_manual_rows": len(stored),
             "tier_counts": dict(sorted(tier_counts.items())),
             "manual_tier_a_supply_records": len(supply_rows),
-            "proof_unblock_allowed_rows": len(supply_rows),
+            "manual_tier_a_market_cap_records": len(tier_a_market_cap_rows),
+            "proof_unblock_allowed_rows": sum(1 for row in stored if row.get("proof_unblock_allowed") is True),
         },
         "output_paths": {
             "manual_evidence_imported": str(imported_path),
@@ -540,8 +548,8 @@ def import_manual_evidence(
         },
         "rejected_rows": rejected,
         "operator_note": (
-            "Manual evidence is stored separately from provider evidence. Only A_FULL_REPLAY_SAFE rows emit "
-            "decision-time-safe supply evidence; B/C/D rows remain review notes."
+            "Manual evidence is stored separately from provider evidence. A_FULL_REPLAY_SAFE rows with verified supply "
+            "or verified market cap can unblock proof review; B/C/D rows remain review notes."
         ),
     }
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

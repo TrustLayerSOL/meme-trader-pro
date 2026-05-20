@@ -105,7 +105,9 @@ def score_ready_context():
                 "token_mint": "MintA",
                 "transaction_signature": "SigA",
                 "readiness_status": "score_ready",
-                "supply_source": "archival_supply_evidence",
+                "supply_source": "focused_manual_supply_research",
+                "supply_status": "archival_supply_recovered",
+                "supply_decision_time_safe": True,
             },
             {
                 "wallet": "WalletPrior",
@@ -113,6 +115,8 @@ def score_ready_context():
                 "transaction_signature": "SigPrior",
                 "readiness_status": "score_ready",
                 "supply_source": "prior_snapshot",
+                "supply_status": "current_supply_stability_proof",
+                "supply_decision_time_safe": True,
             },
         ],
     }

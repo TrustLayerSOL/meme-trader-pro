@@ -78,7 +78,8 @@ class FocusedManualSupplyResearchTests(unittest.TestCase):
                 "request_id",
                 "token_mint",
                 "max_acceptable_snapshot_slot",
-                "verified_supply",
+                "raw_supply_base_units",
+                "display_supply_optional",
                 "decimals",
                 "response_slot",
                 "evidence_source",
@@ -94,13 +95,14 @@ class FocusedManualSupplyResearchTests(unittest.TestCase):
                         "request_id": "7",
                         "token_mint": "MintA",
                         "max_acceptable_snapshot_slot": "120",
-                        "verified_supply": "1000000",
+                        "raw_supply_base_units": "1000000",
+                        "display_supply_optional": "1",
                         "decimals": "6",
-                        "response_slot": "119",
+                        "response_slot": "120",
                         "evidence_source": "Solscan historical export",
                         "evidence_url": "https://solscan.io/token/MintA",
                         "confidence_tier": "A_FULL_REPLAY_SAFE",
-                        "notes": "Historical source proves supply before decision slot.",
+                        "notes": "Historical source proves raw base-unit supply at the exact decision slot.",
                     }
                 )
                 writer.writerow(
@@ -108,7 +110,8 @@ class FocusedManualSupplyResearchTests(unittest.TestCase):
                         "request_id": "8",
                         "token_mint": "MintB",
                         "max_acceptable_snapshot_slot": "200",
-                        "verified_supply": "2000000",
+                        "raw_supply_base_units": "2000000",
+                        "display_supply_optional": "2",
                         "decimals": "6",
                         "response_slot": "205",
                         "evidence_source": "Solscan historical export",
@@ -122,7 +125,8 @@ class FocusedManualSupplyResearchTests(unittest.TestCase):
                         "request_id": "8",
                         "token_mint": "MintB",
                         "max_acceptable_snapshot_slot": "200",
-                        "verified_supply": "2000000",
+                        "raw_supply_base_units": "2000000",
+                        "display_supply_optional": "2",
                         "decimals": "6",
                         "response_slot": "199",
                         "evidence_source": "Dexscreener chart",
@@ -150,9 +154,33 @@ class FocusedManualSupplyResearchTests(unittest.TestCase):
             ]
             self.assertEqual(len(snapshots), 1)
             self.assertEqual(snapshots[0]["token_mint"], "MintA")
-            self.assertEqual(snapshots[0]["slot"], 119)
+            self.assertEqual(snapshots[0]["slot"], 120)
+            self.assertEqual(snapshots[0]["raw_supply"], "1000000")
             self.assertEqual(snapshots[0]["source"], "focused_manual_supply_research")
             self.assertTrue(snapshots[0]["decision_time_safe"])
+
+    def test_rejects_legacy_display_supply_and_decimal_slot_values(self):
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            csv_path = output_dir / "manual_supply.csv"
+            csv_path.write_text(
+                "request_id,token_mint,max_acceptable_snapshot_slot,verified_supply,decimals,response_slot,evidence_source,evidence_url,confidence_tier,notes\n"
+                "7,MintA,120,1.0,6,119.9,Solscan,https://solscan.io/token/MintA,A_FULL_REPLAY_SAFE,Ambiguous display supply\n",
+                encoding="utf-8",
+            )
+
+            report = import_focused_manual_supply_evidence(
+                csv_path,
+                request_bundle_report=request_bundle(),
+                output_dir=output_dir,
+                generated_at=123.0,
+            )
+
+            self.assertEqual(report["summary"]["accepted_rows"], 0)
+            self.assertEqual(report["summary"]["rejected_rows"], 1)
+            reasons = report["rejected_rows"][0]["rejection_reasons"]
+            self.assertIn("legacy_verified_supply_not_allowed_use_raw_supply_base_units", reasons)
+            self.assertIn("missing_or_invalid_response_slot", reasons)
 
 
 if __name__ == "__main__":

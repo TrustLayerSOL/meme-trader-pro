@@ -11,6 +11,7 @@ from wallets.wallet_evidence_models import as_dict, safe_int
 MODE = "ARCHIVAL_MINT_HISTORY_COLLECTION_REVIEW_ONLY"
 VERSION = "archival_mint_history_collection.v1"
 MINT_INITIALIZATION_TYPES = {"initializeMint", "initializeMint2", "initializeMint3"}
+TRANSACTION_BATCH_SIZE = 10
 
 
 def token_mint(row: dict[str, Any]) -> str:
@@ -52,6 +53,47 @@ def fetch_transaction(rpc: Any, signature: str) -> dict[str, Any] | None:
         ],
     )
     return result if isinstance(result, dict) else None
+
+
+def fetch_transactions(
+    rpc: Any,
+    signature_rows: list[dict[str, Any]],
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any] | None]], int]:
+    tx_options = {
+        "encoding": "jsonParsed",
+        "maxSupportedTransactionVersion": 0,
+        "commitment": "confirmed",
+    }
+    batch_call = getattr(rpc, "batch_call", None)
+    results: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    missing = 0
+    if callable(batch_call):
+        for start in range(0, len(signature_rows), TRANSACTION_BATCH_SIZE):
+            chunk = signature_rows[start : start + TRANSACTION_BATCH_SIZE]
+            calls = [
+                ("getTransaction", [str(item.get("signature") or ""), tx_options])
+                for item in chunk
+            ]
+            tx_rows = batch_call(calls)
+            if not isinstance(tx_rows, list) or len(tx_rows) != len(chunk):
+                tx_rows = [None for _item in chunk]
+            for item, tx in zip(chunk, tx_rows):
+                if not isinstance(tx, dict):
+                    missing += 1
+                    results.append((item, None))
+                else:
+                    results.append((item, tx))
+        return results, missing
+
+    for item in signature_rows:
+        signature = str(item.get("signature") or "")
+        tx = fetch_transaction(rpc, signature)
+        if not isinstance(tx, dict):
+            missing += 1
+            results.append((item, None))
+        else:
+            results.append((item, tx))
+    return results, missing
 
 
 def tx_body(row: dict[str, Any]) -> dict[str, Any]:
@@ -236,14 +278,12 @@ def collect_mint_history(
         return target, [], None, build_signature_checkpoint(target, signatures)
 
     raw_rows: list[dict[str, Any]] = []
-    missing_transactions = 0
-    for item in eligible_signatures:
+    fetched_transactions, missing_transactions = fetch_transactions(rpc, eligible_signatures)
+    for item, tx in fetched_transactions:
+        if not isinstance(tx, dict):
+            continue
         signature = str(item.get("signature") or "")
         slot = safe_int(item.get("slot"), 0)
-        tx = fetch_transaction(rpc, signature)
-        if not isinstance(tx, dict):
-            missing_transactions += 1
-            continue
         raw_slot = tx_slot(tx) or slot
         raw_rows.append({
             "version": VERSION,
@@ -331,6 +371,7 @@ def build_archival_mint_history_collection_report(
     existing_signature_checkpoint: dict[str, Any] | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
+    report_generated_at = time.time() if generated_at is None else float(generated_at)
     requirements = ready_requirements(archival_supply_plan)
     target_limit = max(0, int(max_targets)) if max_targets is not None else None
     limited_requirements = requirements[:target_limit] if target_limit is not None else requirements
@@ -354,12 +395,13 @@ def build_archival_mint_history_collection_report(
                 existing_checkpoint=signature_checkpoint,
             )
             raw_transactions.extend(rows)
+            checkpoint_entry["checkpoint_collected_at"] = report_generated_at
             signature_checkpoint[str(updated["token_mint"])] = checkpoint_entry
             if complete:
                 completeness[str(updated["token_mint"])] = complete
 
     return {
-        "generated_at": time.time() if generated_at is None else float(generated_at),
+        "generated_at": report_generated_at,
         "mode": MODE,
         "review_only": True,
         "read_only": True,

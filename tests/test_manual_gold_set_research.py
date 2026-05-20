@@ -247,6 +247,61 @@ class ManualGoldSetResearchTests(unittest.TestCase):
             self.assertFalse(records[0]["proof_unblock_allowed"])
             self.assertFalse((tmp_path / "manual_supply_evidence_records.jsonl").read_text().strip())
 
+    def test_import_manual_evidence_accepts_tier_a_market_cap_without_supply_as_unblocking_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "manual_evidence.csv"
+            with csv_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "candidate_id",
+                        "mint",
+                        "decision_slot",
+                        "decision_timestamp",
+                        "verified_supply",
+                        "verified_market_cap",
+                        "evidence_source",
+                        "evidence_url",
+                        "screenshot_path",
+                        "confidence_tier",
+                        "notes",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "candidate_id": "manual_MintA_123_SigA",
+                        "mint": "MintA",
+                        "decision_slot": "123",
+                        "decision_timestamp": "1710000000",
+                        "verified_supply": "",
+                        "verified_market_cap": "4700000",
+                        "evidence_source": "Dexscreener 1s historical MCap chart",
+                        "evidence_url": "https://dexscreener.com/solana/MintA",
+                        "confidence_tier": "A_FULL_REPLAY_SAFE",
+                        "notes": "MCap chart crosshair was at or before the decision timestamp and showed 4.7M market cap.",
+                    }
+                )
+
+            result = import_manual_evidence(
+                csv_path,
+                score_ready_report=score_ready_report(),
+                recovery_plan=recovery_plan(),
+                output_dir=tmp_path,
+            )
+
+            self.assertEqual(result["summary"]["accepted_rows"], 1)
+            self.assertEqual(result["summary"]["manual_tier_a_supply_records"], 0)
+            records = [
+                json.loads(line)
+                for line in (tmp_path / "manual_evidence_imported.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(records[0]["proof_unblock_allowed"])
+            self.assertTrue(records[0]["decision_time_safe"])
+            self.assertEqual(records[0]["verified_market_cap"], 4_700_000)
+            self.assertFalse((tmp_path / "manual_supply_evidence_records.jsonl").read_text().strip())
+
     def test_import_solscan_historical_evidence_stores_matching_rows_as_partial_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -444,6 +499,45 @@ class ManualGoldSetResearchTests(unittest.TestCase):
         self.assertEqual(report["summary"]["score_ready_records"], 1)
         self.assertEqual(report["records"][0]["supply_source"], "manual_gold_set")
         self.assertEqual(report["records"][0]["market_cap"], 2000)
+
+    def test_tier_a_manual_market_cap_can_make_matching_context_score_ready_without_supply(self):
+        report = build_score_ready_market_context_report(
+            onchain_market_context_records=[
+                {
+                    "wallet": "WalletA",
+                    "token_mint": "MintA",
+                    "transaction_signature": "SigA",
+                    "status": "onchain_price_liquidity_recovered",
+                    "block_reasons": ["blocked_missing_market_cap", "blocked_missing_supply"],
+                    "decision_time_context": {
+                        "decision_time_safe": True,
+                        "timestamp": 1710000000,
+                        "price": 0.002,
+                        "liquidity": 25000,
+                    },
+                }
+            ],
+            supply_evidence_records=[],
+            archival_supply_records=[],
+            manual_supply_records=[],
+            manual_market_cap_records=[
+                {
+                    "wallet": "WalletA",
+                    "token_mint": "MintA",
+                    "transaction_signature": "SigA",
+                    "confidence_tier": "A_FULL_REPLAY_SAFE",
+                    "proof_unblock_allowed": True,
+                    "decision_time_safe": True,
+                    "verified_market_cap": 4_700_000,
+                    "evidence_source": "Dexscreener 1s historical MCap chart",
+                }
+            ],
+        )
+
+        self.assertEqual(report["summary"]["score_ready_records"], 1)
+        self.assertEqual(report["records"][0]["readiness_status"], "score_ready")
+        self.assertEqual(report["records"][0]["market_cap"], 4_700_000)
+        self.assertEqual(report["records"][0]["market_cap_source"], "manual_gold_set_market_cap")
 
 
 if __name__ == "__main__":

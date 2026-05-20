@@ -284,13 +284,14 @@ def build_reduction_queue(
             "next_action": "Reduce unknown-liquidity and missing-reserve rows before treating replay fills as realistic.",
             "can_drive_wallet_trust": False,
         })
-    if safe_int(supply_summary.get("supply_recovered_records")) <= 0 and safe_int(supply_summary.get("needs_archival_supply_records")) > 0:
+    missing_supply_records = supply_missing_records(supply_summary)
+    if missing_supply_records > 0:
         queue.append({
             "priority": 4,
             "category": "archival_supply_evidence",
             "current": safe_int(supply_summary.get("supply_recovered_records")),
-            "target": safe_int(supply_summary.get("needs_archival_supply_records")),
-            "gap": safe_int(supply_summary.get("needs_archival_supply_records")),
+            "target": supply_required_records(supply_summary),
+            "gap": missing_supply_records,
             "affected_rows": safe_int(supply_summary.get("records_scanned")),
             "blocked_by": ["missing_archival_mint_supply"],
             "next_action": "Fetch or reconstruct historical mint-account supply at or before the decision slot; do not use current supply.",
@@ -307,7 +308,7 @@ def score_ready_blockers(
     timeline_blockers: list[Any],
 ) -> list[str]:
     blockers: list[str] = []
-    if safe_int(supply_summary.get("supply_recovered_records")) <= 0:
+    if supply_missing_records(supply_summary) > 0:
         blockers.append("historical_supply")
     if safe_int(onchain_summary.get("market_cap_recovered_records")) <= 0:
         blockers.append("market_cap")
@@ -317,6 +318,28 @@ def score_ready_blockers(
         blockers.append("price")
     blockers.extend(str(item).replace("_still_missing", "").replace("_still_incomplete", "") for item in timeline_blockers if item)
     return sorted(set(blockers))
+
+
+def supply_required_records(supply_summary: dict[str, Any]) -> int:
+    explicit = safe_int(supply_summary.get("needs_archival_supply_records"))
+    if explicit > 0:
+        return explicit
+    candidate_rows = safe_int(supply_summary.get("candidate_rows"))
+    if candidate_rows > 0:
+        return candidate_rows
+    return safe_int(supply_summary.get("records_scanned"))
+
+
+def supply_missing_records(supply_summary: dict[str, Any]) -> int:
+    explicit_missing = first_positive_int(
+        supply_summary.get("blocked_missing_snapshot_records"),
+        supply_summary.get("needs_archival_supply_records"),
+    )
+    if explicit_missing > 0:
+        return explicit_missing
+    required = supply_required_records(supply_summary)
+    recovered = safe_int(supply_summary.get("supply_recovered_records"))
+    return max(0, required - recovered)
 
 
 def fillability_blockers(onchain_block_reasons: dict[str, Any]) -> list[str]:

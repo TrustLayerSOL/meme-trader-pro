@@ -50,8 +50,8 @@ class BuildFocusedManualSupplyResearchTests(unittest.TestCase):
             csv_path = root / "manual.csv"
             bundle_path.write_text(json.dumps(request_bundle()), encoding="utf-8")
             csv_path.write_text(
-                "request_id,token_mint,max_acceptable_snapshot_slot,verified_supply,decimals,response_slot,evidence_source,evidence_url,confidence_tier,notes\n"
-                "1,MintA,120,1000000,6,119,Solscan,https://solscan.io/token/MintA,A_FULL_REPLAY_SAFE,Verified before slot\n",
+                "request_id,token_mint,max_acceptable_snapshot_slot,raw_supply_base_units,display_supply_optional,decimals,response_slot,evidence_source,evidence_url,confidence_tier,notes\n"
+                "1,MintA,120,1000000,1,6,120,Solscan,https://solscan.io/token/MintA,A_FULL_REPLAY_SAFE,Verified exact slot raw base-unit supply\n",
                 encoding="utf-8",
             )
 

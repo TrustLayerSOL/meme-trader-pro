@@ -83,6 +83,23 @@ class FakeRpc:
         return None
 
 
+class FakeBatchRpc(FakeRpc):
+    def __init__(self, signatures_by_mint, transactions_by_signature):
+        super().__init__(signatures_by_mint, transactions_by_signature)
+        self.batch_calls = []
+
+    def batch_call(self, calls):
+        self.batch_calls.append(calls)
+        results = []
+        for method, params in calls:
+            self.calls.append((method, params))
+            if method == "getTransaction":
+                results.append(self.transactions_by_signature.get(params[0]))
+            else:
+                results.append(None)
+        return results
+
+
 class ArchivalMintHistoryCollectorTests(unittest.TestCase):
     def test_dry_run_prepares_mint_history_collection_targets(self):
         report = build_archival_mint_history_collection_report(
@@ -148,8 +165,37 @@ class ArchivalMintHistoryCollectorTests(unittest.TestCase):
         self.assertEqual(report["summary"]["raw_transactions_preserved"], 2)
         self.assertEqual(report["targets"][0]["status"], "mint_history_complete_through_decision_slot")
         self.assertEqual(report["history_completeness"]["MintA"]["complete_through_slot"], 100)
+        self.assertEqual(report["signature_checkpoint"]["MintA"]["checkpoint_collected_at"], 123.0)
         self.assertEqual(report["raw_transactions"][0]["token_mint"], "MintA")
         self.assertEqual(report["raw_transactions"][0]["source"], "archival_mint_history_collection")
+
+    def test_execute_uses_batch_transaction_fetch_when_rpc_supports_it(self):
+        rpc = FakeBatchRpc(
+            signatures_by_mint={
+                "MintA": [
+                    {"signature": "SigDecision", "slot": 100},
+                    {"signature": "SigMint", "slot": 10},
+                ]
+            },
+            transactions_by_signature={
+                "SigDecision": tx(100, "SigDecision"),
+                "SigMint": tx(10, "SigMint"),
+            },
+        )
+
+        report = build_archival_mint_history_collection_report(
+            archival_supply_plan=plan(),
+            rpc=rpc,
+            execute=True,
+            signature_page_limit=10,
+            max_pages_per_mint=2,
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["mint_histories_complete"], 1)
+        self.assertEqual(report["summary"]["raw_transactions_preserved"], 2)
+        self.assertEqual(len(rpc.batch_calls), 1)
+        self.assertEqual([call[0] for call in rpc.batch_calls[0]], ["getTransaction", "getTransaction"])
 
     def test_execute_resumes_from_signature_checkpoint(self):
         rpc = FakeRpc(

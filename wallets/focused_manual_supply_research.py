@@ -43,7 +43,8 @@ TEMPLATE_COLUMNS = [
     "request_id",
     "token_mint",
     "max_acceptable_snapshot_slot",
-    "verified_supply",
+    "raw_supply_base_units",
+    "display_supply_optional",
     "decimals",
     "response_slot",
     "evidence_source",
@@ -54,19 +55,26 @@ TEMPLATE_COLUMNS = [
 
 
 def safe_int(value: Any) -> int | None:
-    try:
-        parsed = int(float(value))
-    except (TypeError, ValueError):
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if value in (None, ""):
         return None
-    return parsed
+    text = str(value).strip()
+    if not text or not text.isdigit():
+        return None
+    return int(text)
 
 
-def positive_float(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
+def positive_int_text(value: Any) -> str | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value) if value > 0 else None
+    if value in (None, ""):
         return None
-    return parsed if parsed > 0 else None
+    text = str(value).strip().replace(",", "")
+    if not text or not text.isdigit():
+        return None
+    parsed = int(text)
+    return str(parsed) if parsed > 0 else None
 
 
 def decision_time_utc(value: Any) -> str:
@@ -211,7 +219,7 @@ def validate_import_row(row: dict[str, Any], requests_by_id: dict[str, dict[str,
     url = str(row.get("evidence_url") or "").strip()
     notes = str(row.get("notes") or "").strip()
     tier = str(row.get("confidence_tier") or "").strip()
-    supply = positive_float(row.get("verified_supply"))
+    raw_supply = positive_int_text(row.get("raw_supply_base_units"))
     decimals = safe_int(row.get("decimals"))
     response_slot = safe_int(row.get("response_slot"))
     max_slot = safe_int(row.get("max_acceptable_snapshot_slot"))
@@ -231,8 +239,11 @@ def validate_import_row(row: dict[str, Any], requests_by_id: dict[str, dict[str,
         errors.append("missing_max_acceptable_snapshot_slot")
     if request_max_slot is not None and max_slot is not None and max_slot != request_max_slot:
         errors.append("max_acceptable_snapshot_slot_does_not_match_request")
-    if supply is None:
-        errors.append("missing_or_invalid_verified_supply")
+    if raw_supply is None:
+        if row.get("verified_supply") not in (None, ""):
+            errors.append("legacy_verified_supply_not_allowed_use_raw_supply_base_units")
+        else:
+            errors.append("missing_or_invalid_raw_supply_base_units")
     if decimals is None or decimals < 0:
         errors.append("missing_or_invalid_decimals")
     if response_slot is None or response_slot <= 0:
@@ -247,6 +258,8 @@ def validate_import_row(row: dict[str, Any], requests_by_id: dict[str, dict[str,
         errors.append("missing_evidence_url")
     if not notes:
         errors.append("missing_notes")
+    if tier == "A_FULL_REPLAY_SAFE" and response_slot is not None and max_slot is not None and response_slot != max_slot:
+        errors.append("tier_a_requires_exact_decision_slot_snapshot")
 
     if errors:
         return None, errors
@@ -257,7 +270,8 @@ def validate_import_row(row: dict[str, Any], requests_by_id: dict[str, dict[str,
         "request_id": rid,
         "token_mint": mint,
         "max_acceptable_snapshot_slot": max_slot,
-        "verified_supply": supply,
+        "raw_supply_base_units": raw_supply,
+        "display_supply_optional": str(row.get("display_supply_optional") or "").strip(),
         "decimals": decimals,
         "response_slot": response_slot,
         "evidence_source": source,
@@ -280,12 +294,15 @@ def snapshot_from_record(row: dict[str, Any]) -> dict[str, Any] | None:
         "version": "focused_manual_supply_snapshot.v1",
         "token_mint": row.get("token_mint"),
         "slot": row.get("response_slot"),
-        "raw_supply": str(row.get("verified_supply")),
+        "raw_supply": str(row.get("raw_supply_base_units")),
         "decimals": row.get("decimals"),
         "source": "focused_manual_supply_research",
         "source_file": "data/manual_research/focused_manual_supply_evidence_imported.jsonl",
+        "request_id": row.get("request_id"),
+        "max_acceptable_snapshot_slot": row.get("max_acceptable_snapshot_slot"),
         "evidence_url": row.get("evidence_url"),
         "confidence_tier": row.get("confidence_tier"),
+        "notes": row.get("notes"),
         "decision_time_safe": True,
         "can_mutate_wallet_trust": False,
     }

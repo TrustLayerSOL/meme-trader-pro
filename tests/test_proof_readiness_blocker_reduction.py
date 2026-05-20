@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from research.proof_readiness_blocker_reduction import build_proof_readiness_blocker_reduction_report
-from utils.build_proof_readiness_blocker_reduction import write_proof_readiness_blocker_reduction_report
+from utils.build_proof_readiness_blocker_reduction import DEFAULT_SUPPLY_EVIDENCE, write_proof_readiness_blocker_reduction_report
 
 
 def behavioral_trust_validation():
@@ -163,6 +163,39 @@ def supply_evidence():
 
 
 class ProofReadinessBlockerReductionTests(unittest.TestCase):
+    def test_default_supply_input_uses_archival_supply_evidence_report(self):
+        self.assertEqual(DEFAULT_SUPPLY_EVIDENCE.name, "archival_supply_evidence_report.json")
+
+    def test_report_keeps_historical_supply_blocker_when_archival_evidence_is_partial(self):
+        partial_supply = {
+            "mode": "ARCHIVAL_SUPPLY_EVIDENCE_REVIEW_ONLY",
+            "review_only": True,
+            "live_execution_locked": True,
+            "wallet_list_mutated": False,
+            "summary": {
+                "candidate_rows": 591,
+                "supply_recovered_records": 60,
+                "blocked_missing_snapshot_records": 531,
+                "status_counts": {
+                    "archival_supply_recovered": 60,
+                    "blocked_missing_archival_snapshot": 531,
+                },
+            },
+        }
+        report = build_proof_readiness_blocker_reduction_report(
+            behavioral_trust_validation=behavioral_trust_validation(),
+            validation_proof_layer=validation_proof_layer(),
+            stage8_validation=stage8_validation(),
+            evidence_layer=evidence_layer(),
+            replayable_token_timelines=replayable_timelines(),
+            onchain_market_context=onchain_market_context(),
+            supply_evidence=partial_supply,
+            generated_at=123.0,
+        )
+
+        self.assertIn("historical_supply", report["reduction_queue"][0]["blocked_by"])
+        self.assertTrue(any(row["category"] == "archival_supply_evidence" for row in report["reduction_queue"]))
+
     def test_report_prioritizes_exact_proof_blockers_without_mutation(self):
         report = build_proof_readiness_blocker_reduction_report(
             behavioral_trust_validation=behavioral_trust_validation(),

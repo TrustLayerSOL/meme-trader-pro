@@ -63,12 +63,31 @@ def mint_to(amount, decimals=6, mint="MintA"):
 
 
 class SupplyStabilityEvidenceTests(unittest.TestCase):
-    def test_proves_current_supply_as_decision_time_supply_when_no_post_decision_supply_events_exist(self):
+    def test_blocks_current_supply_when_post_decision_history_is_not_proven(self):
         report = build_supply_stability_evidence_report(
             archival_supply_plan=plan(),
             current_supply_snapshots=[current_snapshot()],
             raw_transactions=[],
             history_completeness={"MintA": {"complete_through_slot": 120, "source": "mint_history_collection"}},
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["snapshots_reconstructed"], 0)
+        self.assertEqual(report["requirements"][0]["status"], "blocked_incomplete_post_decision_history")
+        self.assertIn("post_decision_mint_history_not_proven", report["requirements"][0]["block_reasons"])
+
+    def test_proves_current_supply_as_decision_time_supply_when_post_decision_history_is_complete(self):
+        report = build_supply_stability_evidence_report(
+            archival_supply_plan=plan(),
+            current_supply_snapshots=[current_snapshot()],
+            raw_transactions=[],
+            history_completeness={
+                "MintA": {
+                    "complete_through_slot": 120,
+                    "post_decision_complete_through_slot": 200,
+                    "source": "mint_history_collection",
+                }
+            },
             generated_at=123.0,
         )
 
@@ -121,7 +140,10 @@ class SupplyStabilityEvidenceTests(unittest.TestCase):
             plan_path.write_text(json.dumps(plan()), encoding="utf-8")
             current_path.write_text(json.dumps(current_snapshot()) + "\n", encoding="utf-8")
             raw_path.write_text("", encoding="utf-8")
-            completeness_path.write_text(json.dumps({"MintA": {"complete_through_slot": 120}}), encoding="utf-8")
+            completeness_path.write_text(
+                json.dumps({"MintA": {"complete_through_slot": 120, "post_decision_complete_through_slot": 200}}),
+                encoding="utf-8",
+            )
 
             report = write_supply_stability_evidence_report(
                 plan_path=plan_path,
@@ -138,6 +160,39 @@ class SupplyStabilityEvidenceTests(unittest.TestCase):
             self.assertEqual(report["summary"]["snapshots_reconstructed"], 1)
             rows = [json.loads(line) for line in snapshots_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(rows[0]["source"], "current_supply_stability_proof")
+
+    def test_writer_merges_post_decision_completeness_updates(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "plan.json"
+            current_path = root / "current.jsonl"
+            raw_path = root / "raw.jsonl"
+            completeness_path = root / "complete.json"
+            updates_path = root / "updates.json"
+            report_path = root / "report.json"
+            snapshots_path = root / "snapshots.jsonl"
+            plan_path.write_text(json.dumps(plan()), encoding="utf-8")
+            current_path.write_text(json.dumps(current_snapshot()) + "\n", encoding="utf-8")
+            raw_path.write_text("", encoding="utf-8")
+            completeness_path.write_text(json.dumps({"MintA": {"complete_through_slot": 120}}), encoding="utf-8")
+            updates_path.write_text(
+                json.dumps({"MintA": {"post_decision_complete_through_slot": 200, "source": "post_decision_supply_coverage"}}),
+                encoding="utf-8",
+            )
+
+            report = write_supply_stability_evidence_report(
+                plan_path=plan_path,
+                current_supply_snapshots_path=current_path,
+                raw_transaction_paths=[raw_path],
+                completeness_path=completeness_path,
+                post_decision_completeness_updates_path=updates_path,
+                report_path=report_path,
+                snapshots_path=snapshots_path,
+                generated_at=123.0,
+            )
+
+            self.assertEqual(report["summary"]["snapshots_reconstructed"], 1)
+            self.assertEqual(report["requirements"][0]["status"], "stable_current_supply_proven")
 
 
 if __name__ == "__main__":

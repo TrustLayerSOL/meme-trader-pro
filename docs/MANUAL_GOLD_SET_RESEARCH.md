@@ -18,6 +18,18 @@ Useful evidence includes:
 
 Do not use current supply or current market cap as historical proof.
 
+Current supply is only useful after a separate stability proof shows that mint-account history covers the decision slot and post-decision window with no mint/burn changes. If that proof is missing, mark the row as partial or insufficient instead of Tier A.
+
+The no-paid stability workflow is:
+
+```bash
+python3 utils/collect_post_decision_supply_transactions.py --execute --max-targets 5 --max-pages-per-mint 2 --max-transactions-per-mint 500
+python3 utils/build_post_decision_supply_coverage.py
+python3 utils/build_supply_stability_evidence.py
+```
+
+Only after those reports prove coverage should current supply be allowed into replay-safe evidence. Manual screenshots or current token pages do not replace this proof.
+
 ## Confidence Tiers
 
 Use `A_FULL_REPLAY_SAFE` only when the evidence clearly applies at or before the decision slot or decision timestamp. This is the only tier allowed to unblock proof rows.
@@ -145,11 +157,13 @@ Required fields:
 - `confidence_tier`
 - `notes`
 
-`verified_supply` is required only for `A_FULL_REPLAY_SAFE`.
+For `A_FULL_REPLAY_SAFE`, provide either `verified_supply` or `verified_market_cap`.
 
-`verified_market_cap` may be used for `B_STRONG_PARTIAL` or `C_SUGGESTIVE` when you have historical chart evidence but no supply proof. Those rows are retained as research evidence but do not unblock proof readiness.
+`verified_market_cap` may be Tier A when the source clearly shows market cap at or before the decision timestamp, such as a historical chart crosshair on the exact candidate time. If the timestamp is unclear, use `B_STRONG_PARTIAL` or `C_SUGGESTIVE`; those rows are retained as research evidence but do not unblock proof readiness.
 
-`verified_supply` is the key field needed to recompute market cap from existing decision-time price.
+When multiple rows share the same mint and decision timestamp, one Tier A historical market-cap entry can cover the matching group. This is only allowed when the timestamp matches exactly; do not reuse evidence across different times.
+
+For the focused archival supply workflow, use `raw_supply_base_units`, not display supply. Display supply is the human-readable supply shown by explorers. Raw base-unit supply is display supply multiplied by `10 ** decimals`. Tier A supply evidence should only use raw base units or a provider response that exposes the raw mint-account supply directly.
 
 ## How To Import Evidence
 
@@ -164,7 +178,7 @@ The importer rejects rows with:
 
 - Missing candidate ID.
 - Missing mint.
-- Tier A evidence with missing supply.
+- Tier A evidence with neither verified supply nor verified market cap.
 - Supply less than or equal to zero when supply is provided.
 - Impossible market cap values.
 - Missing source.
@@ -184,7 +198,9 @@ data/manual_research/manual_evidence_imported.jsonl
 data/manual_research/manual_supply_evidence_records.jsonl
 ```
 
-Only `A_FULL_REPLAY_SAFE` rows create manual supply evidence that can be treated as replay-safe. Lower tiers stay available for review but do not validate wallet trust.
+`A_FULL_REPLAY_SAFE` rows with verified supply create manual supply evidence. `A_FULL_REPLAY_SAFE` rows with verified historical market cap can make matching price/liquidity rows score-ready without inventing supply. Lower tiers stay available for review but do not validate wallet trust.
+
+Manual market-cap evidence is matched first by exact wallet/mint/transaction. If the exact row differs, it may also match rows with the same mint and exact decision timestamp so repeated observations do not require duplicate browser work.
 
 Run:
 

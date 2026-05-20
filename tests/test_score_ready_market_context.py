@@ -135,6 +135,42 @@ class ScoreReadyMarketContextTests(unittest.TestCase):
         self.assertTrue(record["supply_decision_time_safe"])
         self.assertEqual(record["supply_source"], "archival_supply_evidence")
 
+    def test_tier_a_manual_market_cap_applies_to_same_mint_and_timestamp_group(self):
+        report = build_score_ready_market_context_report(
+            onchain_market_context_records=[
+                onchain_row(
+                    wallet="WalletB",
+                    transaction_signature="SigB",
+                    decision_time_context={
+                        "decision_time_safe": True,
+                        "timestamp": 1000,
+                        "price": 0.01,
+                        "liquidity": 10_000,
+                    },
+                )
+            ],
+            supply_evidence_records=[],
+            manual_market_cap_records=[
+                {
+                    "wallet": "WalletA",
+                    "token_mint": "MintA",
+                    "transaction_signature": "SigA",
+                    "decision_timestamp": 1000,
+                    "confidence_tier": "A_FULL_REPLAY_SAFE",
+                    "proof_unblock_allowed": True,
+                    "decision_time_safe": True,
+                    "verified_market_cap": 4_700_000,
+                    "evidence_source": "Dexscreener 1s historical MCap chart",
+                }
+            ],
+            generated_at=123.0,
+        )
+
+        record = report["records"][0]
+        self.assertEqual(record["readiness_status"], "score_ready")
+        self.assertEqual(record["market_cap"], 4_700_000)
+        self.assertEqual(record["market_cap_source"], "manual_gold_set_market_cap_group")
+
     def test_prior_decision_time_market_snapshot_does_not_require_supply_evidence(self):
         report = build_score_ready_market_context_report(
             onchain_market_context_records=[

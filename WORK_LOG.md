@@ -10696,3 +10696,159 @@ Current result:
 Next:
 
 - If provider/manual response part files are supplied, run `python3 utils/combine_provider_response_chunks.py`, then `python3 utils/import_provider_recommended_archival_mint_supply_snapshots.py`, then rebuild archival supply evidence, score-ready market context, and proof readiness.
+
+### 2026-05-20 - Proof-Readiness Supply Safety Tightening
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Proof-readiness blocker queue remains complete as a routing layer, but the active blocker is still archival supply evidence
+
+Changed files:
+
+- `wallets/supply_stability_evidence.py`
+- `utils/build_supply_stability_evidence.py`
+- `wallets/post_decision_supply_coverage.py`
+- `utils/build_post_decision_supply_coverage.py`
+- `wallets/archival_mint_history_collector.py`
+- `research/proof_readiness_blocker_reduction.py`
+- `utils/build_proof_readiness_blocker_reduction.py`
+- related tests and docs
+
+What changed:
+
+- Tightened the current-supply stability gate. Current supply can no longer be treated as replay-safe historical supply unless post-decision mint-account coverage is explicitly proven through the current snapshot slot.
+- Added a post-decision supply coverage report that checks whether signature checkpoints were collected after current supply snapshots, reached the decision slot, include all post-decision transaction bodies, and show no post-decision mint/burn events.
+- Future mint-history checkpoint writes now preserve `checkpoint_collected_at` so the post-decision coverage lane can distinguish real coverage from stale local files.
+- Updated proof-readiness blocker reduction to consume the newer archival supply evidence report by default and keep historical supply listed as a blocker when only partial supply rows have been recovered.
+
+Current result:
+
+- Post-decision stable tokens: `0`
+- Supply stability snapshots reconstructed from current supply: `0`
+- Current-supply stability blockers: `64` incomplete through decision slot, `11` missing post-decision proof
+- Archival supply evidence remains `60` recovered rows from complete mint/burn reconstruction and `531` blocked rows missing archival snapshots
+- Proof readiness remains `11%`
+
+Interpretation:
+
+- This did not increase proof readiness, but it removed a weak assumption from the proof chain.
+- The remaining route to improve proof readiness is still real archival supply evidence: provider/manual Tier A rows, complete mint/burn reconstruction, or a proven post-decision no-mint/no-burn coverage lane.
+
+Verification:
+
+- `python3 -m pytest tests/test_supply_stability_evidence.py tests/test_post_decision_supply_coverage.py tests/test_archival_mint_history_collector.py tests/test_proof_readiness_blocker_reduction.py -q`
+- `python3 -m py_compile wallets/post_decision_supply_coverage.py utils/build_post_decision_supply_coverage.py wallets/supply_stability_evidence.py utils/build_supply_stability_evidence.py research/proof_readiness_blocker_reduction.py utils/build_proof_readiness_blocker_reduction.py wallets/archival_mint_history_collector.py`
+- `python3 utils/build_post_decision_supply_coverage.py`
+- `python3 utils/build_supply_stability_evidence.py`
+- `python3 utils/build_archival_supply_evidence.py`
+- `python3 utils/build_proof_readiness_blocker_reduction.py`
+
+Next:
+
+- Let the current long read-only mint-history collector finish, then rebuild the full proof chain.
+- If it does not materially reduce blockers, run a focused post-decision transaction-body collection lane for tokens whose checkpoints already reach the decision slot.
+
+### 2026-05-20 - Post-Decision Supply Transaction Collector
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%` until the new collector is run against live local evidence and the proof chain is rebuilt
+
+Changed files:
+
+- `wallets/post_decision_transaction_body_collector.py`
+- `utils/collect_post_decision_supply_transactions.py`
+- `tests/test_post_decision_transaction_body_collector.py`
+- `docs/FOCUSED_ARCHIVAL_RESPONSE_WORKFLOW.md`
+- `docs/MANUAL_GOLD_SET_RESEARCH.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+
+What changed:
+
+- Added a no-paid current-supply stability collector that refreshes mint-account signatures from the chain head and only trusts the refresh when it overlaps the existing checkpoint or reaches the decision slot.
+- The collector preserves missing post-decision transaction bodies for the coverage report, but does not mark current supply replay-safe by itself.
+- The collector writes its refreshed checkpoint to `post_decision_supply_signature_checkpoint.json` and raw bodies to `post_decision_supply_transactions.jsonl` separately from the broad historical mint-history checkpoint/raw ledger. The coverage report merges that refreshed checkpoint over the base checkpoint and reads both raw ledgers through the raw transaction glob.
+- Bounded runs now prioritize targets with the fewest missing post-decision transaction bodies first so small no-paid proof wins are attempted before expensive active-token histories.
+- The existing post-decision coverage and supply-stability reports remain the gate that decides whether current supply can become compatible decision-time supply evidence.
+- The lane is review-only and keeps wallet trust, wallet-list mutation, and live execution disabled.
+
+Verification:
+
+- `python3 -m pytest tests/test_post_decision_transaction_body_collector.py -q`
+- `python3 -m pytest tests/test_post_decision_transaction_body_collector.py tests/test_post_decision_supply_coverage.py tests/test_supply_stability_evidence.py tests/test_archival_mint_history_collector.py -q`
+- `python3 -m pytest tests/test_post_decision_supply_coverage.py tests/test_post_decision_transaction_body_collector.py -q`
+- `python3 -m pytest tests/test_post_decision_transaction_body_collector.py tests/test_post_decision_supply_coverage.py tests/test_supply_stability_evidence.py tests/test_archival_mint_history_collector.py tests/test_proof_readiness_blocker_reduction.py -q`
+- `python3 -m py_compile wallets/post_decision_transaction_body_collector.py utils/collect_post_decision_supply_transactions.py`
+
+Next:
+
+- Let the existing long read-only mint-history collector finish so it does not race writes to the same raw/checkpoint files.
+- Then run a small `collect_post_decision_supply_transactions.py --execute` batch, rebuild post-decision coverage, supply stability, archival supply evidence, score-ready market context, and proof-readiness.
+
+### 2026-05-20 - On-Chain Outcome Integration and Manual Market-Cap Proof Lane
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Top-level proof readiness moved from `11%` to `12%`
+- Known 15m outcomes moved to `710`
+- Fillability evidence rate remains `81%`
+- Score-ready market-context rows remain `124`
+
+Changed files:
+
+- `wallets/onchain_later_outcome_backfill.py`
+- `utils/build_onchain_later_outcome_backfill.py`
+- `utils/build_wallet_outcome_ledger.py`
+- `wallets/score_ready_market_context.py`
+- `utils/build_score_ready_market_context.py`
+- `research/manual_gold_set.py`
+- `docs/MANUAL_GOLD_SET_RESEARCH.md`
+- `research/DATA_SOURCE_MAP.md`
+- related tests
+
+What changed:
+
+- Added a review-only on-chain later-outcome backfill lane that turns preserved raw post-signal transaction pool balances into later outcome windows.
+- Wired on-chain later-outcome labels into the wallet outcome ledger and historical replay dataset without touching decision-time context.
+- Added persistence logic so previously applied on-chain outcome labels stay importable across rebuilds instead of disappearing as already-known outcomes.
+- Extended Manual Gold Set evidence so Tier A historical market-cap evidence can unblock a matching near-score-ready row without pretending it is token supply.
+- Score-ready market-context classification now reads Tier A manual historical market-cap rows from `manual_evidence_imported.jsonl` as replay-safe market-cap evidence.
+- Added exact mint/timestamp grouping for Tier A manual market-cap evidence, so one verified historical chart observation can cover repeated rows at the same decision time instead of requiring duplicate browser work.
+
+Current result:
+
+- On-chain later-outcome backfill scanned `6042` replay events.
+- `50` on-chain 15m labels are now available as importable evaluation-only evidence.
+- Stage 8 readiness report now shows `710` known 15m outcomes and `12%` proof readiness.
+- Manual proof readiness now supports either Tier A verified supply or Tier A verified historical market cap.
+- Live execution remains locked, and wallet-list/trust mutation remains disabled.
+
+Verification:
+
+- `python3 -m pytest tests/test_wallet_outcome_ledger_builder.py tests/test_onchain_later_outcome_backfill.py -q`
+- `python3 -m pytest tests/test_manual_gold_set_research.py tests/test_score_ready_market_context.py tests/test_onchain_later_outcome_backfill.py tests/test_wallet_outcome_ledger_builder.py -q`
+- `python3 -m pytest -q`
+- `python3 -m compileall analysis core execution research utils wallets main.py`
+- Rebuilt score-ready market context, replay realism readiness, historical replay, wallet scorecard, Stage 8 readiness, alerting dashboard, validation proof layer, behavioral trust validation, proof-readiness blocker reduction, and `main.py proof-readiness`.
+
+Next:
+
+- Use the Manual Gold Set packet to collect Tier A historical market-cap evidence from Dexscreener/Solscan for the top repeated-mint rows, then import it and rebuild the proof chain.
+- If manual browser work remains too slow, build a bounded helper that groups the `508` near-score-ready rows by token/time so one verified market-cap observation can cover repeated rows safely where timestamps match.

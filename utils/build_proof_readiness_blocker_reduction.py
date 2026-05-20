@@ -20,7 +20,7 @@ DEFAULT_STAGE8 = ROOT / "data" / "reports" / "replay_validation" / "stage8_valid
 DEFAULT_EVIDENCE_LAYER = ROOT / "data" / "reports" / "wallet_backfills" / "evidence_layer_completion_report.json"
 DEFAULT_REPLAYABLE_TIMELINES = ROOT / "data" / "reports" / "historical_backfill" / "replayable_token_timelines_report.json"
 DEFAULT_ONCHAIN_MARKET_CONTEXT = ROOT / "data" / "reports" / "historical_backfill" / "onchain_market_context_recovery_report.json"
-DEFAULT_SUPPLY_EVIDENCE = ROOT / "data" / "reports" / "historical_backfill" / "onchain_supply_evidence_report.json"
+DEFAULT_SUPPLY_EVIDENCE = ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_report.json"
 DEFAULT_OUTPUT = ROOT / "data" / "reports" / "replay_validation" / "proof_readiness_blocker_reduction_report.json"
 
 

@@ -92,6 +92,70 @@ class SyncRpcClient:
                 })
         return None
 
+    def batch_call(self, calls):
+        payload = json.dumps([
+            {
+                "jsonrpc": "2.0",
+                "id": idx + 1,
+                "method": method,
+                "params": params,
+            }
+            for idx, (method, params) in enumerate(calls)
+        ]).encode("utf-8")
+
+        self.failures = []
+        for provider in self.providers:
+            request = Request(
+                provider.url,
+                data=payload,
+                headers={"content-type": "application/json"},
+            )
+            try:
+                with urlopen(request, timeout=self.timeout) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+                    data = json.loads(body)
+                    if not isinstance(data, list):
+                        detail = data.get("error") if isinstance(data, dict) else "batch response was not a list"
+                        self.failures.append({
+                            "provider": provider.name,
+                            "safe_url": provider.safe_url,
+                            "error": redact_secrets(str(detail))[:240],
+                        })
+                        continue
+                    by_id = {
+                        int(item.get("id")): item
+                        for item in data
+                        if isinstance(item, dict) and item.get("id") is not None
+                    }
+                    results = []
+                    for idx in range(1, len(calls) + 1):
+                        item = by_id.get(idx, {})
+                        if isinstance(item, dict) and "error" in item:
+                            self.failures.append({
+                                "provider": provider.name,
+                                "safe_url": provider.safe_url,
+                                "error": redact_secrets(str(item.get("error")))[:240],
+                            })
+                            results.append(None)
+                        else:
+                            results.append(item.get("result") if isinstance(item, dict) else None)
+                    return results
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                self.failures.append({
+                    "provider": provider.name,
+                    "safe_url": provider.safe_url,
+                    "http_status": exc.code,
+                    "error": redact_secrets(detail)[:240],
+                })
+            except (URLError, TimeoutError, OSError, ValueError) as exc:
+                self.failures.append({
+                    "provider": provider.name,
+                    "safe_url": provider.safe_url,
+                    "error": redact_secrets(str(exc))[:240],
+                })
+        return [None for _method, _params in calls]
+
 
 def load_local_events(hours, limit, db_path=SQLITE_DB):
     if not Path(db_path).exists():

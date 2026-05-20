@@ -27,6 +27,7 @@ DEFAULT_ARCHIVAL_SUPPLY_RECORDS_PATH = (
     ROOT / "data" / "reports" / "historical_backfill" / "archival_supply_evidence_records.jsonl"
 )
 DEFAULT_MANUAL_SUPPLY_RECORDS_PATH = ROOT / "data" / "manual_research" / "manual_supply_evidence_records.jsonl"
+DEFAULT_MANUAL_MARKET_CAP_RECORDS_PATH = ROOT / "data" / "manual_research" / "manual_evidence_imported.jsonl"
 DEFAULT_REPORT_PATH = ROOT / "data" / "reports" / "historical_backfill" / "score_ready_market_context_report.json"
 DEFAULT_OUTPUT_RECORDS_PATH = (
     ROOT / "data" / "reports" / "historical_backfill" / "score_ready_market_context_records.jsonl"
@@ -39,6 +40,7 @@ def write_score_ready_market_context_report(
     supply_records_path: Path | str = DEFAULT_SUPPLY_RECORDS_PATH,
     archival_supply_records_path: Path | str = DEFAULT_ARCHIVAL_SUPPLY_RECORDS_PATH,
     manual_supply_records_path: Path | str = DEFAULT_MANUAL_SUPPLY_RECORDS_PATH,
+    manual_market_cap_records_path: Path | str = DEFAULT_MANUAL_MARKET_CAP_RECORDS_PATH,
     report_path: Path | str = DEFAULT_REPORT_PATH,
     output_records_path: Path | str = DEFAULT_OUTPUT_RECORDS_PATH,
     generated_at: float | None = None,
@@ -47,6 +49,7 @@ def write_score_ready_market_context_report(
     supply_records_path = Path(supply_records_path)
     archival_supply_records_path = Path(archival_supply_records_path)
     manual_supply_records_path = Path(manual_supply_records_path)
+    manual_market_cap_records_path = Path(manual_market_cap_records_path)
     report_path = Path(report_path)
     output_records_path = Path(output_records_path)
     report = build_score_ready_market_context_report(
@@ -54,6 +57,7 @@ def write_score_ready_market_context_report(
         supply_evidence_records=read_jsonl(supply_records_path),
         archival_supply_records=read_jsonl(archival_supply_records_path),
         manual_supply_records=read_jsonl(manual_supply_records_path),
+        manual_market_cap_records=read_jsonl(manual_market_cap_records_path),
         generated_at=generated_at,
     )
     report["input_paths"] = {
@@ -61,6 +65,7 @@ def write_score_ready_market_context_report(
         "supply_evidence_records": relative_path(supply_records_path, ROOT),
         "archival_supply_records": relative_path(archival_supply_records_path, ROOT),
         "manual_supply_records": relative_path(manual_supply_records_path, ROOT),
+        "manual_market_cap_records": relative_path(manual_market_cap_records_path, ROOT),
     }
     report["output_paths"] = {
         "report": relative_path(report_path, ROOT),
@@ -81,6 +86,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--supply-records", type=Path, default=DEFAULT_SUPPLY_RECORDS_PATH)
     parser.add_argument("--archival-supply-records", type=Path, default=DEFAULT_ARCHIVAL_SUPPLY_RECORDS_PATH)
     parser.add_argument("--manual-supply-records", type=Path, default=DEFAULT_MANUAL_SUPPLY_RECORDS_PATH)
+    parser.add_argument("--manual-market-cap-records", type=Path, default=DEFAULT_MANUAL_MARKET_CAP_RECORDS_PATH)
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--records-path", type=Path, default=DEFAULT_OUTPUT_RECORDS_PATH)
     return parser.parse_args(argv)
@@ -93,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         supply_records_path=args.supply_records,
         archival_supply_records_path=args.archival_supply_records,
         manual_supply_records_path=args.manual_supply_records,
+        manual_market_cap_records_path=args.manual_market_cap_records,
         report_path=args.report_path,
         output_records_path=args.records_path,
     )

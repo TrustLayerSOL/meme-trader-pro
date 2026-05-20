@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import sqlite3
 import sys
@@ -14,6 +15,12 @@ from analysis.rejection_logger import DEFAULT_REJECT_PATH
 from research.outcome_linker import build_later_outcome_from_snapshots, build_windowed_outcomes_from_snapshots
 from research.signal_schema import build_record_from_rejection, build_record_from_trade, build_record_from_wallet_signal
 from wallets.wallet_outcome_ledger import build_wallet_outcome_ledger
+
+
+DEFAULT_ONCHAIN_OUTCOME_RECORDS_PATH = (
+    ROOT / "data" / "reports" / "replay_validation" / "onchain_later_outcome_backfill_records.jsonl"
+)
+KNOWN_OUTCOME_TYPES = {"runner", "rug", "dead", "loser"}
 
 
 def read_json(path: Path, default: Any) -> Any:
@@ -138,6 +145,62 @@ def first_present(*values: Any) -> Any:
     return None
 
 
+def outcome_is_known(outcome: dict[str, Any]) -> bool:
+    outcome_type = str(as_dict(outcome).get("outcome_type") or "").lower()
+    if outcome_type in KNOWN_OUTCOME_TYPES:
+        return True
+    windows = as_dict(as_dict(outcome).get("windows"))
+    return any(str(as_dict(row).get("outcome_type") or "").lower() in KNOWN_OUTCOME_TYPES for row in windows.values())
+
+
+def record_decision_id(record: dict[str, Any]) -> str:
+    return str(
+        first_present(
+            record.get("decision_id"),
+            as_dict(record.get("signal_context")).get("decision_id"),
+            as_dict(record.get("decision")).get("decision_id"),
+        )
+        or ""
+    ).strip()
+
+
+def load_onchain_outcome_records(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    path = Path(path or DEFAULT_ONCHAIN_OUTCOME_RECORDS_PATH)
+    if not path.exists():
+        return {}
+    outcomes: dict[str, dict[str, Any]] = {}
+    for row in read_jsonl(path, limit=100_000):
+        if row.get("status") != "onchain_later_outcome_labeled":
+            continue
+        if row.get("known_15m_added") is not True:
+            continue
+        event_id = str(row.get("event_id") or "").strip()
+        outcome = as_dict(row.get("later_token_outcome"))
+        if not event_id or not outcome_is_known(outcome):
+            continue
+        outcomes[event_id] = outcome
+    return outcomes
+
+
+def apply_onchain_later_outcome(record: dict[str, Any], outcomes_by_event_id: dict[str, dict[str, Any]]) -> bool:
+    event_id = record_decision_id(record)
+    if not event_id:
+        return False
+    outcome = outcomes_by_event_id.get(event_id)
+    if not outcome:
+        return False
+    current = as_dict(record.get("later_token_outcome"))
+    if outcome_is_known(current):
+        return False
+    merged = deepcopy(outcome)
+    if current:
+        merged.setdefault("original_outcome_reference", current)
+    merged["onchain_later_outcome_backfill_applied"] = True
+    merged["onchain_later_outcome_backfill_mode"] = "evaluation_only_no_trust_mutation"
+    record["later_token_outcome"] = merged
+    return True
+
+
 def snapshot_rows_for_signal(db_path: Path, mint: str, signal_time: Any, horizon_seconds: float) -> list[dict[str, Any]]:
     if not db_path.exists() or not mint or signal_time in (None, ""):
         return []
@@ -170,6 +233,7 @@ def build_records(
     rejection_path: Path | None = None,
     performance_path: Path | None = None,
     snapshot_db_path: Path | None = None,
+    onchain_outcome_records_path: Path | None = DEFAULT_ONCHAIN_OUTCOME_RECORDS_PATH,
     rejection_limit: int = 5_000,
     performance_signal_limit: int = 5_000,
     outcome_horizon_seconds: float = 3600,
@@ -225,6 +289,11 @@ def build_records(
             records.append(record)
         except Exception:
             continue
+
+    if onchain_outcome_records_path is not None:
+        onchain_outcomes = load_onchain_outcome_records(Path(onchain_outcome_records_path))
+        for record in records:
+            apply_onchain_later_outcome(record, onchain_outcomes)
 
     return records
 

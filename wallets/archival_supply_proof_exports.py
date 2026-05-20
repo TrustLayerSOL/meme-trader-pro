@@ -11,16 +11,22 @@ VERSION = "archival_supply_proof_exports.v1"
 
 VALID_EVIDENCE_COLUMNS = [
     "evidence_key",
+    "request_id",
     "wallet",
     "token_mint",
     "transaction_signature",
     "decision_slot",
     "snapshot_slot",
+    "max_acceptable_snapshot_slot",
     "raw_supply",
     "ui_supply",
     "decimals",
     "status",
     "source",
+    "source_file",
+    "evidence_url",
+    "confidence_tier",
+    "notes",
     "decision_time_safe",
 ]
 
@@ -115,7 +121,8 @@ def rows_upgraded_by_archival_supply(score_ready_market_context_report: dict[str
         for row in as_list(score_ready_market_context_report.get("records"))
         if isinstance(row, dict)
         and row.get("readiness_status") == "score_ready"
-        and row.get("supply_source") == "archival_supply_evidence"
+        and row.get("supply_status") == "archival_supply_recovered"
+        and row.get("supply_decision_time_safe") is True
     )
 
 

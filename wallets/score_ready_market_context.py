@@ -26,6 +26,13 @@ def record_key(row: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def market_cap_group_key(row: dict[str, Any]) -> tuple[str, str]:
+    context = as_dict(row.get("decision_time_context"))
+    token = str(row.get("token_mint") or row.get("mint") or "").strip()
+    timestamp = positive_float(row.get("decision_timestamp") or row.get("timestamp") or context.get("timestamp"))
+    return (token, f"{timestamp:.6f}" if timestamp is not None else "")
+
+
 def index_supply_records(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
     indexed: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows or []:
@@ -52,9 +59,42 @@ def merged_supply_records(
     return indexed
 
 
-def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str], dict[str, Any]]) -> dict[str, Any]:
+def index_manual_market_cap_records(
+    rows: list[dict[str, Any]] | None,
+) -> tuple[dict[tuple[str, str, str], dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
+    indexed: dict[tuple[str, str, str], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        market_cap = positive_float(row.get("verified_market_cap"))
+        if market_cap is None:
+            continue
+        if row.get("confidence_tier") != "A_FULL_REPLAY_SAFE":
+            continue
+        if row.get("proof_unblock_allowed") is not True or row.get("decision_time_safe") is not True:
+            continue
+        indexed[record_key(row)] = row
+        group_key = market_cap_group_key(row)
+        if all(group_key):
+            grouped[group_key] = row
+    return indexed, grouped
+
+
+def classify_record(
+    row: dict[str, Any],
+    supply_by_key: dict[tuple[str, str, str], dict[str, Any]],
+    manual_market_cap_by_key: dict[tuple[str, str, str], dict[str, Any]] | None = None,
+    manual_market_cap_by_group: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     context = as_dict(row.get("decision_time_context"))
     supply = supply_by_key.get(record_key(row), {})
+    manual_market_cap_source_type = "manual_gold_set_market_cap"
+    manual_market_cap = (manual_market_cap_by_key or {}).get(record_key(row), {})
+    if not manual_market_cap:
+        manual_market_cap = (manual_market_cap_by_group or {}).get(market_cap_group_key(row), {})
+        if manual_market_cap:
+            manual_market_cap_source_type = "manual_gold_set_market_cap_group"
     price = positive_float(context.get("price") or context.get("price_usd"))
     liquidity = positive_float(context.get("liquidity") or context.get("liquidity_usd"))
     market_cap = positive_float(context.get("market_cap"))
@@ -62,6 +102,12 @@ def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str
     token_supply = positive_float(context.get("token_supply") or supply.get("ui_supply"))
     if market_cap is None and price is not None and token_supply is not None:
         market_cap = price * token_supply
+        market_cap_source = "decision_time_token_supply"
+    if market_cap is None:
+        manual_market_cap_value = positive_float(manual_market_cap.get("verified_market_cap"))
+        if manual_market_cap_value is not None:
+            market_cap = manual_market_cap_value
+            market_cap_source = manual_market_cap_source_type
     decision_time_safe = context.get("decision_time_safe") is True
     block_reasons = {str(reason) for reason in row.get("block_reasons") or [] if str(reason).strip()}
     supply_status = str(supply.get("status") or "missing_supply_evidence")
@@ -126,7 +172,9 @@ def classify_record(row: dict[str, Any], supply_by_key: dict[tuple[str, str, str
         "price": price,
         "liquidity": liquidity,
         "market_cap": market_cap,
+        "market_cap_source": market_cap_source or None,
         "token_supply": token_supply,
+        "manual_market_cap_source": manual_market_cap.get("evidence_source"),
         "blocked_by": sorted(set(blocked_by)),
         "source_status": row.get("status"),
         "source_block_reasons": sorted(block_reasons),
@@ -170,11 +218,13 @@ def build_score_ready_market_context_report(
     supply_evidence_records: list[dict[str, Any]],
     archival_supply_records: list[dict[str, Any]] | None = None,
     manual_supply_records: list[dict[str, Any]] | None = None,
+    manual_market_cap_records: list[dict[str, Any]] | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     supply_by_key = merged_supply_records(supply_evidence_records, archival_supply_records, manual_supply_records)
+    manual_market_cap_by_key, manual_market_cap_by_group = index_manual_market_cap_records(manual_market_cap_records)
     records = [
-        classify_record(row, supply_by_key)
+        classify_record(row, supply_by_key, manual_market_cap_by_key, manual_market_cap_by_group)
         for row in onchain_market_context_records or []
         if isinstance(row, dict)
     ]

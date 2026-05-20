@@ -56,11 +56,13 @@ def build_requirement_result(
     token = token_mint(requirement)
     decision_slot = safe_int(requirement.get("earliest_decision_slot"), 0)
     complete_through = safe_int(completeness.get("complete_through_slot"), 0)
+    post_decision_complete_through = safe_int(completeness.get("post_decision_complete_through_slot"), 0)
     result = {
         "version": VERSION,
         "token_mint": token,
         "decision_slot": decision_slot or None,
         "complete_through_slot": complete_through or None,
+        "post_decision_complete_through_slot": post_decision_complete_through or None,
         "history_source": completeness.get("source"),
         "row_count": safe_int(requirement.get("row_count"), 0),
         "post_decision_supply_event_count": 0,
@@ -89,6 +91,16 @@ def build_requirement_result(
         ]
         return result, None
 
+    current_snapshot_slot = safe_int(current_snapshot.get("slot"), 0)
+    if current_snapshot_slot <= 0:
+        result["status"] = "blocked_invalid_current_supply_snapshot"
+        result["block_reasons"] = ["missing_current_supply_snapshot_slot"]
+        return result, None
+    if current_snapshot_slot > decision_slot and post_decision_complete_through < current_snapshot_slot:
+        result["status"] = "blocked_incomplete_post_decision_history"
+        result["block_reasons"] = ["post_decision_mint_history_not_proven"]
+        return result, None
+
     raw_supply, decimals, ui_supply = snapshot_supply(current_snapshot)
     if raw_supply is None or decimals is None or ui_supply is None:
         result["status"] = "blocked_invalid_current_supply_snapshot"
@@ -103,7 +115,7 @@ def build_requirement_result(
         "slot": decision_slot,
         "requested_snapshot_slot": decision_slot,
         "max_acceptable_snapshot_slot": decision_slot,
-        "current_snapshot_slot": safe_int(current_snapshot.get("slot"), 0) or None,
+        "current_snapshot_slot": current_snapshot_slot,
         "raw_supply": raw_supply,
         "ui_supply": ui_supply,
         "decimals": int(decimals),
@@ -113,7 +125,8 @@ def build_requirement_result(
         "history_source": completeness.get("source"),
         "decision_time_safe": True,
         "stability_window_start_slot": decision_slot,
-        "stability_window_end_slot": safe_int(current_snapshot.get("slot"), 0) or None,
+        "stability_window_end_slot": current_snapshot_slot,
+        "post_decision_complete_through_slot": post_decision_complete_through,
         "post_decision_supply_event_count": 0,
         "can_mutate_wallet_trust": False,
     }
@@ -179,7 +192,8 @@ def build_supply_stability_evidence_report(
         "requirements": requirement_rows,
         "snapshots": snapshots,
         "operator_note": (
-            "This lane uses current supply only when complete mint-account history covers the decision slot "
-            "forward and no mint/burn events occurred after the decision slot. It remains review-only."
+            "This lane uses current supply only when mint-account history covers the decision slot, "
+            "post-decision history is explicitly proven through the current snapshot slot, and no mint/burn "
+            "events occurred after the decision slot. It remains review-only."
         ),
     }
