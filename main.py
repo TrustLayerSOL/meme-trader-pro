@@ -184,6 +184,31 @@ def run_provider_response_workflow(args):
     return 0
 
 
+def run_export_focused_supply_research(args):
+    from utils.build_focused_manual_supply_research import write_focused_manual_supply_packet
+
+    report = write_focused_manual_supply_packet(limit=args.limit)
+    print(json.dumps(report["summary"], indent=2, sort_keys=True))
+    print(f"Packet CSV: {report['output_paths']['packet_csv']}")
+    print(f"Template CSV: {report['output_paths']['manual_supply_template']}")
+    print(
+        "\nUse Tier A only when the source proves supply and decimals at or before "
+        "max_acceptable_snapshot_slot. Do not guess."
+    )
+    return 0
+
+
+def run_import_focused_supply_evidence(args):
+    from utils.build_focused_manual_supply_research import import_focused_manual_supply_template
+
+    report = import_focused_manual_supply_template(csv_path=args.csv_path)
+    print(json.dumps(report["summary"], indent=2, sort_keys=True))
+    print(f"Manual snapshots: {report['output_paths']['manual_supply_snapshots']}")
+    print(f"Report: {report['output_paths']['report']}")
+    print("\nNext: run `python3 utils/build_archival_supply_evidence.py` and rebuild proof-readiness.")
+    return 0
+
+
 def cli_main(argv=None):
     parser = argparse.ArgumentParser(description="MemeTraderPro Quant Wallet Tracker V2")
     subparsers = parser.add_subparsers(dest="command")
@@ -229,6 +254,20 @@ def cli_main(argv=None):
         help="Inspect the focused archival response handoff and show the next safe operator action.",
     )
     provider_workflow.set_defaults(func=run_provider_response_workflow)
+
+    focused_supply_export = subparsers.add_parser(
+        "export-focused-supply-research",
+        help="Export focused manual supply research packet/template for provider-recommended rows.",
+    )
+    focused_supply_export.add_argument("--limit", type=int, default=None)
+    focused_supply_export.set_defaults(func=run_export_focused_supply_research)
+
+    focused_supply_import = subparsers.add_parser(
+        "import-focused-supply-evidence",
+        help="Import focused manual supply evidence and emit Tier A replay-safe snapshots.",
+    )
+    focused_supply_import.add_argument("csv_path", type=Path)
+    focused_supply_import.set_defaults(func=run_import_focused_supply_evidence)
 
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

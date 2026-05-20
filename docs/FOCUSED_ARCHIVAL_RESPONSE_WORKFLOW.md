@@ -28,6 +28,51 @@ The report is written to:
 data/reports/historical_backfill/provider_response_workflow_report.json
 ```
 
+## Free / Manual Research Packet
+
+If paid archival responses are not available, export the focused manual supply packet:
+
+```bash
+python3 main.py export-focused-supply-research --limit 349
+```
+
+This writes:
+
+```text
+data/manual_research/focused_manual_supply_research_packet.csv
+data/manual_research/focused_manual_supply_research_packet.json
+data/manual_research/focused_manual_supply_template.csv
+```
+
+Use the packet CSV to research rows with free sources. Fill the template only when you can verify token supply and decimals at or before `max_acceptable_snapshot_slot`.
+
+Allowed confidence tiers:
+
+- `A_FULL_REPLAY_SAFE`: source proves historical supply/decimals at or before the slot.
+- `B_STRONG_PARTIAL`: useful but not enough to unblock proof.
+- `C_SUGGESTIVE`: review note only.
+- `D_INSUFFICIENT`: not usable.
+
+Import the filled template with:
+
+```bash
+python3 main.py import-focused-supply-evidence data/manual_research/focused_manual_supply_template.csv
+```
+
+Only `A_FULL_REPLAY_SAFE` rows emit replay-safe snapshots at:
+
+```text
+data/manual_research/focused_manual_supply_snapshots.jsonl
+```
+
+Those snapshots are consumed by:
+
+```bash
+python3 utils/build_archival_supply_evidence.py
+```
+
+Lower-confidence rows remain review evidence and do not move proof-readiness.
+
 ## Files You Need
 
 Focused request chunks live under:
@@ -91,7 +136,7 @@ python3 main.py proof-readiness
 
 The importer only accepts provider responses whose response slot is at or before the candidate decision slot. Responses after the decision boundary stay blocked.
 
-Do not paste current supply into these files. Do not use present-day token pages as historical proof. Do not manually edit imported evidence rows to make them pass. If the response is missing, too new, malformed, or incomplete, keep it blocked.
+Do not paste current supply into these files. Do not use present-day token pages as historical proof. Do not manually edit imported evidence rows to make them pass. If the response is missing, too new, malformed, incomplete, or only suggestive, keep it blocked.
 
 ## Current Expected Blocker
 

@@ -101,6 +101,76 @@ Remaining risk / next step:
 
 - The proof blocker is now operationally clearer but not reduced yet. The next grounded step is to obtain or manually produce valid focused response part files, then run the combiner/import/rebuild chain. Until those response part files exist, the `349` focused rows remain blocked by missing provider responses.
 
+2026-05-19 update - Focused Manual Supply Research Lane:
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract: `100%`
+- Proof readiness: `11%`
+- Wallet score readiness: `16%`
+
+Changed files:
+
+- `wallets/focused_manual_supply_research.py`
+- `utils/build_focused_manual_supply_research.py`
+- `utils/build_archival_supply_evidence.py`
+- `wallets/provider_response_workflow.py`
+- `main.py`
+- `docs/FOCUSED_ARCHIVAL_RESPONSE_WORKFLOW.md`
+- `tests/test_focused_manual_supply_research.py`
+- `tests/test_build_focused_manual_supply_research.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local files:
+
+- `data/manual_research/focused_manual_supply_research_packet.csv`
+- `data/manual_research/focused_manual_supply_research_packet.json`
+- `data/manual_research/focused_manual_supply_template.csv`
+
+What changed:
+
+- Added a free/manual evidence path for the focused provider-recommended archival supply lane.
+- New command: `python3 main.py export-focused-supply-research --limit 349`.
+- Current local export:
+  - requests available: `349`,
+  - requests exported: `349`,
+  - target tokens exported: `43`.
+- New command: `python3 main.py import-focused-supply-evidence data/manual_research/focused_manual_supply_template.csv`.
+- The importer stores manual evidence separately and emits replay-safe supply snapshots only for `A_FULL_REPLAY_SAFE` rows whose response slot is at or before the max acceptable request slot.
+- `utils/build_archival_supply_evidence.py` now consumes `data/manual_research/focused_manual_supply_snapshots.jsonl` by default, alongside provider snapshots, local mint/burn reconstruction, and stability-proven current supply.
+- Lower confidence B/C/D rows remain review-only and do not move proof-readiness.
+- No provider calls were performed. No evidence was imported. No wallet trust, wallet lists, execution settings, or live trading paths were changed.
+
+Verification performed:
+
+- `python3 -m pytest -q tests/test_focused_manual_supply_research.py tests/test_build_focused_manual_supply_research.py tests/test_provider_response_workflow.py tests/test_build_provider_response_workflow.py`
+- `python3 -m py_compile main.py wallets/focused_manual_supply_research.py utils/build_focused_manual_supply_research.py utils/build_archival_supply_evidence.py wallets/provider_response_workflow.py`
+- `python3 main.py export-focused-supply-research --limit 349`
+- `python3 main.py provider-response-workflow`
+- `python3 utils/build_archival_supply_evidence.py`
+- `python3 utils/build_score_ready_market_context.py`
+- `python3 utils/build_proof_readiness_blocker_reduction.py`
+- `python3 utils/export_archival_supply_proof_readiness.py`
+- `python3 main.py proof-readiness`
+
+Post-rebuild status:
+
+- archival supply recovered rows: `60`,
+- blocked missing archival snapshot rows: `531`,
+- score-ready market-context rows: `101`,
+- proof readiness: `11%`,
+- manual Tier A rows: `0`.
+
+Remaining risk / next step:
+
+- This creates the operator/manual path but does not reduce proof-readiness until real Tier A rows are filled into the focused template and imported. The next grounded step is to review the first rows in `data/manual_research/focused_manual_supply_research_packet.csv`, fill only evidence-backed Tier A rows in `focused_manual_supply_template.csv`, import them, and rebuild proof-readiness.
+
 2026-05-17 update - Discord Behavioral Intelligence Layer:
 
 Active milestone:

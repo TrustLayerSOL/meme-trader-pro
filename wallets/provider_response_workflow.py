@@ -222,6 +222,8 @@ def choose_next_action(summary: dict[str, Any], chunk_rows: list[dict[str, Any]]
 def operator_commands() -> list[str]:
     return [
         "python3 utils/build_provider_recommended_archival_mint_snapshot_request_bundle.py",
+        "python3 main.py export-focused-supply-research --limit 349",
+        "python3 main.py import-focused-supply-evidence data/manual_research/focused_manual_supply_template.csv",
         "python3 utils/combine_provider_response_chunks.py",
         "python3 utils/import_provider_recommended_archival_mint_supply_snapshots.py",
         "python3 utils/build_archival_supply_evidence.py",
