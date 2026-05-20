@@ -1,6 +1,6 @@
 # MemeTraderPro Build Plan
 
-Last updated: 2026-05-19
+Last updated: 2026-05-20
 
 ## Legend
 
@@ -12,7 +12,7 @@ Last updated: 2026-05-19
 
 <mark>Active roadmap area: Quant Wallet Tracker V2.</mark>
 
-<mark>Current focus: Maximize information captured from every wallet signal, no-trade decision, and paper outcome so the system becomes explainable, replayable, and measurable before adding complexity.</mark>
+<mark>Current focus: Build the forward evidence loop so current wallet activity, decision-time context, and later outcomes are captured going forward instead of relying primarily on expensive or partial historical reconstruction.</mark>
 
 ## Major Milestone Map
 
@@ -27,13 +27,13 @@ All progress reports should use this 10-stage format. Percentages are stage-leve
 | Stage 5 | Wallet Ecosystem Intelligence | Complete as a review-only ecosystem intelligence layer. Repeated co-entry pairs now compile into wallet nodes, ranked relationship edges, cluster candidates, explicit relationship-source status, and a Stage 5 completion gate at `/api/wallet-ecosystem-intelligence`. Funding-overlap and deployer-linked data remain explicitly blocked until real source artifacts exist; wallet trust/list mutation remains disabled. | 100% |
 | Stage 6 | Replay Realism Layer | Complete as a conservative replay-realism contract. Replay now models latency, slippage, liquidity floors, partial-fill limits, failed-fill states, exit slippage, fixed outcome windows, and a trusted market-context gate. Native-SOL pool reserve reconstruction, quote coverage, and bounded archival-supply reconstruction raised Stage 6 data score-readiness to `16%`, but historical supply/market-cap evidence remains the dominant blocker. | 100% |
 | Stage 7 | Regime Detection | Complete as a review-only regime segmentation layer. Historical replay events now compile into regime rows, decision-type separation, 15m outcome breakdowns, fillability context, unknown-regime visibility, and a Stage 7 completion gate at `/api/market-regime-detection`. Current data is mostly `unknown`, so regime data readiness remains low and regime labels cannot drive wallet trust yet. | 100% |
-| Stage 8 | Replay Validation + Forward Testing | Complete as a validation-loop contract. The replay summary, Stage 6 realism gate, wallet replay scorecard, wallet outcome ledger, and candidate backfill queue now cross-check each other. Proof readiness is now `12%`: known 15m outcome density is above the minimum, and the fillability evidence target is now met at `81%` vs `70%` required. Positive fills remain `52%`; the extra `29%` is useful failed-liquidity evidence, not successful execution. Market-context and archival supply coverage remain the dominant blockers. | 100% |
+| Stage 8 | Replay Validation + Forward Testing | Complete as a validation-loop contract. The replay summary, Stage 6 realism gate, wallet replay scorecard, wallet outcome ledger, and candidate backfill queue now cross-check each other. Proof readiness is now `12%`: known 15m outcome density is above the minimum, and the fillability evidence target is now met at `81%` vs `70%` required. Positive fills remain `52%`; the extra `29%` is useful failed-liquidity evidence, not successful execution. Market-context and archival supply coverage remain the dominant blockers. The forward wallet activity collector now has conservative API-budget gates so current evidence collection can run without accidentally scanning the full wallet universe. | 100% |
 | Stage 9 | Behavioral Intelligence Layer | Complete as a review-only behavioral pattern layer. Stage 5 ecosystem clusters, Stage 7 regime context, and Validation / Proof limitations now join into behavioral pattern candidates at `/api/behavioral-intelligence-layer`. Behavioral trust validation checks those candidates against replay-safe proof readiness at `/api/behavioral-trust-validation`, and the Discord intelligence layer now prepares sparse review-only messages at `/api/discord-intelligence-layer` without sending by default. Current local validation marks `7` patterns reviewed, `0` trust-ready patterns, and `behavioral_trust_justified=false`. | 100% |
 | Stage 10 | Semi-Autonomous Risk Engine | Intentionally deferred. Do not automate risk/trust changes until evidence, replay, relationship intelligence, and validation are trustworthy. | 0% |
 
 Current active milestone for the next implementation step:
 
-- <mark>Proof-readiness blocker reduction after Stage 9. Current queue is remaining decision-time market context and archival supply evidence. Known 15m outcome density has cleared the current minimum, and fillability evidence coverage is now `81%` vs the `70%` target. Positive fill rate remains `52%`, so this is evidence coverage, not profitability or desired-size execution proof. Stage 10 - Semi-Autonomous Risk Engine remains 0% and deferred.</mark>
+- <mark>Forward proof-data collection after Stage 9. Historical/manual recovery remains available, but the main path is now collecting current wallet activity safely, adding decision-time market context, resolving later outcomes, and producing daily calibration reports. The forward wallet activity collector is API-budget guarded; market-context snapshotting and outcome-window automation are the next missing pieces. Stage 10 - Semi-Autonomous Risk Engine remains 0% and deferred.</mark>
 
 Current wallet trust validation readiness snapshot:
 

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
+from wallets.forward_wallet_activity import estimate_api_budget
 from wallets.forward_wallet_activity import select_forward_wallets
 from utils.run_forward_wallet_activity import run_forward_wallet_activity_cycle
 from utils.run_forward_wallet_activity import write_forward_wallet_activity_report
@@ -57,6 +58,43 @@ class FakeRpc:
 
 
 class ForwardWalletActivityTests(unittest.TestCase):
+    def test_estimates_forward_activity_api_budget(self):
+        budget = estimate_api_budget(
+            selected_wallets=50,
+            signature_limit=40,
+            max_transactions_per_wallet=20,
+            interval_seconds=900,
+            max_rpc_calls_per_cycle=2500,
+            max_rpc_calls_per_day=250000,
+        )
+
+        self.assertEqual(budget["estimated_rpc_calls_per_cycle"], 1050)
+        self.assertEqual(budget["projected_rpc_calls_per_day"], 100800)
+        self.assertEqual(budget["budget_status"], "within_budget")
+        self.assertTrue(budget["execute_allowed"])
+
+    def test_blocks_execute_when_api_budget_exceeds_cycle_limit_before_rpc_calls(self):
+        rpc = FakeRpc()
+        report = build_forward_wallet_activity_report(
+            tracked_wallets=[{"wallet": f"Wallet{i}"} for i in range(150)],
+            paper_watch_wallets=[],
+            rpc=rpc,
+            execute=True,
+            max_wallets=150,
+            signature_limit=40,
+            max_transactions_per_wallet=20,
+            max_rpc_calls_per_cycle=2500,
+            max_rpc_calls_per_day=250000,
+            interval_seconds=900,
+        )
+
+        self.assertEqual(rpc.calls, [])
+        self.assertEqual(report["summary"]["wallets_processed"], 0)
+        self.assertEqual(report["summary"]["wallets_blocked_api_budget"], 150)
+        self.assertEqual(report["api_budget"]["budget_status"], "blocked_cycle_limit")
+        self.assertFalse(report["api_budget"]["execute_allowed"])
+        self.assertIn("api budget", report["next_actions"][0])
+
     def test_selects_tracked_then_paper_watch_without_duplicates(self):
         wallets = select_forward_wallets(
             tracked_wallets=[{"wallet": "WalletA"}, "WalletB"],
@@ -162,6 +200,41 @@ class ForwardWalletActivityTests(unittest.TestCase):
         self.assertEqual(updates[-1][1]["wallets_processed"], 3)
         self.assertEqual(updates[-1][1]["evidence_rows_created"], 5)
         self.assertTrue(updates[-1][1]["live_execution_locked"])
+
+    def test_cycle_surfaces_api_budget_status_in_runtime(self):
+        updates = []
+
+        def fake_update(component, **fields):
+            updates.append((component, fields))
+
+        def fake_writer(**kwargs):
+            return {
+                "live_execution_locked": True,
+                "summary": {
+                    "wallets_processed": 0,
+                    "wallets_collected": 0,
+                    "evidence_rows_created": 0,
+                    "wallets_blocked_rpc_error": 0,
+                    "wallets_blocked_api_budget": 150,
+                },
+                "api_budget": {
+                    "budget_status": "blocked_cycle_limit",
+                    "estimated_rpc_calls_per_cycle": 3150,
+                    "projected_rpc_calls_per_day": 302400,
+                },
+            }
+
+        run_forward_wallet_activity_cycle(
+            write_report=fake_writer,
+            update_status=fake_update,
+            execute=True,
+            max_wallets=150,
+            interval_seconds=900,
+        )
+
+        self.assertEqual(updates[-1][1]["api_budget_status"], "blocked_cycle_limit")
+        self.assertEqual(updates[-1][1]["estimated_rpc_calls_per_cycle"], 3150)
+        self.assertEqual(updates[-1][1]["wallets_blocked_api_budget"], 150)
 
 
 if __name__ == "__main__":

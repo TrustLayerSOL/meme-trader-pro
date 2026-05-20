@@ -10,6 +10,8 @@ from wallets.wallet_history_parser import parse_wallet_token_deltas
 
 MODE = "FORWARD_WALLET_ACTIVITY_REVIEW_ONLY"
 FORWARD_OUTCOME_SOURCE = "forward_wallet_activity"
+DEFAULT_MAX_RPC_CALLS_PER_CYCLE = 2500
+DEFAULT_MAX_RPC_CALLS_PER_DAY = 250000
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -63,6 +65,47 @@ def select_forward_wallets(
             if len(out) >= max(0, int(max_wallets)):
                 return out
     return out
+
+
+def estimate_api_budget(
+    *,
+    selected_wallets: int,
+    signature_limit: int,
+    max_transactions_per_wallet: int,
+    interval_seconds: int | None = None,
+    max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
+    max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
+) -> dict[str, Any]:
+    wallets = max(0, int(selected_wallets))
+    per_wallet_calls = 1 + max(0, min(int(signature_limit), int(max_transactions_per_wallet)))
+    estimated_cycle = wallets * per_wallet_calls
+    interval = int(interval_seconds or 0)
+    projected_day = int((estimated_cycle * 86400) / interval) if interval > 0 else None
+
+    execute_allowed = True
+    status = "within_budget"
+    block_reason = None
+    if estimated_cycle > int(max_rpc_calls_per_cycle):
+        execute_allowed = False
+        status = "blocked_cycle_limit"
+        block_reason = "estimated_rpc_calls_per_cycle_exceeds_limit"
+    elif projected_day is not None and projected_day > int(max_rpc_calls_per_day):
+        execute_allowed = False
+        status = "blocked_daily_limit"
+        block_reason = "projected_rpc_calls_per_day_exceeds_limit"
+
+    return {
+        "selected_wallets": wallets,
+        "per_wallet_estimated_rpc_calls": per_wallet_calls,
+        "estimated_rpc_calls_per_cycle": estimated_cycle,
+        "interval_seconds": interval if interval > 0 else None,
+        "projected_rpc_calls_per_day": projected_day,
+        "max_rpc_calls_per_cycle": int(max_rpc_calls_per_cycle),
+        "max_rpc_calls_per_day": int(max_rpc_calls_per_day),
+        "budget_status": status,
+        "block_reason": block_reason,
+        "execute_allowed": execute_allowed,
+    }
 
 
 def fetch_wallet_signatures(rpc: Any, wallet: str, signature_limit: int) -> list[dict[str, Any]]:
@@ -125,6 +168,9 @@ def build_forward_wallet_activity_report(
     signature_limit: int = 40,
     max_transactions_per_wallet: int = 20,
     request_pause_seconds: float = 0.0,
+    interval_seconds: int | None = None,
+    max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
+    max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     cutoff = generated_at - max(0, int(lookback_seconds))
@@ -133,10 +179,69 @@ def build_forward_wallet_activity_report(
         paper_watch_wallets=paper_watch_wallets,
         max_wallets=max_wallets,
     )
+    api_budget = estimate_api_budget(
+        selected_wallets=len(wallets),
+        signature_limit=signature_limit,
+        max_transactions_per_wallet=max_transactions_per_wallet,
+        interval_seconds=interval_seconds,
+        max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
+        max_rpc_calls_per_day=max_rpc_calls_per_day,
+    )
     wallet_rows: list[dict[str, Any]] = []
     evidence_rows: list[dict[str, Any]] = []
     raw_transactions: list[dict[str, Any]] = []
     old_signatures_skipped = 0
+
+    if execute and not api_budget["execute_allowed"]:
+        return {
+            "generated_at": generated_at,
+            "mode": MODE,
+            "review_only": True,
+            "live_execution_locked": True,
+            "execute": bool(execute),
+            "collection_window": {
+                "lookback_seconds": int(lookback_seconds),
+                "cutoff_epoch": cutoff,
+            },
+            "limits": {
+                "max_wallets": max_wallets,
+                "signature_limit": signature_limit,
+                "max_transactions_per_wallet": max_transactions_per_wallet,
+                "request_pause_seconds": request_pause_seconds,
+                "max_rpc_calls_per_cycle": max_rpc_calls_per_cycle,
+                "max_rpc_calls_per_day": max_rpc_calls_per_day,
+            },
+            "api_budget": api_budget,
+            "summary": {
+                "wallets_selected": len(wallets),
+                "wallets_processed": 0,
+                "dry_run_wallets": 0,
+                "wallets_collected": 0,
+                "wallets_without_recent_token_activity": 0,
+                "wallets_blocked_rpc_error": 0,
+                "wallets_blocked_api_budget": len(wallets),
+                "evidence_rows_created": 0,
+                "raw_transactions_preserved": 0,
+                "old_signatures_skipped": 0,
+            },
+            "wallets": [
+                {
+                    "wallet": wallet,
+                    "status": "BLOCKED_API_BUDGET",
+                    "block_reason": api_budget["block_reason"],
+                    "signatures_fetched": 0,
+                    "transactions_inspected": 0,
+                    "evidence_rows_created": 0,
+                }
+                for wallet in wallets
+            ],
+            "evidence_records": [],
+            "raw_transactions": [],
+            "next_actions": [
+                "Reduce the forward wallet activity api budget by lowering max_wallets, signature_limit, max_transactions_per_wallet, or run frequency.",
+                "Use slower rotation for lower-priority wallets instead of scanning the full watch list every cycle.",
+            ],
+        }
 
     for wallet in wallets:
         if not execute:
@@ -218,7 +323,10 @@ def build_forward_wallet_activity_report(
             "signature_limit": signature_limit,
             "max_transactions_per_wallet": max_transactions_per_wallet,
             "request_pause_seconds": request_pause_seconds,
+            "max_rpc_calls_per_cycle": max_rpc_calls_per_cycle,
+            "max_rpc_calls_per_day": max_rpc_calls_per_day,
         },
+        "api_budget": api_budget,
         "summary": {
             "wallets_selected": len(wallets),
             "wallets_processed": len(wallet_rows),
@@ -226,6 +334,7 @@ def build_forward_wallet_activity_report(
             "wallets_collected": statuses["COLLECTED"],
             "wallets_without_recent_token_activity": statuses["NO_RECENT_TOKEN_ACTIVITY"],
             "wallets_blocked_rpc_error": statuses["BLOCKED_RPC_ERROR"],
+            "wallets_blocked_api_budget": statuses["BLOCKED_API_BUDGET"],
             "evidence_rows_created": len(evidence_rows),
             "raw_transactions_preserved": len(raw_transactions),
             "old_signatures_skipped": old_signatures_skipped,

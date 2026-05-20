@@ -10797,6 +10797,84 @@ Next:
 - Let the existing long read-only mint-history collector finish so it does not race writes to the same raw/checkpoint files.
 - Then run a small `collect_post_decision_supply_transactions.py --execute` batch, rebuild post-decision coverage, supply stability, archival supply evidence, score-ready market context, and proof-readiness.
 
+### 2026-05-20 - Forward Wallet Activity API-Budget Guard
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward calibration lane moves from roughly `25%` to `35%`: read-only wallet activity collection now has budget enforcement, but market-context snapshotting, outcome-window resolution, and daily calibration reporting still need to be wired
+
+Changed files:
+
+- `wallets/forward_wallet_activity.py`
+- `utils/run_forward_wallet_activity.py`
+- `tests/test_forward_wallet_activity.py`
+- `research/DATA_SOURCE_MAP.md`
+- `research/BUILD_PLAN.md`
+
+What changed:
+
+- Added conservative API-budget estimation to the forward wallet activity collector.
+- The collector now estimates RPC calls per cycle and projected calls per day from `max_wallets`, `signature_limit`, `max_transactions_per_wallet`, and `interval_seconds`.
+- Execute runs are blocked before any RPC calls when they exceed `max_rpc_calls_per_cycle` or `max_rpc_calls_per_day`.
+- Default guardrails are `2500` estimated RPC calls per cycle and `250000` projected RPC calls per day.
+- Runtime status now exposes budget status, estimated calls per cycle, projected calls per day, and wallets blocked by API budget.
+- CLI output now shows the budget state and estimated calls.
+- `research/BUILD_PLAN.md` now marks the active path as forward proof-data collection rather than historical/manual recovery as the main lane.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_wallet_activity.py -q`
+- `python3 -m py_compile wallets/forward_wallet_activity.py utils/run_forward_wallet_activity.py`
+- `python3 utils/run_forward_wallet_activity.py --max-wallets 100 --interval 900`
+- `python3 utils/run_forward_wallet_activity.py --execute --max-wallets 500 --interval 900`
+- Final safe dry-run restored `data/wallet_backfills/forward_wallet_activity_report.json` with `budget=within_budget`, `est_calls=2100`, and `projected_rpc_calls_per_day=201600`.
+
+Next:
+
+- Add the forward market-context snapshotter so every collected wallet event can capture current price/liquidity/market-cap context at collection time, then add fixed-window outcome resolution.
+
+### 2026-05-20 - Imported B-Tier Manual Market-Cap Evidence
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Official proof readiness remains `12%` because the imported rows are `B_STRONG_PARTIAL`, not Tier A archival proof
+
+Local artifacts:
+
+- Preserved export: `data/manual_research/user_exports/manual_market_cap_evidence_filled_2026-05-20_0950.csv`
+- Imported ledger: `data/manual_research/manual_evidence_imported.jsonl`
+- Manual readiness report: `data/manual_research/manual_proof_readiness_report.json`
+- Regenerated entry page: `data/manual_research/manual_market_cap_entry.html`
+
+What changed:
+
+- Imported the latest operator-exported Dexscreener manual market-cap CSV from Downloads.
+- `252` importer rows scanned, `252` accepted, `0` rejected.
+- All imported rows are `B_STRONG_PARTIAL`.
+- Manual evidence ledger now contains `252` B-tier rows.
+- Regenerated the simple HTML sheet; it now has `357` visible minute-bucket inputs, `176` prefilled minute buckets, UTC labels, and no PDT/PST labels.
+- This evidence is preserved for calibration and wallet-behavior review without unblocking official replay-safe proof readiness.
+
+Verification:
+
+- `python3 main.py import-manual-evidence data/manual_research/user_exports/manual_market_cap_evidence_filled_2026-05-20_0950.csv`
+- `python3 main.py proof-readiness`
+- `python3 main.py export-manual-entry-sheet --limit 1000`
+
+Next:
+
+- Build a B-tier calibration report that measures these partial market-cap observations separately from official Tier A proof, then use it to decide whether wallet behavior is separating good signals from noise.
+
 ### 2026-05-20 - Manual Market-Cap Entry Uses UTC
 
 Active milestone:

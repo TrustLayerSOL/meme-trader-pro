@@ -19,6 +19,8 @@ from core.runtime_status import update_component
 from utils.discover_candidate_wallets import SyncRpcClient
 from utils.run_wallet_history_backfill import merge_wallet_evidence_rows
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
+from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_CYCLE
+from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_DAY
 
 
 DEFAULT_TRACKED = ROOT / "data" / "tracked_wallets.json"
@@ -61,6 +63,9 @@ def write_forward_wallet_activity_report(
     signature_limit: int = 40,
     max_transactions_per_wallet: int = 20,
     request_pause_seconds: float = 0.0,
+    interval_seconds: int | None = None,
+    max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
+    max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     report = build_forward_wallet_activity_report(
@@ -74,6 +79,9 @@ def write_forward_wallet_activity_report(
         signature_limit=signature_limit,
         max_transactions_per_wallet=max_transactions_per_wallet,
         request_pause_seconds=request_pause_seconds,
+        interval_seconds=interval_seconds,
+        max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
+        max_rpc_calls_per_day=max_rpc_calls_per_day,
     )
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(generated_at))
     raw_rows = report.pop("raw_transactions", [])
@@ -112,6 +120,8 @@ def run_forward_wallet_activity_cycle(
     signature_limit: int = 40,
     max_transactions_per_wallet: int = 20,
     request_pause_seconds: float = 0.0,
+    max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
+    max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
     interval_seconds: int | None = None,
 ) -> dict[str, Any]:
     update_status(
@@ -121,6 +131,8 @@ def run_forward_wallet_activity_cycle(
         wallet_list_mutated=False,
         execute=bool(execute),
         heartbeat_interval=interval_seconds,
+        max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
+        max_rpc_calls_per_day=max_rpc_calls_per_day,
     )
     report = write_report(
         rpc=rpc,
@@ -130,8 +142,12 @@ def run_forward_wallet_activity_cycle(
         signature_limit=signature_limit,
         max_transactions_per_wallet=max_transactions_per_wallet,
         request_pause_seconds=request_pause_seconds,
+        interval_seconds=interval_seconds,
+        max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
+        max_rpc_calls_per_day=max_rpc_calls_per_day,
     )
     summary = report.get("summary") if isinstance(report, dict) else {}
+    api_budget = report.get("api_budget") if isinstance(report.get("api_budget"), dict) else {}
     update_status(
         COMPONENT,
         status="cycle_ok",
@@ -143,6 +159,10 @@ def run_forward_wallet_activity_cycle(
         wallets_collected=int(summary.get("wallets_collected", 0) or 0),
         evidence_rows_created=int(summary.get("evidence_rows_created", 0) or 0),
         wallets_blocked_rpc_error=int(summary.get("wallets_blocked_rpc_error", 0) or 0),
+        wallets_blocked_api_budget=int(summary.get("wallets_blocked_api_budget", 0) or 0),
+        api_budget_status=api_budget.get("budget_status"),
+        estimated_rpc_calls_per_cycle=int(api_budget.get("estimated_rpc_calls_per_cycle", 0) or 0),
+        projected_rpc_calls_per_day=api_budget.get("projected_rpc_calls_per_day"),
         heartbeat_interval=interval_seconds,
     )
     return report
@@ -164,6 +184,8 @@ async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict
                 signature_limit=int(config.get("signature_limit", 40)),
                 max_transactions_per_wallet=int(config.get("max_transactions_per_wallet", 20)),
                 request_pause_seconds=float(config.get("request_pause_seconds", 0.2)),
+                max_rpc_calls_per_cycle=int(config.get("max_rpc_calls_per_cycle", DEFAULT_MAX_RPC_CALLS_PER_CYCLE)),
+                max_rpc_calls_per_day=int(config.get("max_rpc_calls_per_day", DEFAULT_MAX_RPC_CALLS_PER_DAY)),
                 interval_seconds=interval_seconds,
             )
         except Exception as exc:
@@ -188,6 +210,8 @@ def main() -> int:
     parser.add_argument("--signature-limit", type=int, default=40)
     parser.add_argument("--max-transactions-per-wallet", type=int, default=20)
     parser.add_argument("--request-pause-seconds", type=float, default=0.2)
+    parser.add_argument("--max-rpc-calls-per-cycle", type=int, default=DEFAULT_MAX_RPC_CALLS_PER_CYCLE)
+    parser.add_argument("--max-rpc-calls-per-day", type=int, default=DEFAULT_MAX_RPC_CALLS_PER_DAY)
     parser.add_argument("--out", type=Path, default=DEFAULT_REPORT)
     args = parser.parse_args()
 
@@ -205,6 +229,8 @@ def main() -> int:
                     "signature_limit": args.signature_limit,
                     "max_transactions_per_wallet": args.max_transactions_per_wallet,
                     "request_pause_seconds": args.request_pause_seconds if args.execute else 0.0,
+                    "max_rpc_calls_per_cycle": args.max_rpc_calls_per_cycle,
+                    "max_rpc_calls_per_day": args.max_rpc_calls_per_day,
                 },
             )
         )
@@ -218,17 +244,22 @@ def main() -> int:
         signature_limit=args.signature_limit,
         max_transactions_per_wallet=args.max_transactions_per_wallet,
         request_pause_seconds=args.request_pause_seconds if args.execute else 0.0,
-        interval_seconds=None,
+        max_rpc_calls_per_cycle=args.max_rpc_calls_per_cycle,
+        max_rpc_calls_per_day=args.max_rpc_calls_per_day,
+        interval_seconds=args.interval,
     )
     summary = report["summary"]
+    api_budget = report.get("api_budget", {})
     print(
-        "wrote {} execute={} wallets={} collected={} evidence_rows={} old_skipped={}".format(
+        "wrote {} execute={} wallets={} collected={} evidence_rows={} old_skipped={} budget={} est_calls={}".format(
             Path(args.out).relative_to(ROOT),
             bool(args.execute),
             summary["wallets_processed"],
             summary["wallets_collected"],
             summary["evidence_rows_created"],
             summary["old_signatures_skipped"],
+            api_budget.get("budget_status"),
+            api_budget.get("estimated_rpc_calls_per_cycle"),
         )
     )
     return 0
