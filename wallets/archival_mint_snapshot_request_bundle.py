@@ -78,6 +78,33 @@ def build_batch_request_chunks(requests: list[dict[str, Any]], batch_request_pat
     return chunks
 
 
+def build_response_template_chunks(
+    requests: list[dict[str, Any]],
+    *,
+    response_template_path: str,
+    raw_response_path: str,
+    chunk_size: int,
+) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    for index, rows in enumerate(chunked(requests, chunk_size), start=1):
+        payloads = [row["jsonrpc_payload"] for row in rows]
+        request_ids = [str(payload.get("id") or "") for payload in payloads if isinstance(payload, dict)]
+        chunk_raw_response_path = chunk_path(raw_response_path, index)
+        chunks.append(
+            {
+                "index": index,
+                "path": chunk_path(response_template_path, index),
+                "request_count": len(rows),
+                "request_ids": request_ids,
+                "first_request_id": request_ids[0] if request_ids else None,
+                "last_request_id": request_ids[-1] if request_ids else None,
+                "raw_response_save_path": chunk_raw_response_path,
+                "response_template": build_response_template(rows, chunk_raw_response_path),
+            }
+        )
+    return chunks
+
+
 def build_summary(requests: list[dict[str, Any]], *, chunk_count: int = 0, chunk_size: int = 100) -> dict[str, Any]:
     statuses = Counter(str(row.get("status") or "unknown") for row in requests)
     return {
@@ -136,6 +163,12 @@ def build_archival_mint_snapshot_request_bundle_report(
     batch_payload = [row["jsonrpc_payload"] for row in requests]
     chunk_size = normalize_chunk_size(batch_chunk_size)
     batch_chunks = build_batch_request_chunks(requests, batch_request_path, chunk_size)
+    response_template_chunks = build_response_template_chunks(
+        requests,
+        response_template_path=response_template_path,
+        raw_response_path=raw_response_path,
+        chunk_size=chunk_size,
+    )
     summary = build_summary(requests, chunk_count=len(batch_chunks), chunk_size=chunk_size)
     summary["source_filter"] = source_filter
     summary["allowed_token_count"] = len(allowed_tokens) if allowed_tokens is not None else None
@@ -171,6 +204,7 @@ def build_archival_mint_snapshot_request_bundle_report(
         "post_import_commands": post_import_commands,
         "batch_jsonrpc_payload": batch_payload,
         "batch_request_chunks": batch_chunks,
+        "response_template_chunks": response_template_chunks,
         "response_template": build_response_template(requests, raw_response_path),
         "requests": requests,
         "operator_note": (

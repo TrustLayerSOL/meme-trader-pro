@@ -78,6 +78,10 @@ def write_archival_mint_snapshot_request_bundle_report(
         chunk_path = Path(str(chunk.get("path") or ""))
         absolute_path = chunk_path if chunk_path.is_absolute() else ROOT / chunk_path
         chunk["absolute_path"] = str(absolute_path)
+    for chunk in report.get("response_template_chunks", []):
+        chunk_path = Path(str(chunk.get("path") or ""))
+        absolute_path = chunk_path if chunk_path.is_absolute() else ROOT / chunk_path
+        chunk["absolute_path"] = str(absolute_path)
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     batch_request_path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,6 +92,10 @@ def write_archival_mint_snapshot_request_bundle_report(
         chunk_file = Path(str(chunk["absolute_path"]))
         chunk_file.parent.mkdir(parents=True, exist_ok=True)
         chunk_file.write_text(json.dumps(chunk["jsonrpc_payload"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    for chunk in report.get("response_template_chunks", []):
+        chunk_file = Path(str(chunk["absolute_path"]))
+        chunk_file.parent.mkdir(parents=True, exist_ok=True)
+        chunk_file.write_text(json.dumps(chunk["response_template"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
     response_template_path.write_text(json.dumps(report["response_template"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 

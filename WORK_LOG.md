@@ -10525,3 +10525,47 @@ Interpretation:
 Next:
 
 - Prioritize the focused `349` request provider/manual archival response lane. Keep local pagination as a narrow supplemental path, not the main proof-readiness strategy.
+
+### 2026-05-19 - Focused Provider Response Chunk Workflow
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+Changed files:
+
+- `wallets/archival_mint_snapshot_request_bundle.py`
+- `utils/build_archival_mint_snapshot_request_bundle.py`
+- `utils/combine_provider_response_chunks.py`
+- `tests/test_archival_mint_snapshot_request_bundle.py`
+- `tests/test_provider_response_chunk_combiner.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added per-chunk response templates to the archival mint snapshot request bundle.
+- Regenerated the provider-recommended focused bundle so the current `349` request rows now have `4` request chunks and `4` matching response-template chunks.
+- Added a review-only response chunk combiner that merges saved `provider_recommended_archival_mint_supply_batch_raw.part*.json` files into the main focused raw response file before strict import.
+- The combiner dedupes response IDs, reports invalid chunk files, performs no provider calls, imports no evidence by itself, and cannot mutate trust or execution.
+
+Current result:
+
+- Focused provider-recommended request rows: `349`
+- Focused provider-recommended target tokens: `43`
+- Request chunks: `4`
+- Matching response-template chunks: `4`
+- Provider calls performed: `0`
+- Wallet-list mutations: `0`
+- Auto-trust mutations: `0`
+
+Next:
+
+- If provider/manual response part files are supplied, run `python3 utils/combine_provider_response_chunks.py`, then `python3 utils/import_provider_recommended_archival_mint_supply_snapshots.py`, then rebuild archival supply evidence, score-ready market context, and proof readiness.

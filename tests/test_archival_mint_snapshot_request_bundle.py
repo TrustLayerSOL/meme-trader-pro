@@ -124,6 +124,8 @@ class ArchivalMintSnapshotRequestBundleTests(unittest.TestCase):
         report = build_archival_mint_snapshot_request_bundle_report(
             snapshot_collection_report=collection_report_with_requests(5),
             batch_request_path="data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.json",
+            response_template_path="data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.json",
+            raw_response_path="data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.json",
             batch_chunk_size=2,
             generated_at=123.0,
         )
@@ -136,6 +138,16 @@ class ArchivalMintSnapshotRequestBundleTests(unittest.TestCase):
         self.assertEqual(report["batch_request_chunks"][0]["request_ids"], ["1", "2"])
         self.assertEqual(report["batch_request_chunks"][0]["path"], "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_request.part001.json")
         self.assertEqual(report["batch_request_chunks"][2]["request_ids"], ["5"])
+        self.assertEqual(len(report["response_template_chunks"]), 3)
+        self.assertEqual(
+            report["response_template_chunks"][0]["path"],
+            "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_response_template.part001.json",
+        )
+        self.assertEqual(
+            report["response_template_chunks"][0]["raw_response_save_path"],
+            "data/reports/historical_backfill/raw_provider_responses/archival_mint_supply_batch_raw.part001.json",
+        )
+        self.assertEqual(report["response_template_chunks"][0]["response_template"]["expected_responses"][1]["request_id"], "2")
 
     def test_builds_filtered_request_packet_for_allowed_token_mints(self):
         report = build_archival_mint_snapshot_request_bundle_report(
@@ -181,6 +193,16 @@ class ArchivalMintSnapshotRequestBundleTests(unittest.TestCase):
             self.assertTrue(chunk_paths[2].exists())
             self.assertEqual(len(json.loads(chunk_paths[0].read_text(encoding="utf-8"))), 2)
             self.assertEqual(json.loads(chunk_paths[2].read_text(encoding="utf-8"))[0]["id"], 5)
+            template_chunk_paths = [Path(row["absolute_path"]) for row in report["response_template_chunks"]]
+            self.assertTrue(template_chunk_paths[0].exists())
+            self.assertEqual(
+                json.loads(template_chunk_paths[0].read_text(encoding="utf-8"))["expected_responses"][0]["request_id"],
+                "1",
+            )
+            self.assertEqual(
+                json.loads(template_chunk_paths[2].read_text(encoding="utf-8"))["raw_response_save_path"],
+                "raw_response.part003.json",
+            )
 
 
 if __name__ == "__main__":
