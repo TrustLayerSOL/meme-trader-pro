@@ -10485,3 +10485,43 @@ Interpretation:
 Next:
 
 - Run targeted deeper pagination for the 25 continue-pagination mint-history tokens first. That is the most realistic free/home-built path to turn more current supply snapshots into replay-safe supply proof without paying for archival account-state snapshots.
+
+### 2026-05-19 - Targeted Mint-History Pagination Follow-Up
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / proof-readiness blocker reduction
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Stage 8 proof readiness remains `11%`
+- Stage 6 data score readiness remains `16%`
+
+What ran:
+
+- Rebuilt the archival mint pagination plan.
+- Ran the low-page continue-pagination bucket with deeper page caps.
+- Ran a bounded medium bucket for `11-25` estimated-page targets.
+- Rebuilt mint-history progress, pagination plan, reconstruction, supply stability, archival supply evidence, score-ready market context, Stage 6 readiness, Stage 8 readiness, and proof-readiness reports.
+- Rebuilt the focused provider-recommended archival request bundle after the new pagination state.
+
+Current result:
+
+- Raw mint-account transactions preserved in this follow-up: `3,051`
+- Tokens moved from continue-pagination into provider/history-start-not-proven: `4`
+- New complete mint histories: `0`
+- Continue-pagination tokens remaining: `21`
+- Provider/history-start-not-proven tokens: `43`
+- Complete-history tokens: `11`
+- Focused provider-recommended request rows: `349`
+- Near-score-ready rows still blocked on missing archival supply: `531`
+
+Interpretation:
+
+- Local free pagination is preserving useful audit evidence and classifying tokens more honestly, but it is not currently producing new complete-history proof.
+- The remaining continue-pagination tail includes expensive token histories; broad brute-force pagination is likely lower leverage than importing real archival account-state responses for the focused provider-recommended bundle.
+
+Next:
+
+- Prioritize the focused `349` request provider/manual archival response lane. Keep local pagination as a narrow supplemental path, not the main proof-readiness strategy.
