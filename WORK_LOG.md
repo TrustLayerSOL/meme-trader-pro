@@ -11547,3 +11547,39 @@ Verification:
 Next:
 
 - Build a conservative merged recommendation layer that flags the single review-behavioral-signal wallet for human review only, while keeping promotions at `0` until evidence quality and repeatability are validated.
+
+### 2026-05-21 - Merged Forward Calibration Recommendations
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Merged forward calibration recommendations are complete as a read-only human-review queue. They do not raise historical proof readiness, promote wallets, mutate wallet lists, or change execution.
+
+Changed files:
+
+- `wallets/forward_merged_calibration_recommendations.py`
+- `utils/build_forward_merged_calibration_recommendations.py`
+- `tests/test_forward_merged_calibration_recommendations.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a conservative recommendation wrapper over the merged forward calibration scorecard.
+- The wrapper preserves the existing recommendation policy: runner evidence becomes manual review only, flat-only wallets are held, missing-context wallets stay in repair, and promotions remain `0`.
+- Current local report covers `31` wallets: `1` review-forward-signal wallet, `22` fix-context wallets, `7` flat-only hold wallets, `1` collect-more wallet, and `0` risk-review wallets.
+- Wallet-list mutations and trust mutations remain `0`.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_merged_calibration_recommendations.py -q`
+- `python3 utils/build_forward_merged_calibration_recommendations.py`
+
+Next:
+
+- Build a manual review packet for the single review-forward-signal wallet so the operator can inspect wallet, repaired rows, token mints, signal times, and 15m outcomes before any future trust decision.
