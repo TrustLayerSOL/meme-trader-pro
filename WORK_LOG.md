@@ -11326,3 +11326,40 @@ Verification:
 Next:
 
 - After reset, rerun `python3 utils/build_forward_outcome_resolution.py` to reclassify the latest forward evidence with the new `flat` known-outcome label.
+
+### 2026-05-21 - Stage 8 Forward Calibration Visibility
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward calibration visibility is now wired into the Stage 8 readiness report, while historical proof readiness remains intentionally unchanged at `12%`.
+
+Changed files:
+
+- `research/replay_validation_readiness.py`
+- `utils/build_replay_validation_readiness.py`
+- `tests/test_replay_validation_readiness.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added optional forward outcome-resolution and daily forward-calibration inputs to the Stage 8 readiness builder.
+- Added separate forward calibration fields: `forward_records`, `forward_known_15m_outcomes`, `forward_known_15m_outcome_rate`, `forward_pending_windows`, `forward_days`, and `forward_mutation_count`.
+- Kept `proof_readiness_pct` tied to historical replay proof, fillability evidence, and Stage 6 score readiness only. Forward observations are visible for calibration but do not unlock trust.
+- Rebuilt Stage 8 readiness. Current local forward layer shows `3,547` forward records, `1,009` known 15m outcomes, `28%` forward known-outcome coverage, `0` pending windows, `5` observed days, and `0` trust/list mutations.
+
+Verification:
+
+- `python3 -m pytest tests/test_replay_validation_readiness.py -q`
+- `python3 -m py_compile research/replay_validation_readiness.py utils/build_replay_validation_readiness.py`
+- `python3 utils/build_replay_validation_readiness.py`
+
+Next:
+
+- Rebuild the downstream validation/proof reports so operator surfaces pick up the clarified Stage 8 forward-calibration fields, then commit and push the checkpoint before the computer reset.

@@ -6,7 +6,7 @@ from typing import Any
 
 MODE = "REPLAY_VALIDATION_STAGE8_READINESS_REVIEW_ONLY"
 READINESS_VERSION = "replay_validation_readiness.v1"
-KNOWN_OUTCOMES = ("runner", "rug", "dead", "loser")
+KNOWN_OUTCOMES = ("runner", "rug", "dead", "loser", "flat")
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -50,6 +50,48 @@ def known_15m_outcome_count(replay_summary: dict[str, Any]) -> int:
     return sum(safe_int(window.get(label)) for label in KNOWN_OUTCOMES)
 
 
+def forward_calibration_summary(
+    *,
+    forward_outcome_resolution: dict[str, Any],
+    daily_forward_calibration: dict[str, Any],
+) -> dict[str, Any]:
+    forward_summary = as_dict(forward_outcome_resolution.get("summary"))
+    daily_summary = as_dict(daily_forward_calibration.get("summary"))
+    daily_rows = daily_forward_calibration.get("days") if isinstance(daily_forward_calibration.get("days"), list) else []
+    outcome_counts: dict[str, int] = {}
+    for row in daily_rows:
+        for label, count in as_dict(as_dict(row).get("outcomes_15m")).items():
+            outcome_counts[str(label)] = outcome_counts.get(str(label), 0) + safe_int(count)
+
+    records = safe_int(forward_summary.get("records_scanned")) or safe_int(daily_summary.get("records"))
+    known_15m = safe_int(forward_summary.get("known_15m_outcomes")) or safe_int(
+        daily_summary.get("known_15m_outcomes")
+    )
+    mutations = safe_int(forward_summary.get("wallet_list_mutations")) + safe_int(
+        forward_summary.get("auto_trust_mutations")
+    )
+    mutations += safe_int(daily_summary.get("wallet_list_mutations")) + safe_int(
+        daily_summary.get("auto_trust_mutations")
+    )
+    return {
+        "records": records,
+        "known_15m_outcomes": known_15m,
+        "known_15m_outcome_rate": percent(known_15m, records),
+        "pending_windows": safe_int(forward_summary.get("pending_windows")),
+        "wallets_affected": safe_int(forward_summary.get("wallets_affected")),
+        "tokens_affected": safe_int(forward_summary.get("tokens_affected")),
+        "days": safe_int(daily_summary.get("days")) or len(daily_rows),
+        "outcomes_15m": dict(sorted(outcome_counts.items())),
+        "aggregate_window_outcome_counts": as_dict(forward_summary.get("window_outcome_counts")),
+        "status_counts": as_dict(forward_summary.get("status_counts")),
+        "mutation_count": mutations,
+        "review_only": forward_outcome_resolution.get("review_only") is not False
+        and daily_forward_calibration.get("review_only") is not False,
+        "live_execution_locked": forward_outcome_resolution.get("live_execution_locked") is not False
+        and daily_forward_calibration.get("live_execution_locked") is not False,
+    }
+
+
 def fillable_count(replay_summary: dict[str, Any]) -> int:
     fills = as_dict(replay_summary.get("fill_status_counts"))
     return (
@@ -85,6 +127,8 @@ def build_replay_validation_readiness_report(
     wallet_replay_scorecard: dict[str, Any],
     wallet_outcome_ledger: dict[str, Any],
     wallet_candidate_backfill_targets: dict[str, Any],
+    forward_outcome_resolution: dict[str, Any] | None = None,
+    daily_forward_calibration: dict[str, Any] | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
@@ -158,6 +202,10 @@ def build_replay_validation_readiness_report(
     unknown_liquidity = safe_int(as_dict(replay_summary.get("fill_status_counts")).get("unknown_liquidity"))
     unknown_liquidity_rate = percent(unknown_liquidity, replay_events)
     proof_readiness_pct = min(known_15m_rate, fillability_evidence_rate, data_score_readiness_pct)
+    forward_summary = forward_calibration_summary(
+        forward_outcome_resolution=as_dict(forward_outcome_resolution),
+        daily_forward_calibration=as_dict(daily_forward_calibration),
+    )
 
     evidence_gaps = evidence_gap_rows(
         known_15m_rate=known_15m_rate,
@@ -174,6 +222,10 @@ def build_replay_validation_readiness_report(
         if contract_pct == 100
         else "Stage 8 validation loop is incomplete; rebuild or repair failed validation artifacts."
     )
+    if forward_summary["records"] > 0:
+        operator_summary = (
+            f"{operator_summary} Forward calibration is reported separately from historical proof readiness."
+        )
 
     return {
         "generated_at": generated_at,
@@ -189,6 +241,12 @@ def build_replay_validation_readiness_report(
             "unsafe_events": unsafe_events,
             "known_15m_outcomes": known_15m,
             "known_15m_outcome_rate": known_15m_rate,
+            "forward_records": forward_summary["records"],
+            "forward_known_15m_outcomes": forward_summary["known_15m_outcomes"],
+            "forward_known_15m_outcome_rate": forward_summary["known_15m_outcome_rate"],
+            "forward_pending_windows": forward_summary["pending_windows"],
+            "forward_days": forward_summary["days"],
+            "forward_mutation_count": forward_summary["mutation_count"],
             "fillable_events": fillable,
             "fillable_rate": fillable_rate,
             "failed_liquidity_events": failed_liquidity,
@@ -206,6 +264,7 @@ def build_replay_validation_readiness_report(
         "passed_gates": passed_gates,
         "failed_gates": failed_gates,
         "gates": gates,
+        "forward_calibration_summary": forward_summary,
         "evidence_gaps": evidence_gaps,
         "target_summary": target_summary,
         "stage6_blocking_data_gaps": explicit_stage6_gaps,

@@ -58,6 +58,54 @@ class ReplayValidationReadinessTests(unittest.TestCase):
             },
         }
 
+    def forward_outcome_resolution(self):
+        return {
+            "mode": "FORWARD_OUTCOME_RESOLUTION_REVIEW_ONLY",
+            "live_execution_locked": True,
+            "summary": {
+                "records_scanned": 200,
+                "known_15m_outcomes": 120,
+                "pending_windows": 5,
+                "wallets_affected": 9,
+                "tokens_affected": 40,
+                "window_outcome_counts": {"flat": 410, "runner": 10, "unknown": 380},
+                "status_counts": {"forward_outcome_labeled": 120, "pending_forward_outcome_windows": 5},
+                "wallet_list_mutations": 0,
+                "auto_trust_mutations": 0,
+            },
+        }
+
+    def daily_forward_calibration(self):
+        return {
+            "mode": "DAILY_FORWARD_CALIBRATION_REVIEW_ONLY",
+            "live_execution_locked": True,
+            "summary": {
+                "days": 2,
+                "records": 200,
+                "known_15m_outcomes": 120,
+                "wallet_list_mutations": 0,
+                "auto_trust_mutations": 0,
+            },
+            "days": [
+                {
+                    "date": "2026-05-20",
+                    "records": 125,
+                    "known_15m_outcomes": 75,
+                    "outcomes_15m": {"flat": 70, "runner": 5, "unknown": 50},
+                    "wallets": 8,
+                    "tokens": 30,
+                },
+                {
+                    "date": "2026-05-21",
+                    "records": 75,
+                    "known_15m_outcomes": 45,
+                    "outcomes_15m": {"flat": 45, "unknown": 30},
+                    "wallets": 5,
+                    "tokens": 20,
+                },
+            ],
+        }
+
     def test_validation_contract_can_be_complete_while_proof_readiness_is_low(self):
         report = build_replay_validation_readiness_report(
             replay_summary=self.replay_summary(),
@@ -78,6 +126,26 @@ class ReplayValidationReadinessTests(unittest.TestCase):
         self.assertIn("replay_scorecard_matches_event_count", report["passed_gates"])
         self.assertIn("low_known_outcome_coverage", report["evidence_gaps"])
         self.assertIn("Stage 8 validation loop is complete; edge proof remains evidence-limited.", report["operator_summary"])
+
+    def test_forward_calibration_is_reported_without_increasing_historical_proof_readiness(self):
+        report = build_replay_validation_readiness_report(
+            replay_summary=self.replay_summary(),
+            stage6_readiness=self.stage6_report(),
+            wallet_replay_scorecard=self.scorecard(),
+            wallet_outcome_ledger=self.ledger(),
+            wallet_candidate_backfill_targets=self.backfill_targets(),
+            forward_outcome_resolution=self.forward_outcome_resolution(),
+            daily_forward_calibration=self.daily_forward_calibration(),
+            generated_at=123.0,
+        )
+
+        self.assertEqual(report["summary"]["proof_readiness_pct"], 0)
+        self.assertEqual(report["summary"]["forward_known_15m_outcomes"], 120)
+        self.assertEqual(report["summary"]["forward_known_15m_outcome_rate"], 60)
+        self.assertEqual(report["summary"]["forward_pending_windows"], 5)
+        self.assertEqual(report["summary"]["forward_days"], 2)
+        self.assertEqual(report["forward_calibration_summary"]["outcomes_15m"]["flat"], 115)
+        self.assertIn("Forward calibration is reported separately from historical proof readiness.", report["operator_summary"])
 
     def test_fillability_target_uses_known_fillability_evidence_not_positive_fills_only(self):
         replay = self.replay_summary()
@@ -146,6 +214,41 @@ class ReplayValidationReadinessTests(unittest.TestCase):
             self.assertTrue(out.exists())
             self.assertEqual(report["summary"]["stage8_validation_contract_completion_pct"], 100)
             self.assertIn("input_paths", report)
+
+    def test_writer_can_include_forward_calibration_inputs(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            replay = root / "replay.json"
+            stage6 = root / "stage6.json"
+            scorecard = root / "scorecard.json"
+            ledger = root / "ledger.json"
+            targets = root / "targets.json"
+            forward = root / "forward.json"
+            daily = root / "daily.json"
+            out = root / "stage8.json"
+            replay.write_text(json.dumps(self.replay_summary()), encoding="utf-8")
+            stage6.write_text(json.dumps(self.stage6_report()), encoding="utf-8")
+            scorecard.write_text(json.dumps(self.scorecard()), encoding="utf-8")
+            ledger.write_text(json.dumps(self.ledger()), encoding="utf-8")
+            targets.write_text(json.dumps(self.backfill_targets()), encoding="utf-8")
+            forward.write_text(json.dumps(self.forward_outcome_resolution()), encoding="utf-8")
+            daily.write_text(json.dumps(self.daily_forward_calibration()), encoding="utf-8")
+
+            report = write_replay_validation_readiness_report(
+                replay_summary_path=replay,
+                stage6_readiness_path=stage6,
+                wallet_replay_scorecard_path=scorecard,
+                wallet_outcome_ledger_path=ledger,
+                wallet_candidate_backfill_targets_path=targets,
+                forward_outcome_resolution_path=forward,
+                daily_forward_calibration_path=daily,
+                report_path=out,
+                generated_at=123.0,
+            )
+
+            self.assertEqual(report["summary"]["forward_known_15m_outcomes"], 120)
+            self.assertIn("forward_outcome_resolution", report["input_paths"])
+            self.assertIn("daily_forward_calibration", report["input_paths"])
 
 
 if __name__ == "__main__":
