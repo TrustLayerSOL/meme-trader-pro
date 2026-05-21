@@ -11656,3 +11656,39 @@ Verification:
 Next:
 
 - Build a review-only decision prep artifact for the repeatability-supported wallet that summarizes the evidence and keeps the output as `manual_review_required`, not promotion.
+
+### 2026-05-21 - Forward Signal Decision Prep
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward signal decision prep is complete as a read-only human-review handoff. It does not raise historical proof readiness, promote wallets, mutate wallet lists, or change execution.
+
+Changed files:
+
+- `wallets/forward_signal_decision_prep.py`
+- `utils/build_forward_signal_decision_prep.py`
+- `tests/test_forward_signal_decision_prep.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a decision-prep artifact over the forward signal validator and review packet.
+- Repeatability-supported wallets become `manual_review_required` only.
+- Current local prep creates `1` prepared decision, `1` manual-review-required row, and `0` held-out wallets.
+- Promotions remain `0`, trust mutations remain `0`, and wallet-list mutations remain `0`.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_signal_decision_prep.py -q`
+- `python3 utils/build_forward_signal_decision_prep.py`
+
+Next:
+
+- Build an operator-readable rollup that combines packet, validator, and decision prep into one short review file so the wallet can be inspected without opening three artifacts.
