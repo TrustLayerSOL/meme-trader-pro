@@ -11251,3 +11251,42 @@ Verification:
 Next:
 
 - Run one tiny free-mode dry run, then one bounded execute probe only if public RPC is responsive. Keep the probe small because public Solana RPC is rate-limited and should be treated as a limited fallback, not a high-volume data source.
+
+### 2026-05-21 - Free RPC Fallback Canary
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward free-RPC collection lane moves from `limited/unproven` to `small-canary usable`: public fallback URLs and stable request headers allow a small throttled collection without paid Helius usage. This is not yet enough for a 24-hour 50-wallet run.
+
+Changed files:
+
+- `utils/discover_candidate_wallets.py`
+- `utils/run_forward_wallet_activity.py`
+- `tests/test_forward_wallet_activity.py`
+- `AGENT_WORKFLOW.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a stable `MemeTraderPro/forward-evidence` user-agent header to the shared synchronous RPC client so public/free gateways that require a user agent can respond.
+- Added `--free-rpc-urls` support to the forward wallet activity runner. Helius/API-key URLs are still filtered unless `--allow-paid-rpc` is explicitly used.
+- Proved the public fallback canary shape with `10` wallets, `22` evidence rows, `18` market snapshots, and `0` RPC-error-blocked wallets.
+- The canary remained `rpc_mode=free_public_rpc` and `paid_rpc_allowed=false`.
+- Outcome resolution stayed review-only: wallet trust mutations `0`, wallet list mutations `0`, pending windows `6`, known `15m` outcomes `0` until windows mature.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_wallet_activity.py::ForwardWalletActivityTests::test_forward_rpc_client_accepts_public_fallback_urls_without_paid_providers tests/test_forward_wallet_activity.py::ForwardWalletActivityTests::test_sync_rpc_client_sends_user_agent_for_public_gateways -q`
+- `python3 utils/run_forward_wallet_activity.py --free-mode --free-rpc-urls "https://api.mainnet.solana.com,https://solana-rpc.publicnode.com" --execute --interval 900 --max-wallets 10 --signature-limit 8 --max-transactions-per-wallet 3 --request-pause-seconds 1.5 --max-rpc-calls-per-day 120000 --capture-market-context`
+- `python3 utils/build_forward_outcome_resolution.py`
+
+Next:
+
+- Wait for the forward windows to mature, rerun outcome resolution, then run one 30-minute canary at the proven small/throttled free-RPC settings before considering a longer public-RPC schedule.

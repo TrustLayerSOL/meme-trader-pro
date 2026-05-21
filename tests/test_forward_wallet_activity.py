@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from core.rpc_provider import HeliusRpcProvider
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_DAY
 from wallets.forward_wallet_activity import estimate_api_budget
@@ -10,6 +12,7 @@ from wallets.forward_wallet_activity import select_forward_wallets
 from utils.run_forward_wallet_activity import run_forward_wallet_activity_cycle
 from utils.run_forward_wallet_activity import write_forward_wallet_activity_report
 from utils.run_forward_wallet_activity import build_forward_rpc_client
+from utils.discover_candidate_wallets import SyncRpcClient
 
 
 class FakeRpc:
@@ -316,6 +319,45 @@ class ForwardWalletActivityTests(unittest.TestCase):
         self.assertTrue(rpc.providers)
         self.assertTrue(all("helius" not in provider.url for provider in rpc.providers))
         self.assertTrue(all("api-key=" not in provider.url for provider in rpc.providers))
+
+    def test_forward_rpc_client_accepts_public_fallback_urls_without_paid_providers(self):
+        rpc = build_forward_rpc_client(
+            allow_paid_rpc=False,
+            free_rpc_urls="https://solana-rpc.publicnode.com, https://mainnet.helius-rpc.com/?api-key=bad",
+        )
+
+        self.assertIn("https://solana-rpc.publicnode.com", [provider.url for provider in rpc.providers])
+        self.assertTrue(all("helius" not in provider.url for provider in rpc.providers))
+        self.assertTrue(all("api-key=" not in provider.url for provider in rpc.providers))
+
+    def test_sync_rpc_client_sends_user_agent_for_public_gateways(self):
+        requests = []
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b'{"jsonrpc":"2.0","result":"ok","id":1}'
+
+        def fake_urlopen(request, timeout):
+            requests.append(request)
+            return FakeResponse()
+
+        rpc = SyncRpcClient(
+            providers=[HeliusRpcProvider("public_fallback_1", "https://solana-rpc.publicnode.com")],
+        )
+
+        with mock.patch("utils.discover_candidate_wallets.urlopen", side_effect=fake_urlopen):
+            result = rpc.call("getHealth", [])
+
+        self.assertEqual(result, "ok")
+        self.assertIn("MemeTraderPro", requests[0].get_header("User-agent"))
 
     def test_forward_report_records_free_rpc_mode(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -41,6 +41,10 @@ TRACKED_WALLETS = ROOT / "data" / "tracked_wallets.json"
 WALLET_PERFORMANCE = ROOT / "data" / "wallet_performance.json"
 CANDIDATE_WALLETS = ROOT / "data" / "candidate_wallets.json"
 BAD_WALLETS = ROOT / "data" / "bad_wallets.json"
+RPC_REQUEST_HEADERS = {
+    "content-type": "application/json",
+    "user-agent": "MemeTraderPro/forward-evidence",
+}
 
 
 class SyncRpcClient:
@@ -62,7 +66,7 @@ class SyncRpcClient:
             request = Request(
                 provider.url,
                 data=payload,
-                headers={"content-type": "application/json"},
+                headers=RPC_REQUEST_HEADERS,
             )
             try:
                 with urlopen(request, timeout=self.timeout) as response:
@@ -108,7 +112,7 @@ class SyncRpcClient:
             request = Request(
                 provider.url,
                 data=payload,
-                headers={"content-type": "application/json"},
+                headers=RPC_REQUEST_HEADERS,
             )
             try:
                 with urlopen(request, timeout=self.timeout) as response:

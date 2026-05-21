@@ -107,6 +107,7 @@ Do not make broad rewrites of these areas unless the user explicitly asks or the
 - Do not promise or imply guaranteed trading profits in UI, docs, or marketing assets.
 - Do not send raw wallet spam or hype alerts to Discord. Only send meaningful behavioral review transitions, proof/readiness events, regime shifts, evidence milestones, or wallet degradation/promotion review items.
 - Forward wallet evidence collection defaults to public/free RPC only. Do not use Helius or other paid RPC for forward collection unless the user explicitly approves it for that run and the command uses the explicit `--allow-paid-rpc` opt-in.
+- Free forward collection can use `--free-rpc-urls` / `MTP_FREE_SOLANA_RPC_URLS` for public fallback endpoints. Treat those endpoints as unstable and rate-limited; run a small canary before any long collection.
 
 ## Runtime State Rules
 
