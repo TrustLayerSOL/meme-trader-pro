@@ -11436,3 +11436,40 @@ Verification:
 Next:
 
 - If staying fully no-paid-data, the next useful implementation is a bounded local "entry context repair plan" that lists exactly why the `22` blocked wallets lack entry context and what free/current collection artifact would be needed to unblock each one.
+
+### 2026-05-21 - Forward Entry Context Repair Plan
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward entry-context repair planning is now complete as a review-only blocker map. It does not raise proof readiness, promote wallets, mutate wallet lists, or change execution.
+
+Changed files:
+
+- `wallets/forward_entry_context_repair_plan.py`
+- `utils/build_forward_entry_context_repair_plan.py`
+- `tests/test_forward_entry_context_repair_plan.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a read-only report that classifies forward rows blocked by `missing_forward_entry_price`.
+- The report separates rows with quote anchors from rows needing market snapshots.
+- It also checks whether quote-anchor rows have later market snapshots before treating them as repair-ready evidence.
+- Current local report covers `31` wallets and `2,538` blocked rows: `562` rows have quote-anchor evidence, `83` have quote anchor plus later market snapshots, `479` have quote anchor but no later snapshot support, and `1,976` still need market snapshots entirely.
+- Wallet-list mutations and trust mutations remain `0`.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_entry_context_repair_plan.py -q`
+- `python3 utils/build_forward_entry_context_repair_plan.py`
+
+Next:
+
+- Build the guarded resolver for the `83` quote-anchor-plus-snapshot rows only, then keep all rows without snapshot support blocked and focus future collection on capturing entry price/market context at observation time.
