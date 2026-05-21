@@ -11692,3 +11692,38 @@ Verification:
 Next:
 
 - Build an operator-readable rollup that combines packet, validator, and decision prep into one short review file so the wallet can be inspected without opening three artifacts.
+
+### 2026-05-21 - Forward Signal Operator Rollup
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward signal operator rollup is complete as a single-file manual review surface. It does not raise historical proof readiness, promote wallets, mutate wallet lists, or change execution.
+
+Changed files:
+
+- `wallets/forward_signal_operator_rollup.py`
+- `utils/build_forward_signal_operator_rollup.py`
+- `tests/test_forward_signal_operator_rollup.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a one-file operator rollup over the forward signal packet, validator, and decision prep artifacts.
+- The rollup summarizes the wallet, decision type, validation status, runner rows, unknown rows, distinct runner token mints, top token mints, and required human checks.
+- Current local rollup reports `1` wallet, `1` manual-review-required row, `1` repeatability-supported wallet, `0` promotions allowed, `0` trust mutations allowed, and `0` wallet-list mutations allowed.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_signal_operator_rollup.py -q`
+- `python3 utils/build_forward_signal_operator_rollup.py`
+
+Next:
+
+- Add this rollup to the daily/Obsidian review export or expose it through the local read-only API so the operator can inspect it without opening generated files directly.
