@@ -17,6 +17,7 @@ from core.env_loader import load_env
 from core.storage import EventStore
 from core.json_store import atomic_write_json, read_json
 from core.runtime_status import update_component
+from core.rpc_provider import build_public_rpc_providers
 from utils.discover_candidate_wallets import SyncRpcClient
 from utils.run_wallet_history_backfill import merge_wallet_evidence_rows
 from wallets.forward_market_context import build_forward_market_context_report
@@ -93,6 +94,8 @@ def write_forward_wallet_activity_report(
     max_market_mints: int = DEFAULT_MAX_MARKET_CONTEXT_MINTS,
     max_market_context_calls_per_cycle: int = DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE,
     max_event_snapshot_lag_seconds: float = DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS,
+    rpc_mode: str = "free_public_rpc",
+    paid_rpc_allowed: bool = False,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     report = build_forward_wallet_activity_report(
@@ -110,6 +113,8 @@ def write_forward_wallet_activity_report(
         max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=max_rpc_calls_per_day,
     )
+    report["rpc_mode"] = str(rpc_mode)
+    report["paid_rpc_allowed"] = bool(paid_rpc_allowed)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(generated_at))
     raw_rows = report.pop("raw_transactions", [])
     if raw_rows:
@@ -205,6 +210,8 @@ def run_forward_wallet_activity_cycle(
     max_market_context_calls_per_cycle: int = DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE,
     max_event_snapshot_lag_seconds: float = DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS,
     interval_seconds: int | None = None,
+    rpc_mode: str = "free_public_rpc",
+    paid_rpc_allowed: bool = False,
 ) -> dict[str, Any]:
     update_status(
         COMPONENT,
@@ -217,6 +224,8 @@ def run_forward_wallet_activity_cycle(
         max_rpc_calls_per_day=max_rpc_calls_per_day,
         capture_market_context=bool(capture_market_context),
         max_market_context_calls_per_cycle=max_market_context_calls_per_cycle,
+        rpc_mode=rpc_mode,
+        paid_rpc_allowed=paid_rpc_allowed,
     )
     report = write_report(
         rpc=rpc,
@@ -263,8 +272,16 @@ def run_forward_wallet_activity_cycle(
             else None
         ),
         heartbeat_interval=interval_seconds,
+        rpc_mode=rpc_mode,
+        paid_rpc_allowed=bool(paid_rpc_allowed),
     )
     return report
+
+
+def build_forward_rpc_client(*, allow_paid_rpc: bool = False, timeout: int = 15) -> SyncRpcClient:
+    if allow_paid_rpc:
+        return SyncRpcClient(timeout=timeout)
+    return SyncRpcClient(providers=build_public_rpc_providers(), timeout=timeout)
 
 
 async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict[str, Any] | None = None) -> None:
@@ -273,7 +290,8 @@ async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict
     while True:
         try:
             load_env()
-            rpc = SyncRpcClient() if config.get("execute") else None
+            allow_paid_rpc = bool(config.get("allow_paid_rpc"))
+            rpc = build_forward_rpc_client(allow_paid_rpc=allow_paid_rpc) if config.get("execute") else None
             await asyncio.to_thread(
                 run_forward_wallet_activity_cycle,
                 rpc=rpc,
@@ -294,6 +312,8 @@ async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict
                     config.get("max_event_snapshot_lag_seconds", DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS)
                 ),
                 interval_seconds=interval_seconds,
+                rpc_mode="paid_rpc_explicit" if allow_paid_rpc else "free_public_rpc",
+                paid_rpc_allowed=allow_paid_rpc,
             )
         except Exception as exc:
             update_component(
@@ -324,13 +344,21 @@ def main() -> int:
     parser.add_argument("--max-market-context-calls-per-cycle", type=int, default=DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE)
     parser.add_argument("--max-event-snapshot-lag-seconds", type=float, default=DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECONDS)
     parser.add_argument("--no-persist-market-context", action="store_true", help="Write context JSONL but skip SQLite token_snapshots persistence.")
+    parser.add_argument("--free-mode", action="store_true", help="Use public/free RPC only. This is the default and is kept as an explicit operator reminder.")
+    parser.add_argument("--allow-paid-rpc", action="store_true", help="Explicitly allow Helius/paid RPC providers. Default is public/free RPC only.")
     parser.add_argument("--out", type=Path, default=DEFAULT_REPORT)
     args = parser.parse_args()
+    if args.free_mode and args.allow_paid_rpc:
+        parser.error("--free-mode cannot be combined with --allow-paid-rpc")
 
     load_env()
-    rpc = SyncRpcClient() if args.execute else None
+    rpc_mode = "paid_rpc_explicit" if args.allow_paid_rpc else "free_public_rpc"
+    rpc = build_forward_rpc_client(allow_paid_rpc=args.allow_paid_rpc) if args.execute else None
     if args.loop:
-        print(f"Forward wallet activity scheduler running every {args.interval}s. Live execution remains locked.")
+        print(
+            f"Forward wallet activity scheduler running every {args.interval}s. "
+            f"Live execution remains locked. rpc_mode={rpc_mode}"
+        )
         asyncio.run(
             forward_wallet_activity_loop(
                 interval_seconds=args.interval,
@@ -347,6 +375,7 @@ def main() -> int:
                     "max_market_mints": args.max_market_mints,
                     "max_market_context_calls_per_cycle": args.max_market_context_calls_per_cycle,
                     "max_event_snapshot_lag_seconds": args.max_event_snapshot_lag_seconds,
+                    "allow_paid_rpc": args.allow_paid_rpc,
                 },
             )
         )
@@ -368,14 +397,17 @@ def main() -> int:
         max_market_context_calls_per_cycle=args.max_market_context_calls_per_cycle,
         max_event_snapshot_lag_seconds=args.max_event_snapshot_lag_seconds,
         interval_seconds=args.interval,
+        rpc_mode=rpc_mode,
+        paid_rpc_allowed=args.allow_paid_rpc,
     )
     summary = report["summary"]
     api_budget = report.get("api_budget", {})
     market_summary = (report.get("market_context") or {}).get("summary") or {}
     print(
-        "wrote {} execute={} wallets={} collected={} evidence_rows={} old_skipped={} budget={} est_calls={} market_snapshots={}".format(
+        "wrote {} execute={} rpc_mode={} wallets={} collected={} evidence_rows={} old_skipped={} budget={} est_calls={} market_snapshots={}".format(
             Path(args.out).relative_to(ROOT),
             bool(args.execute),
+            rpc_mode,
             summary["wallets_processed"],
             summary["wallets_collected"],
             summary["evidence_rows_created"],

@@ -47,6 +47,34 @@ def _split_urls(value):
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
+def _is_paid_rpc_url(url):
+    text = str(url or "").lower()
+    return "helius" in text or "api-key=" in text or "{api_key}" in text
+
+
+def build_public_rpc_providers(urls=None):
+    """Build public/free RPC providers only.
+
+    This deliberately drops Helius/API-key URLs so forward collection can run
+    in no-paid-RPC mode without silently spending provider credits.
+    """
+    raw_urls = [DEFAULT_PUBLIC_SOLANA_URL]
+    raw_urls.extend(_split_urls(urls if urls is not None else os.getenv("MTP_FREE_SOLANA_RPC_URLS")))
+
+    providers = []
+    seen = set()
+    fallback_index = 1
+    for url in raw_urls:
+        if _is_paid_rpc_url(url) or url in seen:
+            continue
+        name = "solana_public" if url == DEFAULT_PUBLIC_SOLANA_URL else f"public_fallback_{fallback_index}"
+        providers.append(HeliusRpcProvider(name=name, url=url))
+        seen.add(url)
+        if name.startswith("public_fallback_"):
+            fallback_index += 1
+    return providers
+
+
 def build_helius_rpc_providers(api_key=None, primary_url=None, fallback_urls=None):
     api_key = api_key or os.getenv("HELIUS_API_KEY")
     if not api_key:

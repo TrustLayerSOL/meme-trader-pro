@@ -106,6 +106,7 @@ Do not make broad rewrites of these areas unless the user explicitly asks or the
 - Keep sell-route/quote feasibility as a required future live-execution gate.
 - Do not promise or imply guaranteed trading profits in UI, docs, or marketing assets.
 - Do not send raw wallet spam or hype alerts to Discord. Only send meaningful behavioral review transitions, proof/readiness events, regime shifts, evidence milestones, or wallet degradation/promotion review items.
+- Forward wallet evidence collection defaults to public/free RPC only. Do not use Helius or other paid RPC for forward collection unless the user explicitly approves it for that run and the command uses the explicit `--allow-paid-rpc` opt-in.
 
 ## Runtime State Rules
 

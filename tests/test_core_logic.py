@@ -32,6 +32,7 @@ from core.market_radar import (
 from core.rpc_provider import (
     HeliusRpcProvider,
     build_helius_rpc_providers,
+    build_public_rpc_providers,
     choose_first_healthy_provider,
     summarize_provider_health,
 )
@@ -203,6 +204,15 @@ class RpcProviderTests(unittest.TestCase):
 
         external = next(provider for provider in providers if provider.name == "fallback_1")
         self.assertEqual(external.url, "https://external.example/rpc")
+
+    def test_public_rpc_providers_never_include_helius_or_api_keys(self):
+        providers = build_public_rpc_providers(
+            urls="https://api.mainnet-beta.solana.com, https://public.example/rpc, https://mainnet.helius-rpc.com/?api-key=bad",
+        )
+
+        self.assertEqual([provider.name for provider in providers], ["solana_public", "public_fallback_1"])
+        self.assertTrue(all("helius" not in provider.url for provider in providers))
+        self.assertTrue(all("api-key=" not in provider.url for provider in providers))
 
 
 class CandidateWalletDiscoveryTests(unittest.TestCase):

@@ -11210,3 +11210,44 @@ Verification:
 Next:
 
 - Wait for the `15m` windows from the post-fix rows to mature, then rerun `python3 utils/build_forward_outcome_resolution.py` and review the daily forward calibration report.
+
+### 2026-05-21 - Forward Evidence No-Paid-RPC Default
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward calibration lane remains evidence-limited, but provider safety improved: forward collection now defaults to public/free RPC only and cannot use Helius unless the operator explicitly passes `--allow-paid-rpc`.
+
+Changed files:
+
+- `core/rpc_provider.py`
+- `utils/run_forward_wallet_activity.py`
+- `tests/test_core_logic.py`
+- `tests/test_forward_wallet_activity.py`
+- `AGENT_WORKFLOW.md`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added `build_public_rpc_providers()` for public/free RPC providers only.
+- The public provider builder drops Helius/API-key URLs so no-paid forward collection cannot silently spend paid provider credits.
+- Forward wallet activity now builds a public-only RPC client by default.
+- Helius/paid RPC for forward collection now requires the explicit `--allow-paid-rpc` opt-in.
+- Forward reports and runtime status record `rpc_mode` and `paid_rpc_allowed`.
+- Added explicit `--free-mode` as an operator reminder; it cannot be combined with `--allow-paid-rpc`.
+
+Verification:
+
+- `python3 -m pytest tests/test_core_logic.py::RpcProviderTests::test_public_rpc_providers_never_include_helius_or_api_keys tests/test_forward_wallet_activity.py::ForwardWalletActivityTests::test_forward_rpc_client_defaults_to_public_only_providers tests/test_forward_wallet_activity.py::ForwardWalletActivityTests::test_forward_report_records_free_rpc_mode -q`
+- `python3 -m pytest tests/test_forward_wallet_activity.py tests/test_forward_market_context.py tests/test_forward_outcome_resolution.py tests/test_core_logic.py::RpcProviderTests -q`
+- `python3 -m py_compile core/rpc_provider.py utils/run_forward_wallet_activity.py`
+
+Next:
+
+- Run one tiny free-mode dry run, then one bounded execute probe only if public RPC is responsive. Keep the probe small because public Solana RPC is rate-limited and should be treated as a limited fallback, not a high-volume data source.

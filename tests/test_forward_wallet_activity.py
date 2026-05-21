@@ -9,6 +9,7 @@ from wallets.forward_wallet_activity import estimate_api_budget
 from wallets.forward_wallet_activity import select_forward_wallets
 from utils.run_forward_wallet_activity import run_forward_wallet_activity_cycle
 from utils.run_forward_wallet_activity import write_forward_wallet_activity_report
+from utils.run_forward_wallet_activity import build_forward_rpc_client
 
 
 class FakeRpc:
@@ -308,6 +309,35 @@ class ForwardWalletActivityTests(unittest.TestCase):
         self.assertEqual(updates[-1][1]["api_budget_status"], "blocked_cycle_limit")
         self.assertEqual(updates[-1][1]["estimated_rpc_calls_per_cycle"], 3150)
         self.assertEqual(updates[-1][1]["wallets_blocked_api_budget"], 150)
+
+    def test_forward_rpc_client_defaults_to_public_only_providers(self):
+        rpc = build_forward_rpc_client(allow_paid_rpc=False)
+
+        self.assertTrue(rpc.providers)
+        self.assertTrue(all("helius" not in provider.url for provider in rpc.providers))
+        self.assertTrue(all("api-key=" not in provider.url for provider in rpc.providers))
+
+    def test_forward_report_records_free_rpc_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = write_forward_wallet_activity_report(
+                out_path=root / "forward_report.json",
+                evidence_path=root / "wallet_history_evidence.jsonl",
+                report_dir=root / "reports",
+                raw_dir=root / "raw",
+                tracked_wallets=[{"wallet": "WalletA"}],
+                paper_watch_wallets=[],
+                rpc=FakeRpc(),
+                generated_at=1000,
+                lookback_seconds=900,
+                execute=True,
+                max_wallets=1,
+                rpc_mode="free_public_rpc",
+                paid_rpc_allowed=False,
+            )
+
+            self.assertEqual(report["rpc_mode"], "free_public_rpc")
+            self.assertFalse(report["paid_rpc_allowed"])
 
 
 if __name__ == "__main__":
