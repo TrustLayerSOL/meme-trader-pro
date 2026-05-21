@@ -293,6 +293,10 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
     wallet_history_backfill = read_json(data_dir / "wallet_backfills" / "wallet_history_backfill_report.json", {})
     wallet_evidence_enrichment = read_json(data_dir / "wallet_backfills" / "wallet_evidence_enrichment_report.json", {})
     wallet_missing_market_context = read_json(data_dir / "wallet_backfills" / "wallet_missing_market_context_report.json", {})
+    forward_signal_operator_rollup = read_json(
+        data_dir / "reports" / "forward_testing" / "forward_signal_operator_rollup.json",
+        {},
+    )
     paper = read_json(data_dir / "paper_trades.json", {})
     replay_visibility = read_json(data_dir / "replay_visibility_report.json", {})
     wallet_replay_scorecard = read_json(data_dir / "wallet_replay_scorecard.json", {})
@@ -323,6 +327,7 @@ def load_snapshot(config: ObsidianExportConfig) -> dict[str, Any]:
         "wallet_history_backfill": wallet_history_backfill,
         "wallet_evidence_enrichment": wallet_evidence_enrichment,
         "wallet_missing_market_context": wallet_missing_market_context,
+        "forward_signal_operator_rollup": forward_signal_operator_rollup,
         "replay_visibility": replay_visibility,
         "wallet_replay_review": build_wallet_replay_review(wallet_replay_scorecard),
     }

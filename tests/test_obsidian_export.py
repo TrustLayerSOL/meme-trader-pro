@@ -551,6 +551,33 @@ old generated body
                         }
                     ],
                 },
+                "forward_signal_operator_rollup": {
+                    "summary": {
+                        "wallets": 1,
+                        "manual_review_required": 1,
+                        "repeatability_supported": 1,
+                        "promotions_allowed": 0,
+                        "trust_mutations_allowed": 0,
+                        "wallet_list_mutations_allowed": 0,
+                    },
+                    "wallets": [
+                        {
+                            "wallet": "WalletFORWARD123",
+                            "decision_type": "manual_review_required",
+                            "validation_status": "repeatability_supported_manual_review",
+                            "runner_rows": 59,
+                            "unknown_15m_rows": 14,
+                            "runner_distinct_token_mints": 33,
+                            "runner_signal_span_seconds": 37734.0,
+                            "dominant_runner_token_share": 0.067797,
+                            "top_token_mints": [{"token_mint": "MintFORWARD", "rows": 4}],
+                            "required_human_checks": ["do not promote from this artifact alone"],
+                            "promotion_allowed": False,
+                            "wallet_trust_mutation_allowed": False,
+                            "wallet_list_mutation_allowed": False,
+                        }
+                    ],
+                },
             }
         )
 
@@ -564,6 +591,7 @@ old generated body
         evidence_enrichment = notes["Dashboards/Wallet Evidence Enrichment.md"]
         missing_context = notes["Dashboards/Wallet Missing Market Context.md"]
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
+        forward_review = notes["Dashboards/Forward Signal Operator Review.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
         lineage = notes["Dashboards/MemeTraderPro Signal Lineage.md"]
@@ -593,6 +621,7 @@ old generated body
         self.assertIn("MemeTraderPro Anomaly Radar", command)
         self.assertIn("MemeTraderPro Drift Monitor", command)
         self.assertIn("Wallet Replay Ecosystem Review", command)
+        self.assertIn("Forward Signal Operator Review", command)
         self.assertIn("Wallet Candidate Evidence Plan", command)
         self.assertIn("Wallet Missing Market Context", command)
         self.assertIn("Wallet Review Decisions", command)
@@ -624,6 +653,12 @@ old generated body
         self.assertIn("reviewable wallets: 2", command)
         self.assertIn("WalletGOOD", replay)
         self.assertIn("type: wallet_replay_ecosystem_review", replay)
+        self.assertIn("type: forward_signal_operator_review", forward_review)
+        self.assertIn("WalletFORWARD123", forward_review)
+        self.assertIn("manual_review_required", forward_review)
+        self.assertIn("repeatability_supported_manual_review", forward_review)
+        self.assertIn("MintFORWARD", forward_review)
+        self.assertIn("do not promote from this artifact alone", forward_review)
         self.assertIn("What Matters Today", shared)
         self.assertIn("Cross-Project Command Centers", shared)
         self.assertIn("Daily Threat Radar Dashboard", shared)

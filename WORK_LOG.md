@@ -11727,3 +11727,38 @@ Verification:
 Next:
 
 - Add this rollup to the daily/Obsidian review export or expose it through the local read-only API so the operator can inspect it without opening generated files directly.
+
+### 2026-05-21 - Forward Signal Obsidian Review Surface
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward signal operator rollup is now wired into the generated Obsidian research dashboard layer. This is review-only and does not raise historical proof readiness, promote wallets, mutate wallet lists, mutate wallet trust, or change execution.
+
+Changed files:
+
+- `obsidian_export/intelligence_notes.py`
+- `obsidian_export/exporter.py`
+- `tests/test_obsidian_export.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added `Dashboards/Forward Signal Operator Review.md` to the Obsidian intelligence export.
+- Added the forward-signal manual-review queue to the MemeTraderPro research command center.
+- Loaded `data/reports/forward_testing/forward_signal_operator_rollup.json` into the Obsidian snapshot so the dashboard uses the same generated operator rollup artifact.
+- The dashboard preserves the safety locks: promotions remain `0`, trust mutations remain `0`, wallet-list mutations remain `0`, and execution remains locked.
+
+Verification:
+
+- `python3 -m pytest tests/test_obsidian_export.py -q`
+
+Next:
+
+- Run the Obsidian exporter against the local vault and verify the new `Forward Signal Operator Review` note is generated and visible from the command center.

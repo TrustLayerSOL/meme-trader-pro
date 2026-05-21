@@ -34,6 +34,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/Wallet Evidence Enrichment.md": render_wallet_evidence_enrichment(snapshot),
         "Dashboards/Wallet Missing Market Context.md": render_wallet_missing_market_context(snapshot),
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
+        "Dashboards/Forward Signal Operator Review.md": render_forward_signal_operator_review(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
         "../SharedQuant/Dashboards/Quant Research Command Center.md": render_shared_quant_dashboard(),
@@ -133,6 +134,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     enrichment_summary = as_dict(evidence_enrichment.get("summary"))
     missing_context = as_dict(snapshot.get("wallet_missing_market_context"))
     missing_context_summary = as_dict(missing_context.get("summary"))
+    forward_rollup = as_dict(snapshot.get("forward_signal_operator_rollup"))
+    forward_summary = as_dict(forward_rollup.get("summary"))
     priority_rows = _priority_queue_rows(
         anomaly,
         drift,
@@ -142,6 +145,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
         backfill_summary,
         enrichment_summary,
         missing_context_summary,
+        forward_summary,
     )
     frontmatter["p0_count"] = _p0_count(priority_rows)
     body = f"""# MemeTraderPro Research Command Center
@@ -180,6 +184,7 @@ This is the daily MemeTraderPro operating surface. It tells you which wallet, si
     "[[Wallet Candidate Evidence Plan]] - replay/outcome evidence gaps",
     "[[Wallet Missing Market Context]] - token-context backfill targets",
     "[[Wallet Replay Ecosystem Review]] - replay-safe wallet evidence",
+    "[[Forward Signal Operator Review]] - repaired forward-signal wallet review before any trust decision",
     "[[Wallet Review Decisions]] - saved human review decisions",
 ])}
 
@@ -199,6 +204,7 @@ def _priority_queue_rows(
     backfill_summary: dict[str, Any],
     enrichment_summary: dict[str, Any],
     missing_context_summary: dict[str, Any],
+    forward_summary: dict[str, Any],
 ) -> list[tuple[str, str, int, str, str]]:
     return [
         (
@@ -256,6 +262,13 @@ def _priority_queue_rows(
             _count_value(backfill_summary.get("needs_wallet_history")),
             "Backfill targets can become future reviewable wallets.",
             "[[Wallet Candidate Backfill Targets]]",
+        ),
+        (
+            "P1",
+            "Forward-signal manual review",
+            _count_value(forward_summary.get("manual_review_required")),
+            "Repaired forward evidence is review-worthy but still cannot mutate wallet trust.",
+            "[[Forward Signal Operator Review]]",
         ),
     ]
 
@@ -535,6 +548,59 @@ def render_wallet_replay_review(snapshot: dict[str, Any]) -> str:
 This shows replay-safe wallet evidence: which wallets have enough replay coverage, which remain low coverage, and where co-entry behavior may affect wallet trust.
 
 {report}
+"""
+    return _note(frontmatter, body)
+
+
+def render_forward_signal_operator_review(snapshot: dict[str, Any]) -> str:
+    rollup = as_dict(snapshot.get("forward_signal_operator_rollup"))
+    summary = as_dict(rollup.get("summary"))
+    wallets = [row for row in rollup.get("wallets") or [] if isinstance(row, dict)][:25]
+    checks: list[str] = []
+    for row in wallets:
+        for check in row.get("required_human_checks") or []:
+            text = str(check)
+            if text and text not in checks:
+                checks.append(text)
+
+    frontmatter = _frontmatter("forward_signal_operator_review")
+    frontmatter["manual_review_required"] = _count_value(summary.get("manual_review_required"))
+    frontmatter["repeatability_supported"] = _count_value(summary.get("repeatability_supported"))
+    body = f"""# Forward Signal Operator Review
+
+{GENERATED_MARKER}
+
+## What This Dashboard Does
+
+This is the one-file Obsidian review surface for repaired forward-signal wallets. It is for human review only. It does not approve wallet trust, wallet-list changes, or execution.
+
+## Current Decision
+
+{table(
+    ["Area", "Count", "Meaning"],
+    [
+        ["Wallets", _count(summary.get("wallets")), "Wallets included in the forward-signal rollup"],
+        ["Manual review required", _count(summary.get("manual_review_required")), "Human review needed before any future trust discussion"],
+        ["Repeatability supported", _count(summary.get("repeatability_supported")), "Evidence survived the repeatability validator"],
+        ["Promotions allowed", _count(summary.get("promotions_allowed")), "Must remain zero in this artifact"],
+        ["Trust mutations allowed", _count(summary.get("trust_mutations_allowed")), "Must remain zero in this artifact"],
+        ["Wallet-list mutations allowed", _count(summary.get("wallet_list_mutations_allowed")), "Must remain zero in this artifact"],
+    ],
+)}
+
+## Wallets To Review
+
+{_forward_signal_operator_wallet_table(wallets)}
+
+## Required Human Checks
+
+{bullet_list(checks or ["No required checks were emitted by the rollup."])}
+
+## Safety
+
+- Promotions allowed: `{summary.get("promotions_allowed", 0)}`
+- Trust mutations allowed: `{summary.get("trust_mutations_allowed", 0)}`
+- Wallet-list mutations allowed: `{summary.get("wallet_list_mutations_allowed", 0)}`
 """
     return _note(frontmatter, body)
 
@@ -1115,6 +1181,59 @@ def _wallet_missing_market_context_table(rows: list[dict[str, Any]]) -> str:
             for row in rows[:10]
         ],
     )
+
+
+def _forward_signal_operator_wallet_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No forward-signal operator review rows currently surfaced."
+    return table(
+        [
+            "Wallet",
+            "Decision",
+            "Validation",
+            "Runner Rows",
+            "Unknown 15m",
+            "Runner Mints",
+            "Span Seconds",
+            "Top Mint",
+            "Mutation Locks",
+        ],
+        [
+            [
+                str(row.get("wallet") or ""),
+                row.get("decision_type") or "",
+                row.get("validation_status") or "",
+                _count(row.get("runner_rows")),
+                _count(row.get("unknown_15m_rows")),
+                _count(row.get("runner_distinct_token_mints")),
+                compact_number(row.get("runner_signal_span_seconds") or 0, 1),
+                _top_forward_token_mint(row),
+                _forward_mutation_locks(row),
+            ]
+            for row in rows[:10]
+        ],
+    )
+
+
+def _top_forward_token_mint(row: dict[str, Any]) -> str:
+    mints = [item for item in row.get("top_token_mints") or [] if isinstance(item, dict)]
+    if not mints:
+        return "none"
+    top = mints[0]
+    mint = str(top.get("token_mint") or "")
+    rows = _count(top.get("rows"))
+    return f"{mint} ({rows})" if mint else f"unknown ({rows})"
+
+
+def _forward_mutation_locks(row: dict[str, Any]) -> str:
+    locked = []
+    if not bool(row.get("promotion_allowed")):
+        locked.append("promotion")
+    if not bool(row.get("wallet_trust_mutation_allowed")):
+        locked.append("trust")
+    if not bool(row.get("wallet_list_mutation_allowed")):
+        locked.append("list")
+    return ", ".join(locked) or "none"
 
 
 def _count(value: Any) -> str:
