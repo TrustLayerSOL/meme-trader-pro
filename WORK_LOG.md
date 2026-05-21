@@ -11583,3 +11583,39 @@ Verification:
 Next:
 
 - Build a manual review packet for the single review-forward-signal wallet so the operator can inspect wallet, repaired rows, token mints, signal times, and 15m outcomes before any future trust decision.
+
+### 2026-05-21 - Forward Signal Review Packet
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward signal review packet is complete as a read-only manual review artifact. It does not raise historical proof readiness, promote wallets, mutate wallet lists, or change execution.
+
+Changed files:
+
+- `wallets/forward_signal_review_packet.py`
+- `utils/build_forward_signal_review_packet.py`
+- `tests/test_forward_signal_review_packet.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a manual review packet for wallets flagged as `REVIEW_FORWARD_SIGNAL_MANUALLY` by merged forward calibration recommendations.
+- The packet exposes wallet address, repaired rows, token mints, signal times, repaired entry price, 15m outcome, and transaction references.
+- Current local packet covers `1` review-forward-signal wallet, `73` repaired review rows, `59` runner 15m rows, `14` unknown 15m rows, and `0` flat 15m rows.
+- Promotions remain `0`, wallet-list mutations remain `0`, and auto trust mutations remain `0`.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_signal_review_packet.py -q`
+- `python3 utils/build_forward_signal_review_packet.py`
+
+Next:
+
+- Build a read-only validator over the review packet that checks repeatability across token mints and signal times before any wallet trust decision is even considered.
