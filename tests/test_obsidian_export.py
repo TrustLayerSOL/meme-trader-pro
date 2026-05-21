@@ -578,6 +578,37 @@ old generated body
                         }
                     ],
                 },
+                "forward_enhanced_observation": {
+                    "summary": {
+                        "enhanced_observation_wallets": 1,
+                        "promotions_allowed": 0,
+                        "wallet_trust_mutations_allowed": 0,
+                        "wallet_list_mutations_allowed": 0,
+                        "minimum_next_forward_signals_per_wallet": 25,
+                        "minimum_distinct_next_token_mints_per_wallet": 10,
+                    },
+                    "wallets": [
+                        {
+                            "wallet": "WalletENHANCED123",
+                            "observation_lane": "enhanced_observation",
+                            "review_action": "WATCH_NEXT_FORWARD_TRADES",
+                            "trust_status": "not_trusted",
+                            "operator_recommendation": "continue observation; do not promote from this artifact alone",
+                            "evidence_summary": {
+                                "runner_rows": 59,
+                                "unknown_15m_rows": 14,
+                                "runner_distinct_token_mints": 33,
+                                "dominant_runner_token_share": 0.067797,
+                            },
+                            "minimum_next_forward_signals": 25,
+                            "minimum_distinct_next_token_mints": 10,
+                            "required_next_checks": ["confirm no new rug or bad-ecosystem linkage appears"],
+                            "promotion_allowed": False,
+                            "wallet_trust_mutation_allowed": False,
+                            "wallet_list_mutation_allowed": False,
+                        }
+                    ],
+                },
             }
         )
 
@@ -592,6 +623,7 @@ old generated body
         missing_context = notes["Dashboards/Wallet Missing Market Context.md"]
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         forward_review = notes["Dashboards/Forward Signal Operator Review.md"]
+        enhanced_observation = notes["Dashboards/Forward Enhanced Observation.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
         lineage = notes["Dashboards/MemeTraderPro Signal Lineage.md"]
@@ -622,6 +654,7 @@ old generated body
         self.assertIn("MemeTraderPro Drift Monitor", command)
         self.assertIn("Wallet Replay Ecosystem Review", command)
         self.assertIn("Forward Signal Operator Review", command)
+        self.assertIn("Forward Enhanced Observation", command)
         self.assertIn("Wallet Candidate Evidence Plan", command)
         self.assertIn("Wallet Missing Market Context", command)
         self.assertIn("Wallet Review Decisions", command)
@@ -659,6 +692,11 @@ old generated body
         self.assertIn("repeatability_supported_manual_review", forward_review)
         self.assertIn("MintFORWARD", forward_review)
         self.assertIn("do not promote from this artifact alone", forward_review)
+        self.assertIn("type: forward_enhanced_observation", enhanced_observation)
+        self.assertIn("WalletENHANCED123", enhanced_observation)
+        self.assertIn("WATCH_NEXT_FORWARD_TRADES", enhanced_observation)
+        self.assertIn("not_trusted", enhanced_observation)
+        self.assertIn("confirm no new rug or bad-ecosystem linkage appears", enhanced_observation)
         self.assertIn("What Matters Today", shared)
         self.assertIn("Cross-Project Command Centers", shared)
         self.assertIn("Daily Threat Radar Dashboard", shared)

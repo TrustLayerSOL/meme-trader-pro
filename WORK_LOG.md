@@ -11762,3 +11762,44 @@ Verification:
 Next:
 
 - Run the Obsidian exporter against the local vault and verify the new `Forward Signal Operator Review` note is generated and visible from the command center.
+
+### 2026-05-21 - Forward Enhanced Observation Lane
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- The promising forward-signal wallet is now routed into an enhanced-observation lane, not a trusted/promoted lane.
+
+Changed files:
+
+- `wallets/forward_enhanced_observation.py`
+- `utils/build_forward_enhanced_observation.py`
+- `tests/test_forward_enhanced_observation.py`
+- `obsidian_export/intelligence_notes.py`
+- `obsidian_export/exporter.py`
+- `tests/test_obsidian_export.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a review-only enhanced-observation watchlist sourced from `forward_signal_operator_rollup.json`.
+- Current local watchlist contains `1` wallet in `enhanced_observation`.
+- The lane requires at least `25` next forward signals and at least `10` distinct next token mints before another trust discussion.
+- The lane explicitly keeps promotions, wallet-trust mutations, wallet-list mutations, and live execution mutations disabled.
+- Added `Dashboards/Forward Enhanced Observation.md` to the Obsidian intelligence export and command center.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_enhanced_observation.py tests/test_obsidian_export.py -q`
+- `python3 -m py_compile wallets/forward_enhanced_observation.py utils/build_forward_enhanced_observation.py obsidian_export/intelligence_notes.py obsidian_export/exporter.py`
+- `python3 utils/build_forward_enhanced_observation.py`
+
+Next:
+
+- Run the Obsidian exporter and verify the new `Forward Enhanced Observation` note appears in the daily research command center, then let future forward evidence fill this lane before any trust decision.
