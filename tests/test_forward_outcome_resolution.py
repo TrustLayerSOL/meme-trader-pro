@@ -92,6 +92,26 @@ class ForwardOutcomeResolutionTests(unittest.TestCase):
         self.assertEqual(report["summary"]["pending_windows"], 4)
         self.assertEqual(report["summary"]["known_15m_outcomes"], 0)
 
+    def test_flat_forward_outcome_counts_as_known_non_runner_evidence(self):
+        report = build_forward_outcome_resolution_report(
+            evidence_records=[evidence_row()],
+            market_snapshots=[
+                snapshot(102, 0.01),
+                snapshot(125, 0.0105),
+                snapshot(210, 0.0102),
+                snapshot(390, 0.0101),
+                snapshot(980, 0.0104),
+            ],
+            generated_at=1100,
+        )
+
+        record = report["records"][0]
+        self.assertEqual(record["status"], "forward_outcome_labeled")
+        self.assertEqual(record["outcome_window_labels"]["15m"]["outcome_type"], "flat")
+        self.assertEqual(record["later_token_outcome"]["outcome_type"], "flat")
+        self.assertEqual(report["summary"]["known_15m_outcomes"], 1)
+        self.assertEqual(report["summary"]["window_outcome_counts"]["flat"], 4)
+
     def test_writer_outputs_report_records_and_daily_calibration(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

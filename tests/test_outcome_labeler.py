@@ -54,6 +54,23 @@ class OutcomeLabelerTests(unittest.TestCase):
         self.assertFalse(labeled["dead"])
         self.assertEqual(labeled["label_confidence"], "low")
 
+    def test_evaluated_small_positive_outcome_is_flat_not_unknown(self):
+        labeled = label_later_token_outcome(
+            outcome={
+                "status": "snapshot_evaluated",
+                "entry_price": 0.01,
+                "exit_price": 0.0105,
+                "highest_price_seen": 0.011,
+            }
+        )
+
+        self.assertEqual(labeled["outcome_type"], "flat")
+        self.assertFalse(labeled["runner"])
+        self.assertFalse(labeled["rug"])
+        self.assertFalse(labeled["dead"])
+        self.assertEqual(labeled["label_confidence"], "medium")
+        self.assertIn("evaluated outcome stayed below runner threshold", labeled["classification_reasons"])
+
 
 if __name__ == "__main__":
     unittest.main()

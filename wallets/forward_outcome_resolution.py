@@ -14,7 +14,7 @@ from wallets.wallet_evidence_models import safe_float
 MODE = "FORWARD_OUTCOME_RESOLUTION_REVIEW_ONLY"
 VERSION = "forward_outcome_resolution.v1"
 SOURCE = "forward_market_context_snapshots"
-KNOWN_OUTCOMES = {"runner", "rug", "dead", "loser"}
+KNOWN_OUTCOMES = {"runner", "rug", "dead", "loser", "flat"}
 
 
 def is_forward_evidence(row: dict[str, Any]) -> bool:

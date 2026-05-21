@@ -11290,3 +11290,39 @@ Verification:
 Next:
 
 - Wait for the forward windows to mature, rerun outcome resolution, then run one 30-minute canary at the proven small/throttled free-RPC settings before considering a longer public-RPC schedule.
+
+### 2026-05-21 - Forward Outcome Flat Label
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward calibration interpretation improved: evaluated non-runner/non-rug rows can now be labeled as `flat` instead of being hidden as `unknown`.
+
+Changed files:
+
+- `research/outcome_labeler.py`
+- `wallets/forward_outcome_resolution.py`
+- `wallets/wallet_replay_scorecard.py`
+- `tests/test_outcome_labeler.py`
+- `tests/test_forward_outcome_resolution.py`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a `flat` outcome label for evaluated rows with measurable outcome evidence that stay below runner, rug, dead, and loser thresholds.
+- Counted `flat` as known forward evidence so calibration can learn from non-runner results instead of treating them as missing data.
+- Added tests for flat outcome labeling and forward 15m known-outcome counting.
+
+Verification:
+
+- `python3 -m pytest tests/test_outcome_labeler.py tests/test_forward_outcome_resolution.py tests/test_wallet_replay_scorecard.py -q`
+- `python3 -m py_compile research/outcome_labeler.py wallets/forward_outcome_resolution.py wallets/wallet_replay_scorecard.py`
+- `git diff --check`
+
+Next:
+
+- After reset, rerun `python3 utils/build_forward_outcome_resolution.py` to reclassify the latest forward evidence with the new `flat` known-outcome label.

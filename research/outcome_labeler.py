@@ -160,6 +160,10 @@ def label_later_token_outcome(
         outcome_type = "loser"
         confidence = "medium"
         reasons.append("negative outcome without rug/dead evidence")
+    elif pnl_pct is not None:
+        outcome_type = "flat"
+        confidence = "medium"
+        reasons.append("evaluated outcome stayed below runner threshold")
     elif status in {"unknown", ""} and pnl_pct is None:
         outcome_type = "unknown"
         confidence = "low"

@@ -7,7 +7,7 @@ from typing import Any
 
 
 WINDOWS = ("30s", "2m", "5m", "15m")
-KNOWN_OUTCOMES = {"runner", "rug", "dead", "loser"}
+KNOWN_OUTCOMES = {"runner", "rug", "dead", "loser", "flat"}
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -57,6 +57,7 @@ def window_stats(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             "rug": counts.get("rug", 0),
             "dead": counts.get("dead", 0),
             "loser": counts.get("loser", 0),
+            "flat": counts.get("flat", 0),
             "known_rate": round(known / total, 4) if total else 0.0,
             "runner_rate_known": round(counts.get("runner", 0) / known, 4) if known else 0.0,
             "rug_rate_known": round(counts.get("rug", 0) / known, 4) if known else 0.0,
