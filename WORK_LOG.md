@@ -11363,3 +11363,38 @@ Verification:
 Next:
 
 - Rebuild the downstream validation/proof reports so operator surfaces pick up the clarified Stage 8 forward-calibration fields, then commit and push the checkpoint before the computer reset.
+
+### 2026-05-21 - Forward Wallet Calibration Scorecard
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward calibration now has a wallet-level review scorecard. This improves analysis visibility; it does not raise proof readiness or mutate wallet trust.
+
+Changed files:
+
+- `wallets/forward_calibration_scorecard.py`
+- `utils/build_forward_calibration_scorecard.py`
+- `tests/test_forward_calibration_scorecard.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a read-only scorecard that aggregates `data/reports/forward_testing/forward_outcome_records.jsonl` by wallet.
+- The scorecard separates `review_behavioral_signal`, `risk_review_candidate`, `flat_noise_candidate`, `blocked_missing_context`, and `collect_more_forward_evidence` wallets.
+- Current local report covers `31` wallets and `3,547` records: `1,009` known 15m outcomes, all `flat`; `0` runner/rug/dead/loser 15m outcomes; `2,538` blocked missing-context records; `8` flat/noise candidate wallets; `22` blocked missing-context wallets; `1` collect-more-evidence wallet; `0` trust/list mutations.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_calibration_scorecard.py -q`
+- `python3 utils/build_forward_calibration_scorecard.py`
+
+Next:
+
+- Use the scorecard to produce a conservative no-action recommendation: keep flat/noise wallets out of promotion review, prioritize missing-entry-context fixes only if free current data collection is available, and avoid any trust changes until a wallet shows repeated non-flat forward outcomes.
