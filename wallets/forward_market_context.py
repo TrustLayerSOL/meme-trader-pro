@@ -185,7 +185,13 @@ def apply_forward_market_context(
 
 
 def fetch_dexscreener_market_info(mint: str, *, timeout: float = 4.0) -> dict[str, Any] | None:
-    request = Request(DEXSCREENER_TOKEN_URL + str(mint), headers={"accept": "application/json"})
+    request = Request(
+        DEXSCREENER_TOKEN_URL + str(mint),
+        headers={
+            "accept": "application/json",
+            "user-agent": "Mozilla/5.0 MemeTraderPro/forward-market-context",
+        },
+    )
     try:
         with urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8", errors="replace"))

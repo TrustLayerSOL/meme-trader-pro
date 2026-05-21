@@ -11133,3 +11133,80 @@ Verification:
 Next:
 
 - Run bounded current forward collection with market-context capture enabled, then rerun the outcome resolver after `30s`, `2m`, `5m`, and `15m` windows have had time to mature.
+
+### 2026-05-20 - Developer Plan Forward Collection Budget
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward calibration lane remains roughly `60%`: the collector, current market-context capture, outcome resolver, and daily reports are wired; the next progress depends on safely accumulating fresh current rows over time.
+
+Changed files:
+
+- `wallets/forward_wallet_activity.py`
+- `utils/run_forward_wallet_activity.py`
+- `launcher.py`
+- `tests/test_forward_wallet_activity.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Adjusted the shared forward collector defaults to fit the current developer API allowance of `2,000,000` calls over `13` days.
+- Default forward collection is now `50` wallets per `900s` cycle, with `40` signatures and `20` transaction bodies per wallet.
+- This projects about `100,800` RPC calls/day for the forward collector, leaving about `689,600` calls of margin across `13` days before the raw `2,000,000` allowance.
+- The shared default daily cap is now `120,000` projected RPC calls/day, so a `100` wallet / `900s` rotation is blocked before any RPC calls.
+- The double-click launcher now starts forward wallet activity with market-context capture enabled and the `120,000` projected RPC/day cap.
+- Live execution remains locked. No wallet trust, wallet-list, buy/sell, or execution behavior changed.
+
+Verification:
+
+- `python3 -m pytest -q tests/test_forward_wallet_activity.py`
+
+Next:
+
+- Run one bounded execute cycle under the new guard, then rerun forward outcome resolution after enough `30s`, `2m`, `5m`, and `15m` windows mature.
+
+### 2026-05-20 - Forward Runtime Collection Check
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data collection
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`
+- Forward calibration lane moves from roughly `60%` to `65%`: safe current collection is now producing fresh rows with market-context snapshots; outcome windows still need time to mature before they can validate wallet behavior.
+
+Changed files:
+
+- `wallets/forward_market_context.py`
+- `tests/test_forward_market_context.py`
+- `WORK_LOG.md`
+
+What changed:
+
+- Fixed the Dexscreener current market-context fetcher to send a browser-style user agent. Without it, Dexscreener returned `403` and the collector recorded provider misses.
+- Added a regression test proving the fetch path sends that header.
+- Ran one full safe forward collection check: `50` wallets processed, `30` wallets with activity, `400` evidence rows created, projected `100,800` RPC calls/day under the `120,000` cap.
+- Ran one smaller post-fix verification cycle: `10` wallets processed, `6` wallets with activity, `107` evidence rows created, `50` market-context snapshots captured.
+- Reran forward outcome resolution. It now sees `32` pending forward rows with entry context, but `0` known `15m` outcomes yet because the fixed windows have not matured.
+- Live execution remains locked. Wallet trust, wallet lists, buys, sells, and execution gates were not changed.
+
+Verification:
+
+- `python3 -m pytest -q tests/test_forward_market_context.py`
+- `python3 -m pytest -q tests/test_forward_wallet_activity.py tests/test_forward_market_context.py tests/test_forward_outcome_resolution.py tests/test_outcome_linker.py`
+- `python3 -m py_compile wallets/forward_wallet_activity.py wallets/forward_market_context.py utils/run_forward_wallet_activity.py utils/build_forward_outcome_resolution.py launcher.py`
+- `python3 utils/run_forward_wallet_activity.py --execute --max-wallets 50 --interval 900 --capture-market-context --max-rpc-calls-per-day 120000`
+- `python3 utils/run_forward_wallet_activity.py --execute --max-wallets 10 --interval 900 --capture-market-context --max-rpc-calls-per-day 120000`
+- `python3 utils/build_forward_outcome_resolution.py`
+
+Next:
+
+- Wait for the `15m` windows from the post-fix rows to mature, then rerun `python3 utils/build_forward_outcome_resolution.py` and review the daily forward calibration report.

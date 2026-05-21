@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
+from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_DAY
 from wallets.forward_wallet_activity import estimate_api_budget
 from wallets.forward_wallet_activity import select_forward_wallets
 from utils.run_forward_wallet_activity import run_forward_wallet_activity_cycle
@@ -59,6 +60,34 @@ class FakeRpc:
 
 
 class ForwardWalletActivityTests(unittest.TestCase):
+    def test_default_daily_budget_stays_inside_current_developer_plan_allowance(self):
+        self.assertLessEqual(DEFAULT_MAX_RPC_CALLS_PER_DAY, 120_000)
+
+    def test_default_budget_blocks_hundred_wallet_fifteen_minute_rotation(self):
+        budget = estimate_api_budget(
+            selected_wallets=100,
+            signature_limit=40,
+            max_transactions_per_wallet=20,
+            interval_seconds=900,
+        )
+
+        self.assertEqual(budget["projected_rpc_calls_per_day"], 201600)
+        self.assertEqual(budget["budget_status"], "blocked_daily_limit")
+        self.assertFalse(budget["execute_allowed"])
+
+    def test_fifty_wallet_fifteen_minute_rotation_fits_current_developer_plan_allowance(self):
+        budget = estimate_api_budget(
+            selected_wallets=50,
+            signature_limit=40,
+            max_transactions_per_wallet=20,
+            interval_seconds=900,
+        )
+
+        self.assertEqual(budget["projected_rpc_calls_per_day"], 100800)
+        self.assertEqual(budget["budget_status"], "within_budget")
+        self.assertTrue(budget["execute_allowed"])
+        self.assertLessEqual(budget["projected_rpc_calls_per_day"] * 13, 2_000_000)
+
     def test_estimates_forward_activity_api_budget(self):
         budget = estimate_api_budget(
             selected_wallets=50,

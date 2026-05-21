@@ -11,7 +11,8 @@ from wallets.wallet_history_parser import parse_wallet_token_deltas
 MODE = "FORWARD_WALLET_ACTIVITY_REVIEW_ONLY"
 FORWARD_OUTCOME_SOURCE = "forward_wallet_activity"
 DEFAULT_MAX_RPC_CALLS_PER_CYCLE = 2500
-DEFAULT_MAX_RPC_CALLS_PER_DAY = 250000
+DEFAULT_MAX_RPC_CALLS_PER_DAY = 120000
+DEFAULT_FORWARD_MAX_WALLETS = 50
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -51,7 +52,7 @@ def select_forward_wallets(
     *,
     tracked_wallets: Any,
     paper_watch_wallets: Any,
-    max_wallets: int = 100,
+    max_wallets: int = DEFAULT_FORWARD_MAX_WALLETS,
 ) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -164,7 +165,7 @@ def build_forward_wallet_activity_report(
     generated_at: float | None = None,
     lookback_seconds: int = 86400,
     execute: bool = False,
-    max_wallets: int = 100,
+    max_wallets: int = DEFAULT_FORWARD_MAX_WALLETS,
     signature_limit: int = 40,
     max_transactions_per_wallet: int = 20,
     request_pause_seconds: float = 0.0,

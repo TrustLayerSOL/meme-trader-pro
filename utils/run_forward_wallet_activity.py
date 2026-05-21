@@ -24,6 +24,7 @@ from wallets.forward_market_context import DEFAULT_MAX_EVENT_SNAPSHOT_LAG_SECOND
 from wallets.forward_market_context import DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE
 from wallets.forward_market_context import DEFAULT_MAX_MARKET_CONTEXT_MINTS
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
+from wallets.forward_wallet_activity import DEFAULT_FORWARD_MAX_WALLETS
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_CYCLE
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_DAY
 
@@ -80,7 +81,7 @@ def write_forward_wallet_activity_report(
     generated_at: float | None = None,
     lookback_seconds: int = 86400,
     execute: bool = False,
-    max_wallets: int = 100,
+    max_wallets: int = DEFAULT_FORWARD_MAX_WALLETS,
     signature_limit: int = 40,
     max_transactions_per_wallet: int = 20,
     request_pause_seconds: float = 0.0,
@@ -191,7 +192,7 @@ def run_forward_wallet_activity_cycle(
     update_status=update_component,
     rpc: Any | None = None,
     execute: bool = False,
-    max_wallets: int = 100,
+    max_wallets: int = DEFAULT_FORWARD_MAX_WALLETS,
     lookback_seconds: int = 86400,
     signature_limit: int = 40,
     max_transactions_per_wallet: int = 20,
@@ -277,7 +278,7 @@ async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict
                 run_forward_wallet_activity_cycle,
                 rpc=rpc,
                 execute=bool(config.get("execute")),
-                max_wallets=int(config.get("max_wallets", 100)),
+                max_wallets=int(config.get("max_wallets", DEFAULT_FORWARD_MAX_WALLETS)),
                 lookback_seconds=int(config.get("lookback_seconds", 86400)),
                 signature_limit=int(config.get("signature_limit", 40)),
                 max_transactions_per_wallet=int(config.get("max_transactions_per_wallet", 20)),
@@ -311,7 +312,7 @@ def main() -> int:
     parser.add_argument("--execute", action="store_true", help="Fetch recent read-only wallet activity. Default is dry-run.")
     parser.add_argument("--loop", action="store_true", help="Run continuously at --interval seconds.")
     parser.add_argument("--interval", type=int, default=900)
-    parser.add_argument("--max-wallets", type=int, default=100)
+    parser.add_argument("--max-wallets", type=int, default=DEFAULT_FORWARD_MAX_WALLETS)
     parser.add_argument("--lookback-seconds", type=int, default=86400)
     parser.add_argument("--signature-limit", type=int, default=40)
     parser.add_argument("--max-transactions-per-wallet", type=int, default=20)

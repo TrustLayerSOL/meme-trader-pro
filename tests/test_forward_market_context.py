@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from wallets.forward_market_context import build_forward_market_context_report
+from wallets.forward_market_context import fetch_dexscreener_market_info
 
 
 class FakeMarketProvider:
@@ -113,6 +115,34 @@ class ForwardMarketContextTests(unittest.TestCase):
         self.assertEqual(report["summary"]["mints_blocked_api_budget"], 3)
         self.assertEqual(report["api_budget"]["budget_status"], "blocked_market_context_cycle_limit")
         self.assertFalse(report["api_budget"]["execute_allowed"])
+
+    def test_dexscreener_fetch_sends_browser_user_agent(self):
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return (
+                    b'{"pairs":[{"chainId":"solana","dexId":"pumpswap","url":"https://dexscreener.test/MintA",'
+                    b'"pairAddress":"PairA","priceUsd":"0.01","marketCap":100000,"fdv":100000,'
+                    b'"liquidity":{"usd":25000},"txns":{"m5":{"buys":7,"sells":5}}}]}'
+                )
+
+        def fake_urlopen(request, timeout):
+            self.assertIn("Mozilla", request.get_header("User-agent") or "")
+            return FakeResponse()
+
+        with patch("wallets.forward_market_context.urlopen", fake_urlopen):
+            info = fetch_dexscreener_market_info("MintA")
+
+        self.assertEqual(info["source"], "dexscreener")
+        self.assertEqual(info["market_cap"], 100000)
+        self.assertEqual(info["tx_count_m5"], 12)
 
 
 if __name__ == "__main__":
