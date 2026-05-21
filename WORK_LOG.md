@@ -11473,3 +11473,40 @@ Verification:
 Next:
 
 - Build the guarded resolver for the `83` quote-anchor-plus-snapshot rows only, then keep all rows without snapshot support blocked and focus future collection on capturing entry price/market context at observation time.
+
+### 2026-05-21 - Forward Entry Context Resolver
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward entry-context resolver is complete as a review-only repaired-record artifact. It does not raise proof readiness, promote wallets, mutate wallet lists, or change execution.
+
+Changed files:
+
+- `wallets/forward_entry_context_resolver.py`
+- `utils/build_forward_entry_context_resolver.py`
+- `tests/test_forward_entry_context_resolver.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a guarded resolver for rows blocked by `missing_forward_entry_price`.
+- Resolver only repairs rows with a valid same-transaction execution-price quote and at least one later market snapshot at or after the signal time.
+- It writes repaired records separately from the original forward outcome records and writes rejected rows separately for audit.
+- Current local resolver scanned `2,538` blocked rows, found `562` quote-anchor candidates, resolved `82` rows, produced `59` known 15m outcomes, blocked `480` quote-anchor rows with no later market snapshot, and blocked `1,976` rows with no valid quote anchor.
+- Wallet-list mutations and trust mutations remain `0`.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_entry_context_resolver.py -q`
+- `python3 utils/build_forward_entry_context_resolver.py`
+
+Next:
+
+- Build a read-only merged forward calibration scorecard that can compare original forward outcomes plus repaired resolver outcomes without treating either as trust permission.
