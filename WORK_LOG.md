@@ -11398,3 +11398,41 @@ Verification:
 Next:
 
 - Use the scorecard to produce a conservative no-action recommendation: keep flat/noise wallets out of promotion review, prioritize missing-entry-context fixes only if free current data collection is available, and avoid any trust changes until a wallet shows repeated non-flat forward outcomes.
+
+### 2026-05-21 - Forward Calibration Recommendations
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward calibration now produces conservative review recommendations. This is a recommendation/read layer only; proof readiness and wallet trust remain unchanged.
+
+Changed files:
+
+- `wallets/forward_calibration_recommendations.py`
+- `utils/build_forward_calibration_recommendations.py`
+- `tests/test_forward_calibration_recommendations.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a conservative recommendation layer over the forward calibration scorecard.
+- Flat-only wallets are explicitly labeled `HOLD_NO_PROMOTION_FLAT_ONLY`.
+- Missing-context wallets are labeled `FIX_FORWARD_ENTRY_CONTEXT`.
+- Runner wallets would be labeled `REVIEW_FORWARD_SIGNAL_MANUALLY`, but current data has none.
+- Risk wallets would be labeled `RISK_REVIEW_REQUIRED`, but current data has none.
+- Current local report reviews `31` wallets: `0` review-forward-signal wallets, `0` risk-review wallets, `8` flat-only hold wallets, `22` context-fix wallets, `1` collect-more wallet, `0` promotions allowed, `0` wallet-list mutations, and `0` auto trust mutations.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_calibration_recommendations.py -q`
+- `python3 utils/build_forward_calibration_recommendations.py`
+
+Next:
+
+- If staying fully no-paid-data, the next useful implementation is a bounded local "entry context repair plan" that lists exactly why the `22` blocked wallets lack entry context and what free/current collection artifact would be needed to unblock each one.
