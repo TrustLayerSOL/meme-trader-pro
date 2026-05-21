@@ -11619,3 +11619,40 @@ Verification:
 Next:
 
 - Build a read-only validator over the review packet that checks repeatability across token mints and signal times before any wallet trust decision is even considered.
+
+### 2026-05-21 - Forward Signal Review Validator
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward signal repeatability validation is complete as a read-only analysis layer. It does not raise historical proof readiness, promote wallets, mutate wallet lists, or change execution.
+
+Changed files:
+
+- `wallets/forward_signal_review_validator.py`
+- `utils/build_forward_signal_review_validator.py`
+- `tests/test_forward_signal_review_validator.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a validator over the manual forward signal review packet.
+- It classifies review wallets as repeatability-supported, concentrated anomaly, limited repeatability, or insufficient runner evidence.
+- Current local validator reviews `1` wallet and marks `1` as `repeatability_supported_manual_review`.
+- Concentrated anomaly wallets remain `0`.
+- Trust mutations remain `0`, and wallet-list mutations remain `0`.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_signal_review_validator.py -q`
+- `python3 utils/build_forward_signal_review_validator.py`
+
+Next:
+
+- Build a review-only decision prep artifact for the repeatability-supported wallet that summarizes the evidence and keeps the output as `manual_review_required`, not promotion.
