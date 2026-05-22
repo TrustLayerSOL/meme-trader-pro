@@ -12072,3 +12072,66 @@ Verification:
 Next:
 
 - Run one more small canary later. If the third canary also stays usable and under budget, prepare a conservative recurring public-RPC schedule proposal with strict daily call caps and automatic stop-on-provider-errors.
+
+### 2026-05-21 - Third Small Free-RPC Canary and Disabled Schedule Proposal
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Free/current forward evidence collection now has `3` consecutive small canaries recommending `FREE_RPC_USABLE_SMALL_THROTTLED`.
+- A conservative recurring public-RPC schedule proposal is ready for review but remains disabled.
+
+Changed files:
+
+- `wallets/forward_public_rpc_schedule_proposal.py`
+- `utils/build_forward_public_rpc_schedule_proposal.py`
+- `tests/test_forward_public_rpc_schedule_proposal.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+Generated local reports:
+
+- `data/reports/forward_testing/forward_free_rpc_canary_report.json`
+- `data/reports/forward_testing/forward_outcome_resolution_report.json`
+- `data/reports/forward_testing/forward_entry_context_resolver_report.json`
+- `data/reports/forward_testing/forward_merged_calibration_scorecard.json`
+- `data/reports/forward_testing/forward_merged_calibration_recommendations.json`
+- `data/reports/forward_testing/forward_enhanced_observation_followup.json`
+- `data/reports/forward_testing/forward_public_rpc_schedule_proposal.json`
+
+What changed:
+
+- Ran a third bounded no-paid-RPC canary using the same public endpoint list.
+- The canary processed `10` wallets, created `15` evidence rows, captured `14` market snapshots, projected `8,640` RPC/day, and recommended `FREE_RPC_USABLE_SMALL_THROTTLED` with no blockers.
+- Rebuilt forward outcome visibility:
+  - `3,581` forward rows scanned,
+  - `1,080` merged known 15m outcomes,
+  - `59` runner 15m outcomes,
+  - `1,021` flat 15m outcomes,
+  - `13` pending windows,
+  - `23` wallets mostly blocked by missing context,
+  - `1` collect-more-evidence wallet.
+- Added a review-only recurring public-RPC schedule proposal. It requires three stable canaries, preserves a `120,000` RPC/day cap, proposes `10` wallets every `900` seconds, and includes stop rules for provider errors, high RPC error rate, budget excess, execution lock failure, or attempted wallet/trust mutation.
+- The proposed schedule is explicitly disabled: no automation was created and no collection setting was changed.
+- Promotions remain `0`, wallet-trust mutations remain `0`, wallet-list mutations remain `0`, and live execution remains locked.
+
+Verification:
+
+- `python3 utils/run_forward_free_rpc_canary.py --duration-seconds 1 --cycle-interval-seconds 300 --max-wallets 10 --signature-limit 4 --max-transactions-per-wallet 2 --request-pause-seconds 1.0 --adaptive-degraded-max-wallets 5 --free-rpc-urls "https://solana-rpc.publicnode.com"`
+- `python3 utils/build_forward_outcome_resolution.py`
+- `python3 utils/build_forward_entry_context_resolver.py`
+- `python3 utils/build_forward_merged_calibration_scorecard.py`
+- `python3 utils/build_forward_merged_calibration_recommendations.py`
+- `python3 utils/build_forward_enhanced_observation_followup.py`
+- `python3 -m pytest tests/test_forward_public_rpc_schedule_proposal.py -q`
+- `python3 utils/build_forward_public_rpc_schedule_proposal.py`
+- Execution safety gate remains `PAPER_SAFE`, live allowed `False`, live enabled `False`, paper enabled `True`.
+
+Next:
+
+- Review the disabled schedule proposal. If approved, the next implementation should create an explicit operator-controlled automation wrapper that runs this small schedule and stops on provider errors, without changing wallet trust or execution.
