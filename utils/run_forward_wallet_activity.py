@@ -26,6 +26,7 @@ from wallets.forward_market_context import DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_
 from wallets.forward_market_context import DEFAULT_MAX_MARKET_CONTEXT_MINTS
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
 from wallets.forward_wallet_activity import DEFAULT_FORWARD_MAX_WALLETS
+from wallets.forward_wallet_activity import DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_CYCLE
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_DAY
 
@@ -89,6 +90,9 @@ def write_forward_wallet_activity_report(
     interval_seconds: int | None = None,
     max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
     max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
+    rpc_preflight: bool = False,
+    adaptive_free_rpc_throttle: bool = False,
+    adaptive_degraded_max_wallets: int = DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS,
     capture_market_context: bool = False,
     persist_market_context: bool = True,
     max_market_mints: int = DEFAULT_MAX_MARKET_CONTEXT_MINTS,
@@ -112,6 +116,9 @@ def write_forward_wallet_activity_report(
         interval_seconds=interval_seconds,
         max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=max_rpc_calls_per_day,
+        rpc_preflight=rpc_preflight,
+        adaptive_free_rpc_throttle=adaptive_free_rpc_throttle,
+        adaptive_degraded_max_wallets=adaptive_degraded_max_wallets,
     )
     report["rpc_mode"] = str(rpc_mode)
     report["paid_rpc_allowed"] = bool(paid_rpc_allowed)
@@ -204,6 +211,9 @@ def run_forward_wallet_activity_cycle(
     request_pause_seconds: float = 0.0,
     max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
     max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
+    rpc_preflight: bool = False,
+    adaptive_free_rpc_throttle: bool = False,
+    adaptive_degraded_max_wallets: int = DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS,
     capture_market_context: bool = False,
     persist_market_context: bool = True,
     max_market_mints: int = DEFAULT_MAX_MARKET_CONTEXT_MINTS,
@@ -222,6 +232,9 @@ def run_forward_wallet_activity_cycle(
         heartbeat_interval=interval_seconds,
         max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=max_rpc_calls_per_day,
+        rpc_preflight=bool(rpc_preflight),
+        adaptive_free_rpc_throttle=bool(adaptive_free_rpc_throttle),
+        adaptive_degraded_max_wallets=int(adaptive_degraded_max_wallets),
         capture_market_context=bool(capture_market_context),
         max_market_context_calls_per_cycle=max_market_context_calls_per_cycle,
         rpc_mode=rpc_mode,
@@ -238,6 +251,9 @@ def run_forward_wallet_activity_cycle(
         interval_seconds=interval_seconds,
         max_rpc_calls_per_cycle=max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=max_rpc_calls_per_day,
+        rpc_preflight=rpc_preflight,
+        adaptive_free_rpc_throttle=adaptive_free_rpc_throttle,
+        adaptive_degraded_max_wallets=adaptive_degraded_max_wallets,
         capture_market_context=capture_market_context,
         persist_market_context=persist_market_context,
         max_market_mints=max_market_mints,
@@ -261,6 +277,9 @@ def run_forward_wallet_activity_cycle(
         wallets_blocked_rpc_error=int(summary.get("wallets_blocked_rpc_error", 0) or 0),
         wallets_blocked_api_budget=int(summary.get("wallets_blocked_api_budget", 0) or 0),
         api_budget_status=api_budget.get("budget_status"),
+        rpc_preflight_status=report.get("rpc_preflight", {}).get("status") if isinstance(report.get("rpc_preflight"), dict) else None,
+        wallets_blocked_rpc_preflight=int(summary.get("wallets_blocked_rpc_preflight", 0) or 0),
+        wallets_throttled_by_rpc_preflight=int(summary.get("wallets_throttled_by_rpc_preflight", 0) or 0),
         estimated_rpc_calls_per_cycle=int(api_budget.get("estimated_rpc_calls_per_cycle", 0) or 0),
         projected_rpc_calls_per_day=api_budget.get("projected_rpc_calls_per_day"),
         capture_market_context=bool(capture_market_context),
@@ -315,6 +334,11 @@ async def forward_wallet_activity_loop(interval_seconds: int = 900, config: dict
                 request_pause_seconds=float(config.get("request_pause_seconds", 0.2)),
                 max_rpc_calls_per_cycle=int(config.get("max_rpc_calls_per_cycle", DEFAULT_MAX_RPC_CALLS_PER_CYCLE)),
                 max_rpc_calls_per_day=int(config.get("max_rpc_calls_per_day", DEFAULT_MAX_RPC_CALLS_PER_DAY)),
+                rpc_preflight=bool(config.get("rpc_preflight")),
+                adaptive_free_rpc_throttle=bool(config.get("adaptive_free_rpc_throttle")),
+                adaptive_degraded_max_wallets=int(
+                    config.get("adaptive_degraded_max_wallets", DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS)
+                ),
                 capture_market_context=bool(config.get("capture_market_context")),
                 max_market_mints=int(config.get("max_market_mints", DEFAULT_MAX_MARKET_CONTEXT_MINTS)),
                 max_market_context_calls_per_cycle=int(
@@ -351,6 +375,9 @@ def main() -> int:
     parser.add_argument("--request-pause-seconds", type=float, default=0.2)
     parser.add_argument("--max-rpc-calls-per-cycle", type=int, default=DEFAULT_MAX_RPC_CALLS_PER_CYCLE)
     parser.add_argument("--max-rpc-calls-per-day", type=int, default=DEFAULT_MAX_RPC_CALLS_PER_DAY)
+    parser.add_argument("--skip-rpc-preflight", action="store_true", help="Skip the public RPC health probe before collection.")
+    parser.add_argument("--disable-adaptive-free-rpc", action="store_true", help="Do not reduce wallet count when public RPC is degraded.")
+    parser.add_argument("--adaptive-degraded-max-wallets", type=int, default=DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS)
     parser.add_argument("--capture-market-context", action="store_true", help="Capture current price/liquidity/market-cap context for observed token mints.")
     parser.add_argument("--max-market-mints", type=int, default=DEFAULT_MAX_MARKET_CONTEXT_MINTS)
     parser.add_argument("--max-market-context-calls-per-cycle", type=int, default=DEFAULT_MAX_MARKET_CONTEXT_CALLS_PER_CYCLE)
@@ -369,6 +396,8 @@ def main() -> int:
 
     load_env()
     rpc_mode = "paid_rpc_explicit" if args.allow_paid_rpc else "free_public_rpc"
+    rpc_preflight = bool(args.execute and not args.skip_rpc_preflight)
+    adaptive_free_rpc_throttle = bool(args.execute and not args.allow_paid_rpc and not args.disable_adaptive_free_rpc)
     rpc = (
         build_forward_rpc_client(allow_paid_rpc=args.allow_paid_rpc, free_rpc_urls=args.free_rpc_urls)
         if args.execute
@@ -391,6 +420,9 @@ def main() -> int:
                     "request_pause_seconds": args.request_pause_seconds if args.execute else 0.0,
                     "max_rpc_calls_per_cycle": args.max_rpc_calls_per_cycle,
                     "max_rpc_calls_per_day": args.max_rpc_calls_per_day,
+                    "rpc_preflight": rpc_preflight,
+                    "adaptive_free_rpc_throttle": adaptive_free_rpc_throttle,
+                    "adaptive_degraded_max_wallets": args.adaptive_degraded_max_wallets,
                     "capture_market_context": args.capture_market_context,
                     "max_market_mints": args.max_market_mints,
                     "max_market_context_calls_per_cycle": args.max_market_context_calls_per_cycle,
@@ -412,6 +444,9 @@ def main() -> int:
         request_pause_seconds=args.request_pause_seconds if args.execute else 0.0,
         max_rpc_calls_per_cycle=args.max_rpc_calls_per_cycle,
         max_rpc_calls_per_day=args.max_rpc_calls_per_day,
+        rpc_preflight=rpc_preflight,
+        adaptive_free_rpc_throttle=adaptive_free_rpc_throttle,
+        adaptive_degraded_max_wallets=args.adaptive_degraded_max_wallets,
         capture_market_context=args.capture_market_context,
         persist_market_context=not args.no_persist_market_context,
         max_market_mints=args.max_market_mints,
@@ -425,16 +460,18 @@ def main() -> int:
     api_budget = report.get("api_budget", {})
     market_summary = (report.get("market_context") or {}).get("summary") or {}
     print(
-        "wrote {} execute={} rpc_mode={} wallets={} collected={} evidence_rows={} old_skipped={} budget={} est_calls={} market_snapshots={}".format(
+        "wrote {} execute={} rpc_mode={} preflight={} wallets={} collected={} evidence_rows={} old_skipped={} budget={} est_calls={} throttled={} market_snapshots={}".format(
             Path(args.out).relative_to(ROOT),
             bool(args.execute),
             rpc_mode,
+            report.get("rpc_preflight", {}).get("status") if isinstance(report.get("rpc_preflight"), dict) else None,
             summary["wallets_processed"],
             summary["wallets_collected"],
             summary["evidence_rows_created"],
             summary["old_signatures_skipped"],
             api_budget.get("budget_status"),
             api_budget.get("estimated_rpc_calls_per_cycle"),
+            summary.get("wallets_throttled_by_rpc_preflight", 0),
             market_summary.get("snapshots_collected", 0),
         )
     )

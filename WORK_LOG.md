@@ -11844,3 +11844,50 @@ Verification:
 Next:
 
 - Let future forward collection create post-baseline rows, then rerun the follow-up report and review whether the enhanced-observation wallet meets the `25` row / `10` mint threshold.
+
+### 2026-05-21 - Forward Free-RPC Preflight and Adaptive Throttle
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward evidence collection reliability improved: public/free RPC now gets a health preflight before wallet scanning, and degraded public RPC can automatically reduce the wallet slice instead of wasting a full 50-wallet cycle.
+
+Changed files:
+
+- `wallets/forward_wallet_activity.py`
+- `utils/run_forward_wallet_activity.py`
+- `tests/test_forward_wallet_activity.py`
+- `research/BUILD_PLAN.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a `getSlot` RPC preflight for forward wallet collection.
+- If preflight fails, the cycle blocks before scanning wallets and records `wallets_blocked_rpc_preflight`.
+- If preflight succeeds but provider failures are observed, the cycle can throttle a degraded free-RPC run down to a smaller wallet slice.
+- CLI runs now enable preflight/adaptive public-RPC protection by default for `--execute` runs unless explicitly skipped.
+- The real free-mode check reported `preflight=healthy`, processed `50` wallets, collected `2` evidence rows, captured `1` market snapshot, and stayed under budget at `550` estimated RPC calls/cycle.
+- Downstream forward reports were rebuilt: merged forward calibration now has `3,551` records, `1,070` known 15m outcomes, `59` runner 15m outcomes, `1,011` flat 15m outcomes, `1` review-behavioral-signal wallet, `1` collect-more-evidence wallet, and `0` wallet trust/list mutations.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_wallet_activity.py -q`
+- `python3 utils/run_forward_wallet_activity.py --execute --free-mode --interval 900 --max-wallets 50 --signature-limit 20 --max-transactions-per-wallet 10 --lookback-seconds 86400 --max-rpc-calls-per-day 120000 --max-rpc-calls-per-cycle 1050 --capture-market-context --max-market-mints 25 --max-market-context-calls-per-cycle 100 --adaptive-degraded-max-wallets 10`
+- `python3 utils/build_forward_outcome_resolution.py`
+- `python3 utils/build_forward_entry_context_resolver.py`
+- `python3 utils/build_forward_merged_calibration_scorecard.py`
+- `python3 utils/build_forward_merged_calibration_recommendations.py`
+- `python3 utils/build_forward_signal_review_packet.py`
+- `python3 utils/build_forward_signal_review_validator.py`
+- `python3 utils/build_forward_signal_decision_prep.py`
+- `python3 utils/build_forward_signal_operator_rollup.py`
+- `python3 utils/build_forward_enhanced_observation.py`
+- `python3 utils/build_forward_enhanced_observation_followup.py`
+
+Next:
+
+- Run a 30-minute free-RPC canary with the new preflight/adaptive guard before any longer public-RPC schedule. Keep live execution locked and do not mutate wallet trust.

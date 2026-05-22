@@ -8,6 +8,7 @@ from core.rpc_provider import HeliusRpcProvider
 from wallets.forward_wallet_activity import build_forward_wallet_activity_report
 from wallets.forward_wallet_activity import DEFAULT_MAX_RPC_CALLS_PER_DAY
 from wallets.forward_wallet_activity import estimate_api_budget
+from wallets.forward_wallet_activity import build_rpc_preflight_report
 from wallets.forward_wallet_activity import select_forward_wallets
 from utils.run_forward_wallet_activity import run_forward_wallet_activity_cycle
 from utils.run_forward_wallet_activity import write_forward_wallet_activity_report
@@ -61,6 +62,31 @@ class FakeRpc:
                 "meta": {"preTokenBalances": [], "postTokenBalances": []},
             }
         return None
+
+
+class FakeUnhealthyRpc:
+    def __init__(self):
+        self.failures = []
+        self.calls = []
+
+    def call(self, method, params):
+        self.calls.append((method, params))
+        self.failures = [{"provider": "public", "error": "temporary unavailable"}]
+        return None
+
+
+class FakeDegradedRpc(FakeRpc):
+    def __init__(self):
+        super().__init__()
+        self.preflight_calls = 0
+
+    def call(self, method, params):
+        if method == "getSlot":
+            self.calls.append((method, params))
+            self.preflight_calls += 1
+            self.failures = [{"provider": "slow_public", "error": "timed out"}]
+            return 123
+        return super().call(method, params)
 
 
 class ForwardWalletActivityTests(unittest.TestCase):
@@ -163,6 +189,57 @@ class ForwardWalletActivityTests(unittest.TestCase):
         self.assertEqual(row["observed_action"], "buy")
         self.assertEqual(row["later_token_outcome"]["outcome_type"], "pending_forward_outcome")
         self.assertIn("forward_current_activity", row["risk_flags"])
+
+    def test_rpc_preflight_blocks_execute_before_wallet_scan_when_provider_is_unhealthy(self):
+        rpc = FakeUnhealthyRpc()
+
+        report = build_forward_wallet_activity_report(
+            tracked_wallets=[{"wallet": "WalletA"}, {"wallet": "WalletB"}],
+            paper_watch_wallets=[],
+            rpc=rpc,
+            execute=True,
+            rpc_preflight=True,
+            max_wallets=2,
+        )
+
+        self.assertEqual(rpc.calls, [("getSlot", [])])
+        self.assertEqual(report["summary"]["wallets_processed"], 0)
+        self.assertEqual(report["summary"]["wallets_blocked_rpc_preflight"], 2)
+        self.assertEqual(report["rpc_preflight"]["status"], "blocked_unhealthy")
+        self.assertFalse(report["rpc_preflight"]["execute_allowed"])
+        self.assertIn("preflight", report["next_actions"][0])
+
+    def test_rpc_preflight_marks_degraded_provider_when_probe_succeeds_after_failures(self):
+        rpc = FakeDegradedRpc()
+
+        preflight = build_rpc_preflight_report(rpc=rpc, execute=True)
+
+        self.assertEqual(preflight["status"], "degraded")
+        self.assertTrue(preflight["execute_allowed"])
+        self.assertEqual(preflight["successful_probes"], 1)
+        self.assertEqual(preflight["failure_count"], 1)
+
+    def test_adaptive_free_rpc_throttle_reduces_wallets_when_preflight_is_degraded(self):
+        rpc = FakeDegradedRpc()
+
+        report = build_forward_wallet_activity_report(
+            tracked_wallets=[{"wallet": "WalletA"}, {"wallet": "WalletB"}, {"wallet": "WalletC"}],
+            paper_watch_wallets=[],
+            rpc=rpc,
+            execute=True,
+            rpc_preflight=True,
+            adaptive_free_rpc_throttle=True,
+            adaptive_degraded_max_wallets=1,
+            max_wallets=3,
+            generated_at=1000,
+            lookback_seconds=900,
+        )
+
+        self.assertEqual(report["limits"]["requested_max_wallets"], 3)
+        self.assertEqual(report["limits"]["max_wallets"], 1)
+        self.assertEqual(report["summary"]["wallets_selected"], 1)
+        self.assertEqual(report["summary"]["wallets_throttled_by_rpc_preflight"], 2)
+        self.assertEqual(report["wallets"][0]["wallet"], "WalletA")
 
     def test_dry_run_does_not_call_rpc(self):
         rpc = FakeRpc()

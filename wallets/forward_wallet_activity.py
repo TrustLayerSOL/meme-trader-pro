@@ -13,6 +13,7 @@ FORWARD_OUTCOME_SOURCE = "forward_wallet_activity"
 DEFAULT_MAX_RPC_CALLS_PER_CYCLE = 2500
 DEFAULT_MAX_RPC_CALLS_PER_DAY = 120000
 DEFAULT_FORWARD_MAX_WALLETS = 50
+DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS = 10
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -109,6 +110,59 @@ def estimate_api_budget(
     }
 
 
+def build_rpc_preflight_report(*, rpc: Any | None, execute: bool = False) -> dict[str, Any]:
+    if not execute:
+        return {
+            "status": "skipped_dry_run",
+            "execute_allowed": True,
+            "successful_probes": 0,
+            "failure_count": 0,
+            "failures": [],
+        }
+    if rpc is None:
+        return {
+            "status": "blocked_missing_rpc_client",
+            "execute_allowed": False,
+            "successful_probes": 0,
+            "failure_count": 0,
+            "failures": [],
+        }
+
+    result = rpc.call("getSlot", [])
+    failures = rpc_call_failures(rpc)
+    if result is None:
+        return {
+            "status": "blocked_unhealthy",
+            "execute_allowed": False,
+            "successful_probes": 0,
+            "failure_count": len(failures),
+            "failures": failures[:5],
+        }
+
+    return {
+        "status": "degraded" if failures else "healthy",
+        "execute_allowed": True,
+        "successful_probes": 1,
+        "failure_count": len(failures),
+        "failures": failures[:5],
+    }
+
+
+def adaptive_wallet_limit(
+    *,
+    requested_max_wallets: int,
+    rpc_preflight: dict[str, Any],
+    adaptive_free_rpc_throttle: bool = False,
+    adaptive_degraded_max_wallets: int = DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS,
+) -> int:
+    requested = max(0, int(requested_max_wallets))
+    if not adaptive_free_rpc_throttle:
+        return requested
+    if rpc_preflight.get("status") != "degraded":
+        return requested
+    return min(requested, max(1, int(adaptive_degraded_max_wallets)))
+
+
 def fetch_wallet_signatures(rpc: Any, wallet: str, signature_limit: int) -> list[dict[str, Any]]:
     result = rpc.call("getSignaturesForAddress", [wallet, {"limit": int(signature_limit)}])
     return result if isinstance(result, list) else []
@@ -172,10 +226,31 @@ def build_forward_wallet_activity_report(
     interval_seconds: int | None = None,
     max_rpc_calls_per_cycle: int = DEFAULT_MAX_RPC_CALLS_PER_CYCLE,
     max_rpc_calls_per_day: int = DEFAULT_MAX_RPC_CALLS_PER_DAY,
+    rpc_preflight: bool = False,
+    adaptive_free_rpc_throttle: bool = False,
+    adaptive_degraded_max_wallets: int = DEFAULT_ADAPTIVE_DEGRADED_MAX_WALLETS,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     cutoff = generated_at - max(0, int(lookback_seconds))
+    preflight = build_rpc_preflight_report(rpc=rpc, execute=execute) if rpc_preflight else {
+        "status": "disabled",
+        "execute_allowed": True,
+        "successful_probes": 0,
+        "failure_count": 0,
+        "failures": [],
+    }
+    effective_max_wallets = adaptive_wallet_limit(
+        requested_max_wallets=max_wallets,
+        rpc_preflight=preflight,
+        adaptive_free_rpc_throttle=adaptive_free_rpc_throttle,
+        adaptive_degraded_max_wallets=adaptive_degraded_max_wallets,
+    )
     wallets = select_forward_wallets(
+        tracked_wallets=tracked_wallets,
+        paper_watch_wallets=paper_watch_wallets,
+        max_wallets=effective_max_wallets,
+    )
+    requested_wallets = select_forward_wallets(
         tracked_wallets=tracked_wallets,
         paper_watch_wallets=paper_watch_wallets,
         max_wallets=max_wallets,
@@ -193,6 +268,64 @@ def build_forward_wallet_activity_report(
     raw_transactions: list[dict[str, Any]] = []
     old_signatures_skipped = 0
 
+    if execute and not preflight["execute_allowed"]:
+        return {
+            "generated_at": generated_at,
+            "mode": MODE,
+            "review_only": True,
+            "live_execution_locked": True,
+            "execute": bool(execute),
+            "collection_window": {
+                "lookback_seconds": int(lookback_seconds),
+                "cutoff_epoch": cutoff,
+            },
+            "limits": {
+                "requested_max_wallets": max_wallets,
+                "max_wallets": effective_max_wallets,
+                "signature_limit": signature_limit,
+                "max_transactions_per_wallet": max_transactions_per_wallet,
+                "request_pause_seconds": request_pause_seconds,
+                "max_rpc_calls_per_cycle": max_rpc_calls_per_cycle,
+                "max_rpc_calls_per_day": max_rpc_calls_per_day,
+                "rpc_preflight": bool(rpc_preflight),
+                "adaptive_free_rpc_throttle": bool(adaptive_free_rpc_throttle),
+                "adaptive_degraded_max_wallets": int(adaptive_degraded_max_wallets),
+            },
+            "rpc_preflight": preflight,
+            "api_budget": api_budget,
+            "summary": {
+                "wallets_selected": len(requested_wallets),
+                "wallets_processed": 0,
+                "dry_run_wallets": 0,
+                "wallets_collected": 0,
+                "wallets_without_recent_token_activity": 0,
+                "wallets_blocked_rpc_error": 0,
+                "wallets_blocked_rpc_preflight": len(requested_wallets),
+                "wallets_blocked_api_budget": 0,
+                "wallets_throttled_by_rpc_preflight": 0,
+                "evidence_rows_created": 0,
+                "raw_transactions_preserved": 0,
+                "old_signatures_skipped": 0,
+            },
+            "wallets": [
+                {
+                    "wallet": wallet,
+                    "status": "BLOCKED_RPC_PREFLIGHT",
+                    "block_reason": preflight["status"],
+                    "signatures_fetched": 0,
+                    "transactions_inspected": 0,
+                    "evidence_rows_created": 0,
+                }
+                for wallet in requested_wallets
+            ],
+            "evidence_records": [],
+            "raw_transactions": [],
+            "next_actions": [
+                "RPC preflight failed; skip this collection cycle instead of scanning wallets through an unhealthy public provider.",
+                "Retry later, lower max_wallets, or provide an explicitly approved provider before broader collection.",
+            ],
+        }
+
     if execute and not api_budget["execute_allowed"]:
         return {
             "generated_at": generated_at,
@@ -205,13 +338,18 @@ def build_forward_wallet_activity_report(
                 "cutoff_epoch": cutoff,
             },
             "limits": {
-                "max_wallets": max_wallets,
+                "requested_max_wallets": max_wallets,
+                "max_wallets": effective_max_wallets,
                 "signature_limit": signature_limit,
                 "max_transactions_per_wallet": max_transactions_per_wallet,
                 "request_pause_seconds": request_pause_seconds,
                 "max_rpc_calls_per_cycle": max_rpc_calls_per_cycle,
                 "max_rpc_calls_per_day": max_rpc_calls_per_day,
+                "rpc_preflight": bool(rpc_preflight),
+                "adaptive_free_rpc_throttle": bool(adaptive_free_rpc_throttle),
+                "adaptive_degraded_max_wallets": int(adaptive_degraded_max_wallets),
             },
+            "rpc_preflight": preflight,
             "api_budget": api_budget,
             "summary": {
                 "wallets_selected": len(wallets),
@@ -220,7 +358,9 @@ def build_forward_wallet_activity_report(
                 "wallets_collected": 0,
                 "wallets_without_recent_token_activity": 0,
                 "wallets_blocked_rpc_error": 0,
+                "wallets_blocked_rpc_preflight": 0,
                 "wallets_blocked_api_budget": len(wallets),
+                "wallets_throttled_by_rpc_preflight": max(0, len(requested_wallets) - len(wallets)),
                 "evidence_rows_created": 0,
                 "raw_transactions_preserved": 0,
                 "old_signatures_skipped": 0,
@@ -320,13 +460,18 @@ def build_forward_wallet_activity_report(
             "cutoff_epoch": cutoff,
         },
         "limits": {
-            "max_wallets": max_wallets,
+            "requested_max_wallets": max_wallets,
+            "max_wallets": effective_max_wallets,
             "signature_limit": signature_limit,
             "max_transactions_per_wallet": max_transactions_per_wallet,
             "request_pause_seconds": request_pause_seconds,
             "max_rpc_calls_per_cycle": max_rpc_calls_per_cycle,
             "max_rpc_calls_per_day": max_rpc_calls_per_day,
+            "rpc_preflight": bool(rpc_preflight),
+            "adaptive_free_rpc_throttle": bool(adaptive_free_rpc_throttle),
+            "adaptive_degraded_max_wallets": int(adaptive_degraded_max_wallets),
         },
+        "rpc_preflight": preflight,
         "api_budget": api_budget,
         "summary": {
             "wallets_selected": len(wallets),
@@ -335,7 +480,9 @@ def build_forward_wallet_activity_report(
             "wallets_collected": statuses["COLLECTED"],
             "wallets_without_recent_token_activity": statuses["NO_RECENT_TOKEN_ACTIVITY"],
             "wallets_blocked_rpc_error": statuses["BLOCKED_RPC_ERROR"],
+            "wallets_blocked_rpc_preflight": 0,
             "wallets_blocked_api_budget": statuses["BLOCKED_API_BUDGET"],
+            "wallets_throttled_by_rpc_preflight": max(0, len(requested_wallets) - len(wallets)),
             "evidence_rows_created": len(evidence_rows),
             "raw_transactions_preserved": len(raw_transactions),
             "old_signatures_skipped": old_signatures_skipped,
