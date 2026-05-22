@@ -11803,3 +11803,44 @@ Verification:
 Next:
 
 - Run the Obsidian exporter and verify the new `Forward Enhanced Observation` note appears in the daily research command center, then let future forward evidence fill this lane before any trust decision.
+
+### 2026-05-21 - Forward Enhanced Observation Follow-Up
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- The enhanced-observation lane now has a follow-up report that compares only new forward rows after the watchlist baseline.
+
+Changed files:
+
+- `wallets/forward_enhanced_observation_followup.py`
+- `utils/build_forward_enhanced_observation_followup.py`
+- `tests/test_forward_enhanced_observation_followup.py`
+- `obsidian_export/intelligence_notes.py`
+- `obsidian_export/exporter.py`
+- `tests/test_obsidian_export.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a review-only follow-up report for enhanced-observation wallets.
+- The report counts only forward evidence after the enhanced-observation watchlist timestamp so it does not double-count baseline evidence.
+- Current local report tracks `1` enhanced-observation wallet, sees `0` new forward rows after baseline, and keeps the wallet in `collect_more_forward_evidence`.
+- Promotions remain `0`, wallet-trust mutations remain `0`, wallet-list mutations remain `0`, and live execution remains locked.
+- Added `Dashboards/Forward Enhanced Observation Follow-Up.md` to the Obsidian intelligence export and command center.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_enhanced_observation_followup.py tests/test_obsidian_export.py -q`
+- `python3 -m py_compile wallets/forward_enhanced_observation_followup.py utils/build_forward_enhanced_observation_followup.py obsidian_export/intelligence_notes.py obsidian_export/exporter.py`
+- `python3 utils/build_forward_enhanced_observation_followup.py`
+
+Next:
+
+- Let future forward collection create post-baseline rows, then rerun the follow-up report and review whether the enhanced-observation wallet meets the `25` row / `10` mint threshold.

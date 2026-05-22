@@ -36,6 +36,7 @@ def render_intelligence_notes(snapshot: dict[str, Any]) -> dict[str, str]:
         "Dashboards/Wallet Replay Ecosystem Review.md": render_wallet_replay_review(snapshot),
         "Dashboards/Forward Signal Operator Review.md": render_forward_signal_operator_review(snapshot),
         "Dashboards/Forward Enhanced Observation.md": render_forward_enhanced_observation(snapshot),
+        "Dashboards/Forward Enhanced Observation Follow-Up.md": render_forward_enhanced_observation_followup(snapshot),
         "Dashboards/MemeTraderPro Signal Lineage.md": render_signal_lineage(),
         "Dashboards/MemeTraderPro Daily Workflow.md": render_daily_workflow(anomaly, drift),
         "../SharedQuant/Dashboards/Quant Research Command Center.md": render_shared_quant_dashboard(),
@@ -139,6 +140,8 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
     forward_summary = as_dict(forward_rollup.get("summary"))
     enhanced_observation = as_dict(snapshot.get("forward_enhanced_observation"))
     enhanced_summary = as_dict(enhanced_observation.get("summary"))
+    enhanced_followup = as_dict(snapshot.get("forward_enhanced_observation_followup"))
+    enhanced_followup_summary = as_dict(enhanced_followup.get("summary"))
     priority_rows = _priority_queue_rows(
         anomaly,
         drift,
@@ -150,6 +153,7 @@ def render_command_center(snapshot: dict[str, Any], anomaly: dict[str, Any], dri
         missing_context_summary,
         forward_summary,
         enhanced_summary,
+        enhanced_followup_summary,
     )
     frontmatter["p0_count"] = _p0_count(priority_rows)
     body = f"""# MemeTraderPro Research Command Center
@@ -190,6 +194,7 @@ This is the daily MemeTraderPro operating surface. It tells you which wallet, si
     "[[Wallet Replay Ecosystem Review]] - replay-safe wallet evidence",
     "[[Forward Signal Operator Review]] - repaired forward-signal wallet review before any trust decision",
     "[[Forward Enhanced Observation]] - priority wallet lane for future forward evidence only",
+    "[[Forward Enhanced Observation Follow-Up]] - compares enhanced-observation wallets against new forward rows",
     "[[Wallet Review Decisions]] - saved human review decisions",
 ])}
 
@@ -211,6 +216,7 @@ def _priority_queue_rows(
     missing_context_summary: dict[str, Any],
     forward_summary: dict[str, Any],
     enhanced_summary: dict[str, Any],
+    enhanced_followup_summary: dict[str, Any],
 ) -> list[tuple[str, str, int, str, str]]:
     return [
         (
@@ -282,6 +288,13 @@ def _priority_queue_rows(
             _count_value(enhanced_summary.get("enhanced_observation_wallets")),
             "Priority wallets need future evidence before any trust discussion.",
             "[[Forward Enhanced Observation]]",
+        ),
+        (
+            "P1",
+            "Enhanced observation follow-up",
+            _count_value(enhanced_followup_summary.get("wallets_meeting_review_threshold")),
+            "Enhanced-observation wallets with enough new rows need human review.",
+            "[[Forward Enhanced Observation Follow-Up]]",
         ),
     ]
 
@@ -655,6 +668,51 @@ This is the priority observation lane for forward-signal wallets that showed rep
 {bullet_list(_forward_enhanced_observation_checks(wallets))}
 
 ## Safety
+
+- Promotions allowed: `{summary.get("promotions_allowed", 0)}`
+- Trust mutations allowed: `{summary.get("wallet_trust_mutations_allowed", 0)}`
+- Wallet-list mutations allowed: `{summary.get("wallet_list_mutations_allowed", 0)}`
+"""
+    return _note(frontmatter, body)
+
+
+def render_forward_enhanced_observation_followup(snapshot: dict[str, Any]) -> str:
+    report = as_dict(snapshot.get("forward_enhanced_observation_followup"))
+    summary = as_dict(report.get("summary"))
+    wallets = [row for row in report.get("wallets") or [] if isinstance(row, dict)][:25]
+    frontmatter = _frontmatter("forward_enhanced_observation_followup")
+    frontmatter["wallets_meeting_review_threshold"] = _count_value(summary.get("wallets_meeting_review_threshold"))
+    frontmatter["new_forward_records"] = _count_value(summary.get("new_forward_records"))
+    body = f"""# Forward Enhanced Observation Follow-Up
+
+{GENERATED_MARKER}
+
+## What This Dashboard Does
+
+This compares enhanced-observation wallets against only the new forward rows captured after the enhanced-observation baseline. It is designed to avoid double-counting the evidence that created the watchlist.
+
+## Summary
+
+{table(
+    ["Area", "Count", "Meaning"],
+    [
+        ["Follow-up wallets", _count(summary.get("followup_wallets")), "Wallets being monitored after baseline"],
+        ["Meeting review threshold", _count(summary.get("wallets_meeting_review_threshold")), "Ready for human follow-up review"],
+        ["Collecting more evidence", _count(summary.get("wallets_collecting_more_evidence")), "Not enough new rows yet"],
+        ["New forward records", _count(summary.get("new_forward_records")), "Rows after the watchlist baseline"],
+        ["New 15m runners", _count(summary.get("new_runner_15m")), "Future runner evidence"],
+        ["New 15m rugs", _count(summary.get("new_rug_15m")), "Future rug evidence"],
+        ["New blocked records", _count(summary.get("new_blocked_records")), "New rows still missing usable context"],
+    ],
+)}
+
+## Wallets
+
+{_forward_enhanced_observation_followup_table(wallets)}
+
+## Safety
+
+No promotion is allowed from this artifact.
 
 - Promotions allowed: `{summary.get("promotions_allowed", 0)}`
 - Trust mutations allowed: `{summary.get("wallet_trust_mutations_allowed", 0)}`
@@ -1339,6 +1397,42 @@ def _forward_enhanced_observation_checks(rows: list[dict[str, Any]]) -> list[str
             if text and text not in checks:
                 checks.append(text)
     return checks or ["No enhanced-observation checks were emitted."]
+
+
+def _forward_enhanced_observation_followup_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No enhanced-observation follow-up rows currently surfaced."
+    return table(
+        [
+            "Wallet",
+            "Status",
+            "Trust",
+            "New Rows",
+            "New Mints",
+            "Runners",
+            "Rugs",
+            "Blocked",
+            "Need Rows",
+            "Need Mints",
+            "Mutation Locks",
+        ],
+        [
+            [
+                str(row.get("wallet") or ""),
+                row.get("review_status") or "",
+                row.get("trust_status") or "",
+                _count(row.get("new_forward_records")),
+                _count(row.get("new_distinct_token_mints")),
+                _count(row.get("new_runner_15m")),
+                _count(row.get("new_rug_15m")),
+                _count(row.get("new_blocked_records")),
+                _count(row.get("minimum_next_forward_signals")),
+                _count(row.get("minimum_distinct_next_token_mints")),
+                _forward_mutation_locks(row),
+            ]
+            for row in rows[:10]
+        ],
+    )
 
 
 def _count(value: Any) -> str:

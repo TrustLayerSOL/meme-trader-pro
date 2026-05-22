@@ -609,6 +609,37 @@ old generated body
                         }
                     ],
                 },
+                "forward_enhanced_observation_followup": {
+                    "summary": {
+                        "followup_wallets": 1,
+                        "wallets_meeting_review_threshold": 0,
+                        "wallets_collecting_more_evidence": 1,
+                        "new_forward_records": 0,
+                        "new_runner_15m": 0,
+                        "new_rug_15m": 0,
+                        "new_blocked_records": 0,
+                        "promotions_allowed": 0,
+                        "wallet_trust_mutations_allowed": 0,
+                        "wallet_list_mutations_allowed": 0,
+                    },
+                    "wallets": [
+                        {
+                            "wallet": "WalletFOLLOWUP123",
+                            "review_status": "collect_more_forward_evidence",
+                            "trust_status": "not_trusted",
+                            "new_forward_records": 0,
+                            "new_distinct_token_mints": 0,
+                            "new_runner_15m": 0,
+                            "new_rug_15m": 0,
+                            "new_blocked_records": 0,
+                            "minimum_next_forward_signals": 25,
+                            "minimum_distinct_next_token_mints": 10,
+                            "promotion_allowed": False,
+                            "wallet_trust_mutation_allowed": False,
+                            "wallet_list_mutation_allowed": False,
+                        }
+                    ],
+                },
             }
         )
 
@@ -624,6 +655,7 @@ old generated body
         replay = notes["Dashboards/Wallet Replay Ecosystem Review.md"]
         forward_review = notes["Dashboards/Forward Signal Operator Review.md"]
         enhanced_observation = notes["Dashboards/Forward Enhanced Observation.md"]
+        enhanced_followup = notes["Dashboards/Forward Enhanced Observation Follow-Up.md"]
         anomaly = notes["Dashboards/MemeTraderPro Anomaly Radar.md"]
         drift = notes["Dashboards/MemeTraderPro Drift Monitor.md"]
         lineage = notes["Dashboards/MemeTraderPro Signal Lineage.md"]
@@ -655,6 +687,7 @@ old generated body
         self.assertIn("Wallet Replay Ecosystem Review", command)
         self.assertIn("Forward Signal Operator Review", command)
         self.assertIn("Forward Enhanced Observation", command)
+        self.assertIn("Forward Enhanced Observation Follow-Up", command)
         self.assertIn("Wallet Candidate Evidence Plan", command)
         self.assertIn("Wallet Missing Market Context", command)
         self.assertIn("Wallet Review Decisions", command)
@@ -697,6 +730,10 @@ old generated body
         self.assertIn("WATCH_NEXT_FORWARD_TRADES", enhanced_observation)
         self.assertIn("not_trusted", enhanced_observation)
         self.assertIn("confirm no new rug or bad-ecosystem linkage appears", enhanced_observation)
+        self.assertIn("type: forward_enhanced_observation_followup", enhanced_followup)
+        self.assertIn("WalletFOLLOWUP123", enhanced_followup)
+        self.assertIn("collect_more_forward_evidence", enhanced_followup)
+        self.assertIn("No promotion is allowed", enhanced_followup)
         self.assertIn("What Matters Today", shared)
         self.assertIn("Cross-Project Command Centers", shared)
         self.assertIn("Daily Threat Radar Dashboard", shared)
