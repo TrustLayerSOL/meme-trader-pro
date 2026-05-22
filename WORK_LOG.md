@@ -11927,3 +11927,42 @@ Verification:
 Next:
 
 - Run the actual 30-minute canary only if the operator wants to spend the time now. Current smoke result says free RPC is reachable but unstable, so broad public-RPC scheduling should remain off.
+
+### 2026-05-21 - Forward Free-RPC Provider Rotation Report
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Forward evidence reliability now has a review-only provider ranking step before any longer free-RPC canary.
+
+Changed files:
+
+- `wallets/forward_free_rpc_provider_rotation.py`
+- `utils/build_forward_free_rpc_provider_rotation.py`
+- `tests/test_forward_free_rpc_provider_rotation.py`
+- `research/BUILD_PLAN.md`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a review-only public/free RPC provider rotation report.
+- The report directly probes public endpoints with a tiny `getSlot` check, filters paid/API-key URLs, ranks providers by healthy/degraded/offline status and latency, and recommends whether a small free-RPC canary is safe to try.
+- It performs no wallet collection, no provider setting mutation, no wallet trust/list mutation, and no live execution change.
+- Current local smoke report tested `2` public endpoints, found `2` healthy endpoints, `0` degraded endpoints, `0` offline endpoints, and recommended `USE_HEALTHY_FREE_PROVIDER`.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_free_rpc_provider_rotation.py -q`
+- `python3 -m py_compile wallets/forward_free_rpc_provider_rotation.py utils/build_forward_free_rpc_provider_rotation.py`
+- `python3 utils/build_forward_free_rpc_provider_rotation.py --free-rpc-urls "https://solana-rpc.publicnode.com" --timeout 8`
+- `python3 -m pytest -q`
+- Execution safety gate remains `PAPER_SAFE`, live allowed `False`, live enabled `False`, paper enabled `True`.
+
+Next:
+
+- Run the provider rotation report against the default public endpoint plus any explicit free fallback endpoints, then only run a small forward canary if at least one endpoint is healthy.
