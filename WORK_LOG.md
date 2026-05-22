@@ -11891,3 +11891,39 @@ Verification:
 Next:
 
 - Run a 30-minute free-RPC canary with the new preflight/adaptive guard before any longer public-RPC schedule. Keep live execution locked and do not mutate wallet trust.
+
+### 2026-05-21 - Forward Free-RPC Canary Runner
+
+Active milestone:
+
+- Stage 8 - Replay Validation + Forward Testing / forward proof-data calibration
+
+Milestone completion:
+
+- Stage 8 validation contract remains `100%`.
+- Free/current forward evidence reliability moves from ad hoc checks to a bounded canary runner. This does not change wallet trust or execution.
+
+Changed files:
+
+- `wallets/forward_free_rpc_canary.py`
+- `utils/run_forward_free_rpc_canary.py`
+- `tests/test_forward_free_rpc_canary.py`
+- `research/DATA_SOURCE_MAP.md`
+- `WORK_LOG.md`
+
+What changed:
+
+- Added a review-only free-RPC canary report layer that runs small forward wallet activity cycles with RPC preflight and adaptive degraded-provider throttling.
+- The canary summarizes provider health status counts, wallet/evidence yield, market snapshots, budget projection, blockers, and a recommendation.
+- The canary always keeps `paid_rpc_allowed=false`, `live_execution_locked=true`, wallet-list mutations `0`, and trust mutations `0`.
+- Added `data/reports/forward_testing/forward_free_rpc_canary_report.json` to the data source map.
+- Ran a short smoke canary: `1` cycle, `5` wallets processed, `2` evidence rows created, `2` market snapshots captured, projected `4,320` RPC/day, provider preflight `healthy`, recommendation `FREE_RPC_UNSTABLE` because the batch still had a high RPC-error rate.
+
+Verification:
+
+- `python3 -m pytest tests/test_forward_free_rpc_canary.py -q`
+- `python3 utils/run_forward_free_rpc_canary.py --duration-seconds 1 --cycle-interval-seconds 300 --max-wallets 5 --signature-limit 4 --max-transactions-per-wallet 2 --request-pause-seconds 1.0 --adaptive-degraded-max-wallets 2`
+
+Next:
+
+- Run the actual 30-minute canary only if the operator wants to spend the time now. Current smoke result says free RPC is reachable but unstable, so broad public-RPC scheduling should remain off.
