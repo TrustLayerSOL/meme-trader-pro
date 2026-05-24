@@ -24,8 +24,10 @@ def queue_rows(repair_queue: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def selected_queue_rows(repair_queue: dict[str, Any], *, max_mints: int) -> list[dict[str, Any]]:
-    return queue_rows(repair_queue)[: max(0, int(max_mints))]
+def selected_queue_rows(repair_queue: dict[str, Any], *, max_mints: int, start_index: int = 0) -> list[dict[str, Any]]:
+    start = max(0, int(start_index))
+    end = start + max(0, int(max_mints))
+    return queue_rows(repair_queue)[start:end]
 
 
 def build_budget(*, selected_mints: int, max_market_context_calls: int) -> dict[str, Any]:
@@ -94,13 +96,14 @@ def build_forward_market_snapshot_capture(
     market_provider: Callable[[str], dict[str, Any] | None] | None = None,
     execute: bool = False,
     max_mints: int = 10,
+    start_index: int = 0,
     max_market_context_calls: int = 10,
     run_id: str | None = None,
     generated_at: float | None = None,
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     run_id = run_id or str(int(generated_at))
-    selected_rows = selected_queue_rows(repair_queue, max_mints=max_mints)
+    selected_rows = selected_queue_rows(repair_queue, max_mints=max_mints, start_index=start_index)
     budget = build_budget(selected_mints=len(selected_rows), max_market_context_calls=max_market_context_calls)
     captured_snapshots: list[dict[str, Any]] = []
     if execute and budget["execute_allowed"]:
@@ -125,6 +128,7 @@ def build_forward_market_snapshot_capture(
         "wallet_trust_mutation_allowed": False,
         "limits": {
             "max_mints": max_mints,
+            "start_index": start_index,
             "max_market_context_calls": max_market_context_calls,
         },
         "budget": budget,

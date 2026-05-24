@@ -131,6 +131,7 @@ def write_forward_market_snapshot_capture(
     market_provider: Callable[[str], dict[str, Any] | None] | None = None,
     execute: bool = False,
     max_mints: int = 10,
+    start_index: int = 0,
     max_market_context_calls: int = 10,
     run_id: str | None = None,
     generated_at: float | None = None,
@@ -143,6 +144,7 @@ def write_forward_market_snapshot_capture(
         market_provider=market_provider,
         execute=execute,
         max_mints=max_mints,
+        start_index=start_index,
         max_market_context_calls=max_market_context_calls,
         run_id=run_id,
         generated_at=generated_at,
@@ -183,6 +185,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--existing-market-context", type=Path, default=DEFAULT_EXISTING_MARKET_CONTEXT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--max-mints", type=int, default=10)
+    parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--max-market-context-calls", type=int, default=10)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--execute", action="store_true")
@@ -197,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         execute=args.execute,
         max_mints=args.max_mints,
+        start_index=args.start_index,
         max_market_context_calls=args.max_market_context_calls,
         run_id=args.run_id,
     )

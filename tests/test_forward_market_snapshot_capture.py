@@ -59,6 +59,22 @@ class ForwardMarketSnapshotCaptureTests(unittest.TestCase):
         self.assertEqual(report["summary"]["wallet_list_mutations"], 0)
         self.assertEqual(report["summary"]["auto_trust_mutations"], 0)
 
+    def test_dry_run_can_start_after_prior_batch(self):
+        report = build_forward_market_snapshot_capture(
+            repair_queue={"queue": [queue_row("MintA"), queue_row("MintB"), queue_row("MintC"), queue_row("MintD")]},
+            existing_market_snapshots=[],
+            execute=False,
+            max_mints=2,
+            start_index=2,
+            max_market_context_calls=2,
+            run_id="fixed",
+            generated_at=2000.0,
+        )
+
+        self.assertEqual([row["token_mint"] for row in report["selected_queue"]], ["MintC", "MintD"])
+        self.assertEqual(report["limits"]["start_index"], 2)
+        self.assertEqual(report["summary"]["selected_mints"], 2)
+
     def test_execute_captures_snapshots_and_combines_with_existing(self):
         report = build_forward_market_snapshot_capture(
             repair_queue={"queue": [queue_row("MintA"), queue_row("MintB")]},
