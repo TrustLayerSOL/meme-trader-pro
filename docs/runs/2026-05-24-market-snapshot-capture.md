@@ -97,9 +97,32 @@ Second batch cumulative result:
 - Review-behavioral-signal wallets stayed at 4.
 - Fix-context wallets stayed at 20.
 
+Additional bounded batches:
+
+| Batch | Start index | Selected mints | Snapshots captured | Provider misses | Repaired rows | Blocked records |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| top10 | 0 | 10 | 3 | 7 | 213 | 2,498 |
+| batch2 | 10 | 10 | 2 | 8 | 223 | 2,488 |
+| batch3 | 20 | 10 | 3 | 7 | 236 | 2,475 |
+| batch4 | 30 | 10 | 3 | 7 | 246 | 2,465 |
+| batch5 | 40 | 10 | 0 | 10 | 246 | 2,465 |
+
+Top-50 cumulative result:
+
+- Selected mints: 50
+- Captured snapshots: 11
+- Provider misses: 39
+- Isolated resolver resolved rows increased from 180 to 246.
+- Scorecard repaired/replaced rows increased from 180 to 246.
+- Scorecard blocked records decreased from 2,531 to 2,465.
+- Known 15m outcomes stayed at 1,282.
+- Runner 15m outcomes stayed at 63.
+- Review-behavioral-signal wallets stayed at 4.
+- Batch 5 captured 0 usable snapshots and produced no scorecard improvement.
+
 ## Interpretation
 
-The top-10 capture proved the repair lane works, but Dexscreener only had usable current data for 3 of the selected queued mints. This means current public market snapshots can reduce some context blockers, but they will not recover every historical gap. The next practical improvement is to continue small bounded capture batches for queued mints with available current pairs, while preserving blocked rows that need true historical context or unrecoverable quote anchors.
+The capture lane proved useful through batch 4, but batch 5 hit the stop condition: zero usable current snapshots and no scorecard improvement. Current public market snapshots can reduce some context blockers, but they will not recover every historical gap. The next practical improvement is a smarter target-selection pass that prioritizes queued mints likely to still have live pairs before spending more provider calls.
 
 ## Safety
 

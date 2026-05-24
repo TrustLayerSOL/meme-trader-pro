@@ -118,6 +118,8 @@ Use `--start-index` plus the prior combined context file to process the next bou
 python3 -m utils.capture_forward_market_snapshot_repair_queue --repair-queue data/reports/forward_testing/market_snapshot_repair_queue/forward_market_snapshot_repair_queue_20260524-market-snapshot-repair-queue-250.json --existing-market-context data/reports/forward_testing/market_snapshot_capture/forward_market_snapshot_capture_combined_market_context_20260524-market-snapshot-capture-top10.jsonl --start-index 10 --max-mints 10 --max-market-context-calls 10 --execute --run-id 20260524-market-snapshot-capture-batch2
 ```
 
+Stop broad batching when a batch captures zero usable snapshots or stops reducing isolated blocked records. At that point, switch to a smarter target-selection pass instead of spending more provider calls on low-yield current snapshots.
+
 Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.
 
 ## Safety Boundary
