@@ -92,6 +92,14 @@ python3 -m utils.build_forward_helius_quote_anchor_merge --quote-probe data/repo
 
 This writes review-only merge outputs under `data/reports/forward_testing/helius_quote_anchor_merge/`. Canonical resolver files are not overwritten.
 
+Rows that still fail because they need later market snapshots can be grouped into a targeted repair queue:
+
+```bash
+python3 -m utils.build_forward_market_snapshot_repair_queue --rejected-records data/reports/forward_testing/helius_quote_anchor_merge/forward_helius_quote_anchor_merge_rejected_20260524-helius-quote-anchor-merge-250.jsonl
+```
+
+The queue writes review-only JSON/CSV/Markdown under `data/reports/forward_testing/market_snapshot_repair_queue/`.
+
 ## Safety Boundary
 
 The system must remain paper-safe:
