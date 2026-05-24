@@ -68,6 +68,22 @@ data/reports/forward_testing/context_blocker_reduction/forward_context_blocker_r
 
 The output separates rows that need later market snapshots from rows that need a valid execution-price quote or timestamp anchor. It is still review-only and cannot mutate trust, wallet lists, or execution.
 
+## Helius Quote Probe
+
+Helius can be used for a tiny review-only probe against `missing_valid_execution_price_quote` rows. Dry-run is the default and makes no RPC calls:
+
+```bash
+python3 -m utils.run_forward_helius_quote_probe --wallet 6b86E2apHeeHoLeeZs5bRSW8gFGDNqYH468mqVGuccdi --max-rows 3
+```
+
+Paid-RPC execution requires both switches:
+
+```bash
+python3 -m utils.run_forward_helius_quote_probe --wallet 6b86E2apHeeHoLeeZs5bRSW8gFGDNqYH468mqVGuccdi --max-rows 3 --execute --allow-paid-rpc
+```
+
+The probe only tests whether Helius transaction bodies expose same-transaction quote anchors that the existing parser can use. It writes reports under `data/reports/forward_testing/helius_quote_probe/`; it does not repair records, mutate wallet trust, mutate wallet lists, promote wallets, or execute trades.
+
 ## Safety Boundary
 
 The system must remain paper-safe:
