@@ -84,6 +84,14 @@ python3 -m utils.run_forward_helius_quote_probe --wallet 6b86E2apHeeHoLeeZs5bRSW
 
 The probe only tests whether Helius transaction bodies expose same-transaction quote anchors that the parser can use, including native SOL balance-delta anchors with fee adjustment. It writes reports under `data/reports/forward_testing/helius_quote_probe/`; it does not repair records, mutate wallet trust, mutate wallet lists, promote wallets, or execute trades.
 
+Recovered Helius quote anchors can be routed through the existing entry-context resolver in an isolated review run:
+
+```bash
+python3 -m utils.build_forward_helius_quote_anchor_merge --quote-probe data/reports/forward_testing/helius_quote_probe/forward_helius_quote_probe_20260524-helius-native-quote-probe-25.json
+```
+
+This writes review-only merge outputs under `data/reports/forward_testing/helius_quote_anchor_merge/`. Canonical resolver files are not overwritten.
+
 ## Safety Boundary
 
 The system must remain paper-safe:
