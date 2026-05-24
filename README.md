@@ -100,6 +100,20 @@ python3 -m utils.build_forward_market_snapshot_repair_queue --rejected-records d
 
 The queue writes review-only JSON/CSV/Markdown under `data/reports/forward_testing/market_snapshot_repair_queue/`.
 
+Use the queue for a bounded market snapshot capture pass. Dry-run is the default and makes no market-data calls:
+
+```bash
+python3 -m utils.capture_forward_market_snapshot_repair_queue --repair-queue data/reports/forward_testing/market_snapshot_repair_queue/forward_market_snapshot_repair_queue_20260524-market-snapshot-repair-queue-250.json --max-mints 10 --max-market-context-calls 10
+```
+
+Execution requires `--execute` and writes isolated snapshot files under `data/reports/forward_testing/market_snapshot_capture/`:
+
+```bash
+python3 -m utils.capture_forward_market_snapshot_repair_queue --repair-queue data/reports/forward_testing/market_snapshot_repair_queue/forward_market_snapshot_repair_queue_20260524-market-snapshot-repair-queue-250.json --max-mints 10 --max-market-context-calls 10 --execute --run-id 20260524-market-snapshot-capture-top10
+```
+
+Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.
+
 ## Safety Boundary
 
 The system must remain paper-safe:
