@@ -259,6 +259,8 @@ def run_forward_wallet_activity_cycle(
         max_market_mints=max_market_mints,
         max_market_context_calls_per_cycle=max_market_context_calls_per_cycle,
         max_event_snapshot_lag_seconds=max_event_snapshot_lag_seconds,
+        rpc_mode=rpc_mode,
+        paid_rpc_allowed=paid_rpc_allowed,
     )
     summary = report.get("summary") if isinstance(report, dict) else {}
     api_budget = report.get("api_budget") if isinstance(report.get("api_budget"), dict) else {}

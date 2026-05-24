@@ -390,6 +390,38 @@ class ForwardWalletActivityTests(unittest.TestCase):
         self.assertEqual(updates[-1][1]["estimated_rpc_calls_per_cycle"], 3150)
         self.assertEqual(updates[-1][1]["wallets_blocked_api_budget"], 150)
 
+    def test_cycle_passes_paid_rpc_mode_into_written_report(self):
+        writer_kwargs = {}
+
+        def fake_writer(**kwargs):
+            writer_kwargs.update(kwargs)
+            return {
+                "live_execution_locked": True,
+                "rpc_mode": kwargs.get("rpc_mode"),
+                "paid_rpc_allowed": kwargs.get("paid_rpc_allowed"),
+                "summary": {
+                    "wallets_processed": 1,
+                    "wallets_collected": 1,
+                    "evidence_rows_created": 1,
+                    "wallets_blocked_rpc_error": 0,
+                },
+            }
+
+        report = run_forward_wallet_activity_cycle(
+            write_report=fake_writer,
+            update_status=lambda *_args, **_kwargs: None,
+            execute=True,
+            max_wallets=1,
+            interval_seconds=900,
+            rpc_mode="paid_rpc_explicit",
+            paid_rpc_allowed=True,
+        )
+
+        self.assertEqual(writer_kwargs["rpc_mode"], "paid_rpc_explicit")
+        self.assertTrue(writer_kwargs["paid_rpc_allowed"])
+        self.assertEqual(report["rpc_mode"], "paid_rpc_explicit")
+        self.assertTrue(report["paid_rpc_allowed"])
+
     def test_forward_rpc_client_defaults_to_public_only_providers(self):
         rpc = build_forward_rpc_client(allow_paid_rpc=False)
 
