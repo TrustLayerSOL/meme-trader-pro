@@ -10,6 +10,8 @@ QUOTE_MINTS = {
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
 }
+NATIVE_SOL_MINT = "So11111111111111111111111111111111111111112"
+LAMPORTS_PER_SOL = 1_000_000_000
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -64,6 +66,65 @@ def transaction_signature(tx: dict[str, Any], fallback: str = "") -> str:
     return fallback
 
 
+def account_key_pubkey(account_key: Any) -> str:
+    if isinstance(account_key, str):
+        return account_key
+    if isinstance(account_key, dict):
+        return str(account_key.get("pubkey") or "")
+    return ""
+
+
+def transaction_account_keys(tx: dict[str, Any]) -> list[Any]:
+    message = as_dict(as_dict(tx.get("transaction")).get("message"))
+    keys = message.get("accountKeys")
+    return keys if isinstance(keys, list) else []
+
+
+def native_sol_delta(tx: dict[str, Any], wallet: str) -> tuple[str | None, float | None, dict[str, Any]]:
+    keys = transaction_account_keys(tx)
+    wallet_index = next((index for index, key in enumerate(keys) if account_key_pubkey(key) == wallet), None)
+    if wallet_index is None:
+        return None, None, {}
+
+    meta = as_dict(tx.get("meta"))
+    pre_balances = meta.get("preBalances")
+    post_balances = meta.get("postBalances")
+    if not isinstance(pre_balances, list) or not isinstance(post_balances, list):
+        return None, None, {}
+    if wallet_index >= len(pre_balances) or wallet_index >= len(post_balances):
+        return None, None, {}
+
+    try:
+        raw_lamports_delta = int(post_balances[wallet_index]) - int(pre_balances[wallet_index])
+    except (TypeError, ValueError):
+        return None, None, {}
+    if raw_lamports_delta == 0:
+        return None, None, {}
+
+    fee_lamports = 0
+    try:
+        fee_lamports = int(meta.get("fee") or 0)
+    except (TypeError, ValueError):
+        fee_lamports = 0
+
+    fee_payer = account_key_pubkey(keys[0]) if keys else ""
+    adjusted_lamports_delta = raw_lamports_delta
+    if fee_lamports and wallet == fee_payer:
+        adjusted_lamports_delta += fee_lamports
+    if adjusted_lamports_delta == 0:
+        return None, None, {}
+
+    return (
+        NATIVE_SOL_MINT,
+        adjusted_lamports_delta / LAMPORTS_PER_SOL,
+        {
+            "native_sol_raw_lamports_delta": raw_lamports_delta,
+            "native_sol_adjusted_lamports_delta": adjusted_lamports_delta,
+            "native_sol_fee_lamports": fee_lamports if wallet == fee_payer else 0,
+        },
+    )
+
+
 def parse_wallet_token_deltas(
     tx: dict[str, Any],
     *,
@@ -78,6 +139,11 @@ def parse_wallet_token_deltas(
     pre = balance_map(meta.get("preTokenBalances"), wallet)
     post = balance_map(meta.get("postTokenBalances"), wallet)
     quote_mint, quote_delta = primary_quote_delta(pre, post)
+    quote_source = "same_transaction_token_balance_delta"
+    quote_metadata: dict[str, Any] = {}
+    if not quote_mint or quote_delta in (None, 0):
+        quote_mint, quote_delta, quote_metadata = native_sol_delta(tx, wallet)
+        quote_source = "native_sol_balance_delta" if quote_mint and quote_delta not in (None, 0) else quote_source
     sig = transaction_signature(tx, signature)
     rows = []
     for mint in sorted(set(pre) | set(post)):
@@ -101,12 +167,15 @@ def parse_wallet_token_deltas(
             row["quote_mint"] = quote_mint
             row["quote_amount_delta"] = quote_delta
             row["execution_price_quote"] = execution_price
+            if quote_metadata:
+                row.update(quote_metadata)
             row["estimated_entry_context"] = {
                 **as_dict(row.get("estimated_entry_context")),
                 "quote_mint": quote_mint,
                 "quote_amount_delta": quote_delta,
                 "execution_price_quote": execution_price,
-                "execution_price_source": "same_transaction_token_balance_delta",
+                "execution_price_source": quote_source,
+                **quote_metadata,
             }
         rows.append(row)
     return rows

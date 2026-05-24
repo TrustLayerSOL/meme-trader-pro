@@ -85,6 +85,48 @@ class ForwardHeliusQuoteProbeTests(unittest.TestCase):
         self.assertFalse(report["wallet_trust_mutation_allowed"])
         self.assertEqual(report["rows"][0]["status"], "quote_anchor_recoverable")
         self.assertEqual(report["rows"][0]["execution_price_quote"], 0.01)
+        self.assertEqual(report["rows"][0]["execution_price_source"], "same_transaction_token_balance_delta")
+
+    def test_probe_preserves_native_sol_quote_source(self):
+        class NativeSolRpc(FakeRpc):
+            def call(self, method, params):
+                self.calls.append((method, params))
+                return {
+                    "blockTime": 200,
+                    "transaction": {
+                        "signatures": [params[0]],
+                        "message": {"accountKeys": [{"pubkey": "WalletA"}, {"pubkey": "OtherAccount"}]},
+                    },
+                    "meta": {
+                        "fee": 5000,
+                        "preBalances": [2_000_000_000, 1],
+                        "postBalances": [999_995_000, 1],
+                        "preTokenBalances": [],
+                        "postTokenBalances": [
+                            {
+                                "owner": "WalletA",
+                                "mint": "MintA",
+                                "uiTokenAmount": {"uiAmount": 100},
+                            }
+                        ],
+                    },
+                }
+
+        report = build_forward_helius_quote_probe(
+            rejected_records=[rejected_row(signature="NativeSolSig")],
+            rpc=NativeSolRpc(),
+            execute=True,
+            paid_rpc_allowed=True,
+            max_rows=1,
+            run_id="fixed",
+            generated_at=123.0,
+        )
+
+        row = report["rows"][0]
+        self.assertEqual(row["status"], "quote_anchor_recoverable")
+        self.assertEqual(row["execution_price_source"], "native_sol_balance_delta")
+        self.assertEqual(row["native_sol_fee_lamports"], 5000)
+        self.assertEqual(row["execution_price_quote"], 0.01)
 
     def test_dry_run_selects_rows_without_calling_rpc(self):
         rpc = FakeRpc()

@@ -82,7 +82,7 @@ Paid-RPC execution requires both switches:
 python3 -m utils.run_forward_helius_quote_probe --wallet 6b86E2apHeeHoLeeZs5bRSW8gFGDNqYH468mqVGuccdi --max-rows 3 --execute --allow-paid-rpc
 ```
 
-The probe only tests whether Helius transaction bodies expose same-transaction quote anchors that the existing parser can use. It writes reports under `data/reports/forward_testing/helius_quote_probe/`; it does not repair records, mutate wallet trust, mutate wallet lists, promote wallets, or execute trades.
+The probe only tests whether Helius transaction bodies expose same-transaction quote anchors that the parser can use, including native SOL balance-delta anchors with fee adjustment. It writes reports under `data/reports/forward_testing/helius_quote_probe/`; it does not repair records, mutate wallet trust, mutate wallet lists, promote wallets, or execute trades.
 
 ## Safety Boundary
 

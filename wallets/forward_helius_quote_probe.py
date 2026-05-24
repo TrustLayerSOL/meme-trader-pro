@@ -71,6 +71,9 @@ def dry_run_row(row: dict[str, Any]) -> dict[str, Any]:
         "quote_amount_delta": None,
         "execution_price_quote": None,
         "execution_price_source": None,
+        "native_sol_raw_lamports_delta": None,
+        "native_sol_adjusted_lamports_delta": None,
+        "native_sol_fee_lamports": None,
         "repair_allowed": False,
         "promotion_allowed": False,
         "can_mutate_wallet_trust": False,
@@ -87,6 +90,11 @@ def probe_row(row: dict[str, Any], rpc: Any) -> dict[str, Any]:
     parsed = parse_wallet_token_deltas(tx or {}, wallet=wallet, signature=signature)
     matching = next((item for item in parsed if item.get("token_mint") == mint), None)
     quote = safe_float((matching or {}).get("execution_price_quote"), None)
+    entry_context = (matching or {}).get("estimated_entry_context") if isinstance(matching, dict) else {}
+    entry_context = entry_context if isinstance(entry_context, dict) else {}
+    execution_price_source = entry_context.get("execution_price_source")
+    if quote is not None and quote > 0 and not execution_price_source:
+        execution_price_source = "same_transaction_token_balance_delta"
     if not isinstance(tx, dict):
         status = "transaction_fetch_failed"
     elif quote is not None and quote > 0:
@@ -107,7 +115,10 @@ def probe_row(row: dict[str, Any], rpc: Any) -> dict[str, Any]:
         "quote_mint": (matching or {}).get("quote_mint"),
         "quote_amount_delta": (matching or {}).get("quote_amount_delta"),
         "execution_price_quote": quote,
-        "execution_price_source": "same_transaction_token_balance_delta" if quote is not None and quote > 0 else None,
+        "execution_price_source": execution_price_source if quote is not None and quote > 0 else None,
+        "native_sol_raw_lamports_delta": (matching or {}).get("native_sol_raw_lamports_delta"),
+        "native_sol_adjusted_lamports_delta": (matching or {}).get("native_sol_adjusted_lamports_delta"),
+        "native_sol_fee_lamports": (matching or {}).get("native_sol_fee_lamports"),
         "repair_allowed": False,
         "promotion_allowed": False,
         "can_mutate_wallet_trust": False,

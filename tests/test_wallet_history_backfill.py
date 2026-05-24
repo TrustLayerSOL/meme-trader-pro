@@ -146,6 +146,47 @@ class WalletHistoryBackfillTests(unittest.TestCase):
         self.assertEqual(row["estimated_entry_context"]["execution_price_quote"], 0.01)
         self.assertEqual(row["estimated_entry_context"]["quote_mint"], "So11111111111111111111111111111111111111112")
 
+    def test_parser_recovers_quote_execution_price_from_native_sol_balance_delta(self):
+        from wallets.wallet_history_parser import parse_wallet_token_deltas
+
+        rows = parse_wallet_token_deltas(
+            {
+                "blockTime": 123,
+                "transaction": {
+                    "signatures": ["SigNativeBuy"],
+                    "message": {
+                        "accountKeys": [
+                            {"pubkey": "WalletA", "signer": True},
+                            {"pubkey": "OtherAccount", "signer": False},
+                        ],
+                    },
+                },
+                "meta": {
+                    "fee": 5000,
+                    "preBalances": [3_000_000_000, 1],
+                    "postBalances": [1_999_995_000, 1],
+                    "preTokenBalances": [],
+                    "postTokenBalances": [
+                        {
+                            "owner": "WalletA",
+                            "mint": "MintA",
+                            "uiTokenAmount": {"uiAmount": 100},
+                        }
+                    ],
+                },
+            },
+            wallet="WalletA",
+            signature="SigNativeBuy",
+        )
+
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["quote_mint"], "So11111111111111111111111111111111111111112")
+        self.assertEqual(row["quote_amount_delta"], -1)
+        self.assertEqual(row["execution_price_quote"], 0.01)
+        self.assertEqual(row["estimated_entry_context"]["execution_price_source"], "native_sol_balance_delta")
+        self.assertEqual(row["estimated_entry_context"]["native_sol_fee_lamports"], 5000)
+
     def test_collects_bounded_wallet_history_for_collection_targets(self):
         report = build_wallet_history_backfill_report(
             backfill_targets={

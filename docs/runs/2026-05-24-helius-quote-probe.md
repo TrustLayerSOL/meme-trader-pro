@@ -35,19 +35,22 @@ python3 -m utils.run_forward_helius_quote_probe --max-rows 3 --execute --allow-p
 
 ## Result
 
-Helius returned transaction bodies successfully for all six attempted rows.
+Helius returned transaction bodies successfully for all attempted rows. The first implementation fetched transactions but recovered `0` quote anchors because the parser only used SPL token-balance deltas. The completed implementation now also recovers quote anchors from native SOL balance deltas with fee adjustment.
 
-- Rows selected: 6
-- Rows attempted: 6
-- Transactions fetched: 6
+- Rows selected in final 25-row sample: 25
+- Rows attempted: 25
+- Transactions fetched: 25
 - RPC failures: 0
-- Recoverable quote rows: 0
+- Recoverable quote rows: 20
+- Unrecoverable rows: 5
 - Repaired rows written: 0
 - Promotions allowed: 0
 - Wallet trust mutations: 0
 - Wallet list mutations: 0
 
-The sampled transaction bodies included matching token deltas, but did not expose a same-transaction quote token delta under the current parser. That means standard Helius RPC is useful for reliable transaction retrieval, but this specific blocker likely needs either an enhanced Helius transaction parser, native SOL balance-delta handling, or a separate market-context repair path.
+The five unrecovered rows had matching token deltas but no quote movement on the tracked wallet account. They remain blocked rather than guessed.
+
+This closes the Helius quote-probe lane as an implementation milestone: Helius is reachable, paid-RPC usage is explicit, dry-run is safe by default, native SOL quote recovery is supported, unrecoverable rows are classified, and no repair/trust/list/execution mutation is performed.
 
 ## Safety
 
