@@ -46,6 +46,28 @@ data/reports/forward_testing/wallet_trust_review/forward_wallet_trust_review_pac
 
 Context gaps are the main validation blocker. A blocked record is not discarded, but it cannot support trust validation until the missing context is repaired or explicitly classified.
 
+## Context Blocker Reduction
+
+After the trust review packet, use the context blocker reduction packet to prioritize the `fix_context` wallets by missing evidence type:
+
+```bash
+python3 -m utils.build_forward_context_blocker_reduction
+```
+
+Deterministic current run:
+
+```bash
+python3 -m utils.build_forward_context_blocker_reduction --run-id 20260524-context-blocker-reduction
+```
+
+Primary output:
+
+```text
+data/reports/forward_testing/context_blocker_reduction/forward_context_blocker_reduction_20260524-context-blocker-reduction.json
+```
+
+The output separates rows that need later market snapshots from rows that need a valid execution-price quote or timestamp anchor. It is still review-only and cannot mutate trust, wallet lists, or execution.
+
 ## Safety Boundary
 
 The system must remain paper-safe:
@@ -57,4 +79,3 @@ The system must remain paper-safe:
 - no wallet list mutation
 - no edge/profitability claim
 - no trusted-wallet claim
-
