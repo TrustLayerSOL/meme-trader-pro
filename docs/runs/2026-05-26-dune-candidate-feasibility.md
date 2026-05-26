@@ -44,6 +44,9 @@ python3 -m utils.build_dune_candidate_feasibility_probe \
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_completed_records_20260526-dune-context-completion-live-v1.jsonl`
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_blocked_records_20260526-dune-context-completion-live-v1.jsonl`
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_completion_20260526-dune-context-completion-live-v1.md`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_drift_20260526-dune-context-drift-live-v1.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_drift_20260526-dune-context-drift-live-v1.csv`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_drift_20260526-dune-context-drift-live-v1.md`
 
 ## Summary
 
@@ -132,6 +135,24 @@ Wallet conclusions under this report:
 
 The Dune rows did not add new clean proof rows in this run because all three context-complete Dune event IDs already existed in the repaired forward set. They are useful as independent context confirmation, not as additional fresh evidence.
 
+The Dune-vs-local drift report compared the three context-complete Dune rows against local forward records for the same event IDs:
+
+- Dune records scanned: `3`
+- Local matches: `3`
+- Missing local matches: `0`
+- No material drift records: `3`
+- Material price drift records: `0`
+- Liquidity drift records: `0`
+- Market-cap drift records: `0`
+- Outcome drift records: `0`
+- Max absolute price delta pct: `20.507784`
+- Average absolute price delta pct: `17.495223`
+- Promotions allowed: `0`
+- Wallet-list mutations: `0`
+- Wallet-trust mutations: `0`
+
+All three rows matched local liquidity, market cap, and 15m outcome. Dune token price was lower than local entry price by `11.470101%`, `20.507784%`, and `20.507784%`, which stayed under the `25%` review threshold. This supports Dune as a context-confirmation layer for these rows, not as authority for broader proof metrics.
+
 ## Interpretation
 
 Dune is useful for candidate-only historical testing because it can provide historical DEX trade rows, token-transfer rows, and token price coverage for the frozen candidate wallets. These rows can help build older training windows and identify same-transaction quote-anchor candidates.
@@ -140,7 +161,7 @@ Dune does not, by itself, clear the current proof blocker. It becomes more usefu
 
 ## Next Step
 
-Continue collecting fresh forward evidence for the candidate wallets and use Dune as an independent historical/context-confirmation layer. The next implementation step is to compare Dune-confirmed overlapping rows against their local repaired counterparts for price/context drift before allowing Dune-derived context to support broader historical backfill.
+Continue collecting fresh forward evidence for the candidate wallets and use Dune as an independent historical/context-confirmation layer. The next implementation step is to test a non-overlapping historical Dune slice; rows should only enter proof metrics if they pass the same context-completion and drift checks.
 
 ## Verification
 
@@ -149,8 +170,9 @@ python3 -m pytest tests/test_dune_candidate_feasibility.py -q
 python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py -q
 python3 -m pytest tests/test_dune_candidate_resolver_adapter.py -q
 python3 -m pytest tests/test_dune_candidate_context_completion.py -q
+python3 -m pytest tests/test_dune_candidate_context_drift.py -q
 python3 -m pytest tests/test_candidate_walk_forward_validation.py -q
 python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py tests/test_dune_candidate_resolver_adapter.py tests/test_candidate_walk_forward_validation.py tests/test_candidate_walk_forward_survivor_review.py tests/test_candidate_walk_forward_paper_readiness_gate.py -q
 ```
 
-Result: `3 passed` for the resolver adapter tests, `3 passed` for the context-completion tests, `5 passed` for the walk-forward validation tests, and `26 passed` for the combined Dune/candidate validation tests.
+Result: `3 passed` for the resolver adapter tests, `3 passed` for the context-completion tests, `3 passed` for the context-drift tests, `5 passed` for the walk-forward validation tests, and `26 passed` for the combined Dune/candidate validation tests.

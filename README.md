@@ -176,6 +176,18 @@ python3 -m utils.build_candidate_walk_forward_validation \
 
 The validator reports Dune overlap separately with `dune_existing_event_matches` and `dune_new_event_appends` so historical context candidates are not mistaken for fresh forward evidence.
 
+Compare context-complete Dune rows against local forward records before allowing Dune to support broader historical backfill:
+
+```bash
+python3 -m utils.build_dune_candidate_context_drift \
+  --dune-completed-records data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_completed_records_20260526-dune-context-completion-live-v1.jsonl \
+  --local-records data/reports/forward_testing/forward_outcome_records.jsonl \
+  --max-price-delta-pct 25 \
+  --run-id 20260526-dune-context-drift-live-v1
+```
+
+This drift report compares Dune price/liquidity/market cap/outcome context with the local forward row for the same event ID. It is review-only and cannot expand proof metrics or change wallet status.
+
 Stop broad batching when a batch captures zero usable snapshots or stops reducing isolated blocked records. At that point, switch to a smarter target-selection pass instead of spending more provider calls on low-yield current snapshots.
 
 Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.
