@@ -118,6 +118,22 @@ Use `--start-index` plus the prior combined context file to process the next bou
 python3 -m utils.capture_forward_market_snapshot_repair_queue --repair-queue data/reports/forward_testing/market_snapshot_repair_queue/forward_market_snapshot_repair_queue_20260524-market-snapshot-repair-queue-250.json --existing-market-context data/reports/forward_testing/market_snapshot_capture/forward_market_snapshot_capture_combined_market_context_20260524-market-snapshot-capture-top10.jsonl --start-index 10 --max-mints 10 --max-market-context-calls 10 --execute --run-id 20260524-market-snapshot-capture-batch2
 ```
 
+## Dune Candidate Feasibility Probe
+
+Dune can be evaluated as a candidate-only historical backfill source without changing trust, wallet lists, recommendations, or execution settings. Dry-run writes the SQL bundle and deterministic report without making API calls:
+
+```bash
+python3 -m utils.build_dune_candidate_feasibility_probe --run-id 20260526-dune-candidate-feasibility
+```
+
+Live Dune execution requires an explicit environment variable and remains review-only:
+
+```bash
+DUNE_API_KEY=... python3 -m utils.build_dune_candidate_feasibility_probe --execute --run-id 20260526-dune-candidate-feasibility-live
+```
+
+The probe checks whether Dune can provide historical wallet activity, DEX-trade quote-anchor candidates, token-transfer context, and price-context candidates for the three frozen candidate wallets. It deliberately keeps `proof_ready_rows` at zero unless price, liquidity, and market-cap context are all complete. Dune rows are evidence candidates, not trust proof.
+
 Stop broad batching when a batch captures zero usable snapshots or stops reducing isolated blocked records. At that point, switch to a smarter target-selection pass instead of spending more provider calls on low-yield current snapshots.
 
 Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.
