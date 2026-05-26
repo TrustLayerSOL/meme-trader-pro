@@ -47,6 +47,12 @@ python3 -m utils.build_dune_candidate_feasibility_probe \
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_drift_20260526-dune-context-drift-live-v1.json`
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_drift_20260526-dune-context-drift-live-v1.csv`
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_drift_20260526-dune-context-drift-live-v1.md`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_20260526-dune-candidate-feasibility-nonoverlap-older-v1.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_rows_20260526-dune-candidate-feasibility-nonoverlap-older-v1.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_nonoverlap_slice_20260526-dune-nonoverlap-older-v1.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_nonoverlap_slice_20260526-dune-nonoverlap-older-v1.csv`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_nonoverlap_records_20260526-dune-nonoverlap-older-v1.jsonl`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_nonoverlap_slice_20260526-dune-nonoverlap-older-v1.md`
 
 ## Summary
 
@@ -153,6 +159,40 @@ The Dune-vs-local drift report compared the three context-complete Dune rows aga
 
 All three rows matched local liquidity, market cap, and 15m outcome. Dune token price was lower than local entry price by `11.470101%`, `20.507784%`, and `20.507784%`, which stayed under the `25%` review threshold. This supports Dune as a context-confirmation layer for these rows, not as authority for broader proof metrics.
 
+An older non-overlap Dune slice was then captured for `2026-04-26` through `2026-05-21`, before the current local forward evidence window. Dune returned DEX, price, and transfer rows for the slice:
+
+- Query count: `4`
+- Queries completed: `3`
+- Queries failed: `1`
+- Rows returned: `300`
+- DEX rows: `100`
+- Price-context candidate rows: `100`
+- Token-transfer rows: `100`
+- Liquidity-context rows: `0`
+- Market-cap context rows: `0`
+- Proof-ready rows from Dune alone: `0`
+
+The `candidate_transactions` aggregation did not complete inside the polling window, matching the known Dune behavior from the earlier live probe. The bounded DEX/price/transfer rows were still usable for candidate-only non-overlap classification.
+
+The non-overlap classifier found:
+
+- Dune DEX rows: `100`
+- Local overlap rows: `0`
+- Non-overlap rows: `100`
+- Quote-anchor candidate rows: `100`
+- Price-context candidate rows: `100`
+- Liquidity-context rows: `0`
+- Market-cap context rows: `0`
+- Forward outcome rows: `0`
+- Proof-ready rows: `0`
+- Wallets with non-overlap rows: `1`
+- Tokens with non-overlap rows: `34`
+- Promotions allowed: `0`
+- Wallet-list mutations: `0`
+- Wallet-trust mutations: `0`
+
+Every non-overlap row remains blocked by missing decision-time liquidity, missing decision-time market cap, and missing forward outcome windows. None were admitted to proof metrics.
+
 ## Interpretation
 
 Dune is useful for candidate-only historical testing because it can provide historical DEX trade rows, token-transfer rows, and token price coverage for the frozen candidate wallets. These rows can help build older training windows and identify same-transaction quote-anchor candidates.
@@ -161,7 +201,7 @@ Dune does not, by itself, clear the current proof blocker. It becomes more usefu
 
 ## Next Step
 
-Continue collecting fresh forward evidence for the candidate wallets and use Dune as an independent historical/context-confirmation layer. The next implementation step is to test a non-overlapping historical Dune slice; rows should only enter proof metrics if they pass the same context-completion and drift checks.
+Continue collecting fresh forward evidence for the candidate wallets and use Dune as an independent historical/context-confirmation layer. The next implementation step is to build a non-overlap reconstruction queue for the 100 older rows, prioritizing rows with price context and then requiring liquidity, market cap, and forward outcome reconstruction before any proof-metric inclusion.
 
 ## Verification
 
@@ -171,8 +211,9 @@ python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candi
 python3 -m pytest tests/test_dune_candidate_resolver_adapter.py -q
 python3 -m pytest tests/test_dune_candidate_context_completion.py -q
 python3 -m pytest tests/test_dune_candidate_context_drift.py -q
+python3 -m pytest tests/test_dune_candidate_nonoverlap_slice.py -q
 python3 -m pytest tests/test_candidate_walk_forward_validation.py -q
 python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py tests/test_dune_candidate_resolver_adapter.py tests/test_candidate_walk_forward_validation.py tests/test_candidate_walk_forward_survivor_review.py tests/test_candidate_walk_forward_paper_readiness_gate.py -q
 ```
 
-Result: `3 passed` for the resolver adapter tests, `3 passed` for the context-completion tests, `3 passed` for the context-drift tests, `5 passed` for the walk-forward validation tests, and `26 passed` for the combined Dune/candidate validation tests.
+Result: `3 passed` for the resolver adapter tests, `3 passed` for the context-completion tests, `3 passed` for the context-drift tests, `3 passed` for the non-overlap tests, `5 passed` for the walk-forward validation tests, and `26 passed` for the combined Dune/candidate validation tests.
