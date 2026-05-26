@@ -134,6 +134,16 @@ DUNE_API_KEY=... python3 -m utils.build_dune_candidate_feasibility_probe --execu
 
 The probe checks whether Dune can provide historical wallet activity, DEX-trade quote-anchor candidates, token-transfer context, and price-context candidates for the three frozen candidate wallets. It deliberately keeps `proof_ready_rows` at zero unless price, liquidity, and market-cap context are all complete. Dune rows are evidence candidates, not trust proof.
 
+Join Dune DEX rows to local candidate events after a live probe emits the row artifact:
+
+```bash
+python3 -m utils.build_dune_candidate_join \
+  --dune-rows data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_rows_20260526-dune-candidate-feasibility-live-v4.json \
+  --run-id 20260526-dune-candidate-join-live-v4
+```
+
+The join uses exact transaction signatures first, then a wallet/token/time-window fallback. Joined rows remain `dune_quote_price_candidate_not_score_ready` until liquidity and market-cap evidence are complete.
+
 Stop broad batching when a batch captures zero usable snapshots or stops reducing isolated blocked records. At that point, switch to a smarter target-selection pass instead of spending more provider calls on low-yield current snapshots.
 
 Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.

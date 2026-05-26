@@ -36,6 +36,10 @@ class DuneCandidateFeasibilityTests(unittest.TestCase):
             self.assertIn(DEFAULT_CANDIDATE_WALLETS[0], sql)
             self.assertIn(DEFAULT_CANDIDATE_WALLETS[1], sql)
             self.assertNotIn("OtherWallet", sql)
+        dex_sql = queries["candidate_dex_trades"]
+        self.assertIn("token_sold_amount > 0 THEN amount_usd / token_sold_amount", dex_sql)
+        self.assertIn("token_bought_amount > 0 THEN amount_usd / token_bought_amount", dex_sql)
+        self.assertNotIn("WHEN token_sold_amount > 0 THEN amount_usd / token_sold_amount\n    ELSE NULL", dex_sql)
 
     def test_report_keeps_dune_as_review_only_evidence_layer(self):
         report = build_dune_candidate_feasibility_report(
@@ -79,6 +83,25 @@ class DuneCandidateFeasibilityTests(unittest.TestCase):
         self.assertFalse(report["promotion_allowed"])
         self.assertIn("dune_does_not_fully_solve_liquidity_or_market_cap", report["limitations"])
 
+    def test_report_counts_sampled_transaction_rows_without_expensive_aggregation(self):
+        report = build_dune_candidate_feasibility_report(
+            candidate_wallets=DEFAULT_CANDIDATE_WALLETS[:1],
+            start_date="2026-04-01",
+            end_date="2026-05-01",
+            query_results={
+                "candidate_transactions": [
+                    {"wallet_address": DEFAULT_CANDIDATE_WALLETS[0], "tx_hash": "Sig1", "block_time": "2026-04-02 00:00:00.000 UTC"},
+                    {"wallet_address": DEFAULT_CANDIDATE_WALLETS[0], "tx_hash": "Sig2", "block_time": "2026-04-03 00:00:00.000 UTC"},
+                ],
+            },
+            generated_at=1000.0,
+        )
+
+        wallet = report["wallets"][0]
+        self.assertEqual(wallet["transaction_history_rows"], 2)
+        self.assertEqual(wallet["first_seen"], "2026-04-02 00:00:00.000 UTC")
+        self.assertEqual(wallet["last_seen"], "2026-04-03 00:00:00.000 UTC")
+
     def test_writer_exports_json_csv_markdown_and_sql_without_api_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
@@ -96,15 +119,17 @@ class DuneCandidateFeasibilityTests(unittest.TestCase):
             csv_path = output_dir / "dune_candidate_feasibility_wallets_fixed.csv"
             md_path = output_dir / "dune_candidate_feasibility_fixed.md"
             sql_path = output_dir / "dune_candidate_feasibility_sql_fixed.json"
+            rows_path = output_dir / "dune_candidate_feasibility_rows_fixed.json"
             self.assertTrue(json_path.exists())
             self.assertTrue(csv_path.exists())
             self.assertTrue(md_path.exists())
             self.assertTrue(sql_path.exists())
+            self.assertTrue(rows_path.exists())
             saved = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["execution_mode"], "dry_run")
             self.assertEqual(saved["generated_at"], 1000.0)
             combined_text = "\n".join(
-                path.read_text(encoding="utf-8") for path in [json_path, csv_path, md_path, sql_path]
+                path.read_text(encoding="utf-8") for path in [json_path, csv_path, md_path, sql_path, rows_path]
             )
             self.assertNotIn("api_key", combined_text.lower())
             self.assertNotIn("ivFG", combined_text)

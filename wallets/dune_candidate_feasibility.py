@@ -32,15 +32,14 @@ def build_dune_sql_queries(
         "candidate_transactions": f"""
 SELECT
   signer AS wallet_address,
-  count(*) AS tx_count,
-  min(block_time) AS first_seen,
-  max(block_time) AS last_seen
+  signature AS tx_hash,
+  block_time,
+  success
 FROM solana.transactions
 WHERE block_date >= DATE {start}
   AND block_date < DATE {end}
   AND signer IN ({wallets})
-GROUP BY 1
-ORDER BY tx_count DESC
+ORDER BY block_time DESC
 LIMIT {safe_limit}
 """.strip(),
         "candidate_dex_trades": f"""
@@ -56,8 +55,18 @@ SELECT
   token_sold_amount,
   amount_usd,
   CASE
-    WHEN token_bought_amount > 0 THEN amount_usd / token_bought_amount
-    WHEN token_sold_amount > 0 THEN amount_usd / token_sold_amount
+    WHEN token_bought_mint_address IN (
+      'So11111111111111111111111111111111111111112',
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+    )
+      AND token_sold_amount > 0 THEN amount_usd / token_sold_amount
+    WHEN token_sold_mint_address IN (
+      'So11111111111111111111111111111111111111112',
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+    )
+      AND token_bought_amount > 0 THEN amount_usd / token_bought_amount
     ELSE NULL
   END AS price_usd,
   CASE
@@ -156,7 +165,17 @@ def row_mint(row: dict[str, Any]) -> str:
 
 
 def build_wallet_rows(candidate_wallets: list[str], query_results: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    tx_by_wallet = {row_wallet(row): row for row in query_results.get("candidate_transactions", []) if row_wallet(row)}
+    tx_by_wallet: dict[str, dict[str, Any]] = {}
+    for row in query_results.get("candidate_transactions", []):
+        wallet = row_wallet(row)
+        if not wallet:
+            continue
+        bucket = tx_by_wallet.setdefault(wallet, {"sampled_rows": 0, "timestamps": [], "aggregate_row": None})
+        bucket["sampled_rows"] += 1
+        if row.get("tx_count") is not None:
+            bucket["aggregate_row"] = row
+        if row.get("block_time") is not None:
+            bucket["timestamps"].append(str(row.get("block_time")))
     dex_counts = Counter(row_wallet(row) for row in query_results.get("candidate_dex_trades", []) if row_wallet(row))
     transfer_counts = Counter(row_wallet(row) for row in query_results.get("candidate_token_transfers", []) if row_wallet(row))
     token_sets: dict[str, set[str]] = {wallet: set() for wallet in candidate_wallets}
@@ -170,14 +189,17 @@ def build_wallet_rows(candidate_wallets: list[str], query_results: dict[str, lis
     rows: list[dict[str, Any]] = []
     for wallet in candidate_wallets:
         tx = tx_by_wallet.get(wallet, {})
+        aggregate = tx.get("aggregate_row") if isinstance(tx.get("aggregate_row"), dict) else {}
+        timestamps = sorted(str(item) for item in tx.get("timestamps", []) if str(item).strip())
+        tx_count = int(number(aggregate.get("tx_count"))) if aggregate else int(number(tx.get("sampled_rows")))
         dex_count = int(dex_counts.get(wallet, 0))
         transfer_count = int(transfer_counts.get(wallet, 0))
         rows.append(
             {
                 "wallet_address": wallet,
-                "transaction_history_rows": int(number(tx.get("tx_count"))),
-                "first_seen": tx.get("first_seen"),
-                "last_seen": tx.get("last_seen"),
+                "transaction_history_rows": tx_count,
+                "first_seen": aggregate.get("first_seen") if aggregate else (timestamps[0] if timestamps else None),
+                "last_seen": aggregate.get("last_seen") if aggregate else (timestamps[-1] if timestamps else None),
                 "dex_trade_rows": dex_count,
                 "token_transfer_rows": transfer_count,
                 "candidate_token_count": len(token_sets.get(wallet, set())),

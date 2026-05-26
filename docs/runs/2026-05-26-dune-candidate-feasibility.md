@@ -27,10 +27,14 @@ python3 -m utils.build_dune_candidate_feasibility_probe \
 
 ## Outputs
 
-- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_20260526-dune-candidate-feasibility-live.json`
-- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_wallets_20260526-dune-candidate-feasibility-live.csv`
-- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_20260526-dune-candidate-feasibility-live.md`
-- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_sql_20260526-dune-candidate-feasibility-live.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_20260526-dune-candidate-feasibility-live-v4.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_wallets_20260526-dune-candidate-feasibility-live-v4.csv`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_20260526-dune-candidate-feasibility-live-v4.md`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_sql_20260526-dune-candidate-feasibility-live-v4.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_feasibility_rows_20260526-dune-candidate-feasibility-live-v4.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_join_20260526-dune-candidate-join-live-v4.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_join_events_20260526-dune-candidate-join-live-v4.csv`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_join_20260526-dune-candidate-join-live-v4.md`
 
 ## Summary
 
@@ -42,7 +46,7 @@ python3 -m utils.build_dune_candidate_feasibility_probe \
 - Wallets with transaction history or DEX/transfer evidence: `3`
 - Wallets with DEX matches: `3`
 - Quote-anchor candidate rows: `100`
-- Price-context candidate rows: `98`
+- Price-context candidate rows: `95`
 - Liquidity-context candidate rows: `0`
 - Market-cap context candidate rows: `0`
 - Proof-ready rows from Dune alone: `0`
@@ -51,6 +55,21 @@ python3 -m utils.build_dune_candidate_feasibility_probe \
 - Wallet-trust mutations: `0`
 
 The raw `solana.transactions` aggregation exceeded the initial polling window, but Dune still returned DEX, token-transfer, and price-coverage evidence for all three candidate wallets. That is enough to confirm Dune is useful as a historical backfill source. It is not enough to treat Dune as a complete trust-validation source by itself.
+
+The follow-up join layer matched the live Dune DEX rows to local candidate events:
+
+- Candidate events scanned: `1,148`
+- Dune DEX rows: `100`
+- Matched events: `5`
+- Exact signature matches: `2`
+- Wallet/token/time-window matches: `3`
+- Quote-anchor candidate events: `5`
+- Price-context candidate events: `3`
+- Liquidity-context candidate events: `0`
+- Market-cap context candidate events: `0`
+- Proof-ready events: `0`
+
+Two exact-signature rows had Dune DEX amount and quote context but no candidate-token amount, so the corrected SQL leaves `price_usd` empty for those rows instead of carrying SOL price as token price.
 
 ## Interpretation
 
@@ -62,10 +81,13 @@ Dune does not, by itself, clear the current proof blocker. The project still nee
 
 Use the Dune probe output as a backfill source for a candidate-only join layer keyed by wallet, token mint, transaction signature, and time window. Keep Dune-derived rows out of trust metrics until the existing resolver marks them clean for price, liquidity, market cap, and outcome context.
 
+The next implementation step is a review-only resolver adapter that can consume `dune_candidate_join_events_*.csv/json`, preserve quote/price candidates, and keep rows blocked until liquidity and market-cap fields are reconstructed.
+
 ## Verification
 
 ```bash
 python3 -m pytest tests/test_dune_candidate_feasibility.py -q
+python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py -q
 ```
 
-Result: `3 passed`.
+Result: `7 passed` for the focused Dune tests.

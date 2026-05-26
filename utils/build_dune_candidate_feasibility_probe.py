@@ -259,16 +259,20 @@ def write_dune_candidate_feasibility_probe(
     csv_path = output / f"dune_candidate_feasibility_wallets_{run_id}.csv"
     md_path = output / f"dune_candidate_feasibility_{run_id}.md"
     sql_path = output / f"dune_candidate_feasibility_sql_{run_id}.json"
+    rows_path = output / f"dune_candidate_feasibility_rows_{run_id}.json"
     report["run_id"] = run_id
     report["output_paths"] = {
         "json": str(json_path),
         "csv": str(csv_path),
         "markdown": str(md_path),
         "sql": str(sql_path),
+        "rows": str(rows_path),
     }
     write_json(json_path, report)
     write_json(output / "dune_candidate_feasibility.json", report)
     write_json(sql_path, queries)
+    write_json(rows_path, query_results)
+    write_json(output / "dune_candidate_feasibility_rows.json", query_results)
     write_csv(csv_path, [row for row in report.get("wallets", []) if isinstance(row, dict)])
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(render_markdown(report), encoding="utf-8")
