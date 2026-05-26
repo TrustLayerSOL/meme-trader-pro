@@ -144,6 +144,16 @@ python3 -m utils.build_dune_candidate_join \
 
 The join uses exact transaction signatures first, then a wallet/token/time-window fallback. Joined rows remain `dune_quote_price_candidate_not_score_ready` until liquidity and market-cap evidence are complete.
 
+Attach joined Dune context candidates to local forward rows without making them proof-ready:
+
+```bash
+python3 -m utils.build_dune_candidate_resolver_adapter \
+  --dune-join data/reports/forward_testing/candidate_walk_forward/dune_candidate_join_20260526-dune-candidate-join-live-v4.json \
+  --run-id 20260526-dune-resolver-adapter-live-v4
+```
+
+The resolver adapter preserves Dune quote and price candidates for manual review, but keeps every adapted row blocked until decision-time-safe liquidity and market-cap context are reconstructed. It does not change trust, wallet lists, scoring thresholds, recommendations, execution settings, or proof metrics.
+
 Stop broad batching when a batch captures zero usable snapshots or stops reducing isolated blocked records. At that point, switch to a smarter target-selection pass instead of spending more provider calls on low-yield current snapshots.
 
 Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.

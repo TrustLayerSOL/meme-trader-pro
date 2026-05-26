@@ -35,6 +35,10 @@ python3 -m utils.build_dune_candidate_feasibility_probe \
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_join_20260526-dune-candidate-join-live-v4.json`
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_join_events_20260526-dune-candidate-join-live-v4.csv`
 - `data/reports/forward_testing/candidate_walk_forward/dune_candidate_join_20260526-dune-candidate-join-live-v4.md`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_resolver_adapter_20260526-dune-resolver-adapter-live-v4.json`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_resolver_adapter_events_20260526-dune-resolver-adapter-live-v4.csv`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_candidate_records_20260526-dune-resolver-adapter-live-v4.jsonl`
+- `data/reports/forward_testing/candidate_walk_forward/dune_candidate_resolver_adapter_20260526-dune-resolver-adapter-live-v4.md`
 
 ## Summary
 
@@ -71,6 +75,20 @@ The follow-up join layer matched the live Dune DEX rows to local candidate event
 
 Two exact-signature rows had Dune DEX amount and quote context but no candidate-token amount, so the corrected SQL leaves `price_usd` empty for those rows instead of carrying SOL price as token price.
 
+The review-only resolver adapter attached the joined Dune context candidates to local forward rows while keeping every adapted row blocked:
+
+- Forward records scanned: `4,219`
+- Joined events scanned: `5`
+- Context candidate records: `5`
+- Price candidate records: `3`
+- Quote-only candidate records: `2`
+- Liquidity candidate records: `0`
+- Market-cap candidate records: `0`
+- Proof-ready records: `0`
+- Promotions allowed: `0`
+- Wallet-list mutations: `0`
+- Wallet-trust mutations: `0`
+
 ## Interpretation
 
 Dune is useful for candidate-only historical testing because it can provide historical DEX trade rows, token-transfer rows, and token price coverage for the frozen candidate wallets. These rows can help build older training windows and identify same-transaction quote-anchor candidates.
@@ -79,15 +97,15 @@ Dune does not, by itself, clear the current proof blocker. The project still nee
 
 ## Next Step
 
-Use the Dune probe output as a backfill source for a candidate-only join layer keyed by wallet, token mint, transaction signature, and time window. Keep Dune-derived rows out of trust metrics until the existing resolver marks them clean for price, liquidity, market cap, and outcome context.
-
-The next implementation step is a review-only resolver adapter that can consume `dune_candidate_join_events_*.csv/json`, preserve quote/price candidates, and keep rows blocked until liquidity and market-cap fields are reconstructed.
+Use the Dune probe, join, and resolver-adapter outputs as historical context candidates only. The next implementation step is reconstructing decision-time-safe liquidity and market-cap context for the five joined candidate events, then rerunning the candidate-only walk-forward validation with those rows still excluded from proof metrics unless the resolver marks them complete.
 
 ## Verification
 
 ```bash
 python3 -m pytest tests/test_dune_candidate_feasibility.py -q
 python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py -q
+python3 -m pytest tests/test_dune_candidate_resolver_adapter.py -q
+python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py tests/test_dune_candidate_resolver_adapter.py tests/test_candidate_walk_forward_validation.py tests/test_candidate_walk_forward_survivor_review.py tests/test_candidate_walk_forward_paper_readiness_gate.py -q
 ```
 
-Result: `7 passed` for the focused Dune tests.
+Result: `3 passed` for the resolver adapter tests and `22 passed` for the combined Dune/candidate validation tests.
