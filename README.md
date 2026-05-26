@@ -154,6 +154,18 @@ python3 -m utils.build_dune_candidate_resolver_adapter \
 
 The resolver adapter preserves Dune quote and price candidates for manual review, but keeps every adapted row blocked until decision-time-safe liquidity and market-cap context are reconstructed. It does not change trust, wallet lists, scoring thresholds, recommendations, execution settings, or proof metrics.
 
+Complete Dune candidate context with near-event forward market snapshots when price, liquidity, and market cap are all present inside the configured lag window:
+
+```bash
+python3 -m utils.build_dune_candidate_context_completion \
+  --candidate-records data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_candidate_records_20260526-dune-resolver-adapter-live-v4.jsonl \
+  --market-snapshots data/wallet_backfills/forward_market_context_snapshots.jsonl \
+  --max-snapshot-lag-seconds 120 \
+  --run-id 20260526-dune-context-completion-live-v1
+```
+
+This completion layer is still candidate-only and review-only. It can identify context-complete candidate rows, but it cannot promote wallets, mutate trust, mutate wallet lists, change scoring thresholds, or unlock execution.
+
 Stop broad batching when a batch captures zero usable snapshots or stops reducing isolated blocked records. At that point, switch to a smarter target-selection pass instead of spending more provider calls on low-yield current snapshots.
 
 Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.
