@@ -19,6 +19,14 @@ from wallets.candidate_walk_forward_validation import build_candidate_walk_forwa
 
 DEFAULT_RECORDS = ROOT / "data" / "reports" / "forward_testing" / "forward_outcome_records.jsonl"
 DEFAULT_REPAIRED_RECORDS = ROOT / "data" / "reports" / "forward_testing" / "forward_entry_context_resolved_records.jsonl"
+DEFAULT_DUNE_COMPLETED_RECORDS = (
+    ROOT
+    / "data"
+    / "reports"
+    / "forward_testing"
+    / "candidate_walk_forward"
+    / "dune_candidate_context_completed_records_20260526-dune-context-completion-live-v1.jsonl"
+)
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "reports" / "forward_testing" / "candidate_walk_forward"
 
 WALLET_FIELDS = [
@@ -102,6 +110,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Candidate records: {summary.get('candidate_records', 0)}",
         f"- Clean proof records: {summary.get('clean_records', 0)}",
         f"- Excluded records: {summary.get('excluded_records', 0)}",
+        f"- Dune completed input records: {summary.get('dune_completed_records', 0)}",
+        f"- Dune clean proof records: {summary.get('dune_clean_records', 0)}",
+        f"- Dune existing event matches: {summary.get('dune_existing_event_matches', 0)}",
+        f"- Dune new event appends: {summary.get('dune_new_event_appends', 0)}",
         f"- Continued validation wallets: {summary.get('continued_validation_wallets', 0)}",
         f"- Degraded wallets: {summary.get('degraded_wallets', 0)}",
         f"- Inconclusive wallets: {summary.get('inconclusive_wallets', 0)}",
@@ -146,6 +158,7 @@ def write_candidate_walk_forward_validation_report(
     *,
     records_path: Path | str = DEFAULT_RECORDS,
     repaired_records_path: Path | str = DEFAULT_REPAIRED_RECORDS,
+    dune_completed_records_path: Path | str | None = None,
     output_dir: Path | str = DEFAULT_OUTPUT_DIR,
     run_id: str | None = None,
     generated_at: float | None = None,
@@ -159,6 +172,7 @@ def write_candidate_walk_forward_validation_report(
     report = build_candidate_walk_forward_validation_report(
         records=read_jsonl(records_path),
         repaired_records=read_jsonl(repaired_records_path),
+        dune_completed_records=read_jsonl(dune_completed_records_path) if dune_completed_records_path else [],
         candidate_wallets=candidate_wallets or DEFAULT_CANDIDATE_WALLETS,
         generated_at=generated_at,
         train_fraction=train_fraction,
@@ -167,7 +181,11 @@ def write_candidate_walk_forward_validation_report(
         degradation_tolerance=degradation_tolerance,
     )
     report["run_id"] = run_id
-    report["input_paths"] = {"records": str(records_path), "repaired_records": str(repaired_records_path)}
+    report["input_paths"] = {
+        "records": str(records_path),
+        "repaired_records": str(repaired_records_path),
+        "dune_completed_records": str(dune_completed_records_path) if dune_completed_records_path else None,
+    }
     output = Path(output_dir)
     json_path = output / f"candidate_walk_forward_validation_{run_id}.json"
     csv_path = output / f"candidate_walk_forward_validation_{run_id}.csv"
@@ -195,6 +213,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build candidate-only walk-forward validation evidence packet.")
     parser.add_argument("--records", type=Path, default=DEFAULT_RECORDS)
     parser.add_argument("--repaired-records", type=Path, default=DEFAULT_REPAIRED_RECORDS)
+    parser.add_argument("--dune-completed-records", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--candidate-wallets", default=None, help="Comma-separated wallet addresses. Defaults to current candidate validation wallets.")
@@ -210,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     report = write_candidate_walk_forward_validation_report(
         records_path=args.records,
         repaired_records_path=args.repaired_records,
+        dune_completed_records_path=args.dune_completed_records,
         output_dir=args.output_dir,
         run_id=args.run_id,
         candidate_wallets=parse_wallets(args.candidate_wallets),

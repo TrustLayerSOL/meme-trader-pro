@@ -166,6 +166,16 @@ python3 -m utils.build_dune_candidate_context_completion \
 
 This completion layer is still candidate-only and review-only. It can identify context-complete candidate rows, but it cannot promote wallets, mutate trust, mutate wallet lists, change scoring thresholds, or unlock execution.
 
+Pass context-complete Dune rows into the candidate walk-forward validator as a separate validation input:
+
+```bash
+python3 -m utils.build_candidate_walk_forward_validation \
+  --dune-completed-records data/reports/forward_testing/candidate_walk_forward/dune_candidate_context_completed_records_20260526-dune-context-completion-live-v1.jsonl \
+  --run-id 20260526-candidate-wfv-with-dune-context-defaults-v2
+```
+
+The validator reports Dune overlap separately with `dune_existing_event_matches` and `dune_new_event_appends` so historical context candidates are not mistaken for fresh forward evidence.
+
 Stop broad batching when a batch captures zero usable snapshots or stops reducing isolated blocked records. At that point, switch to a smarter target-selection pass instead of spending more provider calls on low-yield current snapshots.
 
 Captured snapshots can be passed into the isolated Helius quote-anchor merge with `--market-context`. This is still review-only; it does not overwrite canonical market context, resolver outputs, wallet trust, wallet lists, promotions, or execution settings.

@@ -115,10 +115,36 @@ class CandidateWalkForwardValidationTests(unittest.TestCase):
         self.assertEqual(report["summary"]["excluded_records"], 0)
         self.assertEqual(report["wallets"][0]["conclusion"], "continued_validation")
 
+    def test_dune_completed_records_are_separate_validation_input(self):
+        original = row(WALLET_A, "dune", 10, "runner", blocked=True, token="A")
+        dune_completed = row(WALLET_A, "dune", 10, "flat", token="A")
+        dune_completed["status"] = "dune_candidate_context_complete_review_only"
+        dune_blocked = row(WALLET_A, "blocked-dune", 20, "runner", blocked=True, token="B")
+        report = build_candidate_walk_forward_validation_report(
+            records=[original, row(WALLET_A, "validation", 30, "runner", token="C")],
+            dune_completed_records=[dune_completed, dune_blocked],
+            candidate_wallets=[WALLET_A],
+            generated_at=1000.0,
+            min_train_clean_rows=1,
+            min_validation_clean_rows=1,
+        )
+
+        self.assertEqual(report["summary"]["dune_completed_records"], 2)
+        self.assertEqual(report["summary"]["dune_clean_records"], 1)
+        self.assertEqual(report["summary"]["dune_existing_event_matches"], 1)
+        self.assertEqual(report["summary"]["dune_new_event_appends"], 1)
+        self.assertEqual(report["summary"]["clean_records"], 2)
+        self.assertEqual(report["summary"]["excluded_records"], 1)
+        self.assertEqual(report["train_validation_config"]["dune_context_completed_input"], True)
+        self.assertEqual(report["wallets"][0]["candidate_records"], 3)
+        self.assertFalse(report["wallet_trust_mutation_allowed"])
+        self.assertFalse(report["wallet_list_mutation_allowed"])
+
     def test_writer_exports_deterministic_json_csv_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             records_path = root / "records.jsonl"
+            dune_path = root / "dune.jsonl"
             output_dir = root / "out"
             records = [
                 row(WALLET_A, "train", 10, "runner", token="A"),
@@ -126,10 +152,12 @@ class CandidateWalkForwardValidationTests(unittest.TestCase):
                 row("OtherWallet", "other", 30, "runner", token="C"),
             ]
             records_path.write_text("\n".join(json.dumps(item, sort_keys=True) for item in records) + "\n", encoding="utf-8")
+            dune_path.write_text(json.dumps(row(WALLET_A, "dune", 25, "flat", token="D"), sort_keys=True) + "\n", encoding="utf-8")
 
             report = write_candidate_walk_forward_validation_report(
                 records_path=records_path,
                 repaired_records_path=root / "missing_repaired.jsonl",
+                dune_completed_records_path=dune_path,
                 output_dir=output_dir,
                 run_id="fixed",
                 generated_at=1000.0,
@@ -147,5 +175,6 @@ class CandidateWalkForwardValidationTests(unittest.TestCase):
             saved = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["generated_at"], 1000.0)
             self.assertEqual(saved["summary"], report["summary"])
-            self.assertIn("continued_validation", csv_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["summary"]["dune_clean_records"], 1)
+            self.assertIn("degraded", csv_path.read_text(encoding="utf-8"))
             self.assertIn("Candidate Walk-Forward Validation", md_path.read_text(encoding="utf-8"))

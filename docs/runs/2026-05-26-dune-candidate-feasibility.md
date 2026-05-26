@@ -109,6 +109,29 @@ The candidate-only context completion layer then merged those Dune context candi
 
 The three completed rows all belong to `2tgUbS9UMoQD6GkDZBiqKYCURnGrSb6ocYwRABrSJUvY` and had near-event market snapshots inside 20 seconds. The two blocked rows remain excluded because they have no Dune token price and no acceptable near snapshot inside the 120-second window.
 
+The candidate walk-forward validator was then rerun with the three context-complete Dune rows passed as a separate input under the default thresholds:
+
+- Candidate records: `1,148`
+- Clean proof records: `969`
+- Excluded records: `179`
+- Dune completed input records: `3`
+- Dune clean records: `3`
+- Dune existing event matches: `3`
+- Dune new event appends: `0`
+- Continued-validation wallets: `2`
+- Degraded wallets: `1`
+- Promotions allowed: `0`
+- Wallet-list mutations: `0`
+- Wallet-trust mutations: `0`
+
+Wallet conclusions under this report:
+
+- `2tgUbS9UMoQD6GkDZBiqKYCURnGrSb6ocYwRABrSJUvY`: `degraded`
+- `2K5DekX2pitRReFBC4byUCv2Ci3o89StnBQnBbkA9BdN`: `continued_validation`
+- `D11LfGmruiKraNB9BtPqb1ELEYnNtpsNDuft32wArYV3`: `continued_validation`
+
+The Dune rows did not add new clean proof rows in this run because all three context-complete Dune event IDs already existed in the repaired forward set. They are useful as independent context confirmation, not as additional fresh evidence.
+
 ## Interpretation
 
 Dune is useful for candidate-only historical testing because it can provide historical DEX trade rows, token-transfer rows, and token price coverage for the frozen candidate wallets. These rows can help build older training windows and identify same-transaction quote-anchor candidates.
@@ -117,7 +140,7 @@ Dune does not, by itself, clear the current proof blocker. It becomes more usefu
 
 ## Next Step
 
-Rerun the candidate-only walk-forward validation with the three context-complete Dune candidate rows as a separate validation input. Keep the two blocked rows excluded from proof metrics and continue collecting fresh forward evidence for the candidate wallets.
+Continue collecting fresh forward evidence for the candidate wallets and use Dune as an independent historical/context-confirmation layer. The next implementation step is to compare Dune-confirmed overlapping rows against their local repaired counterparts for price/context drift before allowing Dune-derived context to support broader historical backfill.
 
 ## Verification
 
@@ -126,7 +149,8 @@ python3 -m pytest tests/test_dune_candidate_feasibility.py -q
 python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py -q
 python3 -m pytest tests/test_dune_candidate_resolver_adapter.py -q
 python3 -m pytest tests/test_dune_candidate_context_completion.py -q
+python3 -m pytest tests/test_candidate_walk_forward_validation.py -q
 python3 -m pytest tests/test_dune_candidate_feasibility.py tests/test_dune_candidate_join.py tests/test_dune_candidate_resolver_adapter.py tests/test_candidate_walk_forward_validation.py tests/test_candidate_walk_forward_survivor_review.py tests/test_candidate_walk_forward_paper_readiness_gate.py -q
 ```
 
-Result: `3 passed` for the resolver adapter tests, `3 passed` for the context-completion tests, and `22 passed` for the combined Dune/candidate validation tests.
+Result: `3 passed` for the resolver adapter tests, `3 passed` for the context-completion tests, `5 passed` for the walk-forward validation tests, and `26 passed` for the combined Dune/candidate validation tests.

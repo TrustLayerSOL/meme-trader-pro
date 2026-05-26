@@ -235,6 +235,7 @@ def build_candidate_walk_forward_validation_report(
     *,
     records: list[dict[str, Any]],
     repaired_records: list[dict[str, Any]] | None = None,
+    dune_completed_records: list[dict[str, Any]] | None = None,
     candidate_wallets: list[str] | None = None,
     generated_at: float | None = None,
     train_fraction: float = 0.7,
@@ -244,11 +245,18 @@ def build_candidate_walk_forward_validation_report(
 ) -> dict[str, Any]:
     generated_at = time.time() if generated_at is None else float(generated_at)
     repaired_records = repaired_records or []
-    merged_records = merge_repaired_records(records, repaired_records)
+    dune_completed_records = dune_completed_records or []
+    base_merged_records = merge_repaired_records(records, repaired_records)
+    base_event_ids = {event_id(row) for row in base_merged_records if event_id(row)}
+    dune_existing_event_matches = sum(1 for row in dune_completed_records if event_id(row) and event_id(row) in base_event_ids)
+    dune_new_event_appends = sum(1 for row in dune_completed_records if not event_id(row) or event_id(row) not in base_event_ids)
+    merged_records = merge_repaired_records(base_merged_records, dune_completed_records)
     candidates = [str(wallet) for wallet in (candidate_wallets or DEFAULT_CANDIDATE_WALLETS) if str(wallet)]
     candidate_set = set(candidates)
     candidate_records = [row for row in merged_records if wallet_address(row) in candidate_set]
     clean_records = [row for row in candidate_records if is_clean_proof_row(row)]
+    dune_candidate_records = [row for row in dune_completed_records if wallet_address(row) in candidate_set]
+    dune_clean_records = [row for row in dune_candidate_records if is_clean_proof_row(row)]
     by_wallet = {wallet: [] for wallet in candidates}
     for row in candidate_records:
         by_wallet.setdefault(wallet_address(row), []).append(row)
@@ -282,6 +290,7 @@ def build_candidate_walk_forward_validation_report(
             "degradation_tolerance": float(degradation_tolerance),
             "candidate_wallets_only": True,
             "proof_metrics_exclude_blocked_rows": True,
+            "dune_context_completed_input": bool(dune_completed_records),
         },
         "frozen_wallet_candidate_snapshot": {
             "generated_at": generated_at,
@@ -291,6 +300,11 @@ def build_candidate_walk_forward_validation_report(
         "summary": {
             "input_records": len(records),
             "repaired_records": len(repaired_records),
+            "dune_completed_records": len(dune_completed_records),
+            "dune_candidate_records": len(dune_candidate_records),
+            "dune_clean_records": len(dune_clean_records),
+            "dune_existing_event_matches": dune_existing_event_matches,
+            "dune_new_event_appends": dune_new_event_appends,
             "merged_records": len(merged_records),
             "candidate_wallets": len(candidates),
             "candidate_records": len(candidate_records),
