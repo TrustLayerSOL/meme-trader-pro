@@ -63,3 +63,19 @@ Fallback (if virtualenv path differs):
 ```bash
 python3 -m pytest research/tests/test_candidate_registry.py
 ```
+
+## Milestone 3: Helius Historical Adapter Foundation
+
+v3 now has a low-cost Helius JSON-RPC adapter foundation for historical signature discovery. The first supported method is `getSignaturesForAddress`; full transaction-body hydration comes later.
+
+Run the focused Helius adapter tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_helius_backfill.py
+```
+
+Example real probe command:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_helius_backfill_probe <ADDRESS> --limit 10
+```

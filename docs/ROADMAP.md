@@ -4,7 +4,9 @@
 
 - [x] 1. Repo migration and v3 scaffold
   - v3 package structure and legacy preservation are in place.
-- [ ] 2. Candidate registry
+- [x] 2. Candidate registry
+  - Verified with `./trading_env/bin/python -m pytest research/tests/test_candidate_registry.py`.
+- [ ] 3. Helius historical adapter foundation
 
 ## Milestone 2 acceptance criteria
 
@@ -19,3 +21,13 @@
 - Root `research` package imports resolve from repository root
 - `./trading_env/bin/python -m research.mtp_research.ingestion.run_candidate_registry` runs successfully
 - `./trading_env/bin/python -m pytest research/tests/test_candidate_registry.py` passes
+
+## Milestone 3 acceptance criteria
+
+- HeliusBackfillRequest model exists
+- HeliusHistoricalAdapter builds `getSignaturesForAddress` payloads
+- Signature rows parse into normalized records
+- Failed transaction filtering works
+- Pagination `next_before` works
+- CLI probe exists
+- Tests pass without network
