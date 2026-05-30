@@ -139,3 +139,21 @@ Example run:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.ingestion.run_normalize_trade_events --limit 100
 ```
+
+## Milestone 7: Feature Snapshot Builder v0
+
+v3 now builds rolling token-level feature snapshots from normalized local events. These snapshots are the first direct inputs for the future event-driven backtester.
+
+Run the focused Milestone 7 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_feature_snapshot_store.py
+./trading_env/bin/python -m pytest research/tests/test_feature_snapshot_builder.py
+./trading_env/bin/python -m pytest research/tests/test_run_build_feature_snapshots.py
+```
+
+Example run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.features.run_build_feature_snapshots --snapshot-step-sec 60 --max-snapshots 100
+```

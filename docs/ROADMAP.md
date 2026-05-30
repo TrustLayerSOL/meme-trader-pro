@@ -12,7 +12,9 @@
   - Verified with Milestone 4 store, job, and normalizer tests.
 - [x] 5. DEX event parser foundation
   - Verified with parser, venue classifier, and parse CLI tests.
-- [ ] 6. Trade event normalization v0
+- [x] 6. Trade event normalization v0
+  - Verified with trade normalizer and trade normalization CLI tests.
+- [ ] 7. Feature snapshot builder v0
 
 ## Milestone 2 acceptance criteria
 
@@ -69,4 +71,16 @@
 - `target_token_mint` filtering works
 - Normalized events include confidence and reasons
 - Trade normalization CLI exists
+- Tests pass without network
+
+## Milestone 7 acceptance criteria
+
+- FeatureSnapshot model exists
+- FeatureSnapshotStore writes JSONL
+- FeatureSnapshotBuilder creates rolling 1m/5m/15m snapshots
+- Buy/sell/accumulation/distribution counts are calculated
+- Confidence-weighted flow features are calculated
+- Unique actor counts are calculated
+- Venue and event type counts are calculated
+- CLI feature snapshot builder exists
 - Tests pass without network

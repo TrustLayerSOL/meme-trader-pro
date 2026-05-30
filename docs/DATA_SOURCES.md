@@ -45,3 +45,11 @@ Backtests should depend on normalized event stores instead of direct RPC calls.
 Balance-delta trade inference uses local raw transaction JSON from the replay cache. v0 treats WSOL, USDC, and USDT as known quote assets.
 
 DEX-specific parsing is a later milestone. Heuristic trade events should be treated as candidates, not perfect fills.
+
+## Feature snapshots
+
+Feature snapshots are derived local artifacts that should be reproducible from NormalizedEventStore.
+
+Helius should not be called during feature building. Snapshot outputs live under `data/features/`.
+
+v0 rolling windows are 1m, 5m, and 15m.
