@@ -1,0 +1,10 @@
+venues:
+  enabled:
+    - helius
+    - dexscreener
+    - jupiter
+    - raydium
+    - pump
+    - pumpswap
+  disabled:
+    - helius_enhanced_wallet

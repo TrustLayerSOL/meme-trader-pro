@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LaunchRecord",
+  "type": "object",
+  "properties": {
+    "launch_id": { "type": "string" },
+    "token_address": { "type": "string" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "status": { "type": "string" }
+  },
+  "required": ["launch_id", "token_address", "observed_at"]
+}

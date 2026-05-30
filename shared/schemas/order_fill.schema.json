@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrderFill",
+  "type": "object",
+  "properties": {
+    "order_id": { "type": "string" },
+    "venue": { "type": "string" },
+    "filled": { "type": "boolean" },
+    "fill_ratio": { "type": "number" },
+    "filled_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["order_id", "venue", "filled", "filled_at"]
+}

@@ -1,0 +1,6 @@
+fees:
+  raydium_bps: 30
+  jupiter_bps: 25
+  default_protocol_bps: 50
+  slippage_buffer_bps: 20
+  priority_fee_buffer_sol: 0.0001

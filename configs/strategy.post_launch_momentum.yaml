@@ -1,0 +1,8 @@
+strategy:
+  name: post_launch_momentum
+  description: Research-first post-launch momentum entry profile
+  min_liquidity_usd: 10000
+  min_unique_buyers: 25
+  min_buy_sell_imbalance: 1.2
+  max_quote_impact_bps: 150
+  include_organic_attention: true

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FeatureSnapshot",
+  "type": "object",
+  "properties": {
+    "token_address": { "type": "string" },
+    "wallet_address": { "type": "string" },
+    "snapshot_at": { "type": "string", "format": "date-time" },
+    "features": { "type": "object", "additionalProperties": true }
+  },
+  "required": ["token_address", "snapshot_at", "features"]
+}

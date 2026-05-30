@@ -1,0 +1,36 @@
+.env
+trading_env/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+target/
+paper_trades.json
+.DS_Store
+.superpowers/
+
+# Runtime state and generated reports
+logs/
+live_state.json
+live_state*.json
+live_state*.lock
+.live_state*.tmp
+latest_report.txt
+
+# Local trading data/state
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.json
+data/*.lock
+data/.*.tmp
+data/archives/
+data/process_locks/
+data/historical_replay/
+data/reports/
+data/rejected_signals/
+data/signal_contexts/
+data/wallet_backfills/
+data/wallet_evidence/
+data/manual_research/
+!data/__init__.py

@@ -1,0 +1,6 @@
+risk:
+  max_position_pct_visible_liquidity: 0.02
+  max_drawdown_pct: 0.05
+  max_slippage_bps: 300
+  liquidation_cascade_guard_enabled: true
+  creator_sell_kill_enabled: true

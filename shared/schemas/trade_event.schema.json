@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradeEvent",
+  "type": "object",
+  "properties": {
+    "wallet": { "type": "string" },
+    "token": { "type": "string" },
+    "type": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "amount": { "type": "number" },
+    "usd_value": { "type": "number" }
+  },
+  "required": ["wallet", "token", "type", "timestamp"]
+}
