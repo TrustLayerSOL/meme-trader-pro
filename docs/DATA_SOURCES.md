@@ -53,3 +53,11 @@ Feature snapshots are derived local artifacts that should be reproducible from N
 Helius should not be called during feature building. Snapshot outputs live under `data/features/`.
 
 v0 rolling windows are 1m, 5m, and 15m.
+
+## Outcome labels
+
+Outcome labels are derived local artifacts stored under `data/backtests/`.
+
+Outcome labeling uses NormalizedEventStore `price_quote` as the v0 price proxy. No RPC calls should happen during outcome labeling.
+
+`price_quote` is heuristic in v0 and may later be replaced by venue-specific execution or quote data.

@@ -157,3 +157,22 @@ Example run:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.features.run_build_feature_snapshots --snapshot-step-sec 60 --max-snapshots 100
 ```
+
+## Milestone 8: Outcome Labeler v0
+
+v3 now labels future outcomes for feature snapshots using local normalized events and `price_quote` as the v0 price proxy. Outcome labels are separate from features so feature generation remains leakage-free.
+
+Run the focused Milestone 8 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_outcome_label_store.py
+./trading_env/bin/python -m pytest research/tests/test_price_series_builder.py
+./trading_env/bin/python -m pytest research/tests/test_outcome_label_builder.py
+./trading_env/bin/python -m pytest research/tests/test_run_build_outcome_labels.py
+```
+
+Example run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels --max-snapshots 100
+```

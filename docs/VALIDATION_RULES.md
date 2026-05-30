@@ -33,3 +33,13 @@
 - Rolling windows must use strict time filtering to avoid leakage.
 - Confidence-weighted features should separate high-confidence inferred trades from exploratory low-confidence events.
 - Strategy labels/outcomes are not part of Milestone 7.
+
+## Outcome labels
+
+- Outcome labels may look forward in time; features may not.
+- Outcome labeling must be separate from feature generation to avoid leakage.
+- Backtests should join FeatureSnapshot rows with OutcomeLabel rows by `snapshot_id` and horizon.
+- Entry price source must be tracked.
+- Labels with `entry_price_source="first_after_snapshot"` should be treated carefully because they use future information for entry approximation.
+- `label_quality` must be used to filter sparse/no-price rows.
+- Rug-like labels are heuristic and threshold-based in v0.

@@ -14,7 +14,9 @@
   - Verified with parser, venue classifier, and parse CLI tests.
 - [x] 6. Trade event normalization v0
   - Verified with trade normalizer and trade normalization CLI tests.
-- [ ] 7. Feature snapshot builder v0
+- [x] 7. Feature snapshot builder v0
+  - Verified with feature snapshot store, builder, and CLI tests.
+- [ ] 8. Outcome labeler v0
 
 ## Milestone 2 acceptance criteria
 
@@ -83,4 +85,17 @@
 - Unique actor counts are calculated
 - Venue and event type counts are calculated
 - CLI feature snapshot builder exists
+- Tests pass without network
+
+## Milestone 8 acceptance criteria
+
+- OutcomeLabel model exists
+- OutcomeLabelStore writes JSONL
+- TokenPriceSeriesBuilder creates price points from normalized events
+- Entry price selection works with staleness control
+- Forward points are strict future-only
+- `forward_return` / `max_runup` / `max_drawdown` are calculated
+- `survived_horizon` and `rug_like_drop` are labeled
+- Future event counts and volumes are calculated
+- CLI outcome label builder exists
 - Tests pass without network
