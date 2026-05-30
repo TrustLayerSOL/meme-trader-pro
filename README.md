@@ -176,3 +176,29 @@ Example run:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels --max-snapshots 100
 ```
+
+## Milestone 9: Research Dataset Builder v0
+
+v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
+
+Run the focused Milestone 9 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_research_dataset_store.py
+./trading_env/bin/python -m pytest research/tests/test_research_dataset_builder.py
+./trading_env/bin/python -m pytest research/tests/test_research_dataset_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_build_research_dataset.py
+./trading_env/bin/python -m pytest research/tests/test_run_research_dataset_report.py
+```
+
+Example build:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_research_dataset --min-label-quality sparse --require-forward-return
+```
+
+Example report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_research_dataset_report --min-label-quality sparse --require-forward-return
+```

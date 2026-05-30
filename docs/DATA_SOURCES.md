@@ -61,3 +61,11 @@ Outcome labels are derived local artifacts stored under `data/backtests/`.
 Outcome labeling uses NormalizedEventStore `price_quote` as the v0 price proxy. No RPC calls should happen during outcome labeling.
 
 `price_quote` is heuristic in v0 and may later be replaced by venue-specific execution or quote data.
+
+## Research dataset rows
+
+ResearchDatasetStore is a derived local artifact stored under `data/backtests/`.
+
+It joins local feature snapshots and local outcome labels. No RPC calls should happen during dataset building.
+
+Dataset rows are reproducible from FeatureSnapshotStore and OutcomeLabelStore.

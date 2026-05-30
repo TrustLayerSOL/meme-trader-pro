@@ -43,3 +43,12 @@
 - Labels with `entry_price_source="first_after_snapshot"` should be treated carefully because they use future information for entry approximation.
 - `label_quality` must be used to filter sparse/no-price rows.
 - Rug-like labels are heuristic and threshold-based in v0.
+
+## Research datasets
+
+- Research datasets are the first place features and future outcomes are joined.
+- Feature columns must come only from FeatureSnapshot.
+- Outcome columns must come only from OutcomeLabel.
+- Strategy/backtest code should consume ResearchDatasetRow, not raw transaction data.
+- Rows with low `label_quality` should be excluded from serious validation unless explicitly being investigated.
+- Dataset filters must be recorded in reports when used.

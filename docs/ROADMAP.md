@@ -16,7 +16,9 @@
   - Verified with trade normalizer and trade normalization CLI tests.
 - [x] 7. Feature snapshot builder v0
   - Verified with feature snapshot store, builder, and CLI tests.
-- [ ] 8. Outcome labeler v0
+- [x] 8. Outcome labeler v0
+  - Verified with outcome store, price series, label builder, and CLI tests.
+- [ ] 9. Research dataset builder v0
 
 ## Milestone 2 acceptance criteria
 
@@ -98,4 +100,16 @@
 - `survived_horizon` and `rug_like_drop` are labeled
 - Future event counts and volumes are calculated
 - CLI outcome label builder exists
+- Tests pass without network
+
+## Milestone 9 acceptance criteria
+
+- ResearchDatasetRow model exists
+- ResearchDatasetStore writes JSONL
+- FeatureSnapshot rows join to OutcomeLabel rows by `snapshot_id`
+- Dataset rows clearly separate feature fields from outcome fields
+- Filtering by token/window/horizon/label quality works
+- Dataset builder CLI exists
+- Dataset report CLI exists
+- Summary report works
 - Tests pass without network
