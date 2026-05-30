@@ -31,3 +31,35 @@ Avoid for MVP:
 - pure first-block sniping
 - generalized copy trading
 - MEV/bundle racing
+
+## Milestone 2: Candidate Registry
+
+Research discovery is now backed by a v3 candidate registry:
+
+- `LaunchCandidate` model in `research/mtp_research/ingestion/models.py`
+- JSONL persistence in `data/normalized/candidate_registry.jsonl`
+- Upsert-by-mint merge semantics (earliest first-seen + merged metadata)
+
+Run candidate ingestion and registry update:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_candidate_registry
+```
+
+Fallback (if virtualenv path differs):
+
+```bash
+python3 -m research.mtp_research.ingestion.run_candidate_registry
+```
+
+Run the focused registry tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_candidate_registry.py
+```
+
+Fallback (if virtualenv path differs):
+
+```bash
+python3 -m pytest research/tests/test_candidate_registry.py
+```
