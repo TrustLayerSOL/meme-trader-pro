@@ -39,3 +39,9 @@ DEX-specific parsing should be added incrementally after generic account, progra
 Venue classification should remain conservative and confidence-scored. Unknown venues with token balance deltas should be treated as observed swap candidates, not confirmed trades.
 
 Backtests should depend on normalized event stores instead of direct RPC calls.
+
+## Balance-delta trade inference
+
+Balance-delta trade inference uses local raw transaction JSON from the replay cache. v0 treats WSOL, USDC, and USDT as known quote assets.
+
+DEX-specific parsing is a later milestone. Heuristic trade events should be treated as candidates, not perfect fills.

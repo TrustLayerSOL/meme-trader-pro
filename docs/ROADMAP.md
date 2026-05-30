@@ -10,7 +10,9 @@
   - Verified with `./trading_env/bin/python -m pytest research/tests/test_helius_backfill.py`.
 - [x] 4. Raw transaction store and backfill job ledger
   - Verified with Milestone 4 store, job, and normalizer tests.
-- [ ] 5. DEX event parser foundation
+- [x] 5. DEX event parser foundation
+  - Verified with parser, venue classifier, and parse CLI tests.
+- [ ] 6. Trade event normalization v0
 
 ## Milestone 2 acceptance criteria
 
@@ -56,4 +58,15 @@
 - Venue classifier exists
 - Basic normalizer includes venue and parser metadata
 - Raw transaction parse CLI exists
+- Tests pass without network
+
+## Milestone 6 acceptance criteria
+
+- TradeFlow model exists
+- TradeEventNormalizer exists
+- `possible_buy` / `possible_sell` events can be inferred from token balance deltas
+- Accumulation/distribution events can be inferred conservatively
+- `target_token_mint` filtering works
+- Normalized events include confidence and reasons
+- Trade normalization CLI exists
 - Tests pass without network

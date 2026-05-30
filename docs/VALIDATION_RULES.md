@@ -16,3 +16,11 @@
 - fill rate
 - venue attribution
 - performance by lifecycle stage
+
+## Trade event inference
+
+- Trade event inference is heuristic in v0.
+- Every inferred trade event must carry confidence and reasons.
+- Backtests must be able to filter by minimum confidence.
+- Low-confidence events should be used for exploratory analysis, not live execution.
+- Later DEX-specific decoders may replace or upgrade these heuristic events.

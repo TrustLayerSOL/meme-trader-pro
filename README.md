@@ -122,3 +122,20 @@ Example parser run:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.ingestion.run_parse_raw_transactions --limit 100
 ```
+
+## Milestone 6: Trade Event Normalization v0
+
+v3 now has conservative balance-delta trade inference for likely swaps, possible buys, possible sells, token accumulation, and token distribution. These are research candidates, not strategy rules or live trading signals.
+
+Run the focused Milestone 6 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_trade_event_normalizer.py
+./trading_env/bin/python -m pytest research/tests/test_run_normalize_trade_events.py
+```
+
+Example run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_normalize_trade_events --limit 100
+```

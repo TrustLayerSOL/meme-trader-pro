@@ -2,13 +2,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TradeEvent",
   "type": "object",
+  "additionalProperties": true,
   "properties": {
-    "wallet": { "type": "string" },
-    "token": { "type": "string" },
-    "type": { "type": "string" },
-    "timestamp": { "type": "string", "format": "date-time" },
-    "amount": { "type": "number" },
-    "usd_value": { "type": "number" }
+    "event_id": { "type": "string" },
+    "signature": { "type": "string" },
+    "slot": { "type": ["integer", "null"] },
+    "block_time": { "type": ["integer", "null"] },
+    "event_type": { "type": "string" },
+    "token_mint": { "type": ["string", "null"] },
+    "venue": { "type": ["string", "null"] },
+    "actor": { "type": ["string", "null"] },
+    "side": { "type": ["string", "null"] },
+    "base_qty": { "type": ["number", "null"] },
+    "quote_qty": { "type": ["number", "null"] },
+    "price_quote": { "type": ["number", "null"] },
+    "source": { "type": "string" },
+    "metadata_json": { "type": "object" }
   },
-  "required": ["wallet", "token", "type", "timestamp"]
+  "required": ["event_id", "signature", "event_type", "source"]
 }
