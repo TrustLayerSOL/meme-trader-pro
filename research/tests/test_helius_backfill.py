@@ -129,3 +129,55 @@ def test_fetch_signatures_for_address_uses_mocked_http_method() -> None:
     assert calls[0][1]["method"] == "getSignaturesForAddress"
     assert calls[0][1]["params"][1]["limit"] == 2
     assert calls[0][2] == 7
+
+
+def test_build_get_transaction_payload_is_standard_json_rpc() -> None:
+    adapter = HeliusHistoricalAdapter(api_key="test-key")
+
+    payload = adapter.build_get_transaction_payload("sig-1")
+
+    assert payload["method"] == "getTransaction"
+    assert payload["params"][0] == "sig-1"
+    assert payload["params"][1] == {
+        "encoding": "jsonParsed",
+        "maxSupportedTransactionVersion": 0,
+    }
+
+
+def test_fetch_transaction_uses_mocked_http_method() -> None:
+    calls = []
+
+    def fake_http_post(url: str, payload: dict, timeout_sec: int) -> dict:
+        calls.append((url, payload, timeout_sec))
+        return {
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 10,
+                "blockTime": 1000,
+                "meta": {"err": None},
+            },
+        }
+
+    adapter = HeliusHistoricalAdapter(
+        rpc_url="https://mock-helius.invalid",
+        timeout_sec=7,
+        http_post=fake_http_post,
+    )
+
+    result = adapter.fetch_transaction("sig-1")
+
+    assert result["slot"] == 10
+    assert result["blockTime"] == 1000
+    assert calls[0][1]["method"] == "getTransaction"
+
+
+def test_fetch_transaction_handles_null_result() -> None:
+    def fake_http_post(_url: str, _payload: dict, _timeout_sec: int) -> dict:
+        return {"jsonrpc": "2.0", "result": None}
+
+    adapter = HeliusHistoricalAdapter(
+        rpc_url="https://mock-helius.invalid",
+        http_post=fake_http_post,
+    )
+
+    assert adapter.fetch_transaction("sig-missing") == {}

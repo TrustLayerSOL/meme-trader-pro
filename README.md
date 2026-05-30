@@ -79,3 +79,46 @@ Example real probe command:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.ingestion.run_helius_backfill_probe <ADDRESS> --limit 10
 ```
+
+## Milestone 4: Raw Transaction Store + Backfill Job Ledger
+
+v3 now has the raw historical data layer for replay-safe research: backfill targets, a raw Helius transaction JSONL store, a normalized event JSONL store, and a basic `transaction_observed` normalizer.
+
+Run the focused Milestone 4 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_raw_transaction_store.py
+./trading_env/bin/python -m pytest research/tests/test_backfill_jobs.py
+./trading_env/bin/python -m pytest research/tests/test_normalized_event_store.py
+./trading_env/bin/python -m pytest research/tests/test_basic_transaction_normalizer.py
+```
+
+Example dry run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_backfill_target <ADDRESS> --role wallet --limit 10 --dry-run
+```
+
+Example real run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_backfill_target <ADDRESS> --role wallet --limit 10
+```
+
+## Milestone 5: DEX Event Parser Foundation
+
+v3 now has a conservative raw transaction parser that turns stored Solana `jsonParsed` transaction bodies into observed transaction events with account summaries, program invocations, token balance deltas, and venue classification metadata.
+
+Run the focused Milestone 5 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_solana_transaction_parser.py
+./trading_env/bin/python -m pytest research/tests/test_venue_classifier.py
+./trading_env/bin/python -m pytest research/tests/test_parse_raw_transactions_cli.py
+```
+
+Example parser run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_parse_raw_transactions --limit 100
+```

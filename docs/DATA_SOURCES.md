@@ -21,3 +21,21 @@ Later milestones can add `getTransaction` or batch transaction-body retrieval fo
 Do not use Helius Enhanced Transactions or Wallet API as the default historical backbone.
 
 Keep Helius calls filtered by candidate token, pool, creator, or wallet addresses. Broad chain scans are outside the v3 research-first scope.
+
+## Local replay cache
+
+The raw transaction store is the local replay cache for Helius/Solana transaction bodies. Historical backtests should read from local raw and normalized JSONL data instead of repeatedly calling Helius.
+
+Use `getSignaturesForAddress` for discovery and pagination. Use `getTransaction` for full transaction bodies after signatures are scoped to candidate token, pool, creator, or wallet addresses.
+
+Later optimization may add batching or `getTransactionsForAddress` where it is cost-effective and still compatible with the research-first pipeline.
+
+## Local parser
+
+Raw transaction JSON is parsed locally from stored `getTransaction` `jsonParsed` results. Parser logic should prefer deterministic fields from those raw transaction bodies and avoid live RPC dependencies.
+
+DEX-specific parsing should be added incrementally after generic account, program, and token balance-delta extraction is stable.
+
+Venue classification should remain conservative and confidence-scored. Unknown venues with token balance deltas should be treated as observed swap candidates, not confirmed trades.
+
+Backtests should depend on normalized event stores instead of direct RPC calls.

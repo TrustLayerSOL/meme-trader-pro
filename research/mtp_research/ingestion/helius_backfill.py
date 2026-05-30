@@ -114,6 +114,37 @@ class HeliusHistoricalAdapter:
 
         return self.parse_signature_rows(request, rows)
 
+    def build_get_transaction_payload(self, signature: str) -> dict[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": "mtp-helius-get-transaction",
+            "method": "getTransaction",
+            "params": [
+                signature,
+                {
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                },
+            ],
+        }
+
+    def fetch_transaction(self, signature: str) -> dict[str, Any]:
+        payload = self.build_get_transaction_payload(signature)
+        response = self._http_post(self.build_rpc_url(), payload, self.timeout_sec)
+
+        if "error" in response:
+            raise RuntimeError(f"Helius RPC error: {response['error']}")
+
+        result = response.get("result")
+        if result is None:
+            return {}
+        if not isinstance(result, dict):
+            raise RuntimeError("Helius RPC getTransaction result was not an object")
+        return result
+
+    def fetch_transactions(self, signatures: list[str]) -> list[dict[str, Any]]:
+        return [self.fetch_transaction(signature) for signature in signatures]
+
     def _post_json(self, url: str, payload: dict[str, Any], timeout_sec: int) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
         req = urllib_request.Request(

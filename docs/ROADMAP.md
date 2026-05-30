@@ -6,7 +6,11 @@
   - v3 package structure and legacy preservation are in place.
 - [x] 2. Candidate registry
   - Verified with `./trading_env/bin/python -m pytest research/tests/test_candidate_registry.py`.
-- [ ] 3. Helius historical adapter foundation
+- [x] 3. Helius historical adapter foundation
+  - Verified with `./trading_env/bin/python -m pytest research/tests/test_helius_backfill.py`.
+- [x] 4. Raw transaction store and backfill job ledger
+  - Verified with Milestone 4 store, job, and normalizer tests.
+- [ ] 5. DEX event parser foundation
 
 ## Milestone 2 acceptance criteria
 
@@ -30,4 +34,26 @@
 - Failed transaction filtering works
 - Pagination `next_before` works
 - CLI probe exists
+- Tests pass without network
+
+## Milestone 4 acceptance criteria
+
+- BackfillTarget model exists
+- RawTransactionStore writes JSONL
+- Raw transactions upsert by signature
+- Helius adapter can build `getTransaction` payloads
+- CLI backfill target runner exists
+- NormalizedEvent model/store exists
+- Basic `transaction_observed` normalizer exists
+- Tests pass without network
+
+## Milestone 5 acceptance criteria
+
+- TransactionSummary model exists
+- TokenBalanceDelta model exists
+- Solana raw transaction parser exists
+- Token balance deltas are extracted from pre/post token balances
+- Venue classifier exists
+- Basic normalizer includes venue and parser metadata
+- Raw transaction parse CLI exists
 - Tests pass without network

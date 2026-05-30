@@ -8,3 +8,10 @@ venues:
     - pumpswap
   disabled:
     - helius_enhanced_wallet
+
+# TODO: Fill these with verified parser program IDs before venue-specific parsing.
+parser_program_ids:
+  raydium: []
+  pump: []
+  pumpswap: []
+  jupiter: []
