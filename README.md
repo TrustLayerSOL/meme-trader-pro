@@ -233,6 +233,32 @@ Focused tests:
 
 Stage 24 uses the diagnostic nearest-entry dataset and writes reports under `data/backtests/diagnostics/reports/`. Findings are research-only and cannot promote theses or enable live trading.
 
+## Stage 25: Rule Failure Review
+
+Run the offline decision cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage25_decision_cycle
+```
+
+Inspect the current best-ranked diagnostic rule manually:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_inspect_rule_selected_rows --rule-id buy_imbalance_basic --real-only --limit 20
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_rule_failure_analyzer.py
+./trading_env/bin/python -m pytest research/tests/test_rule_failure_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_rule_failure_review.py
+./trading_env/bin/python -m pytest research/tests/test_run_stage25_decision_cycle.py
+./trading_env/bin/python -m pytest research/tests/test_run_inspect_rule_selected_rows.py
+```
+
+Stage 25 explains why diagnostic rules failed before any rule definition changes. It does not optimize thresholds, promote theses, or enable live trading.
+
 ## Milestone 10: Baseline Edge Report v0
 
 v3 now has an exploratory baseline report layer that buckets clean research dataset rows by feature and summarizes forward outcomes. This is descriptive analysis only, not a trading strategy, signal feed, or live execution path.

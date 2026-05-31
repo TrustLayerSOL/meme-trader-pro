@@ -146,3 +146,11 @@
 - Any rule with positive diagnostic evidence must be re-tested on clean labels and larger historical samples.
 - Fallback dependency must be reported for every diagnostic walk-forward review.
 - Diagnostic reports must keep outputs under `data/backtests/diagnostics/` and must not overwrite canonical clean walk-forward or thesis stores.
+
+## Rule failure review
+
+- Rule failure review is required before changing rule definitions.
+- Do not optimize thresholds based on tiny diagnostic folds.
+- Positive diagnostic folds are hypothesis clues only.
+- Rule changes should be made only after the failure cause is understood.
+- Inspect selected rows manually before changing thresholds or adding new rules.

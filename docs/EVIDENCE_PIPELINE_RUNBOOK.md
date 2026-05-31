@@ -259,3 +259,17 @@ Run this after fold sufficiency finds valid diagnostic folds:
 This stage is offline and diagnostic-only. It reviews the best diagnostic walk-forward store at `data/backtests/diagnostics/walk_forward_best_diagnostic.jsonl`, reports whether default rules have valid test folds, and flags whether selected rows depend heavily on nearest-entry fallback labels.
 
 Use the recommended next action to choose between more bounded evidence expansion, clean price inference work, or manual rule inspection. Do not treat Stage 24 findings as canonical validation, live trading approval, or thesis promotion.
+
+## Stage 25 Rule Failure Review
+
+Run this after diagnostic walk-forward produces valid folds but weak positive fold rates:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_rule_failure_review --real-only
+./trading_env/bin/python -m research.mtp_research.validation.run_stage25_decision_cycle
+./trading_env/bin/python -m research.mtp_research.validation.run_inspect_rule_selected_rows --rule-id buy_imbalance_basic --real-only
+```
+
+Use Stage 25 to decide whether weak diagnostic folds are caused by low token diversity, short time span, small selected samples, fallback dependency, cost drag, or overly broad/default exploratory rules.
+
+If token diversity or time span is low, scale bounded evidence. If fallback dependency is high, improve clean price inference. If a specific rule looks promising, inspect selected rows manually before changing rule definitions. Do not run a parameter grid or optimize thresholds from the diagnostic fallback dataset.

@@ -50,6 +50,8 @@
   - Adds bounded/progress/timing controls, faster derived-store writes, offline rebuild profile reports, and a fast review runner.
 - [x] 24. Best diagnostic walk-forward review v0
   - Adds diagnostic walk-forward findings, fallback dependency reporting, one-command diagnostic cycle, and diagnostic-only review reports.
+- [x] 25. Rule failure anatomy and evidence expansion decision v0
+  - Adds rule failure anatomy, selected-row inspection, and offline decision reporting before any rule changes.
 
 ## Milestone 2 acceptance criteria
 
