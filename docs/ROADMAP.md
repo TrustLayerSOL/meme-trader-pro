@@ -30,6 +30,8 @@
   - Verified with thesis registry, decision store, evaluator, reports, CLIs, and full v3 research pipeline regression tests.
 - [x] 14. Evidence-bearing historical dataset population v0
   - Verified with evidence pipeline package, seed loader, target planner, dry-run backfill, offline rebuild, full-cycle CLI, runbook, and full v3 research pipeline regression tests.
+- [x] 15. Evidence run audit and target quality diagnostics v0
+  - Verified with offline evidence audit, target inspection, post-run diagnostics, Markdown/JSON reports, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -188,4 +190,19 @@
 - Offline research rebuild CLI exists
 - Full research cycle CLI exists
 - Evidence pipeline runbook exists
+- Tests pass without network
+
+## Milestone 15 acceptance criteria
+
+- EvidenceAuditor exists
+- Evidence audit counts local stores
+- Target quality diagnostics exist
+- Mint-only target warnings exist
+- Dropoff analysis exists
+- Bottleneck inference exists
+- Recommended next actions exist
+- Markdown/JSON audit reports exist
+- Evidence audit CLI exists
+- Post-evidence diagnostics CLI exists
+- Backfill target inspection CLI exists
 - Tests pass without network

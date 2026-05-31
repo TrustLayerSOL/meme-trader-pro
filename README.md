@@ -363,3 +363,35 @@ Run the focused Milestone 14 tests:
 ./trading_env/bin/python -m pytest research/tests/test_run_evidence_backfill.py
 ./trading_env/bin/python -m pytest research/tests/test_run_offline_research_rebuild.py
 ```
+
+## Milestone 15: Evidence Run Audit and Target Quality Diagnostics v0
+
+v3 now has an offline diagnostic layer for explaining where evidence is being lost after a bounded run. It audits local JSONL stores, checks backfill target quality, flags mint-only target plans, infers the first major bottleneck, and writes Markdown/JSON reports. This is diagnostic only and is not a trading signal.
+
+Run the focused Milestone 15 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_evidence_auditor.py
+./trading_env/bin/python -m pytest research/tests/test_evidence_audit_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_evidence_audit.py
+./trading_env/bin/python -m pytest research/tests/test_run_post_evidence_diagnostics.py
+./trading_env/bin/python -m pytest research/tests/test_run_inspect_backfill_targets.py
+```
+
+Inspect targets:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_inspect_backfill_targets
+```
+
+Run audit:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_evidence_audit
+```
+
+Run diagnostics:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_post_evidence_diagnostics
+```

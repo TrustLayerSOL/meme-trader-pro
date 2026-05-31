@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memetraderpro.local/schemas/evidence_audit_report.schema.json",
+  "title": "EvidenceAuditReport",
+  "type": "object",
+  "required": [
+    "report_id",
+    "created_at",
+    "store_counts",
+    "dropoffs",
+    "target_quality",
+    "event_type_counts",
+    "label_quality_counts",
+    "thesis_recommendation_counts",
+    "bottleneck_stage",
+    "top_warnings",
+    "recommended_next_actions",
+    "metadata_json"
+  ],
+  "properties": {
+    "report_id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "store_counts": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "dropoffs": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "target_quality": {
+      "type": ["object", "null"]
+    },
+    "event_type_counts": { "type": "object" },
+    "label_quality_counts": { "type": "object" },
+    "thesis_recommendation_counts": { "type": "object" },
+    "bottleneck_stage": {
+      "type": ["string", "null"]
+    },
+    "top_warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "recommended_next_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metadata_json": { "type": "object" }
+  },
+  "additionalProperties": true
+}

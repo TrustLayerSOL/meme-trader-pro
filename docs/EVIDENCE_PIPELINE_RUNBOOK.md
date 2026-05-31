@@ -93,3 +93,17 @@ If backfill is skipped or not executed, results depend only on already-local dat
 ```
 
 Early results may still be sparse. Thesis evaluation should remain `needs_more_data` until walk-forward folds have enough clean test rows and selected trades.
+
+## Post-Run Diagnostics
+
+Run these immediately after a tiny real evidence run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_inspect_backfill_targets
+./trading_env/bin/python -m research.mtp_research.pipeline.run_evidence_audit
+./trading_env/bin/python -m research.mtp_research.pipeline.run_post_evidence_diagnostics
+```
+
+The audit identifies the first major local bottleneck across candidate rows, target plans, raw transactions, normalized events, feature snapshots, outcome labels, research rows, walk-forward results, and thesis decisions.
+
+Do not scale up backfills until the bottleneck is understood. If targets are mint-only, seed real candidates with `pool_address` and `creator_wallet` before spending more credits. If parser coverage is the bottleneck, inspect raw transaction shape before spending more credits. If insufficient test evidence is the bottleneck, gradually increase bounded runs only after target quality is confirmed.
