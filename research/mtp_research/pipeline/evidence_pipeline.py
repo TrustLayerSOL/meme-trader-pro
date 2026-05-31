@@ -97,27 +97,43 @@ class EvidencePipeline:
 
         for target in targets:
             try:
-                request = HeliusBackfillRequest(
-                    address=target.address,
-                    token_mint=target.token_mint,
-                    role=target.role,
-                    limit=config.max_signatures_per_target,
-                    include_failed=config.include_failed,
-                )
-                signature_result = adapter.fetch_signatures_for_address(request)
-                signatures = [record.signature for record in signature_result.records]
-                summary.signatures_seen += len(signatures)
-                selected_signatures = signatures[: config.max_transactions_per_target]
-                bodies = adapter.fetch_transactions(selected_signatures)
-                raw_records = [
-                    _raw_record_from_body(signature, body, target)
-                    for signature, body in zip(selected_signatures, bodies, strict=False)
-                    if body
-                ]
-                counts = self.raw_transaction_store.upsert_many(raw_records)
-                summary.transactions_fetched += len(raw_records)
-                summary.raw_transactions_inserted += counts["inserted"]
-                summary.raw_transactions_updated += counts["updated"]
+                next_before = None
+                transactions_for_target = 0
+                page_count = max(1, config.signature_pages_per_target)
+                for _page_index in range(page_count):
+                    request = HeliusBackfillRequest(
+                        address=target.address,
+                        token_mint=target.token_mint,
+                        role=target.role,
+                        limit=config.max_signatures_per_target,
+                        before=next_before,
+                        include_failed=config.include_failed,
+                    )
+                    signature_result = adapter.fetch_signatures_for_address(request)
+                    signatures = [record.signature for record in signature_result.records]
+                    summary.signatures_seen += len(signatures)
+
+                    remaining_transactions = config.max_transactions_per_target - transactions_for_target
+                    if remaining_transactions <= 0:
+                        break
+
+                    selected_signatures = signatures[:remaining_transactions]
+                    if selected_signatures:
+                        bodies = adapter.fetch_transactions(selected_signatures)
+                        raw_records = [
+                            _raw_record_from_body(signature, body, target)
+                            for signature, body in zip(selected_signatures, bodies, strict=False)
+                            if body
+                        ]
+                        counts = self.raw_transaction_store.upsert_many(raw_records)
+                        summary.transactions_fetched += len(raw_records)
+                        summary.raw_transactions_inserted += counts["inserted"]
+                        summary.raw_transactions_updated += counts["updated"]
+                        transactions_for_target += len(raw_records)
+
+                    next_before = signature_result.next_before
+                    if not next_before or transactions_for_target >= config.max_transactions_per_target:
+                        break
             except Exception as exc:  # noqa: BLE001 - continue per target in bounded research runs
                 summary.warning_flags.append(f"target_backfill_failed:{target.target_id}")
                 summary.metadata_json.setdefault("target_errors", {})[target.target_id] = str(exc)

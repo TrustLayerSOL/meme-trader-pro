@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-liquidity-usd", type=float, default=10000)
     parser.add_argument("--max-signatures-per-target", type=int, default=75)
     parser.add_argument("--max-transactions-per-target", type=int, default=75)
+    parser.add_argument("--signature-pages-per-target", type=int, default=1)
     parser.add_argument("--stop-after-targets", type=int)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -65,6 +66,7 @@ def run_time_span_backfill(args: argparse.Namespace):
         candidate_limit=args.candidate_limit,
         max_signatures_per_target=args.max_signatures_per_target,
         max_transactions_per_target=args.max_transactions_per_target,
+        signature_pages_per_target=args.signature_pages_per_target,
         include_failed=False,
         dry_run=not args.execute or args.dry_run,
         roles=["pool"],

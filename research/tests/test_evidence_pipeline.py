@@ -40,6 +40,46 @@ class FakeHeliusAdapter:
         ]
 
 
+class PaginatedFakeHeliusAdapter:
+    def __init__(self):
+        self.requests = []
+        self.transaction_batches = []
+
+    def fetch_signatures_for_address(self, request):
+        self.requests.append(request)
+        if request.before is None:
+            return HeliusBackfillResult(
+                request=request,
+                records=[
+                    HeliusTransactionRecord("sig-new-1", 3, 103, True, {}),
+                    HeliusTransactionRecord("sig-new-2", 2, 102, True, {}),
+                ],
+                next_before="sig-new-2",
+            )
+        if request.before == "sig-new-2":
+            return HeliusBackfillResult(
+                request=request,
+                records=[
+                    HeliusTransactionRecord("sig-old-1", 1, 101, True, {}),
+                    HeliusTransactionRecord("sig-old-2", 0, 100, True, {}),
+                ],
+                next_before="sig-old-2",
+            )
+        return HeliusBackfillResult(request=request, records=[], next_before=None)
+
+    def fetch_transactions(self, signatures):
+        self.transaction_batches.append(list(signatures))
+        return [
+            {
+                "slot": index + 1,
+                "blockTime": 100 + index,
+                "meta": {"err": None},
+                "transaction": {"signatures": [signature]},
+            }
+            for index, signature in enumerate(signatures)
+        ]
+
+
 def _candidate(token_mint: str = "mint-1") -> LaunchCandidate:
     return LaunchCandidate(
         token_mint=token_mint,
@@ -96,6 +136,36 @@ def test_run_backfill_targets_execute_uses_mocked_adapter_and_tracks_counts(tmp_
     assert summary.transactions_fetched == 1
     assert summary.raw_transactions_inserted == 1
     assert raw_store.get_by_signature("sig-1") is not None
+
+
+def test_run_backfill_targets_can_fetch_bounded_signature_pages(tmp_path: Path) -> None:
+    adapter = PaginatedFakeHeliusAdapter()
+    raw_store = RawTransactionStore(tmp_path / "raw.jsonl")
+    pipeline = EvidencePipeline(
+        candidate_registry=_registry(tmp_path / "registry.jsonl", 1),
+        raw_transaction_store=raw_store,
+        helius_adapter=adapter,
+    )
+    targets = pipeline.plan_targets(pipeline.select_candidates(), ["mint"])
+
+    summary = pipeline.run_backfill_targets(
+        targets,
+        EvidenceRunConfig(
+            "run-1",
+            max_signatures_per_target=2,
+            max_transactions_per_target=3,
+            signature_pages_per_target=2,
+            dry_run=False,
+        ),
+        execute=True,
+    )
+
+    assert [request.before for request in adapter.requests] == [None, "sig-new-2"]
+    assert adapter.transaction_batches == [["sig-new-1", "sig-new-2"], ["sig-old-1"]]
+    assert summary.signatures_seen == 4
+    assert summary.transactions_fetched == 3
+    assert raw_store.get_by_signature("sig-old-1") is not None
+    assert raw_store.get_by_signature("sig-old-2") is None
 
 
 def test_missing_helius_api_key_handled_for_execute_path(tmp_path: Path, monkeypatch) -> None:

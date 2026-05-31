@@ -14,6 +14,7 @@ class EvidenceRunConfig:
     candidate_limit: int = 10
     max_signatures_per_target: int = 100
     max_transactions_per_target: int = 100
+    signature_pages_per_target: int = 1
     include_failed: bool = False
     dry_run: bool = True
     require_execute_flag: bool = True
