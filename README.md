@@ -277,6 +277,24 @@ Focused tests:
 
 If the sample is too small, thesis recommendations stay `needs_more_data`. Weak diagnostic reads are stored as metadata, not used to reject, promote, or mark a thesis as a paper candidate.
 
+## Bounded Evidence Expansion Plan
+
+Plan the next evidence expansion without Helius:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_sample_adequacy_expansion_plan
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_sample_adequacy_expansion_plan.py
+./trading_env/bin/python -m pytest research/tests/test_sample_adequacy_expansion_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_sample_adequacy_expansion_plan.py
+```
+
+The plan is review-only. It does not execute backfills, call Helius, trade, or mutate thesis status.
+
 ## Milestone 10: Baseline Edge Report v0
 
 v3 now has an exploratory baseline report layer that buckets clean research dataset rows by feature and summarizes forward outcomes. This is descriptive analysis only, not a trading strategy, signal feed, or live execution path.

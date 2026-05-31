@@ -293,3 +293,15 @@ Default adequacy thresholds are:
 When these thresholds are not met, thesis evaluation must return `needs_more_data` and preserve the weak or negative diagnostic read in metadata. Do not reject, promote, or move a thesis to watchlist from a tiny diagnostic sample.
 
 The expected current data expansion recommendation is to add more real candidates and expand per-pool time span with bounded backfills. Do not run Helius until the bounded expansion plan is reviewed.
+
+## Sample Adequacy Expansion Plan
+
+Build the dry-run expansion plan before any Helius execution:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_sample_adequacy_expansion_plan
+```
+
+This combines sample adequacy thresholds with the bounded time-span backfill planner. It reports token and time-span shortfalls, target pools, estimated request counts, and the exact bounded command to review. The command does not call Helius and does not trade.
+
+If the plan still shows fewer than 10 real tokens, prioritize candidate discovery or adding more real candidate pools before spending credits on already-covered pools.

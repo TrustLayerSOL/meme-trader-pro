@@ -54,6 +54,8 @@
   - Adds rule failure anatomy, selected-row inspection, and offline decision reporting before any rule changes.
 - [x] 26. Sample adequacy gate and evidence expansion plan v0
   - Prevents tiny diagnostic samples from promoting or demoting theses and reports bounded data expansion needs.
+- [x] 27. Sample adequacy expansion plan v0
+  - Combines adequacy shortfalls with bounded time-span target planning before any Helius execution.
 
 ## Milestone 2 acceptance criteria
 
