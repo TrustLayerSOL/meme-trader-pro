@@ -38,6 +38,8 @@
   - Verified with real-candidate filters, price coverage diagnostics, optional nearest entry fallback, dataset sufficiency reports, and full v3 research pipeline regression tests.
 - [x] 18. Price inference and entry coverage improvement v0
   - Verified with diagnostic-only nearest-entry coverage comparison, real-only evidence quality reporting, price inference metadata, ambiguity handling, and full v3 research pipeline regression tests.
+- [x] 19. Diagnostic validation review v0
+  - Verified with diagnostic baseline/rule/walk-forward/thesis orchestration, clean-vs-fallback comparison reports, diagnostic-only stores, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -243,4 +245,16 @@
 - Trade price inference records method metadata when price is inferred
 - Ambiguous trade flows do not infer fake precision
 - Real-only evidence quality report exists
+- Tests pass without network
+
+## Milestone 19 acceptance criteria
+
+- Diagnostic validation review models exist
+- Diagnostic validation review compares clean and fallback datasets
+- Baseline, rule, walk-forward, and thesis layers can run against diagnostic dataset paths
+- Diagnostic stores live under `data/backtests/diagnostics/`
+- Diagnostic reports include the research-only fallback warning
+- Rule comparisons count nearest fallback selected rows
+- Walk-forward comparisons report valid test folds and selected counts
+- Thesis comparisons mark diagnostic-only status changes
 - Tests pass without network

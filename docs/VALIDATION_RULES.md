@@ -107,3 +107,11 @@
 - `no_price` label counts must be monitored before scaling Helius backfills.
 - Thesis promotion should not use fallback rows unless explicitly reviewed.
 - Price inference from token balance deltas must carry `price_inference_method` metadata.
+
+## Diagnostic validation
+
+- Diagnostic fallback validation must be separate from canonical validation.
+- Diagnostic validation may inform next research steps but cannot promote a thesis without human review.
+- Nearest fallback rows must be counted in every diagnostic report.
+- Canonical clean labels remain the source of truth for serious validation.
+- Any diagnostic report using nearest-entry fallback must include the warning: `diagnostic fallback dataset; not valid for live trading or thesis promotion without human review.`

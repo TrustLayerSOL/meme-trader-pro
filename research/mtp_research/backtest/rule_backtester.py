@@ -112,6 +112,7 @@ class RuleBacktester:
             metadata_json={
                 "snapshot_id": row.snapshot_id,
                 "outcome_id": row.outcome_id,
+                "entry_price_source": row.entry_price_source,
                 "cost_drag": cost_drag,
             },
         )

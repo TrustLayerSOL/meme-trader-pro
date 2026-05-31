@@ -136,3 +136,16 @@ Use diagnostic nearest-entry fallback only on separate output paths:
 ```
 
 Fallback rows are research diagnostics only. Do not use them for thesis promotion without explicit review.
+
+## Diagnostic Validation Review
+
+Use this after diagnostic nearest-entry fallback labels and the diagnostic dataset are built.
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_diagnostic_validation_review
+./trading_env/bin/python -m research.mtp_research.validation.run_diagnostic_validation_smoke
+```
+
+The review runs baseline, rule backtest, walk-forward validation, and thesis evaluation on `data/backtests/diagnostics/research_dataset_nearest300.jsonl`, writes outputs under `data/backtests/diagnostics/`, and compares those results against canonical clean stores.
+
+Use the recommended next action to decide whether to scale bounded backfill, improve clean price inference, or inspect rule selection and fold thresholds. Do not use diagnostic fallback results for live trading or thesis promotion without human review.

@@ -505,3 +505,27 @@ Real-only evidence quality:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_real_only_evidence_quality_report
 ```
+
+## Milestone 19: Diagnostic Validation Review v0
+
+v3 can now run baseline, rule, walk-forward, and thesis evaluation against the diagnostic nearest-entry fallback dataset without overwriting canonical clean validation stores. Every fallback report is marked research-only.
+
+Run the focused Milestone 19 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_diagnostic_validation_review.py
+./trading_env/bin/python -m pytest research/tests/test_diagnostic_validation_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_diagnostic_validation_review.py
+```
+
+Run the diagnostic review:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_diagnostic_validation_review
+```
+
+Smoke run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_diagnostic_validation_smoke
+```
