@@ -9,6 +9,7 @@ from research.mtp_research.ingestion.helius_models import (
 from research.mtp_research.ingestion.models import LaunchCandidate
 from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
 from research.mtp_research.ingestion.raw_transaction_store import RawTransactionStore
+from research.mtp_research.ingestion.raw_transaction_store import RawTransactionRecord
 from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
 from research.mtp_research.pipeline.evidence_models import EvidenceRunConfig
 from research.mtp_research.pipeline.evidence_pipeline import EvidencePipeline
@@ -166,6 +167,48 @@ def test_run_backfill_targets_can_fetch_bounded_signature_pages(tmp_path: Path) 
     assert summary.transactions_fetched == 3
     assert raw_store.get_by_signature("sig-old-1") is not None
     assert raw_store.get_by_signature("sig-old-2") is None
+
+
+def test_run_backfill_targets_skips_existing_signatures_while_paging(tmp_path: Path) -> None:
+    adapter = PaginatedFakeHeliusAdapter()
+    raw_store = RawTransactionStore(tmp_path / "raw.jsonl")
+    raw_store.upsert(
+        RawTransactionRecord(
+            signature="sig-new-1",
+            slot=3,
+            block_time=103,
+            success=True,
+            address="mint-0",
+            role="mint",
+            token_mint="mint-0",
+            fetched_at=datetime(2026, 5, 31, tzinfo=timezone.utc),
+            raw_json={"signature": "sig-new-1"},
+        )
+    )
+    pipeline = EvidencePipeline(
+        candidate_registry=_registry(tmp_path / "registry.jsonl", 1),
+        raw_transaction_store=raw_store,
+        helius_adapter=adapter,
+    )
+    targets = pipeline.plan_targets(pipeline.select_candidates(), ["mint"])
+
+    summary = pipeline.run_backfill_targets(
+        targets,
+        EvidenceRunConfig(
+            "run-1",
+            max_signatures_per_target=2,
+            max_transactions_per_target=3,
+            signature_pages_per_target=2,
+            dry_run=False,
+        ),
+        execute=True,
+    )
+
+    assert adapter.transaction_batches == [["sig-new-2"], ["sig-old-1", "sig-old-2"]]
+    assert summary.signatures_seen == 4
+    assert summary.transactions_fetched == 3
+    assert summary.raw_transactions_inserted == 3
+    assert summary.raw_transactions_updated == 0
 
 
 def test_missing_helius_api_key_handled_for_execute_path(tmp_path: Path, monkeypatch) -> None:

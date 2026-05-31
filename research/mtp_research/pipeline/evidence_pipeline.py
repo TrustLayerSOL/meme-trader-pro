@@ -95,6 +95,7 @@ class EvidencePipeline:
                 summary.metadata_json["error"] = str(exc)
                 return summary
 
+        existing_signatures = {record.signature for record in self.raw_transaction_store.load_all()}
         for target in targets:
             try:
                 next_before = None
@@ -117,7 +118,10 @@ class EvidencePipeline:
                     if remaining_transactions <= 0:
                         break
 
-                    selected_signatures = signatures[:remaining_transactions]
+                    missing_signatures = [
+                        signature for signature in signatures if signature not in existing_signatures
+                    ]
+                    selected_signatures = missing_signatures[:remaining_transactions]
                     if selected_signatures:
                         bodies = adapter.fetch_transactions(selected_signatures)
                         raw_records = [
@@ -130,6 +134,7 @@ class EvidencePipeline:
                         summary.raw_transactions_inserted += counts["inserted"]
                         summary.raw_transactions_updated += counts["updated"]
                         transactions_for_target += len(raw_records)
+                        existing_signatures.update(record.signature for record in raw_records)
 
                     next_before = signature_result.next_before
                     if not next_before or transactions_for_target >= config.max_transactions_per_target:
