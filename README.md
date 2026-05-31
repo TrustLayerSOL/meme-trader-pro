@@ -259,6 +259,12 @@ Rank the tokens and failure combinations driving strict price-quality row loss:
 ./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_failure_analysis --real-only
 ```
 
+After bounded expansion, the fast offline rebuild uses a wider diagnostic prior-entry window by default while leaving clean/canonical labels unchanged:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review --real-only --snapshot-selection-strategy per_token_even --max-snapshots-per-token 1000 --min-time-gap-seconds 60 --diagnostic-entry-max-staleness-sec 120 --timing
+```
+
 Focused tests:
 
 ```bash
@@ -269,6 +275,7 @@ Focused tests:
 ./trading_env/bin/python -m pytest research/tests/test_price_quality_validation_comparison.py
 ./trading_env/bin/python -m pytest research/tests/test_price_quality_failure_analysis.py
 ./trading_env/bin/python -m pytest research/tests/test_run_price_quality_failure_analysis.py
+./trading_env/bin/python -m pytest research/tests/test_fast_offline_rebuild_review.py
 ```
 
 Stage 35 is offline and diagnostic-only. It filters price-quality rows into a separate diagnostic dataset and compares gated results against ungated diagnostics. It does not call Helius, tune rules, promote theses, enable paper trading, or enable live trading.

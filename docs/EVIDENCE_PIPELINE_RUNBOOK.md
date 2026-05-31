@@ -454,4 +454,10 @@ When the gate removes a large share of rows, rank the failure causes before spen
 ./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_failure_analysis --real-only
 ```
 
+Use the fast offline rebuild before interpreting price-quality changes. Its diagnostic path accepts a wider prior-entry window so prior prices allowed by the strict gate are not mislabeled as nearest fallback rows:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review --real-only --snapshot-selection-strategy per_token_even --max-snapshots-per-token 1000 --min-time-gap-seconds 60 --diagnostic-entry-max-staleness-sec 120 --timing
+```
+
 Stage 35 writes gated diagnostic artifacts under `data/backtests/diagnostics/`. It does not call Helius, does not mutate canonical stores, does not optimize thresholds, and does not promote theses. Use it to decide whether the next bottleneck is clean price inference, candidate diversity, explicit outlier separation, or conservative rule rework.

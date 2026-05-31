@@ -215,3 +215,4 @@
 - Any thesis affected by gated diagnostics should remain `needs_more_data` unless a human explicitly reviews enough clean independent evidence.
 - When strict filters remove many rows, run token-level failure analysis before another bounded Helius expansion.
 - Price-quality failure analysis is offline-only and should recommend parser/price inference work when fallback rows dominate failures.
+- Diagnostic outcome rebuilds may use a wider prior-entry staleness window only when the strict gate would accept that prior price; clean/canonical labels remain separate.

@@ -40,6 +40,7 @@ def main() -> int:
             "snapshot_selection_strategy": args.snapshot_selection_strategy,
             "max_snapshots_per_token": args.max_snapshots_per_token,
             "min_time_gap_seconds": args.min_time_gap_seconds,
+            "diagnostic_entry_max_staleness_sec": args.diagnostic_entry_max_staleness_sec,
             "nearest_entry_max_staleness_sec": args.nearest_entry_max_staleness_sec,
         }
     )
@@ -84,6 +85,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-snapshots-per-token", type=int)
     parser.add_argument("--min-time-gap-seconds", type=int)
     parser.add_argument("--progress-every", type=int, default=100)
+    parser.add_argument("--diagnostic-entry-max-staleness-sec", type=int, default=120)
     parser.add_argument("--nearest-entry-max-staleness-sec", type=int, default=300)
     parser.add_argument("--skip-clean-outcomes", action="store_true")
     parser.add_argument("--skip-diagnostic-outcomes", action="store_true")
@@ -137,6 +139,8 @@ def build_steps(args: argparse.Namespace) -> list[tuple[str, list[str], str | No
                 "-m",
                 "research.mtp_research.validation.run_build_outcome_labels",
                 "--allow-nearest-entry-fallback",
+                "--entry-max-staleness-sec",
+                str(args.diagnostic_entry_max_staleness_sec),
                 "--nearest-entry-max-staleness-sec",
                 str(args.nearest_entry_max_staleness_sec),
                 "--max-snapshots",

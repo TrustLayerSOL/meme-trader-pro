@@ -42,3 +42,41 @@ def test_post_backfill_rebuild_cli_uses_mocked_subprocess_and_no_network(monkeyp
     assert "raw_rows=2" in output
     assert "diagnostic_rows=1" in output
     assert "network_calls=0" in output
+
+
+def test_post_backfill_rebuild_passes_diagnostic_entry_staleness(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(command, check, capture_output, text):
+        calls.append(command)
+        return SimpleNamespace(stdout="ok\n")
+
+    fake_report = SimpleNamespace(
+        time_span_seconds=1200,
+        best_config_name=None,
+        recommended_next_action="scale_bounded_backfill_for_more_time_span",
+    )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(module.RawTransactionStore, "load_all", lambda self: [])
+    monkeypatch.setattr(module.ResearchDatasetStore, "load_all", lambda self: [])
+    monkeypatch.setattr(module, "build_and_write_report", lambda args: (fake_report, "fold.md", "fold.json"))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_post_backfill_rebuild_and_review",
+            "--diagnostic-entry-max-staleness-sec",
+            "120",
+        ],
+    )
+
+    assert module.main() == 0
+
+    diagnostic_call = [
+        call
+        for call in calls
+        if "research.mtp_research.validation.run_build_outcome_labels" in call
+        and "--allow-nearest-entry-fallback" in call
+    ][0]
+    assert "--entry-max-staleness-sec" in diagnostic_call
+    assert diagnostic_call[diagnostic_call.index("--entry-max-staleness-sec") + 1] == "120"

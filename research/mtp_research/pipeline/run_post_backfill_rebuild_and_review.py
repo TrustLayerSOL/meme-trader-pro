@@ -45,6 +45,7 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline post-backfill rebuild and review.")
     parser.add_argument("--max-snapshots", type=int, default=1000)
+    parser.add_argument("--diagnostic-entry-max-staleness-sec", type=int, default=120)
     parser.add_argument("--nearest-entry-max-staleness-sec", type=int, default=300)
     parser.add_argument("--real-only", action="store_true")
     return parser.parse_args()
@@ -66,6 +67,8 @@ def build_commands(args: argparse.Namespace) -> list[list[str]]:
             "-m",
             "research.mtp_research.validation.run_build_outcome_labels",
             "--allow-nearest-entry-fallback",
+            "--entry-max-staleness-sec",
+            str(args.diagnostic_entry_max_staleness_sec),
             "--nearest-entry-max-staleness-sec",
             str(args.nearest_entry_max_staleness_sec),
             "--max-snapshots",
