@@ -195,3 +195,12 @@
 - Price-path reviews must classify extreme rows as plausible, suspicious, fallback-dependent, isolated, or unusable before the next evidence-scaling decision.
 - Diagnostic reports must show raw, capped, robust, and outlier-excluded views when outlier classifications are available.
 - Outlier-excluded metrics are diagnostic review aids only; they do not mutate datasets, labels, rules, or thesis decisions.
+
+## Evidence expansion decisions
+
+- Evidence expansion decisions must use robust and outlier-separated metrics.
+- Raw mean return must not drive expansion decisions.
+- Expansion is for evidence quality, not strategy confirmation.
+- Expansion recommendations must stay bounded and reviewable.
+- Decision reports may suggest a bounded Helius command, but must not execute it.
+- No expansion decision may promote a thesis, validate a rule, or enable paper/live trading.

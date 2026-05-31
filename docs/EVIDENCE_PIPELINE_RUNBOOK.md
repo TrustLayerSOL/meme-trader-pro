@@ -411,3 +411,19 @@ Run the full offline Stage 32 cycle:
 ```
 
 Stage 32 keeps raw averages, capped averages, robust metrics, and outlier-excluded metrics separate. It does not delete rows, alter labels, tune rules, promote theses, or call Helius. Use it to decide whether the next action is clean price-quality tightening, explicit outlier separation, manual review, or bounded evidence expansion.
+
+## Stage 33: Evidence Expansion Decision
+
+Build the expansion decision report after outlier-adjusted diagnostics:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_evidence_expansion_decision --real-only
+```
+
+Run the full offline Stage 33 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage33_expansion_decision_cycle --real-only
+```
+
+The output suggests the next bounded Helius command but does not execute it. Review the plan before running any Helius. If the recommendation is `improve_price_coverage_before_scaling`, avoid spending more Helius until price quality improves. If the recommendation is `run_bounded_evidence_expansion`, run only the bounded command after review.

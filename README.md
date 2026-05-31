@@ -818,3 +818,25 @@ Focused tests:
 ```bash
 ./trading_env/bin/python -m pytest research/tests/test_outlier_adjusted_rule_metrics.py research/tests/test_run_outlier_adjusted_rule_report.py research/tests/test_run_stage32_outlier_adjusted_cycle.py
 ```
+
+## Milestone 33: Evidence Expansion Decision
+
+Stage 33 uses robust and outlier-separated diagnostics to decide the next bounded evidence expansion plan. It is report-only: it may suggest a bounded Helius command, but it does not execute it.
+
+Run decision report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_evidence_expansion_decision --real-only
+```
+
+Run full Stage 33 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage33_expansion_decision_cycle --real-only
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_evidence_expansion_decision.py research/tests/test_evidence_expansion_decision_report.py research/tests/test_run_evidence_expansion_decision.py research/tests/test_run_stage33_expansion_decision_cycle.py
+```
