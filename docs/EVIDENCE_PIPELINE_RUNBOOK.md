@@ -160,3 +160,46 @@ Run this after diagnostic validation review shows zero valid walk-forward folds:
 ```
 
 If no configs produce valid folds, scale bounded backfill. If short configs work, use them only as diagnostic validation until more data exists. Fold window sweeps are evidence sufficiency checks, not strategy optimization.
+
+## Time-Span Expansion Backfill
+
+Stage 20 showed the real-only diagnostic dataset had only `1,140` seconds of usable time span. Walk-forward validation needs enough chronological span for the selected fold configuration, so the next bounded backfills should target more tokens, more pools, and longer per-token time span rather than only adding more rows from the same narrow window.
+
+Start with the plan command before executing:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_plan \
+  --candidate-limit 10 \
+  --target-time-span-seconds 3600 \
+  --recommended-signature-limit 75 \
+  --recommended-transaction-limit 75
+```
+
+Dry-run the execution wrapper:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_execute \
+  --candidate-limit 5 \
+  --max-signatures-per-target 75 \
+  --max-transactions-per-target 75 \
+  --stop-after-targets 10
+```
+
+Execute only after reviewing the plan:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_execute \
+  --candidate-limit 5 \
+  --max-signatures-per-target 75 \
+  --max-transactions-per-target 75 \
+  --stop-after-targets 10 \
+  --execute
+```
+
+After a bounded run, rebuild and review offline:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_post_backfill_rebuild_and_review \
+  --max-snapshots 1000 \
+  --real-only
+```

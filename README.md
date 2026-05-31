@@ -554,3 +554,41 @@ Run best diagnostic walk-forward:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_best_diagnostic_walk_forward --real-only
 ```
+
+## Milestone 21: Time-Span Expansion Backfill Plan v0
+
+v3 can now plan bounded Helius backfills around chronological evidence coverage. Dry-run remains the default; real calls require `--execute`.
+
+Run the focused Milestone 21 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_time_span_backfill_planner.py
+./trading_env/bin/python -m pytest research/tests/test_time_span_backfill_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_time_span_backfill_plan.py
+./trading_env/bin/python -m pytest research/tests/test_run_time_span_backfill_execute.py
+./trading_env/bin/python -m pytest research/tests/test_run_post_backfill_rebuild_and_review.py
+```
+
+Plan:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_plan --candidate-limit 10
+```
+
+Dry-run execute:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_execute --candidate-limit 5 --max-signatures-per-target 75 --max-transactions-per-target 75 --stop-after-targets 10
+```
+
+Execute:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_execute --candidate-limit 5 --max-signatures-per-target 75 --max-transactions-per-target 75 --stop-after-targets 10 --execute
+```
+
+Post-run review:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_post_backfill_rebuild_and_review --max-snapshots 1000 --real-only
+```

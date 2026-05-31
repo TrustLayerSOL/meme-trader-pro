@@ -123,3 +123,10 @@
 - Short diagnostic folds may be used while the dataset is small.
 - Canonical validation should move toward longer, more stable folds as data grows.
 - No thesis can be promoted based only on diagnostic fold settings.
+
+## Backfill scaling
+
+- Backfill scale decisions should be based on time-span and fold sufficiency, not just row count.
+- Do not trust walk-forward results unless the dataset spans enough time for the chosen fold configuration.
+- Bounded Helius scaling should proceed in small steps and be followed by offline rebuild and review.
+- Any execution wrapper must default to dry-run and require `--execute` for real Helius calls.

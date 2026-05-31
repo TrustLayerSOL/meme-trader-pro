@@ -42,6 +42,8 @@
   - Verified with diagnostic baseline/rule/walk-forward/thesis orchestration, clean-vs-fallback comparison reports, diagnostic-only stores, and full v3 research pipeline regression tests.
 - [x] 20. Walk-forward fold sufficiency diagnostics v0
   - Verified with fold-window sufficiency sweeps, best diagnostic walk-forward gating, diagnostic-only reports, and full v3 research pipeline regression tests.
+- [x] 21. Time-span expansion backfill plan v0
+  - Verified with local coverage planning, dry-run-first execution wrapper, offline post-run rebuild helper, reports, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -269,4 +271,14 @@
 - Reports show dataset time span, config comparison, and per-rule sufficiency
 - Best diagnostic walk-forward runs only when a config has evidence-bearing folds
 - Diagnostic outputs stay under `data/backtests/diagnostics/`
+- Tests pass without network
+
+## Milestone 21 acceptance criteria
+
+- Time-span coverage models exist
+- Planner summarizes per-token raw/event/feature/outcome/research coverage
+- Planner prioritizes no-raw and short-span real candidates
+- Plan reports estimate bounded signature and transaction requests
+- Execute wrapper defaults to dry-run and requires `--execute` for Helius
+- Post-backfill helper runs offline rebuild and diagnostics only
 - Tests pass without network
