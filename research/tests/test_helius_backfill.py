@@ -194,3 +194,23 @@ def test_fetch_transaction_handles_null_result() -> None:
     )
 
     assert adapter.fetch_transaction("sig-missing") == {}
+
+
+def test_fetch_transactions_can_use_bounded_worker_pool_and_preserve_order() -> None:
+    calls = []
+
+    def fake_http_post(_url: str, payload: dict, _timeout_sec: int) -> dict:
+        signature = payload["params"][0]
+        calls.append(signature)
+        return {"jsonrpc": "2.0", "result": {"signature": signature}}
+
+    adapter = HeliusHistoricalAdapter(
+        rpc_url="https://mock-helius.invalid",
+        http_post=fake_http_post,
+        transaction_workers=2,
+    )
+
+    results = adapter.fetch_transactions(["sig-1", "sig-2", "sig-3"])
+
+    assert [result["signature"] for result in results] == ["sig-1", "sig-2", "sig-3"]
+    assert sorted(calls) == ["sig-1", "sig-2", "sig-3"]

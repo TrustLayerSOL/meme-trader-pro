@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib import request as urllib_request
@@ -28,11 +29,13 @@ class HeliusHistoricalAdapter:
         rpc_url: str | None = None,
         timeout_sec: int = 30,
         http_post: HttpPost | None = None,
+        transaction_workers: int = 1,
     ):
         self.api_key = api_key
         self.rpc_url = rpc_url
         self.timeout_sec = timeout_sec
         self._http_post = http_post or self._post_json
+        self.transaction_workers = max(1, transaction_workers)
 
     @classmethod
     def from_env(cls, load_project_dotenv: bool = True) -> "HeliusHistoricalAdapter":
@@ -41,7 +44,7 @@ class HeliusHistoricalAdapter:
         api_key = os.getenv("HELIUS_API_KEY")
         if not api_key:
             raise ValueError("HELIUS_API_KEY is required for real Helius RPC calls")
-        return cls(api_key=api_key)
+        return cls(api_key=api_key, transaction_workers=_env_int("HELIUS_TRANSACTION_WORKERS", 1))
 
     def build_rpc_url(self) -> str:
         if self.rpc_url:
@@ -146,7 +149,10 @@ class HeliusHistoricalAdapter:
         return result
 
     def fetch_transactions(self, signatures: list[str]) -> list[dict[str, Any]]:
-        return [self.fetch_transaction(signature) for signature in signatures]
+        if self.transaction_workers == 1 or len(signatures) <= 1:
+            return [self.fetch_transaction(signature) for signature in signatures]
+        with ThreadPoolExecutor(max_workers=self.transaction_workers) as executor:
+            return list(executor.map(self.fetch_transaction, signatures))
 
     def _post_json(self, url: str, payload: dict[str, Any], timeout_sec: int) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
@@ -187,3 +193,13 @@ def _strip_env_value(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
