@@ -351,3 +351,25 @@ Then rerun the full-span offline rebuild:
 ```
 
 This is still a local rebuild only. It does not call Helius and does not change rules or thesis statuses.
+
+## Stage 30: Selected Row + Price Outlier Audit
+
+Run selected-row diagnostics before changing rule definitions or scaling around a rule with outlier-driven averages:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_selected_row_audit --real-only
+```
+
+Run price outlier diagnostics:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_outlier_audit --real-only
+```
+
+Run the full offline Stage 30 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage30_price_rule_audit_cycle --real-only
+```
+
+Stage 30 is diagnostic-only. It does not call Helius, does not change thesis status, does not tune thresholds, and does not create trading instructions. Use it to decide whether the next bottleneck is clean price inference, manual outlier inspection, candidate diversity, bounded evidence expansion, or conservative rule review.

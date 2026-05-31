@@ -740,3 +740,31 @@ Focused tests:
 ```bash
 ./trading_env/bin/python -m pytest research/tests/test_feature_snapshot_builder.py research/tests/test_feature_snapshot_store.py research/tests/test_run_build_feature_snapshots.py
 ```
+
+## Milestone 30: Selected Row + Price Outlier Audit
+
+Stage 30 audits the exact rows selected by diagnostic rules and separately reviews extreme return/runup rows. This is an offline research trust check only; it does not call Helius, change rule thresholds, promote theses, or create trading instructions.
+
+Run selected-row audit:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_selected_row_audit --real-only
+```
+
+Run price outlier audit:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_outlier_audit --real-only
+```
+
+Run full Stage 30 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage30_price_rule_audit_cycle --real-only
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_selected_row_auditor.py research/tests/test_selected_row_audit_report.py research/tests/test_run_selected_row_audit.py research/tests/test_price_outlier_auditor.py research/tests/test_run_price_outlier_audit.py research/tests/test_run_stage30_price_rule_audit_cycle.py
+```

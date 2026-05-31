@@ -179,3 +179,13 @@
 - Global snapshot grids can be useful for debugging, but they can inflate `no_price` labels when applied to every token.
 - Token-active feature rebuilds are preferred before clean-label price coverage review.
 - Rebuilding features must remain offline-only and must not change strategy thresholds.
+
+## Selected-row and price-outlier audit
+
+- Before changing rule definitions, inspect the rows selected by each rule.
+- Positive diagnostic averages can be invalid if a small number of outliers dominate returns.
+- Median return and positive fold rate matter more than average return on small or diagnostic samples.
+- Rows using `nearest_research_fallback` must be counted separately and treated as diagnostic-only.
+- Stale entry prices must be audited before interpreting forward returns or max runup.
+- Extreme max runup and forward-return rows require manual price-path inspection before bounded evidence scaling or rule review.
+- Selected-row audits must remain offline-only and must not produce live signals, thesis promotion, or rule threshold optimization.
