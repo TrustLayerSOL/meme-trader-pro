@@ -395,3 +395,19 @@ Run the full offline Stage 31 cycle:
 ```
 
 Stage 31 is offline-only. It does not call Helius, does not mutate canonical stores, and does not mark theses validated. Use it to decide whether to improve clean price inference, tighten price-quality filters, separate outlier metrics, expand bounded evidence, or require manual review.
+
+## Stage 32: Outlier-Adjusted Diagnostic Metrics
+
+Build outlier-adjusted rule metrics from the latest outlier price-path report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_outlier_adjusted_rule_report --real-only
+```
+
+Run the full offline Stage 32 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage32_outlier_adjusted_cycle --real-only
+```
+
+Stage 32 keeps raw averages, capped averages, robust metrics, and outlier-excluded metrics separate. It does not delete rows, alter labels, tune rules, promote theses, or call Helius. Use it to decide whether the next action is clean price-quality tightening, explicit outlier separation, manual review, or bounded evidence expansion.

@@ -796,3 +796,25 @@ Focused tests:
 ```bash
 ./trading_env/bin/python -m pytest research/tests/test_outlier_price_path_reviewer.py research/tests/test_outlier_price_path_report.py research/tests/test_run_outlier_price_path_review.py research/tests/test_robust_return_metrics.py research/tests/test_run_rule_robust_return_report.py research/tests/test_run_stage31_outlier_review_cycle.py
 ```
+
+## Milestone 32: Outlier-Adjusted Diagnostics
+
+Stage 32 separates raw averages from capped, robust, and outlier-excluded rule metrics. It is report-only: no Helius calls, no rule tuning, no thesis promotion, and no dataset mutation.
+
+Run outlier-adjusted rule report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_outlier_adjusted_rule_report --real-only
+```
+
+Run full Stage 32 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage32_outlier_adjusted_cycle --real-only
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_outlier_adjusted_rule_metrics.py research/tests/test_run_outlier_adjusted_rule_report.py research/tests/test_run_stage32_outlier_adjusted_cycle.py
+```

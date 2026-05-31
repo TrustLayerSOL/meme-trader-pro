@@ -193,3 +193,5 @@
 - Robust return metrics are required before interpreting rule averages.
 - Isolated price prints should be excluded or separately labeled from serious validation.
 - Price-path reviews must classify extreme rows as plausible, suspicious, fallback-dependent, isolated, or unusable before the next evidence-scaling decision.
+- Diagnostic reports must show raw, capped, robust, and outlier-excluded views when outlier classifications are available.
+- Outlier-excluded metrics are diagnostic review aids only; they do not mutate datasets, labels, rules, or thesis decisions.
