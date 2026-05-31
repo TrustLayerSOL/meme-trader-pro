@@ -529,3 +529,28 @@ Smoke run:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_diagnostic_validation_smoke
 ```
+
+## Milestone 20: Walk-Forward Fold Sufficiency Diagnostics v0
+
+v3 can now diagnose why walk-forward validation has zero valid folds by sweeping chronological fold settings for evidence sufficiency only. This does not tune rules for returns and does not promote theses.
+
+Run the focused Milestone 20 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_fold_sufficiency_analyzer.py
+./trading_env/bin/python -m pytest research/tests/test_fold_sufficiency_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_fold_sufficiency_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_best_diagnostic_walk_forward.py
+```
+
+Run fold sufficiency:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_fold_sufficiency_report --real-only
+```
+
+Run best diagnostic walk-forward:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_best_diagnostic_walk_forward --real-only
+```

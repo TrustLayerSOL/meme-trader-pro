@@ -149,3 +149,14 @@ Use this after diagnostic nearest-entry fallback labels and the diagnostic datas
 The review runs baseline, rule backtest, walk-forward validation, and thesis evaluation on `data/backtests/diagnostics/research_dataset_nearest300.jsonl`, writes outputs under `data/backtests/diagnostics/`, and compares those results against canonical clean stores.
 
 Use the recommended next action to decide whether to scale bounded backfill, improve clean price inference, or inspect rule selection and fold thresholds. Do not use diagnostic fallback results for live trading or thesis promotion without human review.
+
+## Fold Sufficiency Diagnostics
+
+Run this after diagnostic validation review shows zero valid walk-forward folds:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_fold_sufficiency_report --real-only
+./trading_env/bin/python -m research.mtp_research.validation.run_best_diagnostic_walk_forward --real-only
+```
+
+If no configs produce valid folds, scale bounded backfill. If short configs work, use them only as diagnostic validation until more data exists. Fold window sweeps are evidence sufficiency checks, not strategy optimization.

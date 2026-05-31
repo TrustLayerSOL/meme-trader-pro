@@ -115,3 +115,11 @@
 - Nearest fallback rows must be counted in every diagnostic report.
 - Canonical clean labels remain the source of truth for serious validation.
 - Any diagnostic report using nearest-entry fallback must include the warning: `diagnostic fallback dataset; not valid for live trading or thesis promotion without human review.`
+
+## Fold sufficiency diagnostics
+
+- Fold sufficiency diagnostics are not strategy optimization.
+- Fold window choice should initially be based on evidence sufficiency, not returns.
+- Short diagnostic folds may be used while the dataset is small.
+- Canonical validation should move toward longer, more stable folds as data grows.
+- No thesis can be promoted based only on diagnostic fold settings.

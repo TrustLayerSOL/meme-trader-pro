@@ -40,6 +40,8 @@
   - Verified with diagnostic-only nearest-entry coverage comparison, real-only evidence quality reporting, price inference metadata, ambiguity handling, and full v3 research pipeline regression tests.
 - [x] 19. Diagnostic validation review v0
   - Verified with diagnostic baseline/rule/walk-forward/thesis orchestration, clean-vs-fallback comparison reports, diagnostic-only stores, and full v3 research pipeline regression tests.
+- [x] 20. Walk-forward fold sufficiency diagnostics v0
+  - Verified with fold-window sufficiency sweeps, best diagnostic walk-forward gating, diagnostic-only reports, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -257,4 +259,14 @@
 - Rule comparisons count nearest fallback selected rows
 - Walk-forward comparisons report valid test folds and selected counts
 - Thesis comparisons mark diagnostic-only status changes
+- Tests pass without network
+
+## Milestone 20 acceptance criteria
+
+- Fold sufficiency models exist
+- Fold sufficiency analyzer evaluates multiple chronological fold configs
+- Config ranking is based on evidence sufficiency, not returns
+- Reports show dataset time span, config comparison, and per-rule sufficiency
+- Best diagnostic walk-forward runs only when a config has evidence-bearing folds
+- Diagnostic outputs stay under `data/backtests/diagnostics/`
 - Tests pass without network
