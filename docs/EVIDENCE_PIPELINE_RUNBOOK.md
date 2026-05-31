@@ -107,3 +107,7 @@ Run these immediately after a tiny real evidence run:
 The audit identifies the first major local bottleneck across candidate rows, target plans, raw transactions, normalized events, feature snapshots, outcome labels, research rows, walk-forward results, and thesis decisions.
 
 Do not scale up backfills until the bottleneck is understood. If targets are mint-only, seed real candidates with `pool_address` and `creator_wallet` before spending more credits. If parser coverage is the bottleneck, inspect raw transaction shape before spending more credits. If insufficient test evidence is the bottleneck, gradually increase bounded runs only after target quality is confirmed.
+
+If the audit shows `mock_candidates_present` or `no_raw_transactions` from mock/manual targets, run `docs/REAL_DISCOVERY_RUNBOOK.md` before more Helius backfills.
+
+Do not scale backfills against mock or `manual_example` candidates.

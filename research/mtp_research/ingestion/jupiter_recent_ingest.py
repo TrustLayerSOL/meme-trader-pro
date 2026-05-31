@@ -1,4 +1,4 @@
-"""Jupiter recent-token ingest placeholders for candidate discovery."""
+"""Jupiter recent-token mock ingest placeholders for candidate discovery."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ from datetime import datetime, timezone
 from research.mtp_research.ingestion.models import LaunchCandidate
 
 
-# TODO: Replace with Jupiter recent-token endpoint calls (rate-limited + auth) later.
 def fetch_candidates() -> list[LaunchCandidate]:
-    """Return deterministic mock Jupiter candidate updates for local testing."""
+    """This returns deterministic mock data for tests only. Real discovery lives in dexscreener_real_ingest.py."""
 
     return [
         LaunchCandidate(

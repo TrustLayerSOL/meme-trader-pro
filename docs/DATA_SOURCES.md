@@ -119,3 +119,15 @@ Helius is only used for bounded targeted backfills.
 All downstream parsing, features, outcomes, and datasets are local derived artifacts.
 
 No live trading or wallet signing occurs.
+
+## Real Candidate Discovery
+
+DexScreener real discovery is the first real public candidate source for v3.
+
+DexScreener token profiles and token boosts are discovery sources. The DexScreener token-pairs endpoint enriches token mints into pool/pair addresses so Helius backfills can target higher-value addresses than mint-only records.
+
+Jupiter token enrichment is optional and used only for quality metadata such as verification, holder count, liquidity, market cap, organic score, and trading stats when the endpoint contract is confirmed.
+
+Mock ingestors are test-only. Real discovery commands do not call the mock DexScreener, Jupiter, or Raydium placeholder ingestors.
+
+Helius should only be used after real candidate quality is confirmed with non-mock candidates, pool addresses, and bounded liquidity filters.

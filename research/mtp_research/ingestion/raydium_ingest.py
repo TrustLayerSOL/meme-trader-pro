@@ -1,4 +1,4 @@
-"""Raydium ingest placeholders for candidate discovery."""
+"""Raydium mock ingest placeholders for candidate discovery."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ from datetime import datetime, timezone
 from research.mtp_research.ingestion.models import LaunchCandidate
 
 
-# TODO: Replace with Raydium pool/discovery API calls after API integration review.
 def fetch_candidates() -> list[LaunchCandidate]:
-    """Return deterministic mock Raydium candidates for local testing."""
+    """This returns deterministic mock data for tests only. Real discovery lives in dexscreener_real_ingest.py."""
 
     return [
         LaunchCandidate(

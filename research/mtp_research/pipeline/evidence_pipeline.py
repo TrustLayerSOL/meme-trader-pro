@@ -65,8 +65,9 @@ class EvidencePipeline:
         self,
         candidates: list[LaunchCandidate],
         roles: list[str],
+        exclude_mock: bool = True,
     ) -> list[BackfillTarget]:
-        return self.target_planner.candidates_to_targets(candidates, roles=roles)
+        return self.target_planner.candidates_to_targets(candidates, roles=roles, exclude_mock=exclude_mock)
 
     def run_backfill_targets(
         self,

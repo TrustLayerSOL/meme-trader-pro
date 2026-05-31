@@ -13,17 +13,22 @@ class BackfillTargetPlanner:
         self,
         candidates: list[LaunchCandidate],
         roles: list[str] | None = None,
+        exclude_mock: bool = True,
     ) -> list[BackfillTarget]:
         targets: list[BackfillTarget] = []
         for candidate in candidates:
-            targets.extend(self.candidate_to_targets(candidate, roles=roles))
+            targets.extend(self.candidate_to_targets(candidate, roles=roles, exclude_mock=exclude_mock))
         return self.dedupe_targets(targets)
 
     def candidate_to_targets(
         self,
         candidate: LaunchCandidate,
         roles: list[str] | None = None,
+        exclude_mock: bool = True,
     ) -> list[BackfillTarget]:
+        if exclude_mock and _is_mock_candidate(candidate):
+            return []
+
         selected_roles = roles or ["mint", "pool", "creator"]
         targets: list[BackfillTarget] = []
         for role in selected_roles:
@@ -64,3 +69,13 @@ class BackfillTargetPlanner:
             wallets = candidate.metadata_json.get("wallets", [])
             return [str(wallet) for wallet in wallets if wallet]
         return []
+
+
+def _is_mock_candidate(candidate: LaunchCandidate) -> bool:
+    metadata = candidate.metadata_json or {}
+    return bool(
+        metadata.get("is_mock")
+        or metadata.get("example_only")
+        or candidate.source in {"mock", "manual_example"}
+        or candidate.venue in {"mock", "manual_example"}
+    )

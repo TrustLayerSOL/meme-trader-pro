@@ -395,3 +395,42 @@ Run diagnostics:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.pipeline.run_post_evidence_diagnostics
 ```
+
+## Milestone 16: Real Candidate Discovery Ingestion v0
+
+v3 now has bounded public DexScreener discovery for real Solana candidates. Discovery is dry-run by default; registry writes require `--write`. Target planning and evidence backfill exclude mock candidates by default.
+
+Run the focused Milestone 16 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_http_client.py
+./trading_env/bin/python -m pytest research/tests/test_dexscreener_real_ingest.py
+./trading_env/bin/python -m pytest research/tests/test_jupiter_token_enrichment.py
+./trading_env/bin/python -m pytest research/tests/test_run_dexscreener_discovery.py
+./trading_env/bin/python -m pytest research/tests/test_run_candidate_quality_filter.py
+./trading_env/bin/python -m pytest research/tests/test_real_discovery_backfill_filters.py
+```
+
+Dry-run real discovery:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_dexscreener_discovery --limit 10 --min-liquidity-usd 10000
+```
+
+Write real candidates:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_dexscreener_discovery --limit 10 --min-liquidity-usd 10000 --write
+```
+
+Candidate quality:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_candidate_quality_filter --exclude-mock --require-pool-address --min-liquidity-usd 10000
+```
+
+Plan real targets:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_plan_backfill_targets --candidate-limit 3 --require-pool-address --min-liquidity-usd 10000
+```

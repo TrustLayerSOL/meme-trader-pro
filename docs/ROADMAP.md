@@ -32,6 +32,8 @@
   - Verified with evidence pipeline package, seed loader, target planner, dry-run backfill, offline rebuild, full-cycle CLI, runbook, and full v3 research pipeline regression tests.
 - [x] 15. Evidence run audit and target quality diagnostics v0
   - Verified with offline evidence audit, target inspection, post-run diagnostics, Markdown/JSON reports, and full v3 research pipeline regression tests.
+- [x] 16. Real candidate discovery ingestion v0
+  - Verified with bounded DexScreener discovery, candidate quality filtering, mock-safe target planning/backfill filters, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -205,4 +207,16 @@
 - Evidence audit CLI exists
 - Post-evidence diagnostics CLI exists
 - Backfill target inspection CLI exists
+- Tests pass without network
+
+## Milestone 16 acceptance criteria
+
+- Real DexScreener ingestor exists
+- Real discovery CLI exists
+- Candidate quality filter CLI exists
+- Mock ingestors are clearly marked test-only
+- Real discovery candidates include token_mint and pool_address
+- Target planner excludes mock candidates by default
+- Evidence backfill excludes mock candidates by default
+- Real discovery runbook exists
 - Tests pass without network
