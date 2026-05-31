@@ -52,6 +52,8 @@
   - Adds diagnostic walk-forward findings, fallback dependency reporting, one-command diagnostic cycle, and diagnostic-only review reports.
 - [x] 25. Rule failure anatomy and evidence expansion decision v0
   - Adds rule failure anatomy, selected-row inspection, and offline decision reporting before any rule changes.
+- [x] 26. Sample adequacy gate and evidence expansion plan v0
+  - Prevents tiny diagnostic samples from promoting or demoting theses and reports bounded data expansion needs.
 
 ## Milestone 2 acceptance criteria
 

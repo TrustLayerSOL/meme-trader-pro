@@ -9,6 +9,21 @@ from typing import Any
 
 
 @dataclass
+class SampleAdequacyReport:
+    real_token_count: int = 0
+    time_span_seconds: int | None = None
+    valid_test_fold_count: int = 0
+    total_test_selected_count: int = 0
+    adequate_for_rejection: bool = False
+    adequate_for_promotion: bool = False
+    warning_flags: list[str] = field(default_factory=list)
+    recommended_data_expansion: str = "unknown"
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+@dataclass
 class ThesisReference:
     thesis_id: str
     name: str

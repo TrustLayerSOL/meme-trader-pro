@@ -259,6 +259,24 @@ Focused tests:
 
 Stage 25 explains why diagnostic rules failed before any rule definition changes. It does not optimize thresholds, promote theses, or enable live trading.
 
+## Sample Adequacy Gate
+
+Check whether diagnostic evidence is large enough to support thesis status changes:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_sample_adequacy_report --real-only
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_sample_adequacy_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_sample_adequacy_report.py
+./trading_env/bin/python -m pytest research/tests/test_thesis_evaluator.py
+```
+
+If the sample is too small, thesis recommendations stay `needs_more_data`. Weak diagnostic reads are stored as metadata, not used to reject, promote, or mark a thesis as a paper candidate.
+
 ## Milestone 10: Baseline Edge Report v0
 
 v3 now has an exploratory baseline report layer that buckets clean research dataset rows by feature and summarizes forward outcomes. This is descriptive analysis only, not a trading strategy, signal feed, or live execution path.

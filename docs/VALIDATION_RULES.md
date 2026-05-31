@@ -154,3 +154,13 @@
 - Positive diagnostic folds are hypothesis clues only.
 - Rule changes should be made only after the failure cause is understood.
 - Inspect selected rows manually before changing thresholds or adding new rules.
+
+## Sample adequacy gate
+
+- No thesis can be rejected from tiny samples.
+- Tiny diagnostic samples can only produce diagnostic notes.
+- Rejection requires enough independent evidence across real tokens, time span, valid folds, and selected test rows.
+- Promotion requires at least the same sample adequacy gate plus human review.
+- If the sample adequacy gate fails, thesis recommendations must remain `needs_more_data`.
+- Weak or negative diagnostic reads should be preserved in metadata as `diagnostic_raw_recommendation`, not converted into demotion.
+- Current diagnostic fallback results are not reliable enough to demote anything until sample adequacy is met.

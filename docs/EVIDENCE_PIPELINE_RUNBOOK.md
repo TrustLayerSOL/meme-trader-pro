@@ -273,3 +273,23 @@ Run this after diagnostic walk-forward produces valid folds but weak positive fo
 Use Stage 25 to decide whether weak diagnostic folds are caused by low token diversity, short time span, small selected samples, fallback dependency, cost drag, or overly broad/default exploratory rules.
 
 If token diversity or time span is low, scale bounded evidence. If fallback dependency is high, improve clean price inference. If a specific rule looks promising, inspect selected rows manually before changing rule definitions. Do not run a parameter grid or optimize thresholds from the diagnostic fallback dataset.
+
+## Sample Adequacy Gate
+
+Run the sample adequacy report before interpreting diagnostic thesis decisions:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_sample_adequacy_report --real-only
+```
+
+Default adequacy thresholds are:
+
+- `min_real_token_count=10`
+- `min_time_span_seconds=43200`
+- `min_valid_test_folds=10`
+- `min_total_test_selected_count=100`
+- `min_independent_batches=1`
+
+When these thresholds are not met, thesis evaluation must return `needs_more_data` and preserve the weak or negative diagnostic read in metadata. Do not reject, promote, or move a thesis to watchlist from a tiny diagnostic sample.
+
+The expected current data expansion recommendation is to add more real candidates and expand per-pool time span with bounded backfills. Do not run Helius until the bounded expansion plan is reviewed.

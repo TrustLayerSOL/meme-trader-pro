@@ -33,6 +33,7 @@ from research.mtp_research.validation.diagnostic_validation_report import (
 from research.mtp_research.validation.diagnostic_validation_review import DiagnosticValidationReviewer
 from research.mtp_research.validation.research_dataset_store import ResearchDatasetStore
 from research.mtp_research.validation.thesis_decision_store import ThesisDecisionStore
+from research.mtp_research.validation.sample_adequacy import SampleAdequacyAnalyzer
 from research.mtp_research.validation.thesis_evaluator import ThesisEvaluator
 from research.mtp_research.validation.thesis_registry import ThesisRegistry
 from research.mtp_research.validation.thesis_report import (
@@ -91,7 +92,12 @@ def run_diagnostic_validation_review(args: argparse.Namespace) -> dict[str, Any]
     baseline_paths = _run_baseline_report(args, diagnostic_rows, diagnostic_dataset_path, output_dir)
     diagnostic_rule_results, rule_paths = _run_rule_backtests(args, diagnostic_rows, output_dir)
     diagnostic_walk_forward_result, walk_paths = _run_walk_forward(args, diagnostic_rows, rules, output_dir)
-    diagnostic_decisions, thesis_paths = _run_thesis_evaluation(args, [diagnostic_walk_forward_result], output_dir)
+    diagnostic_decisions, thesis_paths = _run_thesis_evaluation(
+        args,
+        [diagnostic_walk_forward_result],
+        diagnostic_rows,
+        output_dir,
+    )
 
     reviewer = DiagnosticValidationReviewer()
     review = reviewer.build_review(
@@ -297,14 +303,20 @@ def _run_walk_forward(args: argparse.Namespace, diagnostic_rows, rules, output_d
 def _run_thesis_evaluation(
     args: argparse.Namespace,
     diagnostic_walk_forward_results,
+    diagnostic_rows,
     output_dir: Path,
 ):
     theses = ThesisRegistry(args.theses_dir).load_theses()
+    sample_adequacy_report = SampleAdequacyAnalyzer().build_report(
+        diagnostic_rows,
+        diagnostic_walk_forward_results,
+    )
     evaluator = ThesisEvaluator(
         min_total_test_selected_count=args.min_total_test_selected_count,
         min_positive_test_fold_rate=args.min_positive_test_fold_rate,
         min_avg_test_net_return=args.min_avg_test_net_return,
         min_consistency_score=args.min_consistency_score,
+        sample_adequacy_report=sample_adequacy_report,
     )
     summaries = evaluator.evaluate_all(theses, diagnostic_walk_forward_results)
     decisions = [
@@ -315,6 +327,7 @@ def _run_thesis_evaluation(
         decision.warning_flags = sorted(set(decision.warning_flags + [DIAGNOSTIC_FALLBACK_WARNING]))
         decision.metadata_json["diagnostic_mode"] = True
         decision.metadata_json["diagnostic_warning"] = DIAGNOSTIC_FALLBACK_WARNING
+        decision.metadata_json["sample_adequacy_report"] = sample_adequacy_report.to_dict()
     ThesisDecisionStore(args.diagnostic_decision_store_path).upsert_many(decisions)
     markdown_path = write_thesis_evaluation_markdown(
         summaries,

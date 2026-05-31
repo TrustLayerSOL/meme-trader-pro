@@ -1,5 +1,5 @@
 from research.mtp_research.validation.thesis_evaluator import ThesisEvaluator
-from research.mtp_research.validation.thesis_models import ThesisReference
+from research.mtp_research.validation.thesis_models import SampleAdequacyReport, ThesisReference
 from research.mtp_research.validation.walk_forward_models import (
     RuleWalkForwardSummary,
     WalkForwardConfig,
@@ -101,3 +101,45 @@ def test_evaluate_all_and_summary_to_decision_create_warnings() -> None:
     assert "research_decision_not_trading_instruction" in decision.warning_flags
     assert "live_trading_disabled" in decision.warning_flags
     assert "requires_human_review" in decision.warning_flags
+
+
+def test_thesis_does_not_get_rejected_when_sample_too_small() -> None:
+    adequacy = SampleAdequacyReport(
+        real_token_count=3,
+        time_span_seconds=8040,
+        valid_test_fold_count=4,
+        total_test_selected_count=52,
+        adequate_for_rejection=False,
+        adequate_for_promotion=False,
+        warning_flags=["diagnostic_sample_only"],
+        recommended_data_expansion="add_more_real_candidates_and_expand_time_span",
+    )
+    summary = ThesisEvaluator(
+        min_total_test_selected_count=50,
+        sample_adequacy_report=adequacy,
+    ).evaluate_thesis(_thesis(), [_summary(selected=100, avg=-0.01, rate=0.4)])
+
+    assert summary.recommended_status == "needs_more_data"
+    assert "insufficient_sample_for_demotion_or_promotion" in summary.warning_flags
+    assert "diagnostic_sample_only" in summary.warning_flags
+    assert summary.metadata_json["diagnostic_raw_recommendation"] == "rejected_or_rework"
+
+
+def test_thesis_does_not_get_promoted_when_sample_too_small() -> None:
+    adequacy = SampleAdequacyReport(
+        real_token_count=3,
+        time_span_seconds=8040,
+        valid_test_fold_count=4,
+        total_test_selected_count=100,
+        adequate_for_rejection=False,
+        adequate_for_promotion=False,
+        warning_flags=["diagnostic_sample_only"],
+        recommended_data_expansion="add_more_real_candidates_and_expand_time_span",
+    )
+    summary = ThesisEvaluator(
+        min_total_test_selected_count=50,
+        sample_adequacy_report=adequacy,
+    ).evaluate_thesis(_thesis(status="active"), [_summary(selected=100)])
+
+    assert summary.recommended_status == "needs_more_data"
+    assert summary.metadata_json["diagnostic_raw_recommendation"] == "paper_candidate"

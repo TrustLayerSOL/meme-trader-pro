@@ -8,6 +8,7 @@ from research.mtp_research.validation.thesis_models import (
     ThesisDecision,
     ThesisEvaluationSummary,
     ThesisReference,
+    SampleAdequacyReport,
     make_thesis_decision_id,
     utc_now_iso,
 )
@@ -26,11 +27,13 @@ class ThesisEvaluator:
         min_positive_test_fold_rate: float = 0.6,
         min_avg_test_net_return: float = 0.0,
         min_consistency_score: float = 0.0,
+        sample_adequacy_report: SampleAdequacyReport | None = None,
     ):
         self.min_total_test_selected_count = min_total_test_selected_count
         self.min_positive_test_fold_rate = min_positive_test_fold_rate
         self.min_avg_test_net_return = min_avg_test_net_return
         self.min_consistency_score = min_consistency_score
+        self.sample_adequacy_report = sample_adequacy_report
 
     def map_rules_to_theses(
         self,
@@ -117,6 +120,25 @@ class ThesisEvaluator:
         ):
             recommended_status = "paper_candidate"
 
+        diagnostic_raw_recommendation = recommended_status
+        if self.sample_adequacy_report and recommended_status in {
+            "rejected_or_rework",
+            "watchlist",
+            "paper_candidate",
+        }:
+            if not (
+                self.sample_adequacy_report.adequate_for_rejection
+                and self.sample_adequacy_report.adequate_for_promotion
+            ):
+                recommended_status = "needs_more_data"
+                warning_flags.extend(
+                    [
+                        "insufficient_sample_for_demotion_or_promotion",
+                        "diagnostic_sample_only",
+                    ]
+                )
+                warning_flags.extend(self.sample_adequacy_report.warning_flags)
+
         return ThesisEvaluationSummary(
             thesis_id=thesis.thesis_id,
             name=thesis.name,
@@ -128,10 +150,16 @@ class ThesisEvaluator:
             best_positive_test_fold_rate=best_rate,
             total_test_selected_count=total_selected,
             recommended_status=recommended_status,
-            warning_flags=warning_flags,
+            warning_flags=sorted(set(warning_flags)),
             metadata_json={
                 "linked_rule_ids": [summary.rule_id for summary in linked_summaries],
                 "supporting_validation_id": validation_result.validation_id if validation_result else None,
+                "diagnostic_raw_recommendation": diagnostic_raw_recommendation,
+                "sample_adequacy_report": (
+                    self.sample_adequacy_report.to_dict()
+                    if self.sample_adequacy_report
+                    else None
+                ),
             },
         )
 

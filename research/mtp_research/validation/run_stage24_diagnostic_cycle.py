@@ -86,6 +86,8 @@ def build_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
                 "data/backtests/diagnostics/thesis_decisions_diagnostic.jsonl",
                 "--output-dir",
                 "data/backtests/diagnostics/reports",
+                "--sample-adequacy-dataset-path",
+                "data/backtests/diagnostics/research_dataset_nearest300.jsonl",
             ],
         ),
     ]
