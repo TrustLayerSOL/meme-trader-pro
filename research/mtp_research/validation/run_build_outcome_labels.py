@@ -11,6 +11,8 @@ from research.mtp_research.ingestion.normalized_event_store import NormalizedEve
 from research.mtp_research.pipeline.real_candidate_filter import real_token_mints_from_registry
 from research.mtp_research.validation.outcome_label_builder import OutcomeLabelBuilder
 from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
+from research.mtp_research.validation.snapshot_selection_models import SnapshotSelectionConfig
+from research.mtp_research.validation.snapshot_selector import SnapshotSelector
 
 
 def main() -> int:
@@ -20,6 +22,9 @@ def main() -> int:
     parser.add_argument("--outcomes-path")
     parser.add_argument("--token-mint")
     parser.add_argument("--max-snapshots", type=int)
+    parser.add_argument("--snapshot-selection-strategy", default="head")
+    parser.add_argument("--max-snapshots-per-token", type=int)
+    parser.add_argument("--min-time-gap-seconds", type=int)
     parser.add_argument("--entry-max-staleness-sec", type=int, default=60)
     parser.add_argument("--allow-first-after-entry", action="store_true")
     parser.add_argument("--allow-nearest-entry-fallback", action="store_true")
@@ -54,15 +59,23 @@ def main() -> int:
 
     snapshots = feature_store.load_all()
     events = event_store.load_all()
+    real_mints = None
     if args.token_mint:
-        snapshots = [snapshot for snapshot in snapshots if snapshot.token_mint == args.token_mint]
         events = [event for event in events if event.token_mint == args.token_mint]
     if args.real_only:
         real_mints = real_token_mints_from_registry(min_liquidity_usd=args.min_liquidity_usd)
-        snapshots = [snapshot for snapshot in snapshots if snapshot.token_mint in real_mints]
         events = [event for event in events if event.token_mint in real_mints]
-    if args.max_snapshots is not None:
-        snapshots = snapshots[: args.max_snapshots]
+    selection_config = SnapshotSelectionConfig(
+        strategy=args.snapshot_selection_strategy,
+        max_snapshots=args.max_snapshots,
+        max_snapshots_per_token=args.max_snapshots_per_token,
+        min_time_gap_seconds=args.min_time_gap_seconds,
+        token_mints=[args.token_mint] if args.token_mint else [],
+        real_only=args.real_only,
+        min_liquidity_usd=args.min_liquidity_usd,
+        metadata_json={"real_mint_count": len(real_mints) if real_mints is not None else None},
+    )
+    snapshots, selection_summary = SnapshotSelector().select_snapshots(snapshots, selection_config)
     if args.stop_after_snapshots is not None:
         snapshots = snapshots[: args.stop_after_snapshots]
 
@@ -95,6 +108,18 @@ def main() -> int:
     print(f"events_loaded={len(events)}")
     print(f"token_count={len({snapshot.token_mint for snapshot in snapshots})}")
     print(f"selected_snapshot_count={len(snapshots)}")
+    print(f"snapshot_selection_strategy={selection_summary.strategy}")
+    print(f"snapshot_selection_input_snapshot_count={selection_summary.input_snapshot_count}")
+    print(f"snapshot_selection_selected_snapshot_count={selection_summary.selected_snapshot_count}")
+    print(f"snapshot_selection_input_token_count={selection_summary.input_token_count}")
+    print(f"snapshot_selection_selected_token_count={selection_summary.selected_token_count}")
+    print(f"snapshot_selection_input_time_span_seconds={selection_summary.input_time_span_seconds}")
+    print(
+        "snapshot_selection_selected_time_span_seconds="
+        f"{selection_summary.selected_time_span_seconds}"
+    )
+    print(f"snapshot_selection_selected_by_token={selection_summary.selected_by_token}")
+    print(f"snapshot_selection_warning_flags={selection_summary.warning_flags}")
     print(f"labels_generated={len(labels)}")
     print(f"labels_inserted={counts['inserted']}")
     print(f"labels_updated={counts['updated']}")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +37,9 @@ def main() -> int:
             "real_only": args.real_only,
             "min_liquidity_usd": args.min_liquidity_usd,
             "max_snapshots": args.max_snapshots,
+            "snapshot_selection_strategy": args.snapshot_selection_strategy,
+            "max_snapshots_per_token": args.max_snapshots_per_token,
+            "min_time_gap_seconds": args.min_time_gap_seconds,
             "nearest_entry_max_staleness_sec": args.nearest_entry_max_staleness_sec,
         }
     )
@@ -53,6 +57,7 @@ def main() -> int:
                 skipped=skipped,
             )
         print_counts("after_counts")
+        print_artifact_span_guidance()
     except KeyboardInterrupt:
         profile.warning_flags.append("interrupted")
         print("interrupted=True", flush=True)
@@ -75,6 +80,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--real-only", action="store_true")
     parser.add_argument("--min-liquidity-usd", type=float, default=10000)
     parser.add_argument("--max-snapshots", type=int, default=1000)
+    parser.add_argument("--snapshot-selection-strategy", default="head")
+    parser.add_argument("--max-snapshots-per-token", type=int)
+    parser.add_argument("--min-time-gap-seconds", type=int)
     parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--nearest-entry-max-staleness-sec", type=int, default=300)
     parser.add_argument("--skip-clean-outcomes", action="store_true")
@@ -96,6 +104,11 @@ def build_steps(args: argparse.Namespace) -> list[tuple[str, list[str], str | No
         else []
     )
     timing_args = ["--timing"] if args.timing else []
+    selection_args = ["--snapshot-selection-strategy", args.snapshot_selection_strategy]
+    if args.max_snapshots_per_token is not None:
+        selection_args.extend(["--max-snapshots-per-token", str(args.max_snapshots_per_token)])
+    if args.min_time_gap_seconds is not None:
+        selection_args.extend(["--min-time-gap-seconds", str(args.min_time_gap_seconds)])
     return [
         (
             "clean_outcomes",
@@ -105,6 +118,7 @@ def build_steps(args: argparse.Namespace) -> list[tuple[str, list[str], str | No
                 "research.mtp_research.validation.run_build_outcome_labels",
                 "--max-snapshots",
                 str(args.max_snapshots),
+                *selection_args,
                 "--progress-every",
                 str(args.progress_every),
                 "--overwrite",
@@ -127,6 +141,7 @@ def build_steps(args: argparse.Namespace) -> list[tuple[str, list[str], str | No
                 str(args.nearest_entry_max_staleness_sec),
                 "--max-snapshots",
                 str(args.max_snapshots),
+                *selection_args,
                 "--outcomes-path",
                 str(PATHS["diagnostic_outcomes"]),
                 "--progress-every",
@@ -267,6 +282,42 @@ def count_rows(path: Path | None) -> int:
         return 0
     with path.open("r", encoding="utf-8") as f:
         return sum(1 for line in f if line.strip())
+
+
+def print_artifact_span_guidance() -> None:
+    raw_span = artifact_span(PATHS["raw"], "block_time")
+    diagnostic_span = artifact_span(PATHS["diagnostic_dataset"], "snapshot_ts")
+    if (
+        raw_span is not None
+        and diagnostic_span is not None
+        and raw_span > 0
+        and diagnostic_span < raw_span * 0.5
+    ):
+        print("artifact_span_warning=diagnostic_dataset_span_much_smaller_than_raw", flush=True)
+        print(
+            "recommended_full_span_command="
+            "./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review "
+            "--real-only --snapshot-selection-strategy per_token_even "
+            "--max-snapshots-per-token 1000 --min-time-gap-seconds 60 --timing",
+            flush=True,
+        )
+
+
+def artifact_span(path: Path, time_field: str) -> int | None:
+    if not path.exists():
+        return None
+    times: list[int] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            text = line.strip()
+            if not text:
+                continue
+            value = json.loads(text).get(time_field)
+            if value is not None:
+                times.append(int(value))
+    if not times:
+        return None
+    return max(times) - min(times)
 
 
 if __name__ == "__main__":

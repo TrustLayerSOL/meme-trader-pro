@@ -305,3 +305,26 @@ Build the dry-run expansion plan before any Helius execution:
 This combines sample adequacy thresholds with the bounded time-span backfill planner. It reports token and time-span shortfalls, target pools, estimated request counts, and the exact bounded command to review. The command does not call Helius and does not trade.
 
 If the plan still shows fewer than 10 real tokens, prioritize candidate discovery or adding more real candidate pools before spending credits on already-covered pools.
+
+## Full-Span Offline Rebuild
+
+After broad raw evidence expansion, a simple `--max-snapshots` cap can select an early-only slice of feature snapshots. That makes derived labels, datasets, and fold sufficiency look narrower than the raw evidence actually is.
+
+Check artifact coverage before interpreting fold sufficiency:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_artifact_span_report --real-only
+```
+
+Run the representative full-span offline rebuild:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review \
+  --real-only \
+  --snapshot-selection-strategy per_token_even \
+  --max-snapshots-per-token 1000 \
+  --min-time-gap-seconds 60 \
+  --timing
+```
+
+Use `per_token_even` when raw evidence covers many tokens or a wide time range. It keeps the validation slice distributed by token and timestamp instead of silently truncating to the earliest snapshots. This remains offline-only and does not call Helius.

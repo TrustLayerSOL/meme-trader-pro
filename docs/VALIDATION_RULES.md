@@ -164,3 +164,11 @@
 - If the sample adequacy gate fails, thesis recommendations must remain `needs_more_data`.
 - Weak or negative diagnostic reads should be preserved in metadata as `diagnostic_raw_recommendation`, not converted into demotion.
 - Current diagnostic fallback results are not reliable enough to demote anything until sample adequacy is met.
+
+## Artifact span coverage
+
+- Derived validation artifacts must cover a representative share of the raw evidence time span before fold sufficiency or thesis results are interpreted.
+- Snapshot caps must not silently truncate validation to early-only slices after broad raw evidence expansion.
+- Full-span or per-token snapshot selection is required after raw evidence covers multiple tokens or a wider time span.
+- Artifact span reports should be reviewed before deciding whether the next bottleneck is more evidence, price inference, or fold-window configuration.
+- Span checks are offline-only and do not justify live trading, thesis promotion, or rule optimization.

@@ -684,3 +684,30 @@ Post-run review:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.pipeline.run_post_backfill_rebuild_and_review --max-snapshots 1000 --real-only
 ```
+
+## Milestone 27: Full-Span Snapshot Selection
+
+v3 can now rebuild validation artifacts with explicit snapshot selection strategies so broad raw evidence is not reduced to an early-only slice by a simple snapshot cap. Use artifact span reports to confirm derived labels and datasets cover the intended raw evidence span.
+
+Run artifact span review:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_artifact_span_report --real-only
+```
+
+Run the full-span offline rebuild:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review \
+  --real-only \
+  --snapshot-selection-strategy per_token_even \
+  --max-snapshots-per-token 1000 \
+  --min-time-gap-seconds 60 \
+  --timing
+```
+
+Run the focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_snapshot_selector.py research/tests/test_artifact_span_report.py research/tests/test_run_artifact_span_report.py
+```

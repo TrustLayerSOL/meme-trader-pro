@@ -47,3 +47,45 @@ def test_fast_offline_rebuild_keyboard_interrupt_reports_partial(tmp_path: Path,
     output = capsys.readouterr().out
     assert "interrupted=True" in output
     assert "partial_counts.raw=0" in output
+
+
+def test_fast_offline_rebuild_passes_snapshot_selection_args(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data/features").mkdir(parents=True)
+    (tmp_path / "data/features/feature_snapshots.jsonl").write_text("{}\n", encoding="utf-8")
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+
+    monkeypatch.setattr(runner, "run_command_step", fake_run)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_fast_offline_rebuild_review",
+            "--skip-reports",
+            "--snapshot-selection-strategy",
+            "per_token_even",
+            "--max-snapshots-per-token",
+            "1000",
+            "--min-time-gap-seconds",
+            "60",
+        ],
+    )
+
+    assert runner.main() == 0
+
+    outcome_calls = [
+        call for call in calls if "research.mtp_research.validation.run_build_outcome_labels" in call
+    ]
+    assert len(outcome_calls) == 2
+    for call in outcome_calls:
+        assert "--snapshot-selection-strategy" in call
+        assert "per_token_even" in call
+        assert "--max-snapshots-per-token" in call
+        assert "1000" in call
+        assert "--min-time-gap-seconds" in call
+        assert "60" in call
+
+    output = capsys.readouterr().out
+    assert "network_calls=0" in output
