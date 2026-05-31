@@ -202,3 +202,27 @@ Example report:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_research_dataset_report --min-label-quality sparse --require-forward-return
 ```
+
+## Milestone 10: Baseline Edge Report v0
+
+v3 now has an exploratory baseline report layer that buckets clean research dataset rows by feature and summarizes forward outcomes. This is descriptive analysis only, not a trading strategy, signal feed, or live execution path.
+
+Run the focused Milestone 10 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_baseline_edge_analyzer.py
+./trading_env/bin/python -m pytest research/tests/test_baseline_report_writer.py
+./trading_env/bin/python -m pytest research/tests/test_run_baseline_edge_report.py
+```
+
+Example report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_baseline_edge_report --min-label-quality sparse --feature age_sec --feature event_count
+```
+
+Example smoke report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_baseline_edge_smoke_report
+```

@@ -69,3 +69,11 @@ ResearchDatasetStore is a derived local artifact stored under `data/backtests/`.
 It joins local feature snapshots and local outcome labels. No RPC calls should happen during dataset building.
 
 Dataset rows are reproducible from FeatureSnapshotStore and OutcomeLabelStore.
+
+## Baseline edge reports
+
+Baseline edge reports are derived local artifacts built from ResearchDatasetStore rows.
+
+They do not call RPC providers or external APIs. They should be reproducible from `data/backtests/research_dataset.jsonl`.
+
+Report outputs live under `data/backtests/reports/`.

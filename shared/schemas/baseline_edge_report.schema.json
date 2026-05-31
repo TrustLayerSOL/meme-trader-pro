@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memetraderpro.local/schemas/baseline_edge_report.schema.json",
+  "title": "BaselineEdgeReport",
+  "type": "object",
+  "required": [
+    "report_id",
+    "created_at",
+    "dataset_path",
+    "row_count",
+    "filtered_row_count",
+    "token_count",
+    "feature_reports",
+    "top_findings",
+    "warning_flags",
+    "metadata_json"
+  ],
+  "properties": {
+    "report_id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "dataset_path": { "type": "string" },
+    "row_count": { "type": "integer", "minimum": 0 },
+    "filtered_row_count": { "type": "integer", "minimum": 0 },
+    "token_count": { "type": "integer", "minimum": 0 },
+    "window_counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "horizon_counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "label_quality_counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "feature_reports": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "top_findings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warning_flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metadata_json": { "type": "object" }
+  },
+  "additionalProperties": true
+}

@@ -52,3 +52,13 @@
 - Strategy/backtest code should consume ResearchDatasetRow, not raw transaction data.
 - Rows with low `label_quality` should be excluded from serious validation unless explicitly being investigated.
 - Dataset filters must be recorded in reports when used.
+
+## Baseline edge reports
+
+- Baseline edge reports are exploratory descriptive reports, not strategy validation.
+- They must not produce trading signals, live recommendations, or wallet/token trust claims.
+- Apparent edge must survive event-driven backtesting and walk-forward validation before it can be used as a candidate rule.
+- Feature analysis must not use future/outcome fields as predictors.
+- Reports must show sample sizes and warning flags.
+- Small-bucket findings are not trusted.
+- Top findings are hypothesis generators, not recommendations.

@@ -18,7 +18,10 @@
   - Verified with feature snapshot store, builder, and CLI tests.
 - [x] 8. Outcome labeler v0
   - Verified with outcome store, price series, label builder, and CLI tests.
-- [ ] 9. Research dataset builder v0
+- [x] 9. Research dataset builder v0
+  - Verified with research dataset store, builder, report, and CLI tests.
+- [x] 10. Baseline edge report v0
+  - Verified with baseline analyzer, writer, CLI, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -112,4 +115,16 @@
 - Dataset builder CLI exists
 - Dataset report CLI exists
 - Summary report works
+- Tests pass without network
+
+## Milestone 10 acceptance criteria
+
+- BaselineEdgeAnalyzer exists
+- Default feature list excludes outcome/future fields
+- Numeric bucketing works
+- Outcome summaries calculate forward return, win rate, runup, drawdown, rug-like drop rate, and no-future-liquidity rate
+- BaselineEdgeReport model exists
+- Markdown and JSON writers exist
+- Baseline edge report CLI exists
+- Smoke report CLI exists
 - Tests pass without network
