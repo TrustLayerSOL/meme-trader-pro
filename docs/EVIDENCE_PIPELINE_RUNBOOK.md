@@ -122,3 +122,17 @@ After every evidence run, inspect price coverage before scaling backfill:
 ```
 
 Do not scale Helius if `no_price` dominates due to parser or price inference issues. Diagnose whether missing prices come from missing entry prices, missing future prices, sparse price points, or event types that do not produce usable `price_quote`.
+
+## Entry Price Coverage Diagnostics
+
+Use diagnostic nearest-entry fallback only on separate output paths:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_coverage_report --real-only
+./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels --allow-nearest-entry-fallback --nearest-entry-max-staleness-sec 300 --max-snapshots 500 --outcomes-path data/backtests/diagnostics/outcome_labels_nearest300.jsonl
+./trading_env/bin/python -m research.mtp_research.validation.run_build_research_dataset --outcomes-path data/backtests/diagnostics/outcome_labels_nearest300.jsonl --dataset-path data/backtests/diagnostics/research_dataset_nearest300.jsonl --min-label-quality sparse --require-forward-return
+./trading_env/bin/python -m research.mtp_research.validation.run_entry_price_coverage_comparison
+./trading_env/bin/python -m research.mtp_research.validation.run_real_only_evidence_quality_report
+```
+
+Fallback rows are research diagnostics only. Do not use them for thesis promotion without explicit review.

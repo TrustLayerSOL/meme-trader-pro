@@ -105,3 +105,5 @@
 - Clean validation should prefer exact or prior entry prices.
 - Any row with `entry_price_source="nearest_research_fallback"` must be separately filterable.
 - `no_price` label counts must be monitored before scaling Helius backfills.
+- Thesis promotion should not use fallback rows unless explicitly reviewed.
+- Price inference from token balance deltas must carry `price_inference_method` metadata.

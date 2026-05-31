@@ -95,9 +95,11 @@ class TradeEventNormalizer:
     ) -> NormalizedEvent:
         event_type = _event_type_for_side(flow.inferred_side)
         side = _event_side_for_inferred_side(flow.inferred_side)
-        price_quote = None
-        if flow.base_delta and flow.quote_delta and flow.base_delta != 0:
-            price_quote = abs(flow.quote_delta / flow.base_delta)
+        reasons = list(flow.reasons)
+        price_quote = _infer_price_quote(flow, reasons)
+        price_inference_method = (
+            "balance_delta_quote_over_base_v0" if price_quote is not None else None
+        )
 
         venue = summary.venue_classification.venue if summary.venue_classification else None
         venue_confidence = (
@@ -121,10 +123,11 @@ class TradeEventNormalizer:
             metadata_json={
                 "quote_mint": flow.quote_mint,
                 "confidence": flow.confidence,
-                "reasons": flow.reasons,
+                "reasons": reasons,
                 "venue_confidence": venue_confidence,
                 "source_signature": summary.signature,
                 "parser_version": "trade_event_normalizer_v0",
+                "price_inference_method": price_inference_method,
                 **flow.metadata_json,
             },
         )
@@ -250,3 +253,20 @@ def _event_side_for_inferred_side(inferred_side: str | None) -> str:
     if inferred_side == "distribution":
         return "distribute"
     return "unknown"
+
+
+def _infer_price_quote(flow: TradeFlow, reasons: list[str]) -> float | None:
+    if flow.inferred_side not in {"possible_buy", "possible_sell"}:
+        return None
+    if "multiple_token_deltas" in reasons:
+        reasons.append("ambiguous_price_inference")
+        return None
+    if flow.base_delta is None or flow.quote_delta is None:
+        return None
+    if flow.base_delta == 0:
+        return None
+    quote_qty = abs(flow.quote_delta)
+    base_qty = abs(flow.base_delta)
+    if base_qty <= 0 or quote_qty <= 0:
+        return None
+    return quote_qty / base_qty

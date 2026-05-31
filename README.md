@@ -468,3 +468,40 @@ Research fallback outcome labels:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels --allow-nearest-entry-fallback --nearest-entry-max-staleness-sec 300 --max-snapshots 500
 ```
+
+## Milestone 18: Price Inference and Entry Coverage Improvement v0
+
+v3 now compares clean outcome labels against diagnostic nearest-entry fallback labels and reports real-only evidence quality. Fallback rows remain research-only and are written to diagnostic paths.
+
+Run the focused Milestone 18 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_entry_price_coverage_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_entry_price_coverage_comparison.py
+./trading_env/bin/python -m pytest research/tests/test_real_only_evidence_quality_report.py
+./trading_env/bin/python -m pytest research/tests/test_trade_event_price_inference.py
+```
+
+Diagnostic fallback labels:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels --allow-nearest-entry-fallback --nearest-entry-max-staleness-sec 300 --max-snapshots 500 --outcomes-path data/backtests/diagnostics/outcome_labels_nearest300.jsonl
+```
+
+Diagnostic fallback dataset:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_research_dataset --outcomes-path data/backtests/diagnostics/outcome_labels_nearest300.jsonl --dataset-path data/backtests/diagnostics/research_dataset_nearest300.jsonl --min-label-quality sparse --require-forward-return
+```
+
+Entry price comparison:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_entry_price_coverage_comparison
+```
+
+Real-only evidence quality:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_real_only_evidence_quality_report
+```
