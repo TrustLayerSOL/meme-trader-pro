@@ -44,9 +44,22 @@ class ResearchDatasetStore:
 
     def upsert_many(self, rows: list[ResearchDatasetRow]) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0}
+        if not rows:
+            return counts
+
+        existing_rows = {row.row_id: row for row in self.load_all()}
         for row in rows:
-            counts[self.upsert(row)] += 1
+            if row.row_id in existing_rows:
+                counts["updated"] += 1
+            else:
+                counts["inserted"] += 1
+            existing_rows[row.row_id] = row
+        self._write_all(list(existing_rows.values()))
         return counts
+
+    def replace_all(self, rows: list[ResearchDatasetRow]) -> dict[str, int]:
+        self._write_all(rows)
+        return {"inserted": len(rows), "updated": 0}
 
     def _write_all(self, rows: list[ResearchDatasetRow]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

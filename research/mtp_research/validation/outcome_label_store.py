@@ -46,10 +46,22 @@ class OutcomeLabelStore:
 
     def upsert_many(self, labels: list[OutcomeLabel]) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0}
+        if not labels:
+            return counts
+
+        existing_labels = {label.outcome_id: label for label in self.load_all()}
         for label in labels:
-            result = self.upsert(label)
-            counts[result] += 1
+            if label.outcome_id in existing_labels:
+                counts["updated"] += 1
+            else:
+                counts["inserted"] += 1
+            existing_labels[label.outcome_id] = label
+        self._write_all(list(existing_labels.values()))
         return counts
+
+    def replace_all(self, labels: list[OutcomeLabel]) -> dict[str, int]:
+        self._write_all(labels)
+        return {"inserted": len(labels), "updated": 0}
 
     def _write_all(self, labels: list[OutcomeLabel]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -203,3 +203,45 @@ After a bounded run, rebuild and review offline:
   --max-snapshots 1000 \
   --real-only
 ```
+
+## Fast Offline Rebuild and Review
+
+Stage 23 adds an observable offline-only refresh path for larger bounded evidence runs. Use it before spending more Helius credits whenever raw/events/features have grown but outcome labels, diagnostic datasets, or fold sufficiency still look stale.
+
+Dry-run the label refresh summary without writing:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels \
+  --real-only \
+  --max-snapshots 1000 \
+  --dry-run-summary \
+  --timing
+```
+
+Run a bounded diagnostic output test:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels \
+  --real-only \
+  --allow-nearest-entry-fallback \
+  --nearest-entry-max-staleness-sec 300 \
+  --max-snapshots 1000 \
+  --stop-after-snapshots 100 \
+  --outcomes-path data/backtests/diagnostics/outcome_labels_nearest300_stage23_test.jsonl \
+  --progress-every 25 \
+  --timing
+```
+
+Run the full fast offline rebuild and review:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review \
+  --real-only \
+  --max-snapshots 1000 \
+  --progress-every 100 \
+  --timing
+```
+
+The fast runner stays offline, overwrites derived outcome/dataset stores from local evidence, writes profile reports under `data/backtests/diagnostics/reports/`, and then runs price coverage, dataset sufficiency, and fold sufficiency diagnostics.
+
+Use `--stop-after-snapshots` for bounded refresh tests and skip flags such as `--skip-clean-outcomes` or `--skip-diagnostic-dataset` when isolating a slow step.

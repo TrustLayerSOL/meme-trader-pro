@@ -130,3 +130,11 @@
 - Do not trust walk-forward results unless the dataset spans enough time for the chosen fold configuration.
 - Bounded Helius scaling should proceed in small steps and be followed by offline rebuild and review.
 - Any execution wrapper must default to dry-run and require `--execute` for real Helius calls.
+
+## Offline rebuild freshness
+
+- Outcome labels and research datasets must be refreshed after raw/events/features grow before interpreting fold sufficiency.
+- Stale diagnostic datasets should be treated as a blocker, not evidence that more Helius data is needed.
+- Do not run another bounded backfill when derived layers are stale; first run the fast offline rebuild and review path.
+- Offline rebuild commands must report selected counts, progress, timings, and output paths so slow steps can be isolated.
+- Diagnostic nearest-entry outputs remain separate from canonical clean outputs and remain invalid for live trading or thesis promotion without human review.

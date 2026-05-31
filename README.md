@@ -203,6 +203,17 @@ Example report:
 ./trading_env/bin/python -m research.mtp_research.validation.run_research_dataset_report --min-label-quality sparse --require-forward-return
 ```
 
+## Stage 23: Fast Offline Rebuild Review
+
+After bounded evidence expansion, refresh derived layers before interpreting fold sufficiency or deciding to spend more Helius credits:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels --real-only --max-snapshots 1000 --dry-run-summary --timing
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review --real-only --max-snapshots 1000 --progress-every 100 --timing
+```
+
+This is offline only. It rebuilds outcome labels and research datasets from local evidence, writes timing profiles under `data/backtests/diagnostics/reports/`, and then runs price, dataset, and fold sufficiency diagnostics.
+
 ## Milestone 10: Baseline Edge Report v0
 
 v3 now has an exploratory baseline report layer that buckets clean research dataset rows by feature and summarizes forward outcomes. This is descriptive analysis only, not a trading strategy, signal feed, or live execution path.

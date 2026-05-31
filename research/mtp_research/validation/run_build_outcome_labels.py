@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from time import perf_counter
 
 from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
 from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
+from research.mtp_research.pipeline.real_candidate_filter import real_token_mints_from_registry
 from research.mtp_research.validation.outcome_label_builder import OutcomeLabelBuilder
 from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
 
@@ -23,7 +25,16 @@ def main() -> int:
     parser.add_argument("--allow-nearest-entry-fallback", action="store_true")
     parser.add_argument("--nearest-entry-max-staleness-sec", type=int, default=300)
     parser.add_argument("--rug-drop-threshold", type=float, default=-0.7)
+    parser.add_argument("--progress-every", type=int, default=100)
+    parser.add_argument("--stop-after-snapshots", type=int)
+    parser.add_argument("--real-only", action="store_true")
+    parser.add_argument("--min-liquidity-usd", type=float)
+    parser.add_argument("--dry-run-summary", action="store_true")
+    parser.add_argument("--timing", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--append-or-upsert", action="store_true", default=True)
     args = parser.parse_args()
+    started_at = perf_counter()
 
     feature_store = (
         FeatureSnapshotStore(path=args.features_path)
@@ -46,8 +57,14 @@ def main() -> int:
     if args.token_mint:
         snapshots = [snapshot for snapshot in snapshots if snapshot.token_mint == args.token_mint]
         events = [event for event in events if event.token_mint == args.token_mint]
+    if args.real_only:
+        real_mints = real_token_mints_from_registry(min_liquidity_usd=args.min_liquidity_usd)
+        snapshots = [snapshot for snapshot in snapshots if snapshot.token_mint in real_mints]
+        events = [event for event in events if event.token_mint in real_mints]
     if args.max_snapshots is not None:
         snapshots = snapshots[: args.max_snapshots]
+    if args.stop_after_snapshots is not None:
+        snapshots = snapshots[: args.stop_after_snapshots]
 
     builder = OutcomeLabelBuilder(
         entry_max_staleness_sec=args.entry_max_staleness_sec,
@@ -56,12 +73,18 @@ def main() -> int:
         nearest_entry_max_staleness_sec=args.nearest_entry_max_staleness_sec,
         rug_drop_threshold=args.rug_drop_threshold,
     )
-    labels = builder.build_labels(
-        snapshots,
-        events,
-        token_mints=[args.token_mint] if args.token_mint else None,
+    labels = build_labels_with_progress(
+        builder=builder,
+        snapshots=snapshots,
+        events=events,
+        progress_every=args.progress_every,
     )
-    counts = outcome_store.upsert_many(labels)
+    if args.dry_run_summary:
+        counts = {"inserted": 0, "updated": 0}
+    elif args.overwrite:
+        counts = outcome_store.replace_all(labels)
+    else:
+        counts = outcome_store.upsert_many(labels)
     quality_counts = Counter(label.label_quality for label in labels)
     horizon_counts = Counter(label.horizon_name for label in labels)
     nearest_fallback_count = sum(
@@ -70,14 +93,53 @@ def main() -> int:
 
     print(f"snapshots_loaded={len(snapshots)}")
     print(f"events_loaded={len(events)}")
+    print(f"token_count={len({snapshot.token_mint for snapshot in snapshots})}")
+    print(f"selected_snapshot_count={len(snapshots)}")
     print(f"labels_generated={len(labels)}")
     print(f"labels_inserted={counts['inserted']}")
     print(f"labels_updated={counts['updated']}")
+    print(f"dry_run_summary={args.dry_run_summary}")
+    print(f"write_mode={'dry_run' if args.dry_run_summary else 'overwrite' if args.overwrite else 'append_or_upsert'}")
     print(f"label_quality_counts={dict(sorted(quality_counts.items()))}")
     print(f"horizon_counts={dict(sorted(horizon_counts.items()))}")
     print(f"nearest_research_fallback_count={nearest_fallback_count}")
     print(f"output_path={outcome_store.path}")
+    if args.timing:
+        print(f"elapsed_seconds={perf_counter() - started_at:.3f}")
     return 0
+
+
+def build_labels_with_progress(
+    builder: OutcomeLabelBuilder,
+    snapshots,
+    events,
+    progress_every: int,
+):
+    price_points = builder.price_builder.build_price_points(events)
+    points_by_token = builder.price_builder.group_by_token(price_points)
+    labels = []
+    progress_interval = progress_every if progress_every and progress_every > 0 else 0
+    started_at = perf_counter()
+    total = len(snapshots)
+    for index, snapshot in enumerate(snapshots, start=1):
+        token_points = points_by_token.get(snapshot.token_mint, [])
+        for horizon in builder.horizons:
+            labels.append(
+                builder.build_label_for_snapshot(
+                    snapshot=snapshot,
+                    events=events,
+                    token_price_points=token_points,
+                    horizon=horizon,
+                )
+            )
+        if progress_interval and (index % progress_interval == 0 or index == total):
+            print(
+                "progress "
+                f"snapshots_processed={index} "
+                f"labels_generated={len(labels)} "
+                f"elapsed_seconds={perf_counter() - started_at:.3f}"
+            )
+    return labels
 
 
 if __name__ == "__main__":

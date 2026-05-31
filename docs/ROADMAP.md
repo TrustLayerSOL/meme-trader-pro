@@ -44,6 +44,10 @@
   - Verified with fold-window sufficiency sweeps, best diagnostic walk-forward gating, diagnostic-only reports, and full v3 research pipeline regression tests.
 - [x] 21. Time-span expansion backfill plan v0
   - Verified with local coverage planning, dry-run-first execution wrapper, offline post-run rebuild helper, reports, and full v3 research pipeline regression tests.
+- [x] 22. Bounded evidence expansion run 1
+  - Completed as a run-only Helius expansion; generated data remains local and ignored.
+- [x] 23. Fast offline rebuild observability v0
+  - Adds bounded/progress/timing controls, faster derived-store writes, offline rebuild profile reports, and a fast review runner.
 
 ## Milestone 2 acceptance criteria
 
