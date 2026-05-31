@@ -46,9 +46,17 @@ class FeatureSnapshotStore:
 
     def upsert_many(self, snapshots: list[FeatureSnapshot]) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0}
+        if not snapshots:
+            return counts
+
+        existing_snapshots = {snapshot.snapshot_id: snapshot for snapshot in self.load_all()}
         for snapshot in snapshots:
-            result = self.upsert(snapshot)
-            counts[result] += 1
+            if snapshot.snapshot_id in existing_snapshots:
+                counts["updated"] += 1
+            else:
+                counts["inserted"] += 1
+            existing_snapshots[snapshot.snapshot_id] = snapshot
+        self._write_all(list(existing_snapshots.values()))
         return counts
 
     def _write_all(self, snapshots: list[FeatureSnapshot]) -> None:

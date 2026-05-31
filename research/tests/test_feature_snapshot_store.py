@@ -9,6 +9,7 @@ def _snapshot(
     token_mint: str = "mint-1",
     snapshot_ts: int = 100,
     window_seconds: int = 60,
+    event_count: int = 1,
 ) -> FeatureSnapshot:
     return FeatureSnapshot(
         snapshot_id=snapshot_id,
@@ -16,7 +17,7 @@ def _snapshot(
         snapshot_ts=snapshot_ts,
         window_name=f"{window_seconds}s",
         window_seconds=window_seconds,
-        event_count=1,
+        event_count=event_count,
     )
 
 
@@ -45,6 +46,23 @@ def test_feature_snapshot_store_upsert_many_counts(tmp_path: Path) -> None:
     counts = store.upsert_many([_snapshot("snapshot-1"), _snapshot("snapshot-2")])
 
     assert counts == {"inserted": 1, "updated": 1}
+
+
+def test_feature_snapshot_store_upsert_many_replaces_existing_snapshot(tmp_path: Path) -> None:
+    store = FeatureSnapshotStore(path=tmp_path / "features.jsonl")
+    store.upsert(_snapshot("snapshot-1", event_count=1))
+
+    counts = store.upsert_many(
+        [
+            _snapshot("snapshot-1", event_count=2),
+            _snapshot("snapshot-2", event_count=3),
+        ]
+    )
+
+    assert counts == {"inserted": 1, "updated": 1}
+    snapshots = {snapshot.snapshot_id: snapshot for snapshot in store.load_all()}
+    assert snapshots["snapshot-1"].event_count == 2
+    assert snapshots["snapshot-2"].event_count == 3
 
 
 def test_feature_snapshot_store_loads_sorted_snapshots(tmp_path: Path) -> None:
