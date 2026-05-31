@@ -84,3 +84,12 @@
 - A rule needs consistency across folds, not just one strong fold.
 - Walk-forward reports remain exploratory until tested on larger historical samples and then paper traded.
 - Live trading remains disabled.
+
+## Thesis decisions
+
+- Thesis decisions are research workflow decisions, not trading instructions.
+- No thesis can be promoted to `paper_candidate` without walk-forward evidence.
+- Planned theses with missing data should remain `needs_more_data`.
+- `paper_candidate` requires human review.
+- Live trading remains disabled.
+- Thesis status should be updated intentionally after reviewing reports, not automatically edited by the evaluator in v0.

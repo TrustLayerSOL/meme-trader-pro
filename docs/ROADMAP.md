@@ -26,6 +26,8 @@
   - Verified with rule backtester, library, store, report, CLI, and full v3 research pipeline regression tests.
 - [x] 12. Walk-forward validator v0
   - Verified with splitter, validator, store, report, CLI, and full v3 research pipeline regression tests.
+- [x] 13. Thesis registry and evaluation layer
+  - Verified with thesis registry, decision store, evaluator, reports, CLIs, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -158,4 +160,18 @@
 - Markdown and JSON walk-forward reports exist
 - Walk-forward CLI exists
 - Smoke CLI exists
+- Tests pass without network
+
+## Milestone 13 acceptance criteria
+
+- Top-level `theses/` folder exists
+- One Markdown file exists per thesis
+- `THESIS_REGISTRY.md` exists
+- ThesisRegistry can load thesis files
+- ThesisDecisionStore writes JSONL
+- ThesisEvaluator maps walk-forward rule summaries to theses
+- Promotion/demotion recommendations are conservative
+- Thesis evaluation report exists
+- Registry check CLI exists
+- Thesis evaluation CLI exists
 - Tests pass without network

@@ -97,3 +97,13 @@ No RPC calls should happen during walk-forward validation.
 Walk-forward results are derived artifacts stored under `data/backtests/`.
 
 Reports are written under `data/backtests/reports/`.
+
+## Thesis registry and decisions
+
+Thesis files live under top-level `theses/`.
+
+Thesis decisions are derived artifacts stored under `data/backtests/thesis_decisions.jsonl`.
+
+Thesis evaluation consumes local walk-forward validation results only.
+
+No RPC calls occur during thesis evaluation.

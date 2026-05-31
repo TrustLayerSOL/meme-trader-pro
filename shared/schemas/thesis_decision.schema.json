@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memetraderpro.local/schemas/thesis_decision.schema.json",
+  "title": "ThesisDecision",
+  "type": "object",
+  "required": [
+    "decision_id",
+    "thesis_id",
+    "created_at",
+    "prior_status",
+    "recommended_status",
+    "confidence",
+    "reason",
+    "supporting_rule_ids",
+    "supporting_validation_ids",
+    "warning_flags",
+    "metadata_json"
+  ],
+  "properties": {
+    "decision_id": { "type": "string" },
+    "thesis_id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "prior_status": { "type": "string" },
+    "recommended_status": { "type": "string" },
+    "confidence": { "type": "number" },
+    "reason": { "type": "string" },
+    "supporting_rule_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "supporting_validation_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warning_flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metadata_json": { "type": "object" }
+  },
+  "additionalProperties": true
+}

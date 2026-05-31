@@ -278,3 +278,30 @@ Example smoke run:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_walk_forward_smoke
 ```
+
+## Milestone 13: Thesis Registry and Evaluation Layer
+
+v3 now has a first-class thesis registry under `theses/`. Thesis evaluation maps walk-forward rule summaries back to named research theses and emits conservative workflow recommendations. These recommendations are not trading instructions and do not mutate thesis Markdown status automatically.
+
+Run the focused Milestone 13 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_thesis_registry.py
+./trading_env/bin/python -m pytest research/tests/test_thesis_decision_store.py
+./trading_env/bin/python -m pytest research/tests/test_thesis_evaluator.py
+./trading_env/bin/python -m pytest research/tests/test_thesis_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_thesis_evaluation.py
+./trading_env/bin/python -m pytest research/tests/test_run_thesis_registry_check.py
+```
+
+Example registry check:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_thesis_registry_check
+```
+
+Example thesis evaluation:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_thesis_evaluation
+```
