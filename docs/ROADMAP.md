@@ -24,6 +24,8 @@
   - Verified with baseline analyzer, writer, CLI, and full v3 research pipeline regression tests.
 - [x] 11. Rule-based backtester v0
   - Verified with rule backtester, library, store, report, CLI, and full v3 research pipeline regression tests.
+- [x] 12. Walk-forward validator v0
+  - Verified with splitter, validator, store, report, CLI, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -141,5 +143,19 @@
 - RuleBacktestStore writes JSONL
 - Markdown and JSON rule backtest reports exist
 - Rule backtest CLI exists
+- Smoke CLI exists
+- Tests pass without network
+
+## Milestone 12 acceptance criteria
+
+- WalkForwardConfig and WalkForwardFold models exist
+- Chronological fold splitter exists
+- Train/test windows are separated by optional gap
+- WalkForwardValidator evaluates rules across folds
+- Train and test fold metrics are reported separately
+- Rule summaries include consistency across test folds
+- WalkForwardValidationStore writes JSONL
+- Markdown and JSON walk-forward reports exist
+- Walk-forward CLI exists
 - Smoke CLI exists
 - Tests pass without network

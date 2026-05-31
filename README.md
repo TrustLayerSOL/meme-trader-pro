@@ -252,3 +252,29 @@ Example smoke run:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.backtest.run_rule_backtest_smoke
 ```
+
+## Milestone 12: Walk-Forward Validator v0
+
+v3 now has chronological walk-forward validation for fixed rule definitions. Training folds are descriptive only; test fold results are reported separately and rules are not optimized or altered in v0.
+
+Run the focused Milestone 12 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_walk_forward_splitter.py
+./trading_env/bin/python -m pytest research/tests/test_walk_forward_validator.py
+./trading_env/bin/python -m pytest research/tests/test_walk_forward_store.py
+./trading_env/bin/python -m pytest research/tests/test_walk_forward_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_walk_forward_validation.py
+```
+
+Example validation:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_walk_forward_validation --all-default-rules --min-label-quality sparse --train-window-seconds 86400 --test-window-seconds 21600 --step-seconds 21600
+```
+
+Example smoke run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_walk_forward_smoke
+```

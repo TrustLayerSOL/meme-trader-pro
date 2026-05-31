@@ -87,3 +87,13 @@ No RPC calls should occur during rule backtesting.
 Rule backtest results are derived artifacts stored under `data/backtests/`.
 
 Reports are written under `data/backtests/reports/`.
+
+## Walk-forward validation
+
+Walk-forward validation consumes ResearchDatasetStore only.
+
+No RPC calls should happen during walk-forward validation.
+
+Walk-forward results are derived artifacts stored under `data/backtests/`.
+
+Reports are written under `data/backtests/reports/`.

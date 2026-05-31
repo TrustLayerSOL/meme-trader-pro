@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memetraderpro.local/schemas/walk_forward_validation_result.schema.json",
+  "title": "WalkForwardValidationResult",
+  "type": "object",
+  "required": [
+    "validation_id",
+    "created_at",
+    "config",
+    "dataset_path",
+    "row_count",
+    "filtered_row_count",
+    "fold_count",
+    "rules_tested",
+    "folds",
+    "fold_rule_results",
+    "rule_summaries",
+    "top_findings",
+    "warning_flags",
+    "metadata_json"
+  ],
+  "properties": {
+    "validation_id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "config": { "type": "object" },
+    "dataset_path": { "type": "string" },
+    "row_count": { "type": "integer", "minimum": 0 },
+    "filtered_row_count": { "type": "integer", "minimum": 0 },
+    "fold_count": { "type": "integer", "minimum": 0 },
+    "rules_tested": { "type": "integer", "minimum": 0 },
+    "folds": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "fold_rule_results": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "rule_summaries": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "top_findings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warning_flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metadata_json": { "type": "object" }
+  },
+  "additionalProperties": true
+}

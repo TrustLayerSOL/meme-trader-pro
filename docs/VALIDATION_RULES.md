@@ -73,3 +73,14 @@
 - Small sample warnings must be shown.
 - A profitable in-sample rule is not a trading strategy.
 - Live trading remains disabled.
+
+## Walk-forward validation
+
+- Walk-forward validation is required before any rule can be considered for paper trading.
+- Rows must be split chronologically by `snapshot_ts`.
+- Random train/test splits are not allowed.
+- Train results must not be used to alter rules in v0.
+- Test fold results must be reported separately from train fold results.
+- A rule needs consistency across folds, not just one strong fold.
+- Walk-forward reports remain exploratory until tested on larger historical samples and then paper traded.
+- Live trading remains disabled.
