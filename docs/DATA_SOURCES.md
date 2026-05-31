@@ -107,3 +107,15 @@ Thesis decisions are derived artifacts stored under `data/backtests/thesis_decis
 Thesis evaluation consumes local walk-forward validation results only.
 
 No RPC calls occur during thesis evaluation.
+
+## Evidence population
+
+Stage 14 is the first evidence-bearing data population layer.
+
+Candidate seeds are local/manual until real discovery ingestors are implemented.
+
+Helius is only used for bounded targeted backfills.
+
+All downstream parsing, features, outcomes, and datasets are local derived artifacts.
+
+No live trading or wallet signing occurs.

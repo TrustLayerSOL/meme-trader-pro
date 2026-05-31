@@ -305,3 +305,61 @@ Example thesis evaluation:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_thesis_evaluation
 ```
+
+## Milestone 14: Evidence Population Pipeline v0
+
+v3 now has a controlled pipeline for seeding candidates, planning bounded backfill targets, optionally executing small Helius backfills, and rebuilding local research artifacts offline. Backfill is dry-run by default; real Helius calls require `--execute`.
+
+Write example seed file:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_seed_candidates --write-example
+```
+
+Seed registry:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_seed_candidates --seed-path data/seeds/candidate_seeds.jsonl
+```
+
+Plan targets:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_plan_backfill_targets --candidate-limit 5
+```
+
+Dry-run backfill:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_evidence_backfill --candidate-limit 1 --max-signatures-per-target 10 --max-transactions-per-target 10
+```
+
+Real bounded backfill:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_evidence_backfill --candidate-limit 1 --max-signatures-per-target 10 --max-transactions-per-target 10 --execute
+```
+
+Offline rebuild:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_offline_research_rebuild --max-snapshots 100
+```
+
+Full research cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_full_research_cycle --skip-backfill --max-snapshots 100
+```
+
+Run the focused Milestone 14 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_candidate_seed_loader.py
+./trading_env/bin/python -m pytest research/tests/test_backfill_target_planner.py
+./trading_env/bin/python -m pytest research/tests/test_evidence_pipeline.py
+./trading_env/bin/python -m pytest research/tests/test_run_seed_candidates.py
+./trading_env/bin/python -m pytest research/tests/test_run_plan_backfill_targets.py
+./trading_env/bin/python -m pytest research/tests/test_run_evidence_backfill.py
+./trading_env/bin/python -m pytest research/tests/test_run_offline_research_rebuild.py
+```

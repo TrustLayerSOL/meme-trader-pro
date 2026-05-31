@@ -28,6 +28,8 @@
   - Verified with splitter, validator, store, report, CLI, and full v3 research pipeline regression tests.
 - [x] 13. Thesis registry and evaluation layer
   - Verified with thesis registry, decision store, evaluator, reports, CLIs, and full v3 research pipeline regression tests.
+- [x] 14. Evidence-bearing historical dataset population v0
+  - Verified with evidence pipeline package, seed loader, target planner, dry-run backfill, offline rebuild, full-cycle CLI, runbook, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -174,4 +176,16 @@
 - Thesis evaluation report exists
 - Registry check CLI exists
 - Thesis evaluation CLI exists
+- Tests pass without network
+
+## Milestone 14 acceptance criteria
+
+- Evidence pipeline package exists
+- Candidate seed loader exists
+- Backfill target planner exists
+- Evidence backfill CLI is dry-run by default
+- Real Helius backfill requires `--execute`
+- Offline research rebuild CLI exists
+- Full research cycle CLI exists
+- Evidence pipeline runbook exists
 - Tests pass without network

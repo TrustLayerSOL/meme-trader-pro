@@ -93,3 +93,11 @@
 - `paper_candidate` requires human review.
 - Live trading remains disabled.
 - Thesis status should be updated intentionally after reviewing reports, not automatically edited by the evaluator in v0.
+
+## Evidence population
+
+- First evidence runs should use tiny bounded samples.
+- Early reports with sparse datasets should not promote theses.
+- Thesis evaluation should remain `needs_more_data` until walk-forward folds have enough test rows/trades.
+- Real evidence population must be reproducible from seed files, raw transaction stores, and derived local artifacts.
+- Backfill and rebuild steps must be separated so derived artifacts can be regenerated without spending Helius credits.

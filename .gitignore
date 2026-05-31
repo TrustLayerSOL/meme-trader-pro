@@ -16,11 +16,13 @@ dist/
 build/
 *.pyc
 data/raw/*
+data/seeds/*
 data/normalized/*
 data/features/*
 data/backtests/*
 data/paper/*
 !data/raw/.gitkeep
+!data/seeds/.gitkeep
 !data/normalized/.gitkeep
 !data/features/.gitkeep
 !data/backtests/.gitkeep
