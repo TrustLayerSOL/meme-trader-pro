@@ -96,6 +96,7 @@ def test_run_backfill_targets_execute_uses_mocked_adapter_and_tracks_counts(tmp_
 
 def test_missing_helius_api_key_handled_for_execute_path(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("HELIUS_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
     pipeline = EvidencePipeline(candidate_registry=_registry(tmp_path / "registry.jsonl", 1))
     targets = pipeline.plan_targets(pipeline.select_candidates(), ["mint"])
     summary = pipeline.run_backfill_targets(

@@ -97,7 +97,20 @@ def test_from_env_fails_clearly_if_api_key_missing(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("HELIUS_API_KEY", raising=False)
 
     with pytest.raises(ValueError, match="HELIUS_API_KEY is required"):
-        HeliusHistoricalAdapter.from_env()
+        HeliusHistoricalAdapter.from_env(load_project_dotenv=False)
+
+
+def test_from_env_loads_project_dotenv_when_shell_env_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.delenv("HELIUS_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("HELIUS_API_KEY=dotenv-test-key\n", encoding="utf-8")
+
+    adapter = HeliusHistoricalAdapter.from_env()
+
+    assert adapter.api_key == "dotenv-test-key"
 
 
 def test_fetch_signatures_for_address_uses_mocked_http_method() -> None:

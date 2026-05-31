@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib import request as urllib_request
 
@@ -34,7 +35,9 @@ class HeliusHistoricalAdapter:
         self._http_post = http_post or self._post_json
 
     @classmethod
-    def from_env(cls) -> "HeliusHistoricalAdapter":
+    def from_env(cls, load_project_dotenv: bool = True) -> "HeliusHistoricalAdapter":
+        if load_project_dotenv:
+            _load_project_dotenv_if_needed()
         api_key = os.getenv("HELIUS_API_KEY")
         if not api_key:
             raise ValueError("HELIUS_API_KEY is required for real Helius RPC calls")
@@ -155,3 +158,32 @@ class HeliusHistoricalAdapter:
         )
         with urllib_request.urlopen(req, timeout=timeout_sec) as response:
             return json.loads(response.read().decode("utf-8"))
+
+
+def _load_project_dotenv_if_needed() -> None:
+    if os.getenv("HELIUS_API_KEY"):
+        return
+
+    for directory in (Path.cwd(), *Path.cwd().parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            _load_dotenv_values(env_path)
+            return
+
+
+def _load_dotenv_values(path: Path) -> None:
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = _strip_env_value(value.strip())
+
+
+def _strip_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
