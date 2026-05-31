@@ -373,3 +373,25 @@ Run the full offline Stage 30 cycle:
 ```
 
 Stage 30 is diagnostic-only. It does not call Helius, does not change thesis status, does not tune thresholds, and does not create trading instructions. Use it to decide whether the next bottleneck is clean price inference, manual outlier inspection, candidate diversity, bounded evidence expansion, or conservative rule review.
+
+## Stage 31: Outlier Price-Path Review
+
+Review the local price paths behind extreme selected rows:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_outlier_price_path_review --real-only
+```
+
+Compare average returns with robust return metrics:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_rule_robust_return_report --real-only
+```
+
+Run the full offline Stage 31 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage31_outlier_review_cycle --real-only
+```
+
+Stage 31 is offline-only. It does not call Helius, does not mutate canonical stores, and does not mark theses validated. Use it to decide whether to improve clean price inference, tighten price-quality filters, separate outlier metrics, expand bounded evidence, or require manual review.

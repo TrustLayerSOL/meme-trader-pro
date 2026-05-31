@@ -768,3 +768,31 @@ Focused tests:
 ```bash
 ./trading_env/bin/python -m pytest research/tests/test_selected_row_auditor.py research/tests/test_selected_row_audit_report.py research/tests/test_run_selected_row_audit.py research/tests/test_price_outlier_auditor.py research/tests/test_run_price_outlier_audit.py research/tests/test_run_stage30_price_rule_audit_cycle.py
 ```
+
+## Milestone 31: Outlier Price-Path Review
+
+Stage 31 reconstructs local price paths around extreme selected rows and adds robust return summaries so diagnostic averages are not interpreted without outlier context. This remains offline-only and does not call Helius, tune rules, promote theses, or create trading instructions.
+
+Run outlier price-path review:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_outlier_price_path_review --real-only
+```
+
+Run robust rule return report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_rule_robust_return_report --real-only
+```
+
+Run full Stage 31 cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage31_outlier_review_cycle --real-only
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_outlier_price_path_reviewer.py research/tests/test_outlier_price_path_report.py research/tests/test_run_outlier_price_path_review.py research/tests/test_robust_return_metrics.py research/tests/test_run_rule_robust_return_report.py research/tests/test_run_stage31_outlier_review_cycle.py
+```

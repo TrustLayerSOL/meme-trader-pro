@@ -189,3 +189,7 @@
 - Stale entry prices must be audited before interpreting forward returns or max runup.
 - Extreme max runup and forward-return rows require manual price-path inspection before bounded evidence scaling or rule review.
 - Selected-row audits must remain offline-only and must not produce live signals, thesis promotion, or rule threshold optimization.
+- Outlier-dominated averages must not be used for thesis decisions.
+- Robust return metrics are required before interpreting rule averages.
+- Isolated price prints should be excluded or separately labeled from serious validation.
+- Price-path reviews must classify extreme rows as plausible, suspicious, fallback-dependent, isolated, or unusable before the next evidence-scaling decision.
