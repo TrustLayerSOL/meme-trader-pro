@@ -253,6 +253,12 @@ Compare gated and ungated diagnostic artifacts:
 ./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_validation_comparison
 ```
 
+Rank the tokens and failure combinations driving strict price-quality row loss:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_failure_analysis --real-only
+```
+
 Focused tests:
 
 ```bash
@@ -261,6 +267,8 @@ Focused tests:
 ./trading_env/bin/python -m pytest research/tests/test_run_price_quality_gate.py
 ./trading_env/bin/python -m pytest research/tests/test_run_price_quality_validation_cycle.py
 ./trading_env/bin/python -m pytest research/tests/test_price_quality_validation_comparison.py
+./trading_env/bin/python -m pytest research/tests/test_price_quality_failure_analysis.py
+./trading_env/bin/python -m pytest research/tests/test_run_price_quality_failure_analysis.py
 ```
 
 Stage 35 is offline and diagnostic-only. It filters price-quality rows into a separate diagnostic dataset and compares gated results against ungated diagnostics. It does not call Helius, tune rules, promote theses, enable paper trading, or enable live trading.

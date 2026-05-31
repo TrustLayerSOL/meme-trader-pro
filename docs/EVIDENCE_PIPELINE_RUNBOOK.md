@@ -448,4 +448,10 @@ Compare gated and ungated diagnostic artifacts:
 ./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_validation_comparison
 ```
 
+When the gate removes a large share of rows, rank the failure causes before spending more Helius:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_failure_analysis --real-only
+```
+
 Stage 35 writes gated diagnostic artifacts under `data/backtests/diagnostics/`. It does not call Helius, does not mutate canonical stores, does not optimize thresholds, and does not promote theses. Use it to decide whether the next bottleneck is clean price inference, candidate diversity, explicit outlier separation, or conservative rule rework.

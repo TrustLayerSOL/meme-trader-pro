@@ -213,3 +213,5 @@
 - Raw means must not be compared without median, capped, robust, and gated views.
 - If strict price-quality filters destroy sample size, the next action is clean price inference or bounded evidence quality work, not thesis rejection.
 - Any thesis affected by gated diagnostics should remain `needs_more_data` unless a human explicitly reviews enough clean independent evidence.
+- When strict filters remove many rows, run token-level failure analysis before another bounded Helius expansion.
+- Price-quality failure analysis is offline-only and should recommend parser/price inference work when fallback rows dominate failures.
