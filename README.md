@@ -226,3 +226,29 @@ Example smoke report:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_baseline_edge_smoke_report
 ```
+
+## Milestone 11: Rule-Based Backtester v0
+
+v3 now has a deterministic rule-based backtester that evaluates simple feature hypotheses from local `ResearchDatasetStore` rows. It applies explicit fee/slippage assumptions and reports gross outcomes separately from net outcomes. Results remain exploratory until walk-forward validation exists.
+
+Run the focused Milestone 11 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_rule_backtester.py
+./trading_env/bin/python -m pytest research/tests/test_rule_library.py
+./trading_env/bin/python -m pytest research/tests/test_rule_backtest_store.py
+./trading_env/bin/python -m pytest research/tests/test_rule_backtest_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_rule_backtest.py
+```
+
+Example default rule backtest:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.backtest.run_rule_backtest --all-default-rules --min-label-quality sparse --horizon-name 5m
+```
+
+Example smoke run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.backtest.run_rule_backtest_smoke
+```

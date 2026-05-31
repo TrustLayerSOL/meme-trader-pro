@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memetraderpro.local/schemas/rule_backtest_result.schema.json",
+  "title": "RuleBacktestResult",
+  "type": "object",
+  "required": [
+    "result_id",
+    "created_at",
+    "rule",
+    "config",
+    "summary",
+    "selected_trades",
+    "warning_flags",
+    "metadata_json"
+  ],
+  "properties": {
+    "result_id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "rule": { "type": "object" },
+    "config": { "type": "object" },
+    "summary": { "type": "object" },
+    "selected_trades": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "warning_flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metadata_json": { "type": "object" }
+  },
+  "additionalProperties": true
+}

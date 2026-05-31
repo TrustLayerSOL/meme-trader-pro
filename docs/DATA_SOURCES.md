@@ -77,3 +77,13 @@ Baseline edge reports are derived local artifacts built from ResearchDatasetStor
 They do not call RPC providers or external APIs. They should be reproducible from `data/backtests/research_dataset.jsonl`.
 
 Report outputs live under `data/backtests/reports/`.
+
+## Rule backtests
+
+Rule backtests consume ResearchDatasetStore only.
+
+No RPC calls should occur during rule backtesting.
+
+Rule backtest results are derived artifacts stored under `data/backtests/`.
+
+Reports are written under `data/backtests/reports/`.

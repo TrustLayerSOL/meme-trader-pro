@@ -62,3 +62,14 @@
 - Reports must show sample sizes and warning flags.
 - Small-bucket findings are not trusted.
 - Top findings are hypothesis generators, not recommendations.
+
+## Rule-based backtests
+
+- Rule-based backtests are exploratory until walk-forward validation exists.
+- Backtests must show gross and net returns separately.
+- Cost assumptions must be visible in every report.
+- Rules must not use future/outcome fields as conditions.
+- Rule definitions must be simple and auditable.
+- Small sample warnings must be shown.
+- A profitable in-sample rule is not a trading strategy.
+- Live trading remains disabled.

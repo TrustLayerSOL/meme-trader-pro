@@ -22,6 +22,8 @@
   - Verified with research dataset store, builder, report, and CLI tests.
 - [x] 10. Baseline edge report v0
   - Verified with baseline analyzer, writer, CLI, and full v3 research pipeline regression tests.
+- [x] 11. Rule-based backtester v0
+  - Verified with rule backtester, library, store, report, CLI, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -127,4 +129,17 @@
 - Markdown and JSON writers exist
 - Baseline edge report CLI exists
 - Smoke report CLI exists
+- Tests pass without network
+
+## Milestone 11 acceptance criteria
+
+- RuleCondition and RuleDefinition models exist
+- RuleBacktester evaluates simple deterministic rules
+- Cost assumptions are applied to gross forward returns
+- Rule backtest summaries include win rate, profit factor, cumulative net return, and max drawdown
+- Default exploratory rule library exists
+- RuleBacktestStore writes JSONL
+- Markdown and JSON rule backtest reports exist
+- Rule backtest CLI exists
+- Smoke CLI exists
 - Tests pass without network
