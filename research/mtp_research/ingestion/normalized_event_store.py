@@ -46,9 +46,17 @@ class NormalizedEventStore:
 
     def upsert_many(self, events: list[NormalizedEvent]) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0}
+        if not events:
+            return counts
+
+        existing_events = {event.event_id: event for event in self.load_all()}
         for event in events:
-            result = self.upsert(event)
-            counts[result] += 1
+            if event.event_id in existing_events:
+                counts["updated"] += 1
+            else:
+                counts["inserted"] += 1
+            existing_events[event.event_id] = event
+        self._write_all(list(existing_events.values()))
         return counts
 
     def _write_all(self, events: list[NormalizedEvent]) -> None:

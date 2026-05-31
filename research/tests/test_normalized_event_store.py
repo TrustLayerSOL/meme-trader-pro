@@ -30,7 +30,9 @@ def test_normalized_event_store_upsert_many_counts_inserted_updated(tmp_path: Pa
     store = NormalizedEventStore(path=tmp_path / "events.jsonl")
     store.upsert(_event("event-1"))
 
-    counts = store.upsert_many([_event("event-1"), _event("event-2")])
+    counts = store.upsert_many([_event("event-1", block_time=200), _event("event-2")])
 
     assert counts == {"inserted": 1, "updated": 1}
-    assert len(store.load_all()) == 2
+    events = {event.event_id: event for event in store.load_all()}
+    assert len(events) == 2
+    assert events["event-1"].block_time == 200

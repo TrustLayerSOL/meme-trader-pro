@@ -126,43 +126,47 @@ class EvidencePipeline:
     def parse_raw_transactions(self, limit: int | None = None) -> dict[str, int]:
         raw_records = self.raw_transaction_store.load_all()
         selected = raw_records[:limit] if limit is not None else raw_records
-        inserted = 0
-        updated = 0
+        events = []
         skipped = 0
         for record in selected:
             try:
                 summary = summarize_raw_transaction(record)
                 summary.venue_classification = classify_venue(summary)
-                event = transaction_summary_to_observed_event(summary)
-                result = self.normalized_event_store.upsert(event)
-                inserted += 1 if result == "inserted" else 0
-                updated += 1 if result == "updated" else 0
+                events.append(transaction_summary_to_observed_event(summary))
             except Exception:
                 skipped += 1
-        return {"processed": len(selected), "inserted": inserted, "updated": updated, "skipped": skipped}
+        counts = self.normalized_event_store.upsert_many(events)
+        return {
+            "processed": len(selected),
+            "inserted": counts["inserted"],
+            "updated": counts["updated"],
+            "skipped": skipped,
+        }
 
     def normalize_trade_events(self, limit: int | None = None) -> dict[str, int]:
         raw_records = self.raw_transaction_store.load_all()
         selected = raw_records[:limit] if limit is not None else raw_records
         normalizer = TradeEventNormalizer()
-        inserted = 0
-        updated = 0
+        events = []
         skipped = 0
         for record in selected:
             try:
                 summary = summarize_raw_transaction(record)
                 summary.venue_classification = classify_venue(summary)
                 result = normalizer.normalize_summary(summary)
-                events = [
+                events.extend(
                     normalizer.flow_to_normalized_event(summary, flow, index)
                     for index, flow in enumerate(result.flows)
-                ]
-                counts = self.normalized_event_store.upsert_many(events)
-                inserted += counts["inserted"]
-                updated += counts["updated"]
+                )
             except Exception:
                 skipped += 1
-        return {"processed": len(selected), "inserted": inserted, "updated": updated, "skipped": skipped}
+        counts = self.normalized_event_store.upsert_many(events)
+        return {
+            "processed": len(selected),
+            "inserted": counts["inserted"],
+            "updated": counts["updated"],
+            "skipped": skipped,
+        }
 
     def build_features(self, max_snapshots: int | None = None) -> dict[str, int]:
         events = self.normalized_event_store.load_all()
