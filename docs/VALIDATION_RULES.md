@@ -138,3 +138,11 @@
 - Do not run another bounded backfill when derived layers are stale; first run the fast offline rebuild and review path.
 - Offline rebuild commands must report selected counts, progress, timings, and output paths so slow steps can be isolated.
 - Diagnostic nearest-entry outputs remain separate from canonical clean outputs and remain invalid for live trading or thesis promotion without human review.
+
+## Diagnostic walk-forward review
+
+- Diagnostic walk-forward using nearest-entry fallback is not canonical validation.
+- Diagnostic walk-forward can identify hypotheses worth inspecting, but cannot promote theses alone.
+- Any rule with positive diagnostic evidence must be re-tested on clean labels and larger historical samples.
+- Fallback dependency must be reported for every diagnostic walk-forward review.
+- Diagnostic reports must keep outputs under `data/backtests/diagnostics/` and must not overwrite canonical clean walk-forward or thesis stores.

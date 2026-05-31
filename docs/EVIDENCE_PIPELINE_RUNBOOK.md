@@ -245,3 +245,17 @@ Run the full fast offline rebuild and review:
 The fast runner stays offline, overwrites derived outcome/dataset stores from local evidence, writes profile reports under `data/backtests/diagnostics/reports/`, and then runs price coverage, dataset sufficiency, and fold sufficiency diagnostics.
 
 Use `--stop-after-snapshots` for bounded refresh tests and skip flags such as `--skip-clean-outcomes` or `--skip-diagnostic-dataset` when isolating a slow step.
+
+## Stage 24 Diagnostic Walk-Forward Review
+
+Run this after fold sufficiency finds valid diagnostic folds:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_best_diagnostic_walk_forward --real-only
+./trading_env/bin/python -m research.mtp_research.validation.run_diagnostic_walk_forward_review --real-only
+./trading_env/bin/python -m research.mtp_research.validation.run_stage24_diagnostic_cycle
+```
+
+This stage is offline and diagnostic-only. It reviews the best diagnostic walk-forward store at `data/backtests/diagnostics/walk_forward_best_diagnostic.jsonl`, reports whether default rules have valid test folds, and flags whether selected rows depend heavily on nearest-entry fallback labels.
+
+Use the recommended next action to choose between more bounded evidence expansion, clean price inference work, or manual rule inspection. Do not treat Stage 24 findings as canonical validation, live trading approval, or thesis promotion.

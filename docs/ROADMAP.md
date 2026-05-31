@@ -48,6 +48,8 @@
   - Completed as a run-only Helius expansion; generated data remains local and ignored.
 - [x] 23. Fast offline rebuild observability v0
   - Adds bounded/progress/timing controls, faster derived-store writes, offline rebuild profile reports, and a fast review runner.
+- [x] 24. Best diagnostic walk-forward review v0
+  - Adds diagnostic walk-forward findings, fallback dependency reporting, one-command diagnostic cycle, and diagnostic-only review reports.
 
 ## Milestone 2 acceptance criteria
 

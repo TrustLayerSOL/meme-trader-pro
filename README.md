@@ -214,6 +214,25 @@ After bounded evidence expansion, refresh derived layers before interpreting fol
 
 This is offline only. It rebuilds outcome labels and research datasets from local evidence, writes timing profiles under `data/backtests/diagnostics/reports/`, and then runs price, dataset, and fold sufficiency diagnostics.
 
+## Stage 24: Diagnostic Walk-Forward Review
+
+Run the full offline diagnostic cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage24_diagnostic_cycle
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_diagnostic_walk_forward_review.py
+./trading_env/bin/python -m pytest research/tests/test_diagnostic_walk_forward_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_diagnostic_walk_forward_review.py
+./trading_env/bin/python -m pytest research/tests/test_run_stage24_diagnostic_cycle.py
+```
+
+Stage 24 uses the diagnostic nearest-entry dataset and writes reports under `data/backtests/diagnostics/reports/`. Findings are research-only and cannot promote theses or enable live trading.
+
 ## Milestone 10: Baseline Edge Report v0
 
 v3 now has an exploratory baseline report layer that buckets clean research dataset rows by feature and summarizes forward outcomes. This is descriptive analysis only, not a trading strategy, signal feed, or live execution path.
