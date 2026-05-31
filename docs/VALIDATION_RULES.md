@@ -204,3 +204,12 @@
 - Expansion recommendations must stay bounded and reviewable.
 - Decision reports may suggest a bounded Helius command, but must not execute it.
 - No expansion decision may promote a thesis, validate a rule, or enable paper/live trading.
+
+## Price-quality-gated validation
+
+- Price-quality-gated validation must be used before interpreting outlier-sensitive rules.
+- Gated validation is diagnostic only and cannot promote a thesis, validate a rule, enable paper trading, or enable live trading.
+- Rows using `nearest_research_fallback`, stale entry prices, insufficient future price points, missing forward returns, no future liquidity, rug-like drops, or extreme returns must be separable before rule interpretation.
+- Raw means must not be compared without median, capped, robust, and gated views.
+- If strict price-quality filters destroy sample size, the next action is clean price inference or bounded evidence quality work, not thesis rejection.
+- Any thesis affected by gated diagnostics should remain `needs_more_data` unless a human explicitly reviews enough clean independent evidence.

@@ -427,3 +427,25 @@ Run the full offline Stage 33 cycle:
 ```
 
 The output suggests the next bounded Helius command but does not execute it. Review the plan before running any Helius. If the recommendation is `improve_price_coverage_before_scaling`, avoid spending more Helius until price quality improves. If the recommendation is `run_bounded_evidence_expansion`, run only the bounded command after review.
+
+## Stage 35: Price Quality Gate + Outlier-Adjusted Validation
+
+Run the strict diagnostic price-quality gate before interpreting outlier-sensitive rules:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_gate --real-only
+```
+
+Run the full offline gated validation cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_validation_cycle
+```
+
+Compare gated and ungated diagnostic artifacts:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_validation_comparison
+```
+
+Stage 35 writes gated diagnostic artifacts under `data/backtests/diagnostics/`. It does not call Helius, does not mutate canonical stores, does not optimize thresholds, and does not promote theses. Use it to decide whether the next bottleneck is clean price inference, candidate diversity, explicit outlier separation, or conservative rule rework.

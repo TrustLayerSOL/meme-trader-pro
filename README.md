@@ -233,6 +233,38 @@ Focused tests:
 
 Stage 24 uses the diagnostic nearest-entry dataset and writes reports under `data/backtests/diagnostics/reports/`. Findings are research-only and cannot promote theses or enable live trading.
 
+## Stage 35: Price Quality Gate + Outlier-Adjusted Validation
+
+Run the strict offline price-quality gate:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_gate --real-only
+```
+
+Run the full gated diagnostic validation cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_validation_cycle
+```
+
+Compare gated and ungated diagnostic artifacts:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_quality_validation_comparison
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_price_quality_gate.py
+./trading_env/bin/python -m pytest research/tests/test_price_quality_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_price_quality_gate.py
+./trading_env/bin/python -m pytest research/tests/test_run_price_quality_validation_cycle.py
+./trading_env/bin/python -m pytest research/tests/test_price_quality_validation_comparison.py
+```
+
+Stage 35 is offline and diagnostic-only. It filters price-quality rows into a separate diagnostic dataset and compares gated results against ungated diagnostics. It does not call Helius, tune rules, promote theses, enable paper trading, or enable live trading.
+
 ## Stage 25: Rule Failure Review
 
 Run the offline decision cycle:
