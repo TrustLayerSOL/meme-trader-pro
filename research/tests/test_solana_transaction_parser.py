@@ -6,6 +6,7 @@ from research.mtp_research.ingestion.basic_transaction_normalizer import (
 from research.mtp_research.ingestion.raw_transaction_store import RawTransactionRecord
 from research.mtp_research.ingestion.solana_transaction_parser import (
     extract_account_summaries,
+    extract_native_balance_deltas,
     extract_program_invocations,
     extract_token_balance_deltas,
     summarize_raw_transaction,
@@ -123,18 +124,35 @@ def test_token_balance_deltas_calculate_correctly() -> None:
     assert deltas[0].decimals == 6
 
 
+def test_native_balance_deltas_calculate_sol_amounts() -> None:
+    raw_json = _mock_raw_json()
+    raw_json["meta"]["preBalances"] = [2_000_000_000, 500_000_000, 1_000_000]
+    raw_json["meta"]["postBalances"] = [1_500_000_000, 800_000_000, 1_000_000]
+
+    deltas = extract_native_balance_deltas(raw_json)
+
+    assert len(deltas) == 2
+    assert deltas[0].account == "wallet-1"
+    assert deltas[0].delta_lamports == -500_000_000
+    assert deltas[0].delta_sol == -0.5
+    assert deltas[1].account == "token-account-1"
+    assert deltas[1].delta_sol == 0.3
+
+
 def test_missing_meta_or_transaction_fields_do_not_crash() -> None:
     raw_json = {"slot": 1}
 
     assert extract_account_summaries(raw_json) == []
     assert extract_program_invocations(raw_json) == []
     assert extract_token_balance_deltas(raw_json) == []
+    assert extract_native_balance_deltas(raw_json) == []
 
     summary = summarize_raw_transaction(_raw_record(raw_json))
     assert summary.signature == "sig-1"
     assert summary.accounts == []
     assert summary.programs == []
     assert summary.token_balance_deltas == []
+    assert summary.native_balance_deltas == []
 
 
 def test_transaction_summary_to_observed_event_includes_parser_metadata() -> None:

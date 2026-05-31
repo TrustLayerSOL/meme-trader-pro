@@ -460,4 +460,6 @@ Use the fast offline rebuild before interpreting price-quality changes. Its diag
 ./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review --real-only --snapshot-selection-strategy per_token_even --max-snapshots-per-token 1000 --min-time-gap-seconds 60 --diagnostic-entry-max-staleness-sec 120 --timing
 ```
 
+Native SOL balance-delta price proxies are local heuristic anchors for swaps where the quote leg appears as lamport movement instead of a WSOL/USDC/USDT token balance delta. Treat any coverage improvement from this parser path as diagnostic until outlier reports confirm the price path is usable.
+
 Stage 35 writes gated diagnostic artifacts under `data/backtests/diagnostics/`. It does not call Helius, does not mutate canonical stores, does not optimize thresholds, and does not promote theses. Use it to decide whether the next bottleneck is clean price inference, candidate diversity, explicit outlier separation, or conservative rule rework.

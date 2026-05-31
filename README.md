@@ -265,6 +265,8 @@ After bounded expansion, the fast offline rebuild uses a wider diagnostic prior-
 ./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review --real-only --snapshot-selection-strategy per_token_even --max-snapshots-per-token 1000 --min-time-gap-seconds 60 --diagnostic-entry-max-staleness-sec 120 --timing
 ```
 
+Native SOL balance-delta price proxies are heuristic local anchors for diagnostics. They improve coverage when the quote leg is native SOL, but they do not validate a rule or thesis without outlier and price-path review.
+
 Focused tests:
 
 ```bash

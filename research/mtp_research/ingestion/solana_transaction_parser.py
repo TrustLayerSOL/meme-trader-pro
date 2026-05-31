@@ -6,6 +6,7 @@ from typing import Any
 
 from research.mtp_research.ingestion.raw_transaction_store import RawTransactionRecord
 from research.mtp_research.ingestion.transaction_parser_models import (
+    NativeBalanceDelta,
     ProgramInvocation,
     TokenBalanceDelta,
     TransactionAccountSummary,
@@ -117,6 +118,34 @@ def extract_token_balance_deltas(raw_json: dict) -> list[TokenBalanceDelta]:
     return deltas
 
 
+def extract_native_balance_deltas(raw_json: dict) -> list[NativeBalanceDelta]:
+    meta = raw_json.get("meta") or {}
+    pre_balances = meta.get("preBalances") or []
+    post_balances = meta.get("postBalances") or []
+    account_summaries = extract_account_summaries(raw_json)
+    count = min(len(pre_balances), len(post_balances), len(account_summaries))
+    deltas: list[NativeBalanceDelta] = []
+    for index in range(count):
+        pre_lamports = _int_or_none(pre_balances[index])
+        post_lamports = _int_or_none(post_balances[index])
+        if pre_lamports is None or post_lamports is None:
+            continue
+        delta_lamports = post_lamports - pre_lamports
+        if delta_lamports == 0:
+            continue
+        account = account_summaries[index]
+        deltas.append(
+            NativeBalanceDelta(
+                account=account.pubkey,
+                owner=account.pubkey,
+                pre_lamports=pre_lamports,
+                post_lamports=post_lamports,
+                delta_lamports=delta_lamports,
+            )
+        )
+    return deltas
+
+
 def summarize_raw_transaction(record: RawTransactionRecord) -> TransactionSummary:
     raw_json = record.raw_json or {}
     signature = extract_signature(raw_json) or record.signature
@@ -134,6 +163,7 @@ def summarize_raw_transaction(record: RawTransactionRecord) -> TransactionSummar
         accounts=extract_account_summaries(raw_json),
         programs=extract_program_invocations(raw_json),
         token_balance_deltas=extract_token_balance_deltas(raw_json),
+        native_balance_deltas=extract_native_balance_deltas(raw_json),
         raw_json=raw_json,
     )
 
@@ -196,6 +226,13 @@ def _decimals(row: dict[str, Any] | None) -> int | None:
         return None
     decimals = (row.get("uiTokenAmount") or {}).get("decimals")
     return int(decimals) if decimals is not None else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _first_non_null(

@@ -97,9 +97,16 @@ class TradeEventNormalizer:
         side = _event_side_for_inferred_side(flow.inferred_side)
         reasons = list(flow.reasons)
         price_quote = _infer_price_quote(flow, reasons)
-        price_inference_method = (
-            "balance_delta_quote_over_base_v0" if price_quote is not None else None
-        )
+        price_inference_method = "balance_delta_quote_over_base_v0" if price_quote is not None else None
+        quote_qty = abs(flow.quote_delta) if flow.quote_delta is not None else None
+        quote_mint = flow.quote_mint
+        if price_quote is None:
+            native_quote_qty = _infer_native_quote_qty(summary, flow, reasons)
+            if native_quote_qty is not None and flow.base_delta:
+                quote_qty = native_quote_qty
+                quote_mint = "native_sol"
+                price_quote = native_quote_qty / abs(flow.base_delta)
+                price_inference_method = "transaction_native_sol_quote_over_base_v0"
 
         venue = summary.venue_classification.venue if summary.venue_classification else None
         venue_confidence = (
@@ -117,11 +124,11 @@ class TradeEventNormalizer:
             actor=flow.owner,
             side=side,
             base_qty=abs(flow.base_delta) if flow.base_delta is not None else None,
-            quote_qty=abs(flow.quote_delta) if flow.quote_delta is not None else None,
+            quote_qty=quote_qty,
             price_quote=price_quote,
             source="trade_event_normalizer_v0",
             metadata_json={
-                "quote_mint": flow.quote_mint,
+                "quote_mint": quote_mint,
                 "confidence": flow.confidence,
                 "reasons": reasons,
                 "venue_confidence": venue_confidence,
@@ -270,3 +277,23 @@ def _infer_price_quote(flow: TradeFlow, reasons: list[str]) -> float | None:
     if base_qty <= 0 or quote_qty <= 0:
         return None
     return quote_qty / base_qty
+
+
+def _infer_native_quote_qty(summary: TransactionSummary, flow: TradeFlow, reasons: list[str]) -> float | None:
+    if flow.inferred_side not in {"accumulation", "distribution"}:
+        return None
+    if flow.base_delta is None or flow.base_delta == 0:
+        return None
+    native_deltas = [
+        delta
+        for delta in summary.native_balance_deltas
+        if delta.delta_sol is not None and abs(delta.delta_sol) > 0
+    ]
+    if not native_deltas:
+        return None
+    largest = max(native_deltas, key=lambda delta: abs(delta.delta_sol or 0.0))
+    quote_qty = abs(largest.delta_sol or 0.0)
+    if quote_qty <= 0:
+        return None
+    reasons.append("native_sol_quote_proxy")
+    return quote_qty

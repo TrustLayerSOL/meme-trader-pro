@@ -38,6 +38,21 @@ class TokenBalanceDelta:
 
 
 @dataclass
+class NativeBalanceDelta:
+    account: str | None
+    owner: str | None
+    pre_lamports: int | None
+    post_lamports: int | None
+    delta_lamports: int | None
+
+    @property
+    def delta_sol(self) -> float | None:
+        if self.delta_lamports is None:
+            return None
+        return self.delta_lamports / 1_000_000_000
+
+
+@dataclass
 class VenueClassification:
     venue: str
     confidence: float
@@ -55,5 +70,6 @@ class TransactionSummary:
     accounts: list[TransactionAccountSummary]
     programs: list[ProgramInvocation]
     token_balance_deltas: list[TokenBalanceDelta]
+    native_balance_deltas: list[NativeBalanceDelta] = field(default_factory=list)
     venue_classification: VenueClassification | None = None
     raw_json: dict[str, Any] = field(default_factory=dict)

@@ -216,3 +216,5 @@
 - When strict filters remove many rows, run token-level failure analysis before another bounded Helius expansion.
 - Price-quality failure analysis is offline-only and should recommend parser/price inference work when fallback rows dominate failures.
 - Diagnostic outcome rebuilds may use a wider prior-entry staleness window only when the strict gate would accept that prior price; clean/canonical labels remain separate.
+- Native SOL balance-delta price proxies are heuristic local price anchors. They must carry `transaction_native_sol_quote_over_base_v0` metadata and remain subject to outlier and gated validation review.
+- Improved price coverage from native SOL proxies is not evidence of rule validity if robust means become outlier-sensitive.
