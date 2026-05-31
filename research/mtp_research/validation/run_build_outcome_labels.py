@@ -20,6 +20,8 @@ def main() -> int:
     parser.add_argument("--max-snapshots", type=int)
     parser.add_argument("--entry-max-staleness-sec", type=int, default=60)
     parser.add_argument("--allow-first-after-entry", action="store_true")
+    parser.add_argument("--allow-nearest-entry-fallback", action="store_true")
+    parser.add_argument("--nearest-entry-max-staleness-sec", type=int, default=300)
     parser.add_argument("--rug-drop-threshold", type=float, default=-0.7)
     args = parser.parse_args()
 
@@ -50,6 +52,8 @@ def main() -> int:
     builder = OutcomeLabelBuilder(
         entry_max_staleness_sec=args.entry_max_staleness_sec,
         allow_first_after_entry=args.allow_first_after_entry,
+        allow_nearest_entry_fallback=args.allow_nearest_entry_fallback,
+        nearest_entry_max_staleness_sec=args.nearest_entry_max_staleness_sec,
         rug_drop_threshold=args.rug_drop_threshold,
     )
     labels = builder.build_labels(
@@ -60,6 +64,9 @@ def main() -> int:
     counts = outcome_store.upsert_many(labels)
     quality_counts = Counter(label.label_quality for label in labels)
     horizon_counts = Counter(label.horizon_name for label in labels)
+    nearest_fallback_count = sum(
+        1 for label in labels if label.entry_price_source == "nearest_research_fallback"
+    )
 
     print(f"snapshots_loaded={len(snapshots)}")
     print(f"events_loaded={len(events)}")
@@ -68,6 +75,7 @@ def main() -> int:
     print(f"labels_updated={counts['updated']}")
     print(f"label_quality_counts={dict(sorted(quality_counts.items()))}")
     print(f"horizon_counts={dict(sorted(horizon_counts.items()))}")
+    print(f"nearest_research_fallback_count={nearest_fallback_count}")
     print(f"output_path={outcome_store.path}")
     return 0
 

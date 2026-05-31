@@ -15,6 +15,7 @@ from research.mtp_research.pipeline.evidence_audit_models import (
     TargetQualitySummary,
     make_evidence_audit_report_id,
 )
+from research.mtp_research.pipeline.real_candidate_filter import is_mock_candidate_row
 
 
 STORE_SEQUENCE = [
@@ -134,7 +135,7 @@ class EvidenceAuditor:
             warning_flags.append("missing_creator_wallets")
         if candidate_count and target_count <= candidate_count:
             warning_flags.append("low_targets_per_candidate")
-        if any(_row_is_mock(row) for row in candidate_rows):
+        if any(is_mock_candidate_row(row) for row in candidate_rows):
             warning_flags.append("mock_candidates_present")
 
         return TargetQualitySummary(
@@ -253,7 +254,12 @@ class EvidenceAuditor:
             "insufficient_test_evidence": ["run larger bounded backfill only after target quality is confirmed"],
             "unknown_or_needs_more_data": ["inspect generated reports manually"],
         }
-        return actions.get(report.bottleneck_stage or "unknown_or_needs_more_data", actions["unknown_or_needs_more_data"])
+        selected_actions = list(
+            actions.get(report.bottleneck_stage or "unknown_or_needs_more_data", actions["unknown_or_needs_more_data"])
+        )
+        if report.metadata_json.get("mock_candidate_count", 0):
+            selected_actions.append("run real-only dataset/report filters")
+        return selected_actions
 
     def build_report(self) -> EvidenceAuditReport:
         store_counts = []
@@ -268,6 +274,16 @@ class EvidenceAuditor:
         outcome_rows = self.load_jsonl_rows(self.paths["outcome_labels"])
         dataset_rows = self.load_jsonl_rows(self.paths["research_dataset"])
         decision_rows = self.load_jsonl_rows(self.paths["thesis_decisions"])
+        real_candidate_count = sum(1 for row in candidate_rows if not is_mock_candidate_row(row))
+        mock_candidate_count = sum(1 for row in candidate_rows if is_mock_candidate_row(row))
+        real_token_mints = {
+            str(row.get("token_mint"))
+            for row in candidate_rows
+            if row.get("token_mint") and not is_mock_candidate_row(row)
+        }
+        real_research_dataset_row_count = sum(
+            1 for row in dataset_rows if row.get("token_mint") in real_token_mints
+        )
 
         report = EvidenceAuditReport(
             report_id=make_evidence_audit_report_id(),
@@ -278,6 +294,11 @@ class EvidenceAuditor:
             event_type_counts=self.count_event_types(events_rows),
             label_quality_counts=self.count_label_quality(outcome_rows, dataset_rows),
             thesis_recommendation_counts=self.count_thesis_recommendations(decision_rows),
+            metadata_json={
+                "real_candidate_count": real_candidate_count,
+                "mock_candidate_count": mock_candidate_count,
+                "real_research_dataset_row_count": real_research_dataset_row_count,
+            },
         )
         report.bottleneck_stage = self.infer_bottleneck(report)
         report.top_warnings = _top_warnings(report)
@@ -303,18 +324,6 @@ class EvidenceAuditor:
             event_type_counts=event_type_counts or {},
             thesis_recommendation_counts=thesis_counts or {},
         )
-
-
-def _row_is_mock(row: dict[str, Any]) -> bool:
-    metadata = row.get("metadata_json")
-    metadata = metadata if isinstance(metadata, dict) else {}
-    return bool(
-        row.get("is_mock")
-        or row.get("example_only")
-        or metadata.get("is_mock")
-        or metadata.get("example_only")
-        or metadata.get("mock_source")
-    )
 
 
 def _top_warnings(report: EvidenceAuditReport) -> list[str]:

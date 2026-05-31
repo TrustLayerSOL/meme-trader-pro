@@ -434,3 +434,37 @@ Plan real targets:
 ```bash
 ./trading_env/bin/python -m research.mtp_research.pipeline.run_plan_backfill_targets --candidate-limit 3 --require-pool-address --min-liquidity-usd 10000
 ```
+
+## Milestone 17: Price Coverage and Dataset Sufficiency Diagnostics v0
+
+v3 now has offline diagnostics for price proxy coverage, real-only candidate hygiene, optional nearest-entry research fallback, and dataset sufficiency before scaling Helius backfills.
+
+Run the focused Milestone 17 tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_real_candidate_filter.py
+./trading_env/bin/python -m pytest research/tests/test_price_coverage_analyzer.py
+./trading_env/bin/python -m pytest research/tests/test_run_price_coverage_report.py
+./trading_env/bin/python -m pytest research/tests/test_price_series_nearest_fallback.py
+./trading_env/bin/python -m pytest research/tests/test_outcome_label_nearest_fallback.py
+./trading_env/bin/python -m pytest research/tests/test_dataset_sufficiency_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_dataset_sufficiency_report.py
+```
+
+Price coverage:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_coverage_report --real-only
+```
+
+Dataset sufficiency:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_dataset_sufficiency_report --real-only
+```
+
+Research fallback outcome labels:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_build_outcome_labels --allow-nearest-entry-fallback --nearest-entry-max-staleness-sec 300 --max-snapshots 500
+```

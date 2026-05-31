@@ -7,9 +7,13 @@ from research.mtp_research.ingestion.helius_models import (
     HeliusTransactionRecord,
 )
 from research.mtp_research.ingestion.models import LaunchCandidate
+from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
 from research.mtp_research.ingestion.raw_transaction_store import RawTransactionStore
+from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
 from research.mtp_research.pipeline.evidence_models import EvidenceRunConfig
 from research.mtp_research.pipeline.evidence_pipeline import EvidencePipeline
+from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
+from research.mtp_research.validation.research_dataset_store import ResearchDatasetStore
 
 
 class FakeHeliusAdapter:
@@ -110,6 +114,10 @@ def test_missing_helius_api_key_handled_for_execute_path(tmp_path: Path, monkeyp
 def test_offline_rebuild_calls_local_components_without_network(tmp_path: Path) -> None:
     pipeline = EvidencePipeline(
         raw_transaction_store=RawTransactionStore(tmp_path / "raw.jsonl"),
+        normalized_event_store=NormalizedEventStore(tmp_path / "events.jsonl"),
+        feature_snapshot_store=FeatureSnapshotStore(tmp_path / "features.jsonl"),
+        outcome_label_store=OutcomeLabelStore(tmp_path / "outcomes.jsonl"),
+        research_dataset_store=ResearchDatasetStore(tmp_path / "dataset.jsonl"),
     )
     summary = pipeline.run_offline_rebuild(EvidenceRunConfig("run-1", dry_run=False))
     assert "offline_rebuild_no_network_calls" in summary.warning_flags

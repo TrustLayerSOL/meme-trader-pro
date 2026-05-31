@@ -34,6 +34,8 @@
   - Verified with offline evidence audit, target inspection, post-run diagnostics, Markdown/JSON reports, and full v3 research pipeline regression tests.
 - [x] 16. Real candidate discovery ingestion v0
   - Verified with bounded DexScreener discovery, candidate quality filtering, mock-safe target planning/backfill filters, and full v3 research pipeline regression tests.
+- [x] 17. Price proxy coverage and real-only evidence hygiene v0
+  - Verified with real-candidate filters, price coverage diagnostics, optional nearest entry fallback, dataset sufficiency reports, and full v3 research pipeline regression tests.
 
 ## Milestone 2 acceptance criteria
 
@@ -219,4 +221,14 @@
 - Target planner excludes mock candidates by default
 - Evidence backfill excludes mock candidates by default
 - Real discovery runbook exists
+- Tests pass without network
+
+## Milestone 17 acceptance criteria
+
+- Real candidate filter exists
+- Evidence audit distinguishes mock contamination from real evidence bottlenecks
+- Price coverage report exists
+- `no_price` causes are diagnosed
+- Optional nearest entry fallback exists and is clearly diagnostic only
+- Dataset sufficiency report exists
 - Tests pass without network

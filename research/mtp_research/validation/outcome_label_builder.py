@@ -23,11 +23,15 @@ class OutcomeLabelBuilder:
         horizons: list[OutcomeHorizon] | None = None,
         entry_max_staleness_sec: int = 60,
         allow_first_after_entry: bool = False,
+        allow_nearest_entry_fallback: bool = False,
+        nearest_entry_max_staleness_sec: int = 300,
         rug_drop_threshold: float = -0.7,
     ):
         self.horizons = horizons or self.default_horizons()
         self.entry_max_staleness_sec = entry_max_staleness_sec
         self.allow_first_after_entry = allow_first_after_entry
+        self.allow_nearest_entry_fallback = allow_nearest_entry_fallback
+        self.nearest_entry_max_staleness_sec = nearest_entry_max_staleness_sec
         self.rug_drop_threshold = rug_drop_threshold
         self.price_builder = TokenPriceSeriesBuilder()
 
@@ -52,6 +56,14 @@ class OutcomeLabelBuilder:
             max_staleness_sec=self.entry_max_staleness_sec,
             allow_first_after=self.allow_first_after_entry,
         )
+        entry_uses_nearest_fallback = False
+        if entry_point is None and self.allow_nearest_entry_fallback:
+            entry_point = self.price_builder.get_nearest_price(
+                token_price_points,
+                snapshot.snapshot_ts,
+                max_staleness_sec=self.nearest_entry_max_staleness_sec,
+            )
+            entry_uses_nearest_fallback = entry_point is not None
         forward_points = self.price_builder.get_forward_points(
             token_price_points,
             snapshot.snapshot_ts,
@@ -64,7 +76,11 @@ class OutcomeLabelBuilder:
             horizon_seconds=horizon.seconds,
         )
 
-        entry_price_source = _entry_price_source(entry_point, snapshot.snapshot_ts)
+        entry_price_source = (
+            "nearest_research_fallback"
+            if entry_uses_nearest_fallback
+            else _entry_price_source(entry_point, snapshot.snapshot_ts)
+        )
         entry_price = entry_point.price_quote if entry_point else None
         end_point = forward_points[-1] if forward_points else None
         end_price = end_point.price_quote if end_point else None
@@ -89,6 +105,10 @@ class OutcomeLabelBuilder:
             rug_like_drop = max_drawdown <= self.rug_drop_threshold
 
         event_type_counts = Counter(event.event_type for event in future_events)
+        warning_flags = []
+        if entry_uses_nearest_fallback:
+            warning_flags.append("entry_price_uses_nearest_research_fallback")
+
         outcome = OutcomeLabel(
             outcome_id=make_outcome_id(snapshot.snapshot_id, horizon.name),
             snapshot_id=snapshot.snapshot_id,
@@ -121,10 +141,13 @@ class OutcomeLabelBuilder:
                 "parser_version": "outcome_labeler_v0",
                 "entry_max_staleness_sec": self.entry_max_staleness_sec,
                 "allow_first_after_entry": self.allow_first_after_entry,
+                "allow_nearest_entry_fallback": self.allow_nearest_entry_fallback,
+                "nearest_entry_max_staleness_sec": self.nearest_entry_max_staleness_sec,
                 "rug_drop_threshold": self.rug_drop_threshold,
                 "price_points_count": len(forward_points),
                 "source_snapshot_window_name": snapshot.window_name,
                 "source_snapshot_window_seconds": snapshot.window_seconds,
+                "warning_flags": warning_flags,
             },
         )
         return outcome

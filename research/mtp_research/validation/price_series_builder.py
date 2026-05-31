@@ -11,6 +11,14 @@ from research.mtp_research.validation.outcome_models import TokenPricePoint
 class TokenPriceSeriesBuilder:
     """Extract v0 price proxy points from normalized events."""
 
+    def __init__(
+        self,
+        allow_nearest_price: bool = False,
+        max_nearest_staleness_sec: int = 300,
+    ):
+        self.allow_nearest_price = allow_nearest_price
+        self.max_nearest_staleness_sec = max_nearest_staleness_sec
+
     def build_price_points(self, events: list[NormalizedEvent]) -> list[TokenPricePoint]:
         points: list[TokenPricePoint] = []
         for event in events:
@@ -61,7 +69,28 @@ class TokenPriceSeriesBuilder:
             for point in sorted_points:
                 if point.ts > snapshot_ts:
                     return point
+        if self.allow_nearest_price:
+            return self.get_nearest_price(
+                sorted_points,
+                snapshot_ts,
+                max_staleness_sec=self.max_nearest_staleness_sec,
+            )
         return None
+
+    def get_nearest_price(
+        self,
+        token_points: list[TokenPricePoint],
+        snapshot_ts: int,
+        max_staleness_sec: int,
+    ) -> TokenPricePoint | None:
+        candidates = [
+            point
+            for point in sorted(token_points, key=lambda point: point.ts)
+            if abs(point.ts - snapshot_ts) <= max_staleness_sec
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda point: (abs(point.ts - snapshot_ts), point.ts > snapshot_ts))
 
     def get_forward_points(
         self,

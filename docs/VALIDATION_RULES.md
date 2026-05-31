@@ -101,3 +101,7 @@
 - Thesis evaluation should remain `needs_more_data` until walk-forward folds have enough test rows/trades.
 - Real evidence population must be reproducible from seed files, raw transaction stores, and derived local artifacts.
 - Backfill and rebuild steps must be separated so derived artifacts can be regenerated without spending Helius credits.
+- `nearest_research_fallback` is diagnostic only.
+- Clean validation should prefer exact or prior entry prices.
+- Any row with `entry_price_source="nearest_research_fallback"` must be separately filterable.
+- `no_price` label counts must be monitored before scaling Helius backfills.

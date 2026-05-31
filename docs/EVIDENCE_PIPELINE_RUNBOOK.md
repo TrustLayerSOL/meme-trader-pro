@@ -111,3 +111,14 @@ Do not scale up backfills until the bottleneck is understood. If targets are min
 If the audit shows `mock_candidates_present` or `no_raw_transactions` from mock/manual targets, run `docs/REAL_DISCOVERY_RUNBOOK.md` before more Helius backfills.
 
 Do not scale backfills against mock or `manual_example` candidates.
+
+## Price Coverage and Dataset Sufficiency
+
+After every evidence run, inspect price coverage before scaling backfill:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_price_coverage_report --real-only
+./trading_env/bin/python -m research.mtp_research.validation.run_dataset_sufficiency_report --real-only
+```
+
+Do not scale Helius if `no_price` dominates due to parser or price inference issues. Diagnose whether missing prices come from missing entry prices, missing future prices, sparse price points, or event types that do not produce usable `price_quote`.
