@@ -711,3 +711,32 @@ Run the focused tests:
 ```bash
 ./trading_env/bin/python -m pytest research/tests/test_snapshot_selector.py research/tests/test_artifact_span_report.py research/tests/test_run_artifact_span_report.py
 ```
+
+## Milestone 28: Token-Active Feature Windows
+
+v3 can rebuild feature snapshots on each token's own observed activity window. This prevents broad global time grids from creating artificial validation rows before or after a token has local evidence.
+
+Run the token-active feature rebuild:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.features.run_build_feature_snapshots \
+  --per-token-active-window \
+  --overwrite
+```
+
+Then run the offline validation rebuild:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review \
+  --real-only \
+  --snapshot-selection-strategy per_token_even \
+  --max-snapshots-per-token 1000 \
+  --min-time-gap-seconds 60 \
+  --timing
+```
+
+Focused tests:
+
+```bash
+./trading_env/bin/python -m pytest research/tests/test_feature_snapshot_builder.py research/tests/test_feature_snapshot_store.py research/tests/test_run_build_feature_snapshots.py
+```

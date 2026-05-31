@@ -141,3 +141,22 @@ def test_build_snapshots_target_token_filtering() -> None:
 
     assert len(snapshots) == 1
     assert snapshots[0].token_mint == TOKEN
+
+
+def test_build_snapshots_for_token_active_windows_uses_each_tokens_own_time_range() -> None:
+    builder = FeatureSnapshotBuilder(windows=[FeatureWindow(name="1m", seconds=60)])
+    snapshots = builder.build_snapshots_for_token_active_windows(
+        [
+            _event("a1", "possible_buy", 100, token_mint=TOKEN),
+            _event("a2", "possible_buy", 160, token_mint=TOKEN),
+            _event("b1", "possible_buy", 1000, token_mint=OTHER_TOKEN),
+        ],
+        snapshot_step_sec=60,
+    )
+
+    by_token = {
+        token: sorted(snapshot.snapshot_ts for snapshot in snapshots if snapshot.token_mint == token)
+        for token in {TOKEN, OTHER_TOKEN}
+    }
+    assert by_token[TOKEN] == [100, 160]
+    assert by_token[OTHER_TOKEN] == [1000]

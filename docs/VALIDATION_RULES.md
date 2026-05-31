@@ -172,3 +172,10 @@
 - Full-span or per-token snapshot selection is required after raw evidence covers multiple tokens or a wider time span.
 - Artifact span reports should be reviewed before deciding whether the next bottleneck is more evidence, price inference, or fold-window configuration.
 - Span checks are offline-only and do not justify live trading, thesis promotion, or rule optimization.
+
+## Token-active feature windows
+
+- Feature snapshots should not create validation rows for a token outside that token's observed local activity window unless an explicit global-grid diagnostic is being run.
+- Global snapshot grids can be useful for debugging, but they can inflate `no_price` labels when applied to every token.
+- Token-active feature rebuilds are preferred before clean-label price coverage review.
+- Rebuilding features must remain offline-only and must not change strategy thresholds.

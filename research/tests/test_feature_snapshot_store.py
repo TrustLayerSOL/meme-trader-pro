@@ -81,3 +81,15 @@ def test_feature_snapshot_store_get_by_snapshot_id(tmp_path: Path) -> None:
 
     assert store.get_by_snapshot_id("snapshot-1").snapshot_id == "snapshot-1"
     assert store.get_by_snapshot_id("missing") is None
+
+
+def test_feature_snapshot_store_replace_all_removes_stale_snapshots(tmp_path: Path) -> None:
+    store = FeatureSnapshotStore(path=tmp_path / "features.jsonl")
+    store.upsert(_snapshot("snapshot-old", token_mint="mint-old"))
+
+    counts = store.replace_all([_snapshot("snapshot-new", token_mint="mint-new")])
+
+    assert counts == {"inserted": 1, "updated": 0}
+    loaded = store.load_all()
+    assert [snapshot.snapshot_id for snapshot in loaded] == ["snapshot-new"]
+    assert loaded[0].token_mint == "mint-new"

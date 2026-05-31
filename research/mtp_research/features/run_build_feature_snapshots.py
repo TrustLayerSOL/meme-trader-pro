@@ -18,6 +18,9 @@ def main() -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--snapshot-step-sec", type=int, default=60)
     parser.add_argument("--max-snapshots", type=int)
+    parser.add_argument("--max-snapshots-per-token", type=int)
+    parser.add_argument("--per-token-active-window", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
     event_store = (
@@ -36,25 +39,38 @@ def main() -> int:
     if args.limit is not None:
         events = events[: args.limit]
 
-    block_times = sorted({event.block_time for event in events if event.block_time is not None})
-    snapshot_times = _snapshot_times(block_times, args.snapshot_step_sec)
-    if args.max_snapshots is not None:
-        snapshot_times = snapshot_times[: args.max_snapshots]
-
     builder = FeatureSnapshotBuilder()
     token_mints = [args.token_mint] if args.token_mint else None
-    snapshots = builder.build_snapshots(
-        events,
-        snapshot_times=snapshot_times,
-        token_mints=token_mints,
-    )
-    counts = feature_store.upsert_many(snapshots)
+    if args.per_token_active_window:
+        snapshots = builder.build_snapshots_for_token_active_windows(
+            events,
+            snapshot_step_sec=args.snapshot_step_sec,
+            token_mints=token_mints,
+            max_snapshots_per_token=args.max_snapshots_per_token or args.max_snapshots,
+        )
+        snapshot_times_generated = len({snapshot.snapshot_ts for snapshot in snapshots})
+        snapshot_selection_mode = "per_token_active_window"
+    else:
+        block_times = sorted({event.block_time for event in events if event.block_time is not None})
+        snapshot_times = _snapshot_times(block_times, args.snapshot_step_sec)
+        if args.max_snapshots is not None:
+            snapshot_times = snapshot_times[: args.max_snapshots]
+        snapshots = builder.build_snapshots(
+            events,
+            snapshot_times=snapshot_times,
+            token_mints=token_mints,
+        )
+        snapshot_times_generated = len(snapshot_times)
+        snapshot_selection_mode = "global_time_grid"
+
+    counts = feature_store.replace_all(snapshots) if args.overwrite else feature_store.upsert_many(snapshots)
     window_counts = Counter(snapshot.window_name for snapshot in snapshots)
     tokens_seen = {event.token_mint for event in events if event.token_mint}
 
     print(f"events_loaded={len(events)}")
     print(f"tokens_seen={len(tokens_seen)}")
-    print(f"snapshot_times_generated={len(snapshot_times)}")
+    print(f"snapshot_selection_mode={snapshot_selection_mode}")
+    print(f"snapshot_times_generated={snapshot_times_generated}")
     print(f"snapshots_inserted={counts['inserted']}")
     print(f"snapshots_updated={counts['updated']}")
     print(f"output_path={feature_store.path}")

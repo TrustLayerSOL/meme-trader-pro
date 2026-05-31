@@ -166,6 +166,43 @@ class FeatureSnapshotBuilder:
                     )
         return snapshots
 
+    def build_snapshots_for_token_active_windows(
+        self,
+        events: list[NormalizedEvent],
+        snapshot_step_sec: int = 60,
+        token_mints: list[str] | None = None,
+        max_snapshots_per_token: int | None = None,
+    ) -> list[FeatureSnapshot]:
+        grouped = self.group_events_by_token(events)
+        first_seen = self.get_token_first_seen_ts(events)
+        selected_tokens = token_mints or sorted(grouped.keys())
+
+        snapshots: list[FeatureSnapshot] = []
+        for token_mint in selected_tokens:
+            token_events = grouped.get(token_mint, [])
+            block_times = sorted(
+                {
+                    event.block_time
+                    for event in token_events
+                    if event.block_time is not None
+                }
+            )
+            snapshot_times = _snapshot_times(block_times, snapshot_step_sec)
+            if max_snapshots_per_token is not None:
+                snapshot_times = snapshot_times[:max_snapshots_per_token]
+            for snapshot_ts in snapshot_times:
+                for window in self.windows:
+                    snapshots.append(
+                        self.build_snapshot_for_token(
+                            token_mint=token_mint,
+                            events=token_events,
+                            snapshot_ts=snapshot_ts,
+                            window=window,
+                            first_seen_ts=first_seen.get(token_mint),
+                        )
+                    )
+        return snapshots
+
 
 def _count_type(events: list[NormalizedEvent], event_type: str) -> int:
     return sum(1 for event in events if event.event_type == event_type)
@@ -201,3 +238,17 @@ def _dominant_venue(venue_counts: Counter[str]) -> str | None:
     if not venue_counts:
         return None
     return max(venue_counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+def _snapshot_times(block_times: list[int], step_sec: int) -> list[int]:
+    if not block_times:
+        return []
+    output: list[int] = []
+    current = min(block_times)
+    end = max(block_times)
+    while current <= end:
+        output.append(current)
+        current += step_sec
+    if output[-1] != end:
+        output.append(end)
+    return output

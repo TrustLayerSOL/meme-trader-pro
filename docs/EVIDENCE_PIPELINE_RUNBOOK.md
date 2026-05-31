@@ -328,3 +328,26 @@ Run the representative full-span offline rebuild:
 ```
 
 Use `per_token_even` when raw evidence covers many tokens or a wide time range. It keeps the validation slice distributed by token and timestamp instead of silently truncating to the earliest snapshots. This remains offline-only and does not call Helius.
+
+## Token-Active Feature Rebuild
+
+If feature snapshots span the global evidence clock for every token, validation can create artificial `no_price` labels before or after an individual token's observed activity window. Rebuild features with token-active windows before interpreting clean price coverage:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.features.run_build_feature_snapshots \
+  --per-token-active-window \
+  --overwrite
+```
+
+Then rerun the full-span offline rebuild:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_fast_offline_rebuild_review \
+  --real-only \
+  --snapshot-selection-strategy per_token_even \
+  --max-snapshots-per-token 1000 \
+  --min-time-gap-seconds 60 \
+  --timing
+```
+
+This is still a local rebuild only. It does not call Helius and does not change rules or thesis statuses.

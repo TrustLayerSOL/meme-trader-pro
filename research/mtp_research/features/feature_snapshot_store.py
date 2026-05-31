@@ -59,6 +59,10 @@ class FeatureSnapshotStore:
         self._write_all(list(existing_snapshots.values()))
         return counts
 
+    def replace_all(self, snapshots: list[FeatureSnapshot]) -> dict[str, int]:
+        self._write_all(snapshots)
+        return {"inserted": len(snapshots), "updated": 0}
+
     def _write_all(self, snapshots: list[FeatureSnapshot]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         sorted_snapshots = sorted(
