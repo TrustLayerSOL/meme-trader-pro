@@ -203,6 +203,26 @@ Tiny program probes are dry-run by default. Add `--execute` only after reviewing
 
 Event-inferred launch times are approximate first-observed local events, not verified pair creation. Serious launch-timing analysis should prefer verified pair creation, bonding-curve creation, mint creation, or verified first-trade timestamps.
 
+Run the bounded Pump.fun create scanner dry-run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_create_scanner
+```
+
+Execute only a reviewed bounded scan:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_create_scanner \
+  --max-batches 5 \
+  --signatures-per-batch 25 \
+  --hydrate-limit-per-batch 25 \
+  --target-create-candidates 5 \
+  --max-signatures-total 250 \
+  --execute
+```
+
+The Pump.fun create scanner is a bounded discovery probe. It must prove create extraction quality before any broad historical scan or candidate import. Do not treat DexScreener-only launches as representative of all Pump.fun launches.
+
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
 
 Run the focused Milestone 9 tests:

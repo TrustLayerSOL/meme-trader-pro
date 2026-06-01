@@ -123,6 +123,30 @@ Execute only a tiny explicit probe after reviewing the plan:
 
 Do not hydrate full transactions unless the tiny signature sample looks useful and `--hydrate-sample` is explicitly justified. Future forward self-archive may use Helius webhooks or LaserStream, but this lane is historical research and remains dry-run by default.
 
+## Bounded Pump.fun Create Scanner
+
+Use this only after the tiny Pump.fun probe confirms Helius signature and hydration access. The scanner pages program signatures in small batches, hydrates bounded samples, and stops when create-shaped instructions are found or limits are reached.
+
+Dry-run plan:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_create_scanner
+```
+
+Reviewed bounded execute:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_create_scanner \
+  --max-batches 5 \
+  --signatures-per-batch 25 \
+  --hydrate-limit-per-batch 25 \
+  --target-create-candidates 5 \
+  --max-signatures-total 250 \
+  --execute
+```
+
+This is still a discovery probe, not a launch dataset. Do not run lifecycle backfills, backtests, walk-forward validation, thesis evaluation, registry mutation, or broad historical scans until create extraction is proven from bounded reports.
+
 ## Recommended First Real Run
 
 ```bash

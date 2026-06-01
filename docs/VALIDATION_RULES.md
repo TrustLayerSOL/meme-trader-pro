@@ -187,6 +187,8 @@
 - Serious launch-timing analysis should prefer verified pair creation, verified bonding-curve creation, verified mint creation, or verified first-trade timestamps.
 - Source-bias audits and program-signature plans are data-quality controls, not backtests.
 - Program-signature discovery must default to dry-run, use tiny explicit probes first, and avoid unbounded Helius calls.
+- Pump.fun create scanning must prove token mint, bonding curve, creator wallet, and block-time extraction before any broad launch import.
+- Bounded create-scan reports are discovery diagnostics, not launch datasets or validation artifacts.
 - Future Helius webhooks or LaserStream can support forward self-archive, but they do not replace historical source-quality checks.
 - Rebuilding features must remain offline-only and must not change strategy thresholds.
 

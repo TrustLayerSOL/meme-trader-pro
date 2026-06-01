@@ -93,3 +93,17 @@ This registry tracks candidate sources for broad historical launch discovery. It
 ## Current Recommendation
 
 Use tiny bounded program-signature probes first, starting with Pump.fun creation/bonding-curve signatures. If the probe can identify token mints and launch timestamps cheaply, scale bounded program-signature discovery before spending credits on deeper lifecycle hydration.
+
+## Pump.fun Create Scanner Guardrail
+
+The bounded Pump.fun create scanner is the next candidate path for broad failed/pre-DexScreener launch discovery. It pages signatures in small batches, hydrates bounded samples, and stops when create-shaped instructions are found or scan limits are reached.
+
+Before any broad historical import, the scanner must demonstrate extraction of:
+
+- token mint
+- bonding curve account
+- associated bonding curve account when available
+- creator wallet
+- verified block time
+
+Reports from this scanner remain discovery diagnostics. They are not launch datasets, backtests, strategy validation, or thesis evidence until a bounded importer writes reviewed candidate rows.
