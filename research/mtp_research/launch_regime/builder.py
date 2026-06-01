@@ -215,6 +215,7 @@ class LaunchRegimeBuilder:
                 window_events = [event for event in token_events if event.block_time is not None and event.block_time <= launch.launch_ts + age]
                 priced = [event for event in window_events if event.price_quote is not None and event.price_quote > 0]
                 last_price = priced[-1].price_quote if priced else None
+                liquidity_proxy, liquidity_proxy_source = _liquidity_proxy_with_source(priced)
                 snapshots.append(
                     LaunchFeatureSnapshot(
                         snapshot_id=make_snapshot_id(launch.launch_id, age),
@@ -243,8 +244,12 @@ class LaunchRegimeBuilder:
                         confidence_weighted_net_flow=_confidence_weighted_net_flow(window_events),
                         price_change_since_launch=_return(launch_price, last_price),
                         tx_count=len({event.signature for event in window_events}),
-                        liquidity_proxy=_liquidity_proxy(priced),
-                        metadata_json={"event_count": len(window_events), "priced_event_count": len(priced)},
+                        liquidity_proxy=liquidity_proxy,
+                        metadata_json={
+                            "event_count": len(window_events),
+                            "priced_event_count": len(priced),
+                            "liquidity_proxy_source": liquidity_proxy_source,
+                        },
                     )
                 )
         return snapshots
@@ -291,7 +296,7 @@ class LaunchRegimeBuilder:
             )
             price_available_120m = bool(priced)
             has_price_at_120m = price_available_120m
-            liquidity_proxy_at_120m = _liquidity_proxy(priced)
+            liquidity_proxy_at_120m, liquidity_proxy_source_120m = _liquidity_proxy_with_source(priced)
             has_liquidity_proxy_at_120m = liquidity_proxy_at_120m is not None and liquidity_proxy_at_120m > 0
             liquidity_survival_120m = has_liquidity_proxy_at_120m and price_available_120m
             lifecycle_observed_to_120m = self.config.max_lifecycle_seconds >= 7200
@@ -350,6 +355,7 @@ class LaunchRegimeBuilder:
                         "market_cap_available": max_market_cap is not None,
                         "max_observed_lifecycle_age_seconds": last_age,
                         "liquidity_proxy_at_120m": liquidity_proxy_at_120m,
+                        "liquidity_proxy_source_120m": liquidity_proxy_source_120m,
                     },
                 )
             )
@@ -425,8 +431,21 @@ def _confidence_weighted_net_flow(events: list[NormalizedEvent]) -> float:
 
 
 def _liquidity_proxy(priced_events: list[NormalizedEvent]) -> float | None:
+    value, _source = _liquidity_proxy_with_source(priced_events)
+    return value
+
+
+def _liquidity_proxy_with_source(priced_events: list[NormalizedEvent]) -> tuple[float | None, str | None]:
+    reserve_values = [
+        _float_or_none(event.metadata_json.get("liquidity_proxy_sol"))
+        for event in priced_events
+        if event.metadata_json
+    ]
+    reserve_values = [value for value in reserve_values if value is not None]
+    if reserve_values:
+        return reserve_values[-1], "bonding_curve_post_balance"
     quotes = [event.quote_qty for event in priced_events if event.quote_qty is not None]
-    return sum(abs(value) for value in quotes) if quotes else None
+    return (sum(abs(value) for value in quotes), "quote_qty_sum") if quotes else (None, None)
 
 
 def _hit_market_cap(value: float | None, threshold: float) -> bool | None:

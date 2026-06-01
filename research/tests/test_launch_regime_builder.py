@@ -75,6 +75,32 @@ def test_launch_snapshots_store_launch_age_seconds() -> None:
     assert by_age[300].price_change_since_launch == 0.5
 
 
+def test_launch_snapshots_use_bonding_curve_liquidity_proxy_when_available() -> None:
+    builder = LaunchRegimeBuilder()
+    launch = builder.candidate_to_launch(_candidate())
+    events = [
+        NormalizedEvent(
+            event_id="e1",
+            signature="sig-1",
+            slot=1,
+            block_time=launch.launch_ts + 30,
+            event_type="possible_buy",
+            token_mint="token-1",
+            price_quote=1.0,
+            quote_qty=0.5,
+            metadata_json={"liquidity_proxy_sol": 2.5, "liquidity_proxy_source": "bonding_curve_post_balance"},
+        )
+    ]
+
+    snapshot = {row.launch_age_seconds: row for row in builder.build_snapshots([launch], events)}[30]
+    outcome = builder.build_outcomes([launch], events)[0]
+
+    assert snapshot.liquidity_proxy == 2.5
+    assert snapshot.metadata_json["liquidity_proxy_source"] == "bonding_curve_post_balance"
+    assert outcome.has_liquidity_proxy_at_120m is True
+    assert outcome.metadata_json["liquidity_proxy_at_120m"] == 2.5
+
+
 def test_launch_outcomes_store_interval_returns_and_survival() -> None:
     builder = LaunchRegimeBuilder()
     launch = builder.candidate_to_launch(_candidate())

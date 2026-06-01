@@ -45,8 +45,11 @@ def run_launch_lifecycle_quality_audit(
     max_event_age_by_mint = _max_event_age_by_mint(launches, events)
     event_max_age_bucket_counts = Counter(_age_bucket(age) for age in max_event_age_by_mint.values())
     priced_snapshot_count = sum(1 for row in snapshots if _metadata_number(row, "priced_event_count") > 0)
+    liquidity_proxy_snapshot_count = sum(1 for row in snapshots if _row_number(row, "liquidity_proxy") > 0)
     zero_event_snapshot_count = sum(1 for row in snapshots if _metadata_number(row, "event_count") == 0)
     priced_outcome_count = sum(1 for row in outcomes if _metadata_number(row, "priced_event_count") > 0)
+    liquidity_proxy_outcome_count = sum(1 for row in outcomes if row.get("has_liquidity_proxy_at_120m"))
+    liquidity_proxy_source_counts = _liquidity_proxy_source_counts(snapshots, outcomes)
     market_cap_unknown_outcome_count = sum(
         1 for row in outcomes
         if not (row.get("metadata_json") or {}).get("market_cap_available")
@@ -76,8 +79,11 @@ def run_launch_lifecycle_quality_audit(
         "per_launch_event_classification_coverage": per_launch_coverage,
         "snapshot_age_counts": dict(sorted(snapshot_age_counts.items(), key=lambda item: int(item[0]))),
         "priced_snapshot_count": priced_snapshot_count,
+        "liquidity_proxy_snapshot_count": liquidity_proxy_snapshot_count,
         "zero_event_snapshot_count": zero_event_snapshot_count,
         "priced_outcome_count": priced_outcome_count,
+        "liquidity_proxy_outcome_count": liquidity_proxy_outcome_count,
+        "liquidity_proxy_source_counts": dict(sorted(liquidity_proxy_source_counts.items())),
         "market_cap_unknown_outcome_count": market_cap_unknown_outcome_count,
         "survived_counts": survived_counts,
         "event_max_age_bucket_counts": dict(sorted(event_max_age_bucket_counts.items())),
@@ -148,6 +154,29 @@ def _metadata_number(row: dict[str, Any], key: str) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _row_number(row: dict[str, Any], key: str) -> float:
+    try:
+        return float(row.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _liquidity_proxy_source_counts(
+    snapshots: list[dict[str, Any]],
+    outcomes: list[dict[str, Any]],
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for row in snapshots:
+        source = (row.get("metadata_json") or {}).get("liquidity_proxy_source")
+        if source:
+            counts[str(source)] += 1
+    for row in outcomes:
+        source = (row.get("metadata_json") or {}).get("liquidity_proxy_source_120m")
+        if source:
+            counts[str(source)] += 1
+    return counts
 
 
 def _program_id_counts(events: list[dict[str, Any]], raw_records: list[dict[str, Any]]) -> Counter[str]:
@@ -331,6 +360,8 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- events: `{report['event_count']}`",
         f"- unique_event_mints: `{report['unique_event_mints']}`",
         f"- priced_snapshot_count: `{report['priced_snapshot_count']}`",
+        f"- liquidity_proxy_snapshot_count: `{report['liquidity_proxy_snapshot_count']}`",
+        f"- liquidity_proxy_outcome_count: `{report['liquidity_proxy_outcome_count']}`",
         f"- market_cap_unknown_outcome_count: `{report['market_cap_unknown_outcome_count']}`",
         f"- per_launch_event_classification_coverage: `{report['per_launch_event_classification_coverage']}`",
         f"- warning_flags: `{report['warning_flags']}`",
@@ -350,6 +381,9 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         "## Survival Counts",
         _format_counts(report["survived_counts"]),
+        "",
+        "## Liquidity Proxy Sources",
+        _format_counts(report["liquidity_proxy_source_counts"]),
         "",
         "## Event Max Age Buckets",
         _format_counts(report["event_max_age_bucket_counts"]),

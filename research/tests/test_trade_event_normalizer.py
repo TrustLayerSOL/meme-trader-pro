@@ -158,6 +158,43 @@ def test_flow_to_event_stores_venue_evidence_metadata() -> None:
     assert event.metadata_json["raw_record_metadata_json"] == {"collection_method": "address_window"}
 
 
+def test_flow_to_event_stores_bonding_curve_reserve_proxy_metadata() -> None:
+    normalizer = TradeEventNormalizer()
+    summary = _summary([_delta("owner-1", BASE_MINT, 10), _delta("owner-1", WSOL_MINT, -2)])
+    summary.raw_record_address = "curve-1"
+    summary.raw_record_token_mint = BASE_MINT
+    summary.raw_json = {
+        "transaction": {
+            "message": {
+                "accountKeys": [
+                    {"pubkey": "wallet-1"},
+                    {"pubkey": "curve-1"},
+                    {"pubkey": "curve-token-account"},
+                ]
+            }
+        },
+        "meta": {
+            "postBalances": [1_000_000, 2_500_000_000, 2_039_280],
+            "postTokenBalances": [
+                {
+                    "accountIndex": 2,
+                    "mint": BASE_MINT,
+                    "owner": "curve-1",
+                    "uiTokenAmount": {"uiAmountString": "971540108.952476", "decimals": 6},
+                }
+            ],
+        },
+    }
+    flow = normalizer.infer_trade_flows(summary)[0]
+
+    event = normalizer.flow_to_normalized_event(summary, flow, index=0)
+
+    assert event.metadata_json["bonding_curve_sol_reserve"] == 2.5
+    assert event.metadata_json["bonding_curve_token_reserve"] == 971540108.952476
+    assert event.metadata_json["liquidity_proxy_sol"] == 2.5
+    assert event.metadata_json["liquidity_proxy_source"] == "bonding_curve_post_balance"
+
+
 def test_multiple_token_deltas_lower_confidence_and_add_reason() -> None:
     flows = TradeEventNormalizer().infer_trade_flows(
         _summary(

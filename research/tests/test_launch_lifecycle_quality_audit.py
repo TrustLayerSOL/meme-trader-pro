@@ -39,8 +39,26 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
     snapshots_path = _write_jsonl(
         tmp_path / "snapshots.jsonl",
         [
-            {"token_mint": "mint-a", "launch_age_seconds": 30, "metadata_json": {"event_count": 1, "priced_event_count": 1}},
-            {"token_mint": "mint-a", "launch_age_seconds": 7200, "metadata_json": {"event_count": 1, "priced_event_count": 1}},
+            {
+                "token_mint": "mint-a",
+                "launch_age_seconds": 30,
+                "liquidity_proxy": 2.5,
+                "metadata_json": {
+                    "event_count": 1,
+                    "priced_event_count": 1,
+                    "liquidity_proxy_source": "bonding_curve_post_balance",
+                },
+            },
+            {
+                "token_mint": "mint-a",
+                "launch_age_seconds": 7200,
+                "liquidity_proxy": 2.8,
+                "metadata_json": {
+                    "event_count": 1,
+                    "priced_event_count": 1,
+                    "liquidity_proxy_source": "bonding_curve_post_balance",
+                },
+            },
         ],
     )
     outcomes_path = _write_jsonl(
@@ -50,7 +68,13 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
                 "token_mint": "mint-a",
                 "survived_120m": False,
                 "no_future_liquidity": False,
-                "metadata_json": {"priced_event_count": 2, "market_cap_available": False},
+                "has_liquidity_proxy_at_120m": True,
+                "metadata_json": {
+                    "priced_event_count": 2,
+                    "market_cap_available": False,
+                    "liquidity_proxy_at_120m": 2.8,
+                    "liquidity_proxy_source_120m": "bonding_curve_post_balance",
+                },
             }
         ],
     )
@@ -112,6 +136,9 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
     assert report["top_unknown_instruction_clusters"][0]["program_id"] == "pumpfun-program"
     assert report["unique_event_mints"] == 1
     assert report["priced_snapshot_count"] == 2
+    assert report["liquidity_proxy_snapshot_count"] == 2
+    assert report["liquidity_proxy_outcome_count"] == 1
+    assert report["liquidity_proxy_source_counts"] == {"bonding_curve_post_balance": 3}
     assert report["market_cap_unknown_outcome_count"] == 1
     assert report["event_max_age_bucket_counts"]["gte_120m"] == 1
     assert "market_cap_unavailable_for_threshold_outcomes" in report["warning_flags"]

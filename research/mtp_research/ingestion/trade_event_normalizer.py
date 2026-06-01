@@ -116,6 +116,7 @@ class TradeEventNormalizer:
         venue_matched_program_ids = (
             summary.venue_classification.matched_program_ids if summary.venue_classification else []
         )
+        reserve_metadata = _bonding_curve_reserve_metadata(summary)
 
         return NormalizedEvent(
             event_id=make_event_id(summary.signature, event_type, index=index),
@@ -146,6 +147,7 @@ class TradeEventNormalizer:
                 "source_signature": summary.signature,
                 "parser_version": "trade_event_normalizer_v0",
                 "price_inference_method": price_inference_method,
+                **reserve_metadata,
                 **flow.metadata_json,
             },
         )
@@ -308,3 +310,58 @@ def _infer_native_quote_qty(summary: TransactionSummary, flow: TradeFlow, reason
         return None
     reasons.append("native_sol_quote_proxy")
     return quote_qty
+
+
+def _bonding_curve_reserve_metadata(summary: TransactionSummary) -> dict[str, float | str]:
+    raw_json = summary.raw_json or {}
+    target_address = summary.raw_record_address
+    target_mint = summary.raw_record_token_mint
+    if not target_address:
+        return {}
+
+    account_keys = raw_json.get("transaction", {}).get("message", {}).get("accountKeys", []) or []
+    target_index = _account_index(account_keys, target_address)
+    metadata: dict[str, float | str] = {}
+    post_balances = (raw_json.get("meta") or {}).get("postBalances") or []
+    if target_index is not None and target_index < len(post_balances):
+        lamports = _float_or_none(post_balances[target_index])
+        if lamports is not None:
+            sol_reserve = lamports / 1_000_000_000
+            metadata["bonding_curve_sol_reserve"] = sol_reserve
+            metadata["liquidity_proxy_sol"] = sol_reserve
+            metadata["liquidity_proxy_source"] = "bonding_curve_post_balance"
+
+    if target_mint:
+        for row in (raw_json.get("meta") or {}).get("postTokenBalances") or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("mint") != target_mint or row.get("owner") != target_address:
+                continue
+            amount = _token_ui_amount(row)
+            if amount is not None:
+                metadata["bonding_curve_token_reserve"] = amount
+                break
+    return metadata
+
+
+def _account_index(account_keys: list[object], pubkey: str) -> int | None:
+    for index, account in enumerate(account_keys):
+        if account == pubkey:
+            return index
+        if isinstance(account, dict) and account.get("pubkey") == pubkey:
+            return index
+    return None
+
+
+def _token_ui_amount(row: dict) -> float | None:
+    ui_token_amount = row.get("uiTokenAmount") or {}
+    if ui_token_amount.get("uiAmountString") is not None:
+        return _float_or_none(ui_token_amount.get("uiAmountString"))
+    return _float_or_none(ui_token_amount.get("uiAmount"))
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
