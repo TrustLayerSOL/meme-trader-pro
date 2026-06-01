@@ -249,6 +249,14 @@ After human labels are filled as `reviewed_valid`, `reviewed_invalid`, or `uncer
 ./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_import
 ```
 
+For a bounded transaction-fact sanity check of the deterministic sample, run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_auto_review \
+  --sample-size 50 \
+  --execute
+```
+
 Do not scale broad historical discovery until parser precision is acceptable. The first-two-hour lifecycle label and feature-family stubs are schema placeholders only; this sprint does not run backtests, walk-forward validation, paper trading, live trading, threshold optimization, or thesis promotion.
 
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.

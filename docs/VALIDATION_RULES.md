@@ -192,6 +192,7 @@
 - Pump.fun create scanning must prove token mint, bonding curve, creator wallet, and block-time extraction before any broad launch import.
 - Pump.fun creation census rows with `rejection_reason` are parser diagnostics, not accepted launches.
 - Broad historical discovery must wait for a deterministic manual precision audit with `reviewed_valid`, `reviewed_invalid`, and `uncertain` labels.
+- A bounded auto-sanity review may rehydrate sampled creation signatures to verify raw transaction facts, but it remains parser QA and does not authorize lifecycle collection by itself.
 - First-two-hour lifecycle labels and launch-state feature families are schema stubs until census precision is acceptable.
 - Bounded create-scan reports are discovery diagnostics, not launch datasets or validation artifacts.
 - Low-confidence Pump.fun create-like examples must stay in rejected/diagnostic sections unless explicitly included for parser debugging.

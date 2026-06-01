@@ -173,6 +173,14 @@ Import reviewed labels and write the summary:
 ./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_import
 ```
 
+Run a bounded auto-sanity review when Helius reads are explicitly allowed:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_auto_review \
+  --sample-size 50 \
+  --execute
+```
+
 Allowed review labels are `reviewed_valid`, `reviewed_invalid`, and `uncertain`. Broad historical Pump.fun discovery stays blocked until the parser has an acceptable reviewed precision sample. This gate is parser QA only; it must not run lifecycle backfills, backtests, walk-forward validation, thesis evaluation, paper trading, live trading, threshold optimization, grid search, or ML.
 
 ## Recommended First Real Run
