@@ -31,17 +31,22 @@ def main() -> int:
     )
     normalizer = TradeEventNormalizer()
 
-    raw_records = raw_store.load_all()
-    raw_records_seen = len(raw_records)
-    if args.signature:
-        raw_records = [record for record in raw_records if record.signature == args.signature]
     raw_records_skipped_existing = 0
+    existing_signatures: set[str] = set()
     if args.only_missing_signatures:
         existing_signatures = {event.signature for event in event_store.load_all()}
-        before_count = len(raw_records)
-        raw_records = [record for record in raw_records if record.signature not in existing_signatures]
-        raw_records_skipped_existing = before_count - len(raw_records)
-    selected = raw_records[: args.limit]
+    selected = []
+    raw_records_seen = 0
+    for record in raw_store.iter_all():
+        raw_records_seen += 1
+        if args.signature and record.signature != args.signature:
+            continue
+        if args.only_missing_signatures and record.signature in existing_signatures:
+            raw_records_skipped_existing += 1
+            continue
+        selected.append(record)
+        if len(selected) >= args.limit:
+            break
 
     trade_events_inserted = 0
     trade_events_updated = 0

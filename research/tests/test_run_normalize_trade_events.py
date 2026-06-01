@@ -180,6 +180,35 @@ def test_run_normalize_trade_events_writes_events_once_per_run(
     assert write_calls == 1
 
 
+def test_run_normalize_trade_events_streams_raw_records_without_load_all(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw_path = tmp_path / "raw.jsonl"
+    events_path = tmp_path / "events.jsonl"
+    RawTransactionStore(path=raw_path).upsert_many([_record("sig-1"), _record("sig-2")])
+
+    def fail_load_all(self):
+        raise AssertionError("load_all should not be required for raw normalization")
+
+    monkeypatch.setattr(RawTransactionStore, "load_all", fail_load_all)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_normalize_trade_events",
+            "--raw-path",
+            str(raw_path),
+            "--events-path",
+            str(events_path),
+            "--limit",
+            "100",
+        ],
+    )
+
+    assert main() == 0
+    assert len(NormalizedEventStore(path=events_path).load_all()) == 2
+
+
 def _existing_event(signature: str):
     from research.mtp_research.ingestion.normalization_models import NormalizedEvent
 

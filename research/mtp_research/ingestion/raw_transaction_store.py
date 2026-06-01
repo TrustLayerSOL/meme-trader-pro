@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 @dataclass
@@ -64,16 +64,17 @@ class RawTransactionStore:
         self.path = Path(path or Path("data/raw/helius_transactions.jsonl"))
 
     def load_all(self) -> list[RawTransactionRecord]:
-        if not self.path.exists():
-            return []
+        return list(self.iter_all())
 
-        records: list[RawTransactionRecord] = []
+    def iter_all(self) -> Iterator[RawTransactionRecord]:
+        if not self.path.exists():
+            return
+
         with self.path.open("r", encoding="utf-8") as f:
             for line in f:
                 text = line.strip()
                 if text:
-                    records.append(RawTransactionRecord.from_dict(json.loads(text)))
-        return records
+                    yield RawTransactionRecord.from_dict(json.loads(text))
 
     def get_by_signature(self, signature: str) -> RawTransactionRecord | None:
         for record in self.load_all():

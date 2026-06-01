@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from research.mtp_research.ingestion.models import LaunchCandidate
 from research.mtp_research.ingestion.normalization_models import NormalizedEvent
+from research.mtp_research.ingestion.pumpfun_creation_census import PumpFunCreationCensusRow
 from research.mtp_research.launch_regime.builder import LaunchRegimeBuilder
 
 
@@ -127,3 +128,43 @@ def test_event_inferred_launches_include_requested_local_fields() -> None:
     assert launches[0].launch_hour_local == 17
     assert launches[0].launch_minute_local == 30
     assert launches[0].source == "normalized_event_first_seen"
+
+
+def test_build_launches_from_pumpfun_census_uses_verified_creation_time() -> None:
+    launch_ts = int(datetime(2026, 6, 1, 6, 45, tzinfo=PACIFIC).timestamp())
+    rows = [
+        PumpFunCreationCensusRow(
+            mint="mint-1",
+            creator_deployer="creator-1",
+            creation_signature="sig-1",
+            slot=123,
+            block_time=launch_ts,
+            parser_confidence="high",
+            instruction_type="create_v2",
+            source_method="pumpfun_gtfa_census",
+            accepted=True,
+            bonding_curve="curve-1",
+            associated_bonding_curve="assoc-curve-1",
+        ),
+        PumpFunCreationCensusRow(
+            mint="rejected",
+            creator_deployer="creator-2",
+            creation_signature="sig-2",
+            slot=124,
+            block_time=launch_ts,
+            parser_confidence="rejected",
+            instruction_type="unknown",
+            source_method="pumpfun_gtfa_census",
+            accepted=False,
+        ),
+    ]
+
+    launches = LaunchRegimeBuilder().build_launches_from_pumpfun_census(rows)
+
+    assert len(launches) == 1
+    assert launches[0].token_mint == "mint-1"
+    assert launches[0].pool_address == "curve-1"
+    assert launches[0].launch_timestamp_source == "verified_pair_creation"
+    assert launches[0].launch_timestamp_verified is True
+    assert launches[0].launch_hour_local == 6
+    assert launches[0].metadata_json["creation_signature"] == "sig-1"

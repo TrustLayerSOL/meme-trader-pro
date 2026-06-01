@@ -8,6 +8,7 @@ from pathlib import Path
 
 from research.mtp_research.ingestion.candidate_registry import CandidateRegistry
 from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
+from research.mtp_research.ingestion.pumpfun_creation_census import load_census_rows
 from research.mtp_research.launch_regime.builder import LaunchRegimeBuilder
 from research.mtp_research.launch_regime.models import LaunchRegimeCandidate
 from research.mtp_research.launch_regime.store import JsonlArtifactStore
@@ -15,15 +16,18 @@ from research.mtp_research.launch_regime.store import JsonlArtifactStore
 
 def main() -> int:
     args = parse_args()
-    candidates = CandidateRegistry(args.registry_path).load_all() if args.registry_path else CandidateRegistry().load_all()
     events = NormalizedEventStore(args.events_path).load_all()
     builder = LaunchRegimeBuilder()
-    launches = builder.build_launches(
-        [
-            candidate for candidate in candidates
-            if not candidate.metadata_json.get("is_mock") and candidate.token_mint
-        ]
-    )
+    if args.census_path:
+        launches = builder.build_launches_from_pumpfun_census(load_census_rows(args.census_path))
+    else:
+        candidates = CandidateRegistry(args.registry_path).load_all() if args.registry_path else CandidateRegistry().load_all()
+        launches = builder.build_launches(
+            [
+                candidate for candidate in candidates
+                if not candidate.metadata_json.get("is_mock") and candidate.token_mint
+            ]
+        )
     if args.include_event_inferred:
         by_token = {launch.token_mint: launch for launch in builder.build_event_inferred_launches(events)}
         by_token.update({launch.token_mint: launch for launch in launches})
@@ -66,6 +70,7 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build launch-relative lifecycle artifacts.")
     parser.add_argument("--registry-path")
+    parser.add_argument("--census-path")
     parser.add_argument("--events-path", default="data/normalized/events.jsonl")
     parser.add_argument("--output-dir", default="data/normalized/launch_regime")
     parser.add_argument("--target-launches", type=int, default=2500)

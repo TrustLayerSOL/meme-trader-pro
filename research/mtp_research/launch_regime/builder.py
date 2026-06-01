@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from research.mtp_research.ingestion.models import LaunchCandidate
 from research.mtp_research.ingestion.normalization_models import NormalizedEvent
+from research.mtp_research.ingestion.pumpfun_creation_census import PumpFunCreationCensusRow
 from research.mtp_research.launch_regime.models import (
     LaunchFeatureSnapshot,
     LaunchOutcomeLabel,
@@ -80,6 +81,57 @@ class LaunchRegimeBuilder:
 
     def build_launches(self, candidates: list[LaunchCandidate]) -> list[LaunchRegimeCandidate]:
         launches = [launch for candidate in candidates if (launch := self.candidate_to_launch(candidate))]
+        deduped = {launch.token_mint: launch for launch in sorted(launches, key=lambda item: item.launch_ts)}
+        return sorted(deduped.values(), key=lambda item: (item.launch_ts, item.token_mint))
+
+    def census_row_to_launch(self, row: PumpFunCreationCensusRow) -> LaunchRegimeCandidate | None:
+        if not row.accepted or not row.mint or row.block_time is None:
+            return None
+        local = datetime.fromtimestamp(int(row.block_time), tz=PACIFIC)
+        seconds_since_midnight = local.hour * 3600 + local.minute * 60 + local.second
+        in_window = any(start <= seconds_since_midnight <= end for start, end in self.config.windows)
+        if local.weekday() not in self.config.weekdays or not in_window:
+            return None
+        timestamp_source = classify_launch_timestamp_source(
+            {"metadata_json": {"launch_timestamp_quality": "verified_pair_creation"}}
+        )
+        launch_ts = int(row.block_time)
+        return LaunchRegimeCandidate(
+            launch_id=make_launch_id(row.mint, launch_ts),
+            token_mint=row.mint,
+            pool_address=row.bonding_curve,
+            venue="pumpfun",
+            launch_ts=launch_ts,
+            launch_time_utc=utc_iso_from_ts(launch_ts),
+            launch_weekday=local.strftime("%A"),
+            launch_hour_local=local.hour,
+            launch_minute_local=local.minute,
+            launch_day_of_week=local.weekday(),
+            launch_is_weekend=local.weekday() >= 5,
+            launch_regime=self._launch_regime_name(local),
+            source=row.source_method,
+            launch_timestamp_source=timestamp_source,
+            launch_timestamp_confidence=confidence_rank(timestamp_source),
+            launch_timestamp_verified=is_verified_launch_timestamp(timestamp_source),
+            metadata_json={
+                "creation_signature": row.creation_signature,
+                "creator_deployer": row.creator_deployer,
+                "slot": row.slot,
+                "parser_confidence": row.parser_confidence,
+                "instruction_type": row.instruction_type,
+                "bonding_curve": row.bonding_curve,
+                "associated_bonding_curve": row.associated_bonding_curve,
+                "instruction_index": row.instruction_index,
+                "instruction_discriminator": row.instruction_discriminator,
+                "census_metadata": row.metadata_json,
+            },
+        )
+
+    def build_launches_from_pumpfun_census(
+        self,
+        rows: list[PumpFunCreationCensusRow],
+    ) -> list[LaunchRegimeCandidate]:
+        launches = [launch for row in rows if (launch := self.census_row_to_launch(row))]
         deduped = {launch.token_mint: launch for launch in sorted(launches, key=lambda item: item.launch_ts)}
         return sorted(deduped.values(), key=lambda item: (item.launch_ts, item.token_mint))
 
