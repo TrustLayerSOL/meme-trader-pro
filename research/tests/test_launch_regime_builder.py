@@ -168,3 +168,31 @@ def test_build_launches_from_pumpfun_census_uses_verified_creation_time() -> Non
     assert launches[0].launch_timestamp_verified is True
     assert launches[0].launch_hour_local == 6
     assert launches[0].metadata_json["creation_signature"] == "sig-1"
+
+
+def test_build_launches_from_pumpfun_census_can_include_outside_configured_regime() -> None:
+    launch_ts = int(datetime(2026, 6, 1, 14, 15, tzinfo=PACIFIC).timestamp())
+    rows = [
+        PumpFunCreationCensusRow(
+            mint="mint-outside",
+            creator_deployer="creator-1",
+            creation_signature="sig-1",
+            slot=123,
+            block_time=launch_ts,
+            parser_confidence="high",
+            instruction_type="create_v2",
+            source_method="pumpfun_gtfa_census",
+            accepted=True,
+            bonding_curve="curve-1",
+        )
+    ]
+
+    strict = LaunchRegimeBuilder().build_launches_from_pumpfun_census(rows)
+    inclusive = LaunchRegimeBuilder().build_launches_from_pumpfun_census(
+        rows,
+        include_outside_configured_regime=True,
+    )
+
+    assert strict == []
+    assert len(inclusive) == 1
+    assert inclusive[0].launch_regime == "outside_configured_regime"

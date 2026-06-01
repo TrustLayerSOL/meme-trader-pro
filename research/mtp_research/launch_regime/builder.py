@@ -84,13 +84,20 @@ class LaunchRegimeBuilder:
         deduped = {launch.token_mint: launch for launch in sorted(launches, key=lambda item: item.launch_ts)}
         return sorted(deduped.values(), key=lambda item: (item.launch_ts, item.token_mint))
 
-    def census_row_to_launch(self, row: PumpFunCreationCensusRow) -> LaunchRegimeCandidate | None:
+    def census_row_to_launch(
+        self,
+        row: PumpFunCreationCensusRow,
+        *,
+        include_outside_configured_regime: bool = False,
+    ) -> LaunchRegimeCandidate | None:
         if not row.accepted or not row.mint or row.block_time is None:
             return None
         local = datetime.fromtimestamp(int(row.block_time), tz=PACIFIC)
         seconds_since_midnight = local.hour * 3600 + local.minute * 60 + local.second
         in_window = any(start <= seconds_since_midnight <= end for start, end in self.config.windows)
-        if local.weekday() not in self.config.weekdays or not in_window:
+        if not include_outside_configured_regime and (
+            local.weekday() not in self.config.weekdays or not in_window
+        ):
             return None
         timestamp_source = classify_launch_timestamp_source(
             {"metadata_json": {"launch_timestamp_quality": "verified_pair_creation"}}
@@ -130,8 +137,19 @@ class LaunchRegimeBuilder:
     def build_launches_from_pumpfun_census(
         self,
         rows: list[PumpFunCreationCensusRow],
+        *,
+        include_outside_configured_regime: bool = False,
     ) -> list[LaunchRegimeCandidate]:
-        launches = [launch for row in rows if (launch := self.census_row_to_launch(row))]
+        launches = [
+            launch
+            for row in rows
+            if (
+                launch := self.census_row_to_launch(
+                    row,
+                    include_outside_configured_regime=include_outside_configured_regime,
+                )
+            )
+        ]
         deduped = {launch.token_mint: launch for launch in sorted(launches, key=lambda item: item.launch_ts)}
         return sorted(deduped.values(), key=lambda item: (item.launch_ts, item.token_mint))
 

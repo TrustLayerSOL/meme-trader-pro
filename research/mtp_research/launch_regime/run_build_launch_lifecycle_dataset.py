@@ -19,7 +19,10 @@ def main() -> int:
     events = NormalizedEventStore(args.events_path).load_all()
     builder = LaunchRegimeBuilder()
     if args.census_path:
-        launches = builder.build_launches_from_pumpfun_census(load_census_rows(args.census_path))
+        launches = builder.build_launches_from_pumpfun_census(
+            load_census_rows(args.census_path),
+            include_outside_configured_regime=args.include_outside_configured_regime,
+        )
     else:
         candidates = CandidateRegistry(args.registry_path).load_all() if args.registry_path else CandidateRegistry().load_all()
         launches = builder.build_launches(
@@ -75,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="data/normalized/launch_regime")
     parser.add_argument("--target-launches", type=int, default=2500)
     parser.add_argument("--include-event-inferred", action="store_true")
+    parser.add_argument("--include-outside-configured-regime", action="store_true")
     return parser.parse_args()
 
 
