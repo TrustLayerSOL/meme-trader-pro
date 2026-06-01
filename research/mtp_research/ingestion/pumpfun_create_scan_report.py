@@ -63,6 +63,46 @@ def _markdown(report: PumpFunCreateScanReport) -> str:
     lines.extend(
         [
             "",
+            "## Unknown Instruction Cluster Summary",
+            "",
+            "| Count | Accounts | Discriminator Hex | Base58 Prefix | First 8 Bytes Hex | Data Length | Decoded Length | Example Signatures |",
+            "|---:|---:|---|---|---|---:|---:|---|",
+        ]
+    )
+    summary = report.metadata_json.get("unknown_instruction_summary", {})
+    clusters = summary.get("clusters", []) if isinstance(summary, dict) else []
+    if clusters:
+        for cluster in clusters[:25]:
+            lines.append(
+                "| "
+                f"{cluster.get('count', 0)} | {cluster.get('account_count', 0)} | "
+                f"{cluster.get('instruction_discriminator_hex', '')} | "
+                f"{cluster.get('instruction_discriminator_base58_prefix') or ''} | "
+                f"{cluster.get('first_8_instruction_data_bytes_hex') or ''} | "
+                f"{cluster.get('instruction_data_length') or ''} | "
+                f"{cluster.get('decoded_instruction_data_length') or ''} | "
+                f"{', '.join(cluster.get('example_signatures', []))} |"
+            )
+    else:
+        lines.append("| 0 | 0 |  |  |  |  |  |  |")
+    layouts = summary.get("top_account_layouts", []) if isinstance(summary, dict) else []
+    lines.extend(
+        [
+            "",
+            "### Top Repeated Account Layouts",
+            "",
+            "| Count | Layout |",
+            "|---:|---|",
+        ]
+    )
+    if layouts:
+        for layout in layouts[:10]:
+            lines.append(f"| {layout.get('count', 0)} | {layout.get('layout_key', '')} |")
+    else:
+        lines.append("| 0 |  |")
+    lines.extend(
+        [
+            "",
             "## Verified Create Candidates",
             "",
             "| Signature | Block Time | Token Mint | Bonding Curve | Associated Bonding Curve | Creator Wallet | Accounts | Confidence | Warnings |",

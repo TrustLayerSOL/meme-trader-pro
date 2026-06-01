@@ -15,13 +15,29 @@ from research.mtp_research.ingestion.pumpfun_create_scanner_models import (
     make_pumpfun_create_scan_report_id,
     utc_now_iso,
 )
+from research.mtp_research.ingestion.pumpfun_unknown_instruction_report import (
+    decode_base58,
+    summarize_unknown_instructions,
+)
 from research.mtp_research.ingestion.run_program_signature_probe import PUMP_FUN_PROGRAM_ID
 
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
 SYSTEM_PROGRAM = "11111111111111111111111111111111"
 CONFIDENCE_RANK = {"low": 1, "medium": 2, "high": 3}
-PUMPFUN_CREATE_DISCRIMINATORS: dict[str, str] = {}
+PUMPFUN_CREATE_LAYOUTS: dict[str, dict[str, Any]] = {
+    # Anchor discriminator for `global:create_v2`, fixture-confirmed by bounded
+    # examples whose logs emit `Instruction: CreateV2`.
+    "d6904cec5f8b31b4": {
+        "confidence": "high",
+        "instruction_type": "create_v2",
+        "token_mint_index": 0,
+        "bonding_curve_index": 2,
+        "associated_bonding_curve_index": 3,
+        "creator_wallet_index": 5,
+        "min_account_count": 16,
+    }
+}
 
 
 class PumpFunCreateScanner:
@@ -139,6 +155,9 @@ class PumpFunCreateScanner:
             report.unknown_pumpfun_instructions = report.unknown_pumpfun_instructions[:25]
         report.candidates = _dedupe_candidates(report.candidates)
         report.metadata_json["network_calls_estimate"] = len(report.batches) + report.transactions_hydrated_total
+        report.metadata_json["unknown_instruction_summary"] = summarize_unknown_instructions(
+            report.unknown_pumpfun_instructions
+        )
         return report
 
     def _extract_candidates(
@@ -195,14 +214,16 @@ def _candidate_from_instruction(
     is_create = False
     is_create_like = False
 
-    if discriminator and discriminator in PUMPFUN_CREATE_DISCRIMINATORS:
+    layout = PUMPFUN_CREATE_LAYOUTS.get(discriminator or "")
+    if layout:
         is_create = True
-        confidence = PUMPFUN_CREATE_DISCRIMINATORS[discriminator]
+        confidence = layout["confidence"]
     elif discriminator:
         return None, _instruction_diagnostic(
             signature,
             instruction_index,
             accounts,
+            instruction,
             discriminator,
             "unknown_pumpfun_instruction",
             ["unknown_discriminator"],
@@ -223,15 +244,22 @@ def _candidate_from_instruction(
             signature,
             instruction_index,
             accounts,
+            instruction,
             discriminator,
             "rejected_create_like" if is_create_like else "unknown_pumpfun_instruction",
             ["layout_not_verified_create"] if is_create_like else ["not_create_layout"],
         )
 
-    token_mint = accounts[0] if len(accounts) > 0 else None
-    bonding_curve = accounts[2] if len(accounts) > 2 else None
-    associated_bonding_curve = accounts[3] if len(accounts) > 3 else None
-    creator_wallet = accounts[7] if len(accounts) > 7 else None
+    token_mint_index = layout.get("token_mint_index", 0) if layout else 0
+    bonding_curve_index = layout.get("bonding_curve_index", 2) if layout else 2
+    associated_bonding_curve_index = layout.get("associated_bonding_curve_index", 3) if layout else 3
+    creator_wallet_index = layout.get("creator_wallet_index", 7) if layout else 7
+    if layout and len(accounts) < layout["min_account_count"]:
+        warning_flags.append("missing_create_v2_account_layout")
+    token_mint = accounts[token_mint_index] if len(accounts) > token_mint_index else None
+    bonding_curve = accounts[bonding_curve_index] if len(accounts) > bonding_curve_index else None
+    associated_bonding_curve = accounts[associated_bonding_curve_index] if len(accounts) > associated_bonding_curve_index else None
+    creator_wallet = accounts[creator_wallet_index] if len(accounts) > creator_wallet_index else None
     missing = [
         name
         for name, value in {
@@ -269,7 +297,11 @@ def _candidate_from_instruction(
         instruction_discriminator=discriminator,
         extraction_confidence=confidence,
         warning_flags=warning_flags,
-        metadata_json={"instruction_type": parsed_type or "program_instruction", "accounts": accounts[:16]},
+        metadata_json={
+            "instruction_type": layout.get("instruction_type") if layout else parsed_type or "program_instruction",
+            "accounts": accounts[:16],
+            "create_layout": layout.get("instruction_type") if layout else "heuristic",
+        },
     )
     if _sanity_rejection_reasons(candidate):
         return None, _diagnostic_from_candidate(candidate, _sanity_rejection_reasons(candidate))
@@ -279,6 +311,9 @@ def _candidate_from_instruction(
 def _instruction_discriminator(instruction: dict[str, Any]) -> str | None:
     data = instruction.get("data")
     if isinstance(data, str) and data:
+        decoded = decode_base58(data)
+        if decoded:
+            return decoded[:8].hex()
         return data[:16]
     return None
 
@@ -287,6 +322,7 @@ def _instruction_diagnostic(
     signature: str | None,
     instruction_index: int,
     accounts: list[str],
+    instruction: dict[str, Any],
     discriminator: str | None,
     classification: str,
     reasons: list[str],
@@ -298,7 +334,7 @@ def _instruction_diagnostic(
         instruction_discriminator=discriminator,
         instruction_classification=classification,
         rejection_reasons=reasons,
-        metadata_json={"accounts": accounts[:16]},
+        metadata_json={"accounts": accounts[:16], **_instruction_data_metadata(instruction)},
     )
 
 
@@ -315,6 +351,36 @@ def _diagnostic_from_candidate(
         rejection_reasons=reasons,
         metadata_json=candidate.metadata_json,
     )
+
+
+def _instruction_data_metadata(instruction: dict[str, Any]) -> dict[str, Any]:
+    data = instruction.get("data")
+    if not isinstance(data, str) or not data:
+        return {
+            "instruction_data_length": 0,
+            "decoded_instruction_data_length": None,
+            "first_8_instruction_data_bytes_hex": None,
+            "instruction_discriminator_hex": None,
+            "instruction_data_encoding": "missing",
+        }
+    decoded = decode_base58(data)
+    if decoded is None:
+        return {
+            "instruction_data_length": len(data),
+            "decoded_instruction_data_length": None,
+            "first_8_instruction_data_bytes_hex": None,
+            "instruction_discriminator_hex": None,
+            "instruction_data_encoding": "unknown",
+        }
+    first_8 = decoded[:8].hex()
+    return {
+        "instruction_data_length": len(data),
+        "decoded_instruction_data_length": len(decoded),
+        "first_8_instruction_data_bytes_hex": first_8,
+        "instruction_discriminator_hex": first_8,
+        "instruction_discriminator_base58_prefix": data[:16],
+        "instruction_data_encoding": "base58",
+    }
 
 
 def _signature(tx: dict[str, Any]) -> str | None:

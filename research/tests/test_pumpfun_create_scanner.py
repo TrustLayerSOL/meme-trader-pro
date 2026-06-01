@@ -9,6 +9,9 @@ from research.mtp_research.ingestion.pumpfun_create_scanner import PumpFunCreate
 from research.mtp_research.ingestion.run_program_signature_probe import PUMP_FUN_PROGRAM_ID
 
 
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
 @dataclass
 class FakeAdapter:
     batches: list[list[str]]
@@ -72,6 +75,16 @@ def _create_tx(signature: str, account_count: int = 14) -> dict:
             },
         },
     }
+
+
+def _base58_encode(raw: bytes) -> str:
+    number = int.from_bytes(raw, "big")
+    encoded = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        encoded = BASE58_ALPHABET[remainder] + encoded
+    leading_zeroes = len(raw) - len(raw.lstrip(b"\x00"))
+    return "1" * leading_zeroes + (encoded or "1")
 
 
 def test_dry_run_performs_no_network() -> None:
@@ -141,6 +154,29 @@ def test_unknown_discriminator_is_not_classified_as_create_by_default() -> None:
     assert report.create_candidate_count == 0
     assert len(report.unknown_pumpfun_instructions) == 1
     assert report.unknown_pumpfun_instructions[0].rejection_reasons == ["unknown_discriminator"]
+
+
+def test_create_v2_fixture_extracts_fixture_confirmed_layout() -> None:
+    tx = _create_tx("sig-1", account_count=14)
+    accounts = tx["transaction"]["message"]["instructions"][0]["accounts"]
+    accounts[5] = "creator-sig-1"
+    accounts.extend(["wrapped-sol", "extra-a"])
+    tx["transaction"]["message"]["instructions"][0]["data"] = _base58_encode(bytes.fromhex("d6904cec5f8b31b4") + b"fixture")
+    tx["transaction"]["message"]["accountKeys"] = [{"pubkey": "creator-sig-1", "signer": True}]
+    adapter = FakeAdapter(batches=[["sig-1"]], transactions_by_signature={"sig-1": tx})
+    scanner = PumpFunCreateScanner(adapter=adapter)
+
+    report = scanner.scan(execute=True, max_batches=1, signatures_per_batch=1, min_confidence="high")
+
+    assert report.create_candidate_count == 1
+    candidate = report.verified_create_candidates[0]
+    assert candidate.instruction_discriminator == "d6904cec5f8b31b4"
+    assert candidate.extraction_confidence == "high"
+    assert candidate.token_mint == "mint-sig-1"
+    assert candidate.bonding_curve == "bonding-sig-1"
+    assert candidate.associated_bonding_curve == "assoc-bonding-sig-1"
+    assert candidate.creator_wallet == "creator-sig-1"
+    assert candidate.metadata_json["instruction_type"] == "create_v2"
 
 
 def test_include_low_confidence_keeps_diagnostics_out_of_verified_count() -> None:

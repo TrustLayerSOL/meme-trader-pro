@@ -40,6 +40,9 @@ def main() -> int:
     print(f"verified_create_candidate_count={len(report.verified_create_candidates)}")
     print(f"rejected_create_like_count={len(report.rejected_create_like_candidates)}")
     print(f"unknown_pumpfun_instruction_count={len(report.unknown_pumpfun_instructions)}")
+    unknown_summary = report.metadata_json.get("unknown_instruction_summary", {})
+    cluster_count = len(unknown_summary.get("clusters", [])) if isinstance(unknown_summary, dict) else 0
+    print(f"unknown_instruction_clusters={cluster_count}")
     print(f"include_low_confidence={args.include_low_confidence}")
     print(f"emit_rejected_examples={args.emit_rejected_examples}")
     print(f"min_confidence={args.min_confidence}")
