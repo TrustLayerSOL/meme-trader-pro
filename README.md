@@ -272,6 +272,16 @@ data/backtests/diagnostics/reports/pumpfun_lifecycle_collection_plan.md
 
 Do not scale broad historical discovery or run lifecycle collection until parser precision is acceptable and the lifecycle plan is reviewed. The first-two-hour lifecycle label and feature-family stubs are schema placeholders only; this sprint does not run backtests, walk-forward validation, paper trading, live trading, threshold optimization, or thesis promotion.
 
+Collect bounded first-two-hour raw lifecycle evidence only after reviewing the dry-run size:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_lifecycle_collection \
+  --lane existing \
+  --target-launches 1500
+```
+
+Execution requires `--execute`. The collector targets bonding-curve accounts, requests signature pages first, hydrates only signatures whose block time is between creation and creation plus two hours, and skips raw signatures already present locally.
+
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
 
 Run the focused Milestone 9 tests:

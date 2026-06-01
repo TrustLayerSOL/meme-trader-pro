@@ -194,6 +194,7 @@
 - Broad historical discovery must wait for a deterministic manual precision audit with `reviewed_valid`, `reviewed_invalid`, and `uncertain` labels.
 - A bounded auto-sanity review may rehydrate sampled creation signatures to verify raw transaction facts, but it remains parser QA and does not authorize lifecycle collection by itself.
 - First-two-hour lifecycle collection must start with a dry-run plan from accepted Pump.fun creation census rows, with `network_calls=0`, estimated request counts, expected raw rows, expected launch-relative rows, launch-regime coverage, and warning flags.
+- First-two-hour raw lifecycle collection must hydrate only signatures observed between creation time and creation plus two hours, skip duplicate raw signatures, and preserve raw transactions for replay.
 - First-two-hour lifecycle labels and launch-state feature families are schema stubs until census precision is acceptable and the lifecycle collection plan is reviewed.
 - Bounded create-scan reports are discovery diagnostics, not launch datasets or validation artifacts.
 - Low-confidence Pump.fun create-like examples must stay in rejected/diagnostic sections unless explicitly included for parser debugging.

@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from zoneinfo import ZoneInfo
+from datetime import datetime
 
 from research.mtp_research.ingestion.helius_backfill import HeliusHistoricalAdapter
 from research.mtp_research.ingestion.pumpfun_creation_census import (
@@ -21,20 +23,29 @@ from research.mtp_research.ingestion.pumpfun_create_scanner import PumpFunCreate
 from research.mtp_research.ingestion.run_program_signature_probe import PUMP_FUN_PROGRAM_ID
 
 
+PACIFIC = ZoneInfo("America/Los_Angeles")
+REGIME_WEEKDAYS = {0, 1, 2}
+REGIME_WINDOWS = [(6 * 3600, 12 * 3600), (17 * 3600, 22 * 3600)]
+
+
 def main() -> int:
     args = parse_args()
+    existing_rows = load_census_rows(args.output_path)
     if not args.execute:
         print("execute=False")
         print(f"target_launches={args.target_launches}")
+        print(f"target_regime_launches={args.target_regime_launches}")
         print(f"batch_size={args.batch_size}")
         print(f"checkpoint_path={args.checkpoint_path}")
+        print(f"accepted_launches_existing={_accepted_launch_count(existing_rows)}")
+        print(f"accepted_regime_launches_existing={_regime_launch_count(existing_rows)}")
         print("network_calls=0")
         return 0
 
     adapter = HeliusHistoricalAdapter.from_env()
     scanner = PumpFunCreateScanner(adapter=adapter, program_id=args.program_id)
     checkpoint = _load_checkpoint(args.checkpoint_path)
-    rows = load_census_rows(args.output_path)
+    rows = existing_rows
     rows_by_mint = {row.mint: row for row in rows if row.accepted and row.mint}
     before = checkpoint.get("cursor_before") or args.cursor_before
     total_signatures = int(checkpoint.get("signatures_seen_total", 0))
@@ -42,7 +53,7 @@ def main() -> int:
     total_direct = int(checkpoint.get("direct_pumpfun_instruction_count", 0))
     batch_index = int(checkpoint.get("batch_index", 0))
 
-    while len(rows_by_mint) < args.target_launches and batch_index < args.max_batches:
+    while not _collection_target_met(rows_by_mint, args.target_launches, args.target_regime_launches) and batch_index < args.max_batches:
         report = scanner.scan(
             execute=True,
             max_batches=1,
@@ -89,6 +100,7 @@ def main() -> int:
             "batch_index": batch_index,
             "cursor_before": before,
             "accepted_launches": len(rows_by_mint),
+            "accepted_regime_launches": _regime_launch_count(list(rows_by_mint.values())),
             "signatures_seen_total": total_signatures,
             "transactions_hydrated_total": total_hydrated,
             "direct_pumpfun_instruction_count": total_direct,
@@ -101,6 +113,7 @@ def main() -> int:
         print(
             "batch_progress "
             f"batch={batch_index} accepted_launches={len(rows_by_mint)} "
+            f"accepted_regime_launches={_regime_launch_count(list(rows_by_mint.values()))} "
             f"last_batch_verified={len(report.verified_create_candidates)} "
             f"signatures_seen_total={total_signatures} transactions_hydrated_total={total_hydrated} "
             f"cursor_before={before}",
@@ -110,6 +123,7 @@ def main() -> int:
             break
 
     print(f"accepted_launches={len(rows_by_mint)}")
+    print(f"accepted_regime_launches={_regime_launch_count(list(rows_by_mint.values()))}")
     print(f"signatures_seen_total={total_signatures}")
     print(f"transactions_hydrated_total={total_hydrated}")
     print(f"direct_pumpfun_instruction_count={total_direct}")
@@ -123,6 +137,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Checkpointed Pump.fun create-census collection.")
     parser.add_argument("--program-id", default=PUMP_FUN_PROGRAM_ID)
     parser.add_argument("--target-launches", type=int, default=2500)
+    parser.add_argument("--target-regime-launches", type=int)
     parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--max-batches", type=int, default=1000)
     parser.add_argument("--cursor-before")
@@ -144,6 +159,42 @@ def _write_checkpoint(path: Path | str, payload: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _accepted_launch_count(rows: list[PumpFunCreationCensusRow]) -> int:
+    return len({row.mint for row in rows if row.accepted and row.mint})
+
+
+def _regime_launch_count(rows: list[PumpFunCreationCensusRow]) -> int:
+    return len(
+        {
+            row.mint
+            for row in rows
+            if row.accepted
+            and row.mint
+            and row.block_time is not None
+            and _in_launch_regime(int(row.block_time))
+        }
+    )
+
+
+def _collection_target_met(
+    rows_by_mint: dict[str | None, PumpFunCreationCensusRow],
+    target_launches: int,
+    target_regime_launches: int | None,
+) -> bool:
+    rows = list(rows_by_mint.values())
+    if target_regime_launches is not None:
+        return _regime_launch_count(rows) >= target_regime_launches
+    return len(rows_by_mint) >= target_launches
+
+
+def _in_launch_regime(block_time: int) -> bool:
+    local = datetime.fromtimestamp(block_time, tz=PACIFIC)
+    seconds_since_midnight = local.hour * 3600 + local.minute * 60 + local.second
+    return local.weekday() in REGIME_WEEKDAYS and any(
+        start <= seconds_since_midnight <= end for start, end in REGIME_WINDOWS
+    )
 
 
 if __name__ == "__main__":

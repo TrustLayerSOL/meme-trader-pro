@@ -196,6 +196,26 @@ data/backtests/diagnostics/reports/pumpfun_lifecycle_collection_plan.md
 
 Allowed review labels are `reviewed_valid`, `reviewed_invalid`, and `uncertain`. Broad historical Pump.fun discovery stays blocked until the parser has an acceptable reviewed precision sample. First-two-hour lifecycle collection stays blocked until the dry-run lifecycle plan is reviewed and reasonable. This gate is parser QA and lifecycle planning only; it must not run lifecycle backfills, backtests, walk-forward validation, thesis evaluation, paper trading, live trading, threshold optimization, grid search, or ML.
 
+Dry-run a bounded first-two-hour raw lifecycle collection:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_lifecycle_collection \
+  --lane existing \
+  --target-launches 1500
+```
+
+Collect only after the dry-run estimate is acceptable:
+
+```bash
+HELIUS_TRANSACTION_WORKERS=32 HELIUS_TIMEOUT_SEC=45 HELIUS_MAX_RETRIES=6 HELIUS_RETRY_BASE_SLEEP_SEC=2 \
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_lifecycle_collection \
+  --lane existing \
+  --target-launches 1500 \
+  --execute
+```
+
+Use `--lane regime` only after the creation census has enough launches in the configured Monday/Tuesday/Wednesday windows. The collector stores raw transactions only. Normalization, lifecycle label building, backtests, walk-forward validation, and thesis evaluation remain separate offline steps and must not be inferred from collection alone.
+
 ## Recommended First Real Run
 
 ```bash
