@@ -257,7 +257,20 @@ For a bounded transaction-fact sanity check of the deterministic sample, run:
   --execute
 ```
 
-Do not scale broad historical discovery until parser precision is acceptable. The first-two-hour lifecycle label and feature-family stubs are schema placeholders only; this sprint does not run backtests, walk-forward validation, paper trading, live trading, threshold optimization, or thesis promotion.
+Plan first-two-hour lifecycle collection from verified Pump.fun creation rows without network calls:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.launch_regime.run_pumpfun_lifecycle_plan
+```
+
+The lifecycle planner reads `data/normalized/pumpfun_creation_census.jsonl`, checks the precision-gate summary, filters to the configured Monday/Tuesday/Wednesday launch windows, estimates first-two-hour collection cost, and writes:
+
+```text
+data/backtests/diagnostics/reports/pumpfun_lifecycle_collection_plan.json
+data/backtests/diagnostics/reports/pumpfun_lifecycle_collection_plan.md
+```
+
+Do not scale broad historical discovery or run lifecycle collection until parser precision is acceptable and the lifecycle plan is reviewed. The first-two-hour lifecycle label and feature-family stubs are schema placeholders only; this sprint does not run backtests, walk-forward validation, paper trading, live trading, threshold optimization, or thesis promotion.
 
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
 
