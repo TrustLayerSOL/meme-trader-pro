@@ -63,6 +63,19 @@ def _raw_json() -> dict:
     }
 
 
+def _record(signature: str) -> RawTransactionRecord:
+    payload = _raw_json()
+    payload["transaction"]["signatures"] = [signature]
+    return RawTransactionRecord(
+        signature=signature,
+        slot=42,
+        block_time=1_700_000_000,
+        success=True,
+        fetched_at=datetime(2026, 5, 30, 12, 0, 0, tzinfo=timezone.utc),
+        raw_json=payload,
+    )
+
+
 def test_run_normalize_trade_events_cli_writes_trade_events(
     tmp_path: Path,
     monkeypatch,
@@ -70,16 +83,7 @@ def test_run_normalize_trade_events_cli_writes_trade_events(
 ) -> None:
     raw_path = tmp_path / "raw.jsonl"
     events_path = tmp_path / "events.jsonl"
-    RawTransactionStore(path=raw_path).upsert(
-        RawTransactionRecord(
-            signature="sig-1",
-            slot=42,
-            block_time=1_700_000_000,
-            success=True,
-            fetched_at=datetime(2026, 5, 30, 12, 0, 0, tzinfo=timezone.utc),
-            raw_json=_raw_json(),
-        )
-    )
+    RawTransactionStore(path=raw_path).upsert(_record("sig-1"))
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -106,3 +110,84 @@ def test_run_normalize_trade_events_cli_writes_trade_events(
     assert events[0].token_mint == BASE_MINT
     assert events[0].metadata_json["quote_mint"] == WSOL_MINT
     assert events[0].metadata_json["parser_version"] == "trade_event_normalizer_v0"
+
+
+def test_run_normalize_trade_events_can_skip_already_normalized_signatures(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    raw_path = tmp_path / "raw.jsonl"
+    events_path = tmp_path / "events.jsonl"
+    raw_store = RawTransactionStore(path=raw_path)
+    raw_store.upsert_many([_record("sig-1"), _record("sig-2")])
+    event_store = NormalizedEventStore(path=events_path)
+    event_store.upsert(
+        event_store.load_all()[0] if event_store.load_all() else _existing_event("sig-1")
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_normalize_trade_events",
+            "--raw-path",
+            str(raw_path),
+            "--events-path",
+            str(events_path),
+            "--limit",
+            "100",
+            "--only-missing-signatures",
+        ],
+    )
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "raw_records_seen=2" in output
+    assert "raw_records_skipped_existing=1" in output
+    assert "raw_records_processed=1" in output
+
+
+def test_run_normalize_trade_events_writes_events_once_per_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw_path = tmp_path / "raw.jsonl"
+    events_path = tmp_path / "events.jsonl"
+    RawTransactionStore(path=raw_path).upsert_many([_record("sig-1"), _record("sig-2")])
+    write_calls = 0
+    original_upsert_many = NormalizedEventStore.upsert_many
+
+    def counted_upsert_many(self, events):
+        nonlocal write_calls
+        write_calls += 1
+        return original_upsert_many(self, events)
+
+    monkeypatch.setattr(NormalizedEventStore, "upsert_many", counted_upsert_many)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_normalize_trade_events",
+            "--raw-path",
+            str(raw_path),
+            "--events-path",
+            str(events_path),
+            "--limit",
+            "100",
+        ],
+    )
+
+    assert main() == 0
+    assert write_calls == 1
+
+
+def _existing_event(signature: str):
+    from research.mtp_research.ingestion.normalization_models import NormalizedEvent
+
+    return NormalizedEvent(
+        event_id=f"existing-{signature}",
+        signature=signature,
+        slot=42,
+        block_time=1_700_000_000,
+        event_type="possible_buy",
+        token_mint=BASE_MINT,
+    )

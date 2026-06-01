@@ -19,6 +19,8 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--signature")
     parser.add_argument("--token-mint")
+    parser.add_argument("--only-missing-signatures", action="store_true")
+    parser.add_argument("--progress-every", type=int)
     args = parser.parse_args()
 
     raw_store = RawTransactionStore(path=args.raw_path) if args.raw_path else RawTransactionStore()
@@ -30,16 +32,24 @@ def main() -> int:
     normalizer = TradeEventNormalizer()
 
     raw_records = raw_store.load_all()
+    raw_records_seen = len(raw_records)
     if args.signature:
         raw_records = [record for record in raw_records if record.signature == args.signature]
+    raw_records_skipped_existing = 0
+    if args.only_missing_signatures:
+        existing_signatures = {event.signature for event in event_store.load_all()}
+        before_count = len(raw_records)
+        raw_records = [record for record in raw_records if record.signature not in existing_signatures]
+        raw_records_skipped_existing = before_count - len(raw_records)
     selected = raw_records[: args.limit]
 
     trade_events_inserted = 0
     trade_events_updated = 0
     event_type_counts: Counter[str] = Counter()
     venue_counts: Counter[str] = Counter()
+    all_events = []
 
-    for record in selected:
+    for index, record in enumerate(selected, start=1):
         summary = summarize_raw_transaction(record)
         summary.venue_classification = classify_venue(summary)
         result = normalizer.normalize_summary(summary, target_token_mint=args.token_mint)
@@ -47,13 +57,18 @@ def main() -> int:
             normalizer.flow_to_normalized_event(summary, flow, index)
             for index, flow in enumerate(result.flows)
         ]
-        counts = event_store.upsert_many(events)
-        trade_events_inserted += counts["inserted"]
-        trade_events_updated += counts["updated"]
+        all_events.extend(events)
         for event in events:
             event_type_counts[event.event_type] += 1
             venue_counts[event.venue or "unknown"] += 1
+        if args.progress_every and index % args.progress_every == 0:
+            print(f"progress raw_records_processed={index}")
+    counts = event_store.upsert_many(all_events)
+    trade_events_inserted += counts["inserted"]
+    trade_events_updated += counts["updated"]
 
+    print(f"raw_records_seen={raw_records_seen}")
+    print(f"raw_records_skipped_existing={raw_records_skipped_existing}")
     print(f"raw_records_processed={len(selected)}")
     print(f"trade_events_inserted={trade_events_inserted}")
     print(f"trade_events_updated={trade_events_updated}")
