@@ -279,7 +279,8 @@ Collect bounded first-two-hour raw lifecycle evidence only after reviewing the d
   --lane existing \
   --target-launches 1500 \
   --collection-method address_window \
-  --address-window-workers 32
+  --address-window-workers 32 \
+  --address-window-batch-size 100
 ```
 
 Execution requires `--execute`. The preferred `address_window` method targets bonding-curve accounts with Helius block-time filters, stores only transactions between creation and creation plus two hours, and skips raw signatures already present locally.

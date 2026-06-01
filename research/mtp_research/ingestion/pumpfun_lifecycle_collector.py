@@ -52,6 +52,7 @@ def collect_pumpfun_lifecycle(
     max_transactions_per_launch: int = 100,
     collection_method: str = "signature_hydrate",
     address_window_workers: int = 1,
+    address_window_batch_size: int = 100,
     execute: bool = False,
     adapter: HeliusHistoricalAdapter | None = None,
 ) -> dict[str, Any]:
@@ -68,6 +69,7 @@ def collect_pumpfun_lifecycle(
         "max_transactions_per_launch": max_transactions_per_launch,
         "collection_method": collection_method,
         "address_window_workers": max(1, address_window_workers),
+        "address_window_batch_size": max(1, address_window_batch_size),
         "estimated_signature_requests": len(selected) * max_signature_pages_per_launch,
         "estimated_transaction_requests_up_to": len(selected) * max_transactions_per_launch,
     }
@@ -107,6 +109,7 @@ def collect_pumpfun_lifecycle(
             lane=lane,
             max_transactions_per_launch=max_transactions_per_launch,
             workers=address_window_workers,
+            batch_size=address_window_batch_size,
         )
         for key, value in window_totals.items():
             totals[key] += value
@@ -166,6 +169,7 @@ def _collect_address_window_parallel(
     lane: str,
     max_transactions_per_launch: int,
     workers: int,
+    batch_size: int,
 ) -> dict[str, int]:
     totals = {
         "network_calls": 0,
@@ -176,34 +180,43 @@ def _collect_address_window_parallel(
         "raw_inserted": 0,
         "raw_updated": 0,
     }
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-        results = list(
-            executor.map(
-                lambda row: _fetch_launch_with_address_window(
-                    row,
-                    adapter=adapter,
-                    max_transactions_per_launch=max_transactions_per_launch,
-                ),
-                rows,
+    for start in range(0, len(rows), max(1, batch_size)):
+        batch_rows = rows[start:start + max(1, batch_size)]
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            results = list(
+                executor.map(
+                    lambda row: _fetch_launch_with_address_window(
+                        row,
+                        adapter=adapter,
+                        max_transactions_per_launch=max_transactions_per_launch,
+                    ),
+                    batch_rows,
+                )
             )
+        raw_records: list[RawTransactionRecord] = []
+        for row, transactions in zip(batch_rows, results, strict=False):
+            totals["network_calls"] += 1
+            totals["launches_processed"] += 1
+            totals["signatures_seen"] += len(transactions)
+            totals["signatures_in_window"] += len(transactions)
+            for body in transactions:
+                signature = _signature_from_body(body)
+                if not signature or signature in existing_signatures:
+                    continue
+                record = _raw_record_from_gtfa_body(signature, body, row, lane)
+                raw_records.append(record)
+                existing_signatures.add(signature)
+        counts = store.append_new_many(raw_records)
+        totals["transactions_fetched"] += len(raw_records)
+        totals["raw_inserted"] += counts["inserted"]
+        totals["raw_updated"] += counts["updated"]
+        print(
+            "lifecycle_window_progress "
+            f"launches_processed={totals['launches_processed']} "
+            f"transactions_fetched={totals['transactions_fetched']} "
+            f"raw_inserted={totals['raw_inserted']}",
+            flush=True,
         )
-    raw_records: list[RawTransactionRecord] = []
-    for row, transactions in zip(rows, results, strict=False):
-        totals["network_calls"] += 1
-        totals["launches_processed"] += 1
-        totals["signatures_seen"] += len(transactions)
-        totals["signatures_in_window"] += len(transactions)
-        for body in transactions:
-            signature = _signature_from_body(body)
-            if not signature or signature in existing_signatures:
-                continue
-            record = _raw_record_from_gtfa_body(signature, body, row, lane)
-            raw_records.append(record)
-            existing_signatures.add(signature)
-    counts = store.append_new_many(raw_records)
-    totals["transactions_fetched"] += len(raw_records)
-    totals["raw_inserted"] += counts["inserted"]
-    totals["raw_updated"] += counts["updated"]
     return totals
 
 

@@ -203,7 +203,8 @@ Dry-run a bounded first-two-hour raw lifecycle collection:
   --lane existing \
   --target-launches 1500 \
   --collection-method address_window \
-  --address-window-workers 32
+  --address-window-workers 32 \
+  --address-window-batch-size 100
 ```
 
 Collect only after the dry-run estimate is acceptable:
@@ -215,6 +216,7 @@ HELIUS_TRANSACTION_WORKERS=32 HELIUS_TIMEOUT_SEC=45 HELIUS_MAX_RETRIES=6 HELIUS_
   --target-launches 1500 \
   --collection-method address_window \
   --address-window-workers 32 \
+  --address-window-batch-size 100 \
   --execute
 ```
 

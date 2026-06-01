@@ -19,6 +19,7 @@ def main() -> int:
         max_transactions_per_launch=args.max_transactions_per_launch,
         collection_method=args.collection_method,
         address_window_workers=args.address_window_workers,
+        address_window_batch_size=args.address_window_batch_size,
         execute=args.execute,
     )
     for key in [
@@ -29,6 +30,7 @@ def main() -> int:
         "max_lifecycle_seconds",
         "collection_method",
         "address_window_workers",
+        "address_window_batch_size",
         "estimated_signature_requests",
         "estimated_transaction_requests_up_to",
         "network_calls",
@@ -56,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-transactions-per-launch", type=int, default=100)
     parser.add_argument("--collection-method", choices=["signature_hydrate", "address_window"], default="signature_hydrate")
     parser.add_argument("--address-window-workers", type=int, default=1)
+    parser.add_argument("--address-window-batch-size", type=int, default=100)
     parser.add_argument("--execute", action="store_true")
     return parser.parse_args()
 
