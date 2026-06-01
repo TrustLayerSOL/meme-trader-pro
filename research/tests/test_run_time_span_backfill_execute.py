@@ -13,6 +13,10 @@ def test_time_span_backfill_execute_dry_run_does_not_call_helius(
 ) -> None:
     registry_path = tmp_path / "registry.jsonl"
     raw_path = tmp_path / "raw.jsonl"
+    event_path = tmp_path / "events.jsonl"
+    feature_path = tmp_path / "features.jsonl"
+    outcome_path = tmp_path / "outcomes.jsonl"
+    dataset_path = tmp_path / "dataset.jsonl"
     CandidateRegistry(registry_path).upsert(
         LaunchCandidate(
             token_mint="token-1",
@@ -31,6 +35,14 @@ def test_time_span_backfill_execute_dry_run_does_not_call_helius(
             str(registry_path),
             "--raw-path",
             str(raw_path),
+            "--event-path",
+            str(event_path),
+            "--feature-path",
+            str(feature_path),
+            "--outcome-path",
+            str(outcome_path),
+            "--dataset-path",
+            str(dataset_path),
             "--candidate-limit",
             "1",
             "--max-signatures-per-target",
@@ -58,6 +70,10 @@ def test_time_span_backfill_execute_accepts_transaction_worker_option(
 ) -> None:
     registry_path = tmp_path / "registry.jsonl"
     raw_path = tmp_path / "raw.jsonl"
+    event_path = tmp_path / "events.jsonl"
+    feature_path = tmp_path / "features.jsonl"
+    outcome_path = tmp_path / "outcomes.jsonl"
+    dataset_path = tmp_path / "dataset.jsonl"
     CandidateRegistry(registry_path).upsert(
         LaunchCandidate(
             token_mint="token-1",
@@ -76,6 +92,14 @@ def test_time_span_backfill_execute_accepts_transaction_worker_option(
             str(registry_path),
             "--raw-path",
             str(raw_path),
+            "--event-path",
+            str(event_path),
+            "--feature-path",
+            str(feature_path),
+            "--outcome-path",
+            str(outcome_path),
+            "--dataset-path",
+            str(dataset_path),
             "--candidate-limit",
             "1",
             "--transaction-workers",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,12 +48,14 @@ class TimeSpanBackfillPlanner:
         feature_store: FeatureSnapshotStore | None = None,
         outcome_store: OutcomeLabelStore | None = None,
         dataset_store: ResearchDatasetStore | None = None,
+        include_derived_coverage: bool = True,
     ):
         self.raw_store = raw_store or RawTransactionStore()
         self.event_store = event_store or NormalizedEventStore()
         self.feature_store = feature_store or FeatureSnapshotStore()
         self.outcome_store = outcome_store or OutcomeLabelStore()
         self.dataset_store = dataset_store or ResearchDatasetStore()
+        self.include_derived_coverage = include_derived_coverage
 
     def load_real_candidates(
         self,
@@ -86,40 +90,37 @@ class TimeSpanBackfillPlanner:
         target_time_span_seconds: int = 3600,
         min_raw_tx_per_token: int = 50,
         min_research_rows_per_token: int = 100,
+        include_derived_coverage: bool = True,
     ) -> list[TokenEvidenceCoverage]:
+        stats_by_token = _build_coverage_stats_by_token(
+            raw_records,
+            events,
+            feature_snapshots,
+            outcome_labels,
+            research_rows,
+        )
         output = []
         for candidate in candidates:
             token = candidate.token_mint
-            token_raw = [record for record in raw_records if record.token_mint == token]
-            token_events = [event for event in events if event.token_mint == token]
-            token_features = [item for item in feature_snapshots if item.token_mint == token]
-            token_labels = [label for label in outcome_labels if label.token_mint == token]
-            token_rows = [row for row in research_rows if row.token_mint == token]
-            times = [
-                value for value in [
-                    *[record.block_time for record in token_raw],
-                    *[event.block_time for event in token_events],
-                ]
-                if value is not None
-            ]
-            first = min(times) if times else None
-            last = max(times) if times else None
+            stats = stats_by_token.get(token, _CoverageStats())
+            first = stats.first_block_time
+            last = stats.last_block_time
             span = (last - first) if first is not None and last is not None else None
-            priced_count = sum(1 for event in token_events if event.price_quote is not None and event.price_quote > 0)
-            trade_count = sum(1 for event in token_events if event.event_type in TRADE_EVENT_TYPES)
             warning_flags = []
-            if not token_raw:
+            if stats.raw_tx_count == 0:
                 warning_flags.append("no_raw_transactions")
             if span is None:
                 warning_flags.append("missing_time_span")
             elif span < target_time_span_seconds:
                 warning_flags.append("short_time_span")
-            if priced_count < 5:
+            if stats.priced_event_count < 5:
                 warning_flags.append("low_priced_event_count")
-            if len(token_rows) < min_research_rows_per_token:
+            if include_derived_coverage and stats.research_row_count < min_research_rows_per_token:
                 warning_flags.append("low_research_row_count")
-            if len(token_raw) < min_raw_tx_per_token:
+            if stats.raw_tx_count < min_raw_tx_per_token:
                 warning_flags.append("low_raw_tx_count")
+            if not include_derived_coverage:
+                warning_flags.append("derived_coverage_not_loaded")
             needs_backfill = bool(warning_flags)
             output.append(
                 TokenEvidenceCoverage(
@@ -128,13 +129,13 @@ class TimeSpanBackfillPlanner:
                     venue=candidate.venue,
                     source=candidate.source,
                     liquidity_usd=candidate.liquidity_usd,
-                    raw_tx_count=len(token_raw),
-                    normalized_event_count=len(token_events),
-                    trade_event_count=trade_count,
-                    priced_event_count=priced_count,
-                    feature_snapshot_count=len(token_features),
-                    outcome_label_count=len(token_labels),
-                    research_row_count=len(token_rows),
+                    raw_tx_count=stats.raw_tx_count,
+                    normalized_event_count=stats.normalized_event_count,
+                    trade_event_count=stats.trade_event_count,
+                    priced_event_count=stats.priced_event_count,
+                    feature_snapshot_count=stats.feature_snapshot_count,
+                    outcome_label_count=stats.outcome_label_count,
+                    research_row_count=stats.research_row_count,
                     first_block_time=first,
                     last_block_time=last,
                     time_span_seconds=span,
@@ -145,6 +146,7 @@ class TimeSpanBackfillPlanner:
                         "target_time_span_seconds": target_time_span_seconds,
                         "min_raw_tx_per_token": min_raw_tx_per_token,
                         "min_research_rows_per_token": min_research_rows_per_token,
+                        "include_derived_coverage": include_derived_coverage,
                     },
                 )
             )
@@ -172,12 +174,13 @@ class TimeSpanBackfillPlanner:
             selected_candidates,
             self.raw_store.load_all(),
             self.event_store.load_all(),
-            self.feature_store.load_all(),
-            self.outcome_store.load_all(),
-            self.dataset_store.load_all(),
+            self.feature_store.load_all() if self.include_derived_coverage else [],
+            self.outcome_store.load_all() if self.include_derived_coverage else [],
+            self.dataset_store.load_all() if self.include_derived_coverage else [],
             target_time_span_seconds=target_time_span_seconds,
             min_raw_tx_per_token=min_raw_tx_per_token,
             min_research_rows_per_token=min_research_rows_per_token,
+            include_derived_coverage=self.include_derived_coverage,
         )
         plan_items = self._coverage_to_plan_items(
             coverage,
@@ -212,6 +215,7 @@ class TimeSpanBackfillPlanner:
                 "min_research_rows_per_token": min_research_rows_per_token,
                 "min_liquidity_usd": min_liquidity_usd,
                 "candidate_limit": candidate_limit,
+                "include_derived_coverage": self.include_derived_coverage,
             },
         )
 
@@ -288,3 +292,63 @@ def _recommended_command(
         parts.append(f"--min-liquidity-usd {int(min_liquidity_usd)}")
     parts.append("--execute")
     return " ".join(parts)
+
+
+@dataclass
+class _CoverageStats:
+    raw_tx_count: int = 0
+    normalized_event_count: int = 0
+    trade_event_count: int = 0
+    priced_event_count: int = 0
+    feature_snapshot_count: int = 0
+    outcome_label_count: int = 0
+    research_row_count: int = 0
+    first_block_time: int | None = None
+    last_block_time: int | None = None
+
+    def observe_time(self, block_time: int | None) -> None:
+        if block_time is None:
+            return
+        self.first_block_time = (
+            block_time
+            if self.first_block_time is None
+            else min(self.first_block_time, block_time)
+        )
+        self.last_block_time = (
+            block_time
+            if self.last_block_time is None
+            else max(self.last_block_time, block_time)
+        )
+
+
+def _build_coverage_stats_by_token(
+    raw_records: list[RawTransactionRecord],
+    events: list[NormalizedEvent],
+    feature_snapshots: list[FeatureSnapshot],
+    outcome_labels: list[OutcomeLabel],
+    research_rows: list[ResearchDatasetRow],
+) -> dict[str, _CoverageStats]:
+    stats_by_token: defaultdict[str, _CoverageStats] = defaultdict(_CoverageStats)
+    for record in raw_records:
+        if not record.token_mint:
+            continue
+        stats = stats_by_token[record.token_mint]
+        stats.raw_tx_count += 1
+        stats.observe_time(record.block_time)
+    for event in events:
+        if not event.token_mint:
+            continue
+        stats = stats_by_token[event.token_mint]
+        stats.normalized_event_count += 1
+        stats.observe_time(event.block_time)
+        if event.event_type in TRADE_EVENT_TYPES:
+            stats.trade_event_count += 1
+        if event.price_quote is not None and event.price_quote > 0:
+            stats.priced_event_count += 1
+    for snapshot in feature_snapshots:
+        stats_by_token[snapshot.token_mint].feature_snapshot_count += 1
+    for label in outcome_labels:
+        stats_by_token[label.token_mint].outcome_label_count += 1
+    for row in research_rows:
+        stats_by_token[row.token_mint].research_row_count += 1
+    return dict(stats_by_token)

@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feature-store-path", default=None)
     parser.add_argument("--outcome-store-path", default=None)
     parser.add_argument("--dataset-path", default=None)
+    parser.add_argument("--include-derived-coverage", action="store_true")
     parser.add_argument("--output-dir", default="data/backtests/diagnostics/reports")
     parser.add_argument("--min-liquidity-usd", type=float, default=10000)
     parser.add_argument("--candidate-limit", type=int, default=10)
@@ -57,6 +58,7 @@ def build_and_write_plan(args: argparse.Namespace):
         feature_store=FeatureSnapshotStore(args.feature_store_path) if args.feature_store_path else None,
         outcome_store=OutcomeLabelStore(args.outcome_store_path) if args.outcome_store_path else None,
         dataset_store=ResearchDatasetStore(args.dataset_path) if args.dataset_path else None,
+        include_derived_coverage=args.include_derived_coverage,
     )
     plan = planner.build_plan(
         min_liquidity_usd=args.min_liquidity_usd,

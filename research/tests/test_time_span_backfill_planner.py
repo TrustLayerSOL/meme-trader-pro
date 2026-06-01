@@ -2,13 +2,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from research.mtp_research.features.feature_models import FeatureSnapshot
+from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
 from research.mtp_research.ingestion.candidate_registry import CandidateRegistry
 from research.mtp_research.ingestion.models import LaunchCandidate
 from research.mtp_research.ingestion.normalization_models import NormalizedEvent
+from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
 from research.mtp_research.ingestion.raw_transaction_store import RawTransactionRecord, RawTransactionStore
 from research.mtp_research.pipeline.time_span_backfill_planner import TimeSpanBackfillPlanner
+from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
 from research.mtp_research.validation.outcome_models import OutcomeLabel
 from research.mtp_research.validation.research_dataset_models import ResearchDatasetRow
+from research.mtp_research.validation.research_dataset_store import ResearchDatasetStore
 
 
 def _candidate(token: str, pool: str | None, is_mock: bool = False, liquidity: float = 20000) -> LaunchCandidate:
@@ -111,12 +115,22 @@ def test_coverage_identifies_no_raw_token_needing_backfill() -> None:
 def test_plan_prioritizes_no_raw_and_uses_pool_targets_first(tmp_path: Path) -> None:
     registry_path = tmp_path / "registry.jsonl"
     raw_path = tmp_path / "raw.jsonl"
+    event_path = tmp_path / "events.jsonl"
+    feature_path = tmp_path / "features.jsonl"
+    outcome_path = tmp_path / "outcomes.jsonl"
+    dataset_path = tmp_path / "dataset.jsonl"
     registry = CandidateRegistry(registry_path)
     registry.upsert(_candidate("no-raw", "pool-no-raw", liquidity=30000))
     registry.upsert(_candidate("short-span", "pool-short", liquidity=25000))
     RawTransactionStore(raw_path).upsert(_raw("sig-1", "short-span", 100))
 
-    planner = TimeSpanBackfillPlanner(raw_store=RawTransactionStore(raw_path))
+    planner = TimeSpanBackfillPlanner(
+        raw_store=RawTransactionStore(raw_path),
+        event_store=NormalizedEventStore(event_path),
+        feature_store=FeatureSnapshotStore(feature_path),
+        outcome_store=OutcomeLabelStore(outcome_path),
+        dataset_store=ResearchDatasetStore(dataset_path),
+    )
     plan = planner.build_plan(registry_path=registry_path, min_liquidity_usd=10000, candidate_limit=2)
 
     assert plan.plan_items[0].token_mint == "no-raw"

@@ -5,10 +5,14 @@ from __future__ import annotations
 import argparse
 
 from research.mtp_research.ingestion.candidate_registry import CandidateRegistry
+from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
+from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
 from research.mtp_research.ingestion.raw_transaction_store import RawTransactionStore
 from research.mtp_research.pipeline.evidence_models import EvidenceRunConfig, make_evidence_run_id
 from research.mtp_research.pipeline.evidence_pipeline import EvidencePipeline
 from research.mtp_research.pipeline.time_span_backfill_planner import TimeSpanBackfillPlanner
+from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
+from research.mtp_research.validation.research_dataset_store import ResearchDatasetStore
 
 
 def main() -> int:
@@ -47,12 +51,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--helius-timeout-sec", type=int, default=30)
     parser.add_argument("--registry-path")
     parser.add_argument("--raw-path")
+    parser.add_argument("--event-path")
+    parser.add_argument("--feature-path")
+    parser.add_argument("--outcome-path")
+    parser.add_argument("--dataset-path")
     return parser.parse_args()
 
 
 def run_time_span_backfill(args: argparse.Namespace):
     planner = TimeSpanBackfillPlanner(
         raw_store=RawTransactionStore(args.raw_path) if args.raw_path else RawTransactionStore(),
+        event_store=NormalizedEventStore(args.event_path) if args.event_path else None,
+        feature_store=FeatureSnapshotStore(args.feature_path) if args.feature_path else None,
+        outcome_store=OutcomeLabelStore(args.outcome_path) if args.outcome_path else None,
+        dataset_store=ResearchDatasetStore(args.dataset_path) if args.dataset_path else None,
+        include_derived_coverage=False,
     )
     plan = planner.build_plan(
         min_liquidity_usd=args.min_liquidity_usd,
