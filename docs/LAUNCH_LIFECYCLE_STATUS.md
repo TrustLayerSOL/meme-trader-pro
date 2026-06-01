@@ -27,9 +27,10 @@ Current classified event counts:
 - `pumpfun_buy`: `98,588`
 - `pumpfun_sell`: `79,033`
 - `pumpfun_create`: `6,545`
-- `unknown_token_swap_candidate`: `23`
+- `pumpfun_migrate`: `2`
+- `unknown_token_swap_candidate`: `21`
 
-The previous lifecycle event file classified all `184,189` events as `unknown_token_swap_candidate`. The classified replay reduced unknowns to `23` using deterministic Pump.fun program-id plus instruction-log evidence, with invalid account layouts failing closed.
+The previous lifecycle event file classified all `184,189` events as `unknown_token_swap_candidate`. The classified replay reduced unknowns to `21` using deterministic Pump.fun program-id plus instruction-log evidence, with invalid account layouts failing closed.
 
 ## Survival Semantics
 
