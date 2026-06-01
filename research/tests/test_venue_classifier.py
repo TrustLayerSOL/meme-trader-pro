@@ -58,7 +58,7 @@ def test_venue_classifier_returns_unknown_swap_candidate_for_token_deltas() -> N
 def test_venue_classifier_uses_pumpfun_buy_program_and_log() -> None:
     result = classify_venue(
         _summary(
-            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID)],
+            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID, raw_json={"accounts": ["a", "b", "c", "d"]})],
             raw_record_role="pumpfun_bonding_curve_lifecycle_2h",
             raw_record_source="helius_rpc",
             logs=["Program log: Instruction: Buy"],
@@ -73,7 +73,7 @@ def test_venue_classifier_uses_pumpfun_buy_program_and_log() -> None:
 def test_venue_classifier_uses_pumpfun_sell_program_and_log() -> None:
     result = classify_venue(
         _summary(
-            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID)],
+            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID, raw_json={"accounts": ["a", "b", "c", "d"]})],
             raw_record_role="pumpfun_bonding_curve_lifecycle_2h",
             raw_record_source="helius_rpc",
             logs=["Program log: Instruction: SellV2"],
@@ -87,7 +87,7 @@ def test_venue_classifier_uses_pumpfun_sell_program_and_log() -> None:
 def test_venue_classifier_uses_pumpfun_create_program_and_log() -> None:
     result = classify_venue(
         _summary(
-            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID)],
+            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID, raw_json={"accounts": ["a", "b", "c", "d"]})],
             raw_record_role="pumpfun_bonding_curve_lifecycle_2h",
             raw_record_source="helius_rpc",
             logs=["Program log: Instruction: CreateV2"],
@@ -95,6 +95,20 @@ def test_venue_classifier_uses_pumpfun_create_program_and_log() -> None:
     )
 
     assert result.venue == "pumpfun_create"
+    assert result.confidence == 0.95
+
+
+def test_venue_classifier_uses_pumpfun_migrate_program_and_log() -> None:
+    result = classify_venue(
+        _summary(
+            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID, raw_json={"accounts": ["a", "b", "c", "d"]})],
+            raw_record_role="pumpfun_bonding_curve_lifecycle_2h",
+            raw_record_source="helius_rpc",
+            logs=["Program log: Instruction: MigrateV2"],
+        )
+    )
+
+    assert result.venue == "pumpfun_migrate"
     assert result.confidence == 0.95
 
 
@@ -110,7 +124,7 @@ def test_venue_classifier_keeps_unknown_for_unknown_pumpfun_instruction() -> Non
     )
     result = classify_venue(
         _summary(
-            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID)],
+            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID, raw_json={"accounts": ["a", "b", "c", "d"]})],
             deltas=[delta],
             raw_record_role="pumpfun_bonding_curve_lifecycle_2h",
             logs=["Program log: Instruction: UnknownNewInstruction"],
@@ -119,6 +133,19 @@ def test_venue_classifier_keeps_unknown_for_unknown_pumpfun_instruction() -> Non
 
     assert result.venue == "unknown_token_swap_candidate"
     assert result.reasons == ["pumpfun_program_seen_without_supported_instruction_log"]
+
+
+def test_venue_classifier_fails_closed_for_invalid_pumpfun_account_layout() -> None:
+    result = classify_venue(
+        _summary(
+            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID, raw_json={"accounts": []})],
+            raw_record_role="pumpfun_bonding_curve_lifecycle_2h",
+            logs=["Program log: Instruction: Buy"],
+        )
+    )
+
+    assert result.venue == "unknown"
+    assert result.reasons == ["pumpfun_program_seen_with_invalid_account_layout"]
 
 
 def test_venue_classifier_does_not_invent_pumpfun_without_program_id() -> None:

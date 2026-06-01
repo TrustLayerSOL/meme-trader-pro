@@ -23,6 +23,13 @@ def classify_venue(summary: TransactionSummary) -> VenueClassification:
 
     pumpfun_matches = sorted(program_ids & PARSER_PROGRAM_IDS["pump"])
     if pumpfun_matches:
+        if not _has_valid_pumpfun_account_layout(summary):
+            return VenueClassification(
+                venue="unknown",
+                confidence=0.0,
+                matched_program_ids=pumpfun_matches,
+                reasons=["pumpfun_program_seen_with_invalid_account_layout"],
+            )
         pumpfun_classification = _classify_pumpfun_instruction(instruction_logs)
         if pumpfun_classification:
             return VenueClassification(
@@ -102,10 +109,20 @@ def _classify_pumpfun_instruction(instruction_logs: list[str]) -> str | None:
             return "pumpfun_sell"
         if instruction in {"create", "createv2"}:
             return "pumpfun_create"
-        if instruction in {"migrate"}:
+        if instruction in {"migrate", "migratev2"}:
             return "pumpfun_migrate"
     return None
 
 
 def _pumpfun_reason_name(classification: str) -> str:
     return classification.removeprefix("pumpfun_")
+
+
+def _has_valid_pumpfun_account_layout(summary: TransactionSummary) -> bool:
+    for program in summary.programs:
+        if program.program_id not in PARSER_PROGRAM_IDS["pump"]:
+            continue
+        accounts = program.raw_json.get("accounts") if isinstance(program.raw_json, dict) else None
+        if isinstance(accounts, list) and len(accounts) >= 4:
+            return True
+    return False
