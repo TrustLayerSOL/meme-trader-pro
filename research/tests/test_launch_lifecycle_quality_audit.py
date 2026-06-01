@@ -195,3 +195,53 @@ def test_lifecycle_quality_audit_cli_runs(tmp_path: Path) -> None:
 
     assert "launch_count=1" in result.stdout
     assert "network_calls=0" in result.stdout
+
+
+def test_lifecycle_quality_audit_skips_raw_context_when_no_unknown_events(tmp_path: Path) -> None:
+    launches_path = _write_jsonl(
+        tmp_path / "launches.jsonl",
+        [
+            {
+                "launch_id": "launch-a",
+                "token_mint": "mint-a",
+                "launch_ts": 1000,
+                "launch_time_utc": "1970-01-01T00:16:40+00:00",
+                "launch_weekday": "Monday",
+                "launch_hour_local": 6,
+                "launch_minute_local": 0,
+                "launch_day_of_week": 0,
+                "launch_is_weekend": False,
+                "launch_regime": "mon_tue_wed_0600_1200_pt",
+                "source": "pumpfun_gtfa_census",
+                "venue": "pumpfun",
+                "metadata_json": {},
+            }
+        ],
+    )
+    snapshots_path = _write_jsonl(tmp_path / "snapshots.jsonl", [])
+    outcomes_path = _write_jsonl(tmp_path / "outcomes.jsonl", [])
+    events_path = _write_jsonl(
+        tmp_path / "events.jsonl",
+        [
+            {
+                "token_mint": "mint-a",
+                "signature": "sig-a",
+                "venue": "pumpfun_swap",
+                "metadata_json": {"venue_matched_program_ids": ["pumpfun-program"]},
+            }
+        ],
+    )
+    invalid_raw_path = tmp_path / "raw.jsonl"
+    invalid_raw_path.write_text("{not-json}\n", encoding="utf-8")
+
+    report = run_launch_lifecycle_quality_audit(
+        launches_path=launches_path,
+        snapshots_path=snapshots_path,
+        outcomes_path=outcomes_path,
+        events_path=events_path,
+        raw_path=invalid_raw_path,
+        output_dir=tmp_path / "reports",
+    )
+
+    assert report["event_classification_counts"] == {"pumpfun_swap": 1}
+    assert report["top_unknown_instruction_clusters"] == []

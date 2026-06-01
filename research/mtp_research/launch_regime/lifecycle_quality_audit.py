@@ -24,7 +24,7 @@ def run_launch_lifecycle_quality_audit(
     snapshots = _load_jsonl(Path(snapshots_path))
     outcomes = _load_jsonl(Path(outcomes_path))
     events = _load_jsonl(Path(events_path))
-    raw_records = _load_jsonl(Path(raw_path)) if raw_path else []
+    raw_records = _load_jsonl(Path(raw_path)) if raw_path and _has_unknown_events(events) else []
 
     launch_mints = {row.get("token_mint") for row in launches if row.get("token_mint")}
     snapshot_mints = {row.get("token_mint") for row in snapshots if row.get("token_mint")}
@@ -115,6 +115,10 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
             if text:
                 rows.append(json.loads(text))
     return rows
+
+
+def _has_unknown_events(events: list[dict[str, Any]]) -> bool:
+    return any((event.get("venue") or "unknown") in {"unknown", "unknown_token_swap_candidate"} for event in events)
 
 
 def _max_event_age_by_mint(launches: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[str, int]:
