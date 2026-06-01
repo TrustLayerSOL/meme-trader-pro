@@ -126,6 +126,17 @@ def test_from_env_accepts_explicit_performance_settings(monkeypatch: pytest.Monk
     assert adapter.timeout_sec == 11
 
 
+def test_from_env_loads_retry_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "test-key")
+    monkeypatch.setenv("HELIUS_MAX_RETRIES", "7")
+    monkeypatch.setenv("HELIUS_RETRY_BASE_SLEEP_SEC", "0.25")
+
+    adapter = HeliusHistoricalAdapter.from_env(load_project_dotenv=False)
+
+    assert adapter.max_retries == 7
+    assert adapter.retry_base_sleep_sec == 0.25
+
+
 def test_fetch_signatures_for_address_uses_mocked_http_method() -> None:
     calls = []
 

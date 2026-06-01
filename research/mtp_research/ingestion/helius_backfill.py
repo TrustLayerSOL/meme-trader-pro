@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib import request as urllib_request
 
 from research.mtp_research.ingestion.helius_models import (
@@ -30,12 +32,16 @@ class HeliusHistoricalAdapter:
         timeout_sec: int = 30,
         http_post: HttpPost | None = None,
         transaction_workers: int = 1,
+        max_retries: int = 3,
+        retry_base_sleep_sec: float = 1.0,
     ):
         self.api_key = api_key
         self.rpc_url = rpc_url
         self.timeout_sec = timeout_sec
         self._http_post = http_post or self._post_json
         self.transaction_workers = max(1, transaction_workers)
+        self.max_retries = max(0, max_retries)
+        self.retry_base_sleep_sec = max(0.0, retry_base_sleep_sec)
 
     @classmethod
     def from_env(
@@ -53,6 +59,8 @@ class HeliusHistoricalAdapter:
             api_key=api_key,
             timeout_sec=timeout_sec or _env_int("HELIUS_TIMEOUT_SEC", 30),
             transaction_workers=transaction_workers or _env_int("HELIUS_TRANSACTION_WORKERS", 1),
+            max_retries=_env_int("HELIUS_MAX_RETRIES", 3),
+            retry_base_sleep_sec=_env_float("HELIUS_RETRY_BASE_SLEEP_SEC", 1.0),
         )
 
     def build_rpc_url(self) -> str:
@@ -177,8 +185,24 @@ class HeliusHistoricalAdapter:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib_request.urlopen(req, timeout=timeout_sec) as response:
-            return json.loads(response.read().decode("utf-8"))
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                with urllib_request.urlopen(req, timeout=timeout_sec) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except HTTPError as exc:
+                last_error = exc
+                if exc.code not in {429, 500, 502, 503, 504} or attempt >= self.max_retries:
+                    raise
+                _sleep_for_retry(exc, attempt, self.retry_base_sleep_sec)
+            except URLError as exc:
+                last_error = exc
+                if attempt >= self.max_retries:
+                    raise
+                _sleep_for_retry(exc, attempt, self.retry_base_sleep_sec)
+        if last_error:
+            raise last_error
+        raise RuntimeError("Helius HTTP request failed without an exception")
 
 
 def _load_project_dotenv_if_needed() -> None:
@@ -218,3 +242,27 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _sleep_for_retry(exc: Exception, attempt: int, base_sleep_sec: float) -> None:
+    retry_after = None
+    if isinstance(exc, HTTPError):
+        retry_after_header = exc.headers.get("Retry-After") if exc.headers else None
+        if retry_after_header:
+            try:
+                retry_after = float(retry_after_header)
+            except ValueError:
+                retry_after = None
+    delay = retry_after if retry_after is not None else base_sleep_sec * (2 ** attempt)
+    if delay > 0:
+        time.sleep(delay)
