@@ -5,11 +5,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
+from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
+from research.mtp_research.ingestion.raw_transaction_store import RawTransactionStore
 from research.mtp_research.pipeline.time_span_backfill_planner import TimeSpanBackfillPlanner
 from research.mtp_research.pipeline.time_span_backfill_report import (
     write_plan_json,
     write_plan_markdown,
 )
+from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
+from research.mtp_research.validation.research_dataset_store import ResearchDatasetStore
 
 
 def main() -> int:
@@ -29,6 +34,11 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plan time-span expansion backfill.")
     parser.add_argument("--registry-path")
+    parser.add_argument("--raw-store-path", default=None)
+    parser.add_argument("--event-store-path", default=None)
+    parser.add_argument("--feature-store-path", default=None)
+    parser.add_argument("--outcome-store-path", default=None)
+    parser.add_argument("--dataset-path", default=None)
     parser.add_argument("--output-dir", default="data/backtests/diagnostics/reports")
     parser.add_argument("--min-liquidity-usd", type=float, default=10000)
     parser.add_argument("--candidate-limit", type=int, default=10)
@@ -41,7 +51,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_and_write_plan(args: argparse.Namespace):
-    planner = TimeSpanBackfillPlanner()
+    planner = TimeSpanBackfillPlanner(
+        raw_store=RawTransactionStore(args.raw_store_path) if args.raw_store_path else None,
+        event_store=NormalizedEventStore(args.event_store_path) if args.event_store_path else None,
+        feature_store=FeatureSnapshotStore(args.feature_store_path) if args.feature_store_path else None,
+        outcome_store=OutcomeLabelStore(args.outcome_store_path) if args.outcome_store_path else None,
+        dataset_store=ResearchDatasetStore(args.dataset_path) if args.dataset_path else None,
+    )
     plan = planner.build_plan(
         min_liquidity_usd=args.min_liquidity_usd,
         candidate_limit=args.candidate_limit,

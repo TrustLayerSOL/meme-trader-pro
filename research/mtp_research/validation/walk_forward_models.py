@@ -54,6 +54,7 @@ class WalkForwardConfig:
     min_label_quality: str = "sparse"
     require_entry_price: bool = True
     require_forward_return: bool = True
+    max_folds: int | None = None
     metadata_json: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -74,6 +75,7 @@ class WalkForwardConfig:
             min_label_quality=payload.get("min_label_quality", "sparse"),
             require_entry_price=payload.get("require_entry_price", True),
             require_forward_return=payload.get("require_forward_return", True),
+            max_folds=payload.get("max_folds"),
             metadata_json=dict(payload.get("metadata_json", {})),
         )
 

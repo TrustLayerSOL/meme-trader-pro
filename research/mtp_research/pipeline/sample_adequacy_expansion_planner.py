@@ -10,6 +10,10 @@ from research.mtp_research.pipeline.sample_adequacy_expansion_models import (
     utc_now_iso,
 )
 from research.mtp_research.pipeline.time_span_backfill_planner import TimeSpanBackfillPlanner
+from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
+from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
+from research.mtp_research.ingestion.raw_transaction_store import RawTransactionStore
+from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
 from research.mtp_research.validation.research_dataset_store import ResearchDatasetStore
 from research.mtp_research.validation.sample_adequacy import SampleAdequacyAnalyzer
 from research.mtp_research.validation.walk_forward_store import WalkForwardValidationStore
@@ -41,6 +45,10 @@ class SampleAdequacyExpansionPlanner:
         min_liquidity_usd: float | None = 10_000,
         recommended_signature_limit: int = 75,
         recommended_transaction_limit: int = 75,
+        raw_store_path: Path | str | None = None,
+        event_store_path: Path | str | None = None,
+        feature_store_path: Path | str | None = None,
+        outcome_store_path: Path | str | None = None,
     ) -> SampleAdequacyExpansionPlan:
         rows = ResearchDatasetStore(dataset_path).load_all()
         validations = WalkForwardValidationStore(walk_forward_store_path).load_all()
@@ -51,7 +59,14 @@ class SampleAdequacyExpansionPlanner:
             min_total_test_selected_count=self.min_total_test_selected_count,
             min_independent_batches=self.min_independent_batches,
         ).build_report(rows, validations)
-        time_span_plan = TimeSpanBackfillPlanner().build_plan(
+        time_span_planner = TimeSpanBackfillPlanner(
+            raw_store=RawTransactionStore(raw_store_path) if raw_store_path else None,
+            event_store=NormalizedEventStore(event_store_path) if event_store_path else None,
+            feature_store=FeatureSnapshotStore(feature_store_path) if feature_store_path else None,
+            outcome_store=OutcomeLabelStore(outcome_store_path) if outcome_store_path else None,
+            dataset_store=ResearchDatasetStore(dataset_path),
+        )
+        time_span_plan = time_span_planner.build_plan(
             registry_path=registry_path,
             min_liquidity_usd=min_liquidity_usd,
             candidate_limit=candidate_limit,

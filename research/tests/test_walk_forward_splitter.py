@@ -72,3 +72,23 @@ def test_no_randomization_same_folds_from_unsorted_rows() -> None:
 def test_handles_insufficient_range_safely() -> None:
     rows = [_row("row-1", 1), _row("row-2", 2)]
     assert WalkForwardSplitter(_config()).generate_folds(rows) == []
+
+
+def test_generate_folds_can_sample_large_fold_sets_deterministically() -> None:
+    rows = [_row(f"row-{idx}", idx * 60) for idx in range(500)]
+    config = WalkForwardConfig(
+        config_id="sampled",
+        train_window_seconds=300,
+        test_window_seconds=120,
+        step_seconds=60,
+        max_folds=5,
+    )
+
+    folds = WalkForwardSplitter(config).generate_folds(rows)
+
+    assert len(folds) == 5
+    assert folds[0].train_start_ts == 0
+    assert folds[-1].test_end_ts <= rows[-1].snapshot_ts
+    assert [fold.train_start_ts for fold in folds] == sorted(
+        fold.train_start_ts for fold in folds
+    )

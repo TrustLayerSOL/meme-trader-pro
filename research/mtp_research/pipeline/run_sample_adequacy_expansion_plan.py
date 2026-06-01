@@ -31,6 +31,10 @@ def main() -> int:
         min_liquidity_usd=args.min_liquidity_usd,
         recommended_signature_limit=args.recommended_signature_limit,
         recommended_transaction_limit=args.recommended_transaction_limit,
+        raw_store_path=args.raw_store_path,
+        event_store_path=args.event_store_path,
+        feature_store_path=args.feature_store_path,
+        outcome_store_path=args.outcome_store_path,
     )
     output_dir = Path(args.output_dir)
     markdown_path = write_expansion_plan_markdown(plan, output_dir / f"{plan.plan_id}.md")
@@ -59,6 +63,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--registry-path")
     parser.add_argument("--dataset-path", default="data/backtests/diagnostics/research_dataset_nearest300.jsonl")
     parser.add_argument("--walk-forward-store-path", default="data/backtests/diagnostics/walk_forward_best_diagnostic.jsonl")
+    parser.add_argument("--raw-store-path", default=None)
+    parser.add_argument("--event-store-path", default=None)
+    parser.add_argument("--feature-store-path", default=None)
+    parser.add_argument("--outcome-store-path", default=None)
     parser.add_argument("--output-dir", default="data/backtests/diagnostics/reports")
     parser.add_argument("--candidate-limit", type=int, default=10)
     parser.add_argument("--min-liquidity-usd", type=float, default=10_000)

@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-label-quality", default="sparse")
     parser.add_argument("--real-only", action="store_true")
     parser.add_argument("--min-liquidity-usd", type=float)
+    parser.add_argument("--max-walk-forward-folds", type=int, default=2000)
     return parser.parse_args()
 
 
@@ -102,9 +103,11 @@ def run_best_diagnostic_walk_forward(args: argparse.Namespace) -> dict:
         min_train_rows=best.min_train_rows,
         min_test_rows=best.min_test_rows,
         min_label_quality=args.min_label_quality,
+        max_folds=args.max_walk_forward_folds,
         metadata_json={
             "diagnostic_only": True,
             "fold_sufficiency_report_id": report.report_id,
+            "max_walk_forward_folds": args.max_walk_forward_folds,
         },
     )
     rule_config = RuleBacktestConfig(

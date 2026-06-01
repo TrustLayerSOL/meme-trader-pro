@@ -52,6 +52,8 @@ def test_best_diagnostic_walk_forward_runs_when_valid_config_exists(
             str(output_dir),
             "--store-path",
             str(store_path),
+            "--max-walk-forward-folds",
+            "3",
         ],
     )
 
@@ -59,7 +61,10 @@ def test_best_diagnostic_walk_forward_runs_when_valid_config_exists(
     output = capsys.readouterr().out
     assert "walk_forward_ran=True" in output
     assert "network_calls=0" in output
-    assert len(WalkForwardValidationStore(store_path).load_all()) == 1
+    validations = WalkForwardValidationStore(store_path).load_all()
+    assert len(validations) == 1
+    assert validations[0].fold_count <= 3
+    assert validations[0].config.max_folds == 3
     assert list(output_dir.glob("walk-forward-*.json"))
 
 

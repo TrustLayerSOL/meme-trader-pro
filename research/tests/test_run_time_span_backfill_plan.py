@@ -8,6 +8,11 @@ from research.mtp_research.pipeline.run_time_span_backfill_plan import main
 
 def test_time_span_backfill_plan_cli_runs_without_network(tmp_path: Path, monkeypatch, capsys) -> None:
     registry_path = tmp_path / "registry.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    event_path = tmp_path / "events.jsonl"
+    feature_path = tmp_path / "features.jsonl"
+    outcome_path = tmp_path / "outcomes.jsonl"
+    dataset_path = tmp_path / "dataset.jsonl"
     output_dir = tmp_path / "reports"
     CandidateRegistry(registry_path).upsert(
         LaunchCandidate(
@@ -26,6 +31,16 @@ def test_time_span_backfill_plan_cli_runs_without_network(tmp_path: Path, monkey
             "run_time_span_backfill_plan",
             "--registry-path",
             str(registry_path),
+            "--raw-store-path",
+            str(raw_path),
+            "--event-store-path",
+            str(event_path),
+            "--feature-store-path",
+            str(feature_path),
+            "--outcome-store-path",
+            str(outcome_path),
+            "--dataset-path",
+            str(dataset_path),
             "--output-dir",
             str(output_dir),
             "--candidate-limit",

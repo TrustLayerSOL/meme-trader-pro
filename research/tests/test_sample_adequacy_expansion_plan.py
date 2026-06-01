@@ -66,6 +66,10 @@ def test_expansion_plan_recommends_candidates_and_time_span(tmp_path: Path) -> N
     registry_path = tmp_path / "registry.jsonl"
     dataset_path = tmp_path / "dataset.jsonl"
     wf_path = tmp_path / "wf.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    event_path = tmp_path / "events.jsonl"
+    feature_path = tmp_path / "features.jsonl"
+    outcome_path = tmp_path / "outcomes.jsonl"
     registry = CandidateRegistry(registry_path)
     registry.upsert(_candidate("token-1", "pool-1"))
     registry.upsert(_candidate("token-2", "pool-2"))
@@ -78,6 +82,10 @@ def test_expansion_plan_recommends_candidates_and_time_span(tmp_path: Path) -> N
         dataset_path=dataset_path,
         walk_forward_store_path=wf_path,
         candidate_limit=10,
+        raw_store_path=raw_path,
+        event_store_path=event_path,
+        feature_store_path=feature_path,
+        outcome_store_path=outcome_path,
     )
 
     assert plan.sample_adequate is False

@@ -19,6 +19,10 @@ def test_sample_adequacy_expansion_plan_cli_runs_without_network(tmp_path: Path,
     registry_path = tmp_path / "registry.jsonl"
     dataset_path = tmp_path / "dataset.jsonl"
     walk_path = tmp_path / "walk.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    event_path = tmp_path / "events.jsonl"
+    feature_path = tmp_path / "features.jsonl"
+    outcome_path = tmp_path / "outcomes.jsonl"
     output_dir = tmp_path / "reports"
     CandidateRegistry(registry_path).upsert(
         LaunchCandidate(
@@ -70,11 +74,19 @@ def test_sample_adequacy_expansion_plan_cli_runs_without_network(tmp_path: Path,
             str(registry_path),
             "--dataset-path",
             str(dataset_path),
-            "--walk-forward-store-path",
-            str(walk_path),
-            "--output-dir",
-            str(output_dir),
-        ],
+                "--walk-forward-store-path",
+                str(walk_path),
+                "--raw-store-path",
+                str(raw_path),
+                "--event-store-path",
+                str(event_path),
+                "--feature-store-path",
+                str(feature_path),
+                "--outcome-store-path",
+                str(outcome_path),
+                "--output-dir",
+                str(output_dir),
+            ],
     )
 
     assert main() == 0
