@@ -10,6 +10,10 @@ from research.mtp_research.features.feature_snapshot_store import FeatureSnapsho
 from research.mtp_research.ingestion.normalized_event_store import NormalizedEventStore
 from research.mtp_research.pipeline.real_candidate_filter import real_token_mints_from_registry
 from research.mtp_research.validation.outcome_label_builder import OutcomeLabelBuilder
+from research.mtp_research.validation.outcome_label_builder import _event_times_by_token
+from research.mtp_research.validation.outcome_label_builder import _events_by_token
+from research.mtp_research.validation.outcome_label_builder import _future_events_from_sorted
+from research.mtp_research.validation.outcome_label_builder import _timestamps_by_token
 from research.mtp_research.validation.outcome_label_store import OutcomeLabelStore
 from research.mtp_research.validation.snapshot_selection_models import SnapshotSelectionConfig
 from research.mtp_research.validation.snapshot_selector import SnapshotSelector
@@ -142,19 +146,33 @@ def build_labels_with_progress(
 ):
     price_points = builder.price_builder.build_price_points(events)
     points_by_token = builder.price_builder.group_by_token(price_points)
+    point_times_by_token = _timestamps_by_token(points_by_token)
+    events_by_token = _events_by_token(events)
+    event_times_by_token = _event_times_by_token(events_by_token)
     labels = []
     progress_interval = progress_every if progress_every and progress_every > 0 else 0
     started_at = perf_counter()
     total = len(snapshots)
     for index, snapshot in enumerate(snapshots, start=1):
         token_points = points_by_token.get(snapshot.token_mint, [])
+        token_price_timestamps = point_times_by_token.get(snapshot.token_mint, [])
+        token_events = events_by_token.get(snapshot.token_mint, [])
+        token_event_times = event_times_by_token.get(snapshot.token_mint, [])
         for horizon in builder.horizons:
+            future_events = _future_events_from_sorted(
+                token_events,
+                token_event_times,
+                snapshot_ts=snapshot.snapshot_ts,
+                horizon_seconds=horizon.seconds,
+            )
             labels.append(
                 builder.build_label_for_snapshot(
                     snapshot=snapshot,
                     events=events,
                     token_price_points=token_points,
                     horizon=horizon,
+                    token_price_timestamps=token_price_timestamps,
+                    future_events=future_events,
                 )
             )
         if progress_interval and (index % progress_interval == 0 or index == total):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter
 
 from research.mtp_research.features.feature_models import FeatureSnapshot
@@ -49,32 +50,41 @@ class OutcomeLabelBuilder:
         events: list[NormalizedEvent],
         token_price_points: list[TokenPricePoint],
         horizon: OutcomeHorizon,
+        token_price_timestamps: list[int] | None = None,
+        future_events: list[NormalizedEvent] | None = None,
     ) -> OutcomeLabel:
-        entry_point = self.price_builder.get_entry_price(
+        if token_price_timestamps is None:
+            token_price_points = sorted(token_price_points, key=lambda point: point.ts)
+            token_price_timestamps = [point.ts for point in token_price_points]
+        entry_point = self.price_builder.get_entry_price_from_sorted(
             token_price_points,
             snapshot.snapshot_ts,
             max_staleness_sec=self.entry_max_staleness_sec,
             allow_first_after=self.allow_first_after_entry,
+            timestamps=token_price_timestamps,
         )
         entry_uses_nearest_fallback = False
         if entry_point is None and self.allow_nearest_entry_fallback:
-            entry_point = self.price_builder.get_nearest_price(
+            entry_point = self.price_builder.get_nearest_price_from_sorted(
                 token_price_points,
                 snapshot.snapshot_ts,
                 max_staleness_sec=self.nearest_entry_max_staleness_sec,
+                timestamps=token_price_timestamps,
             )
             entry_uses_nearest_fallback = entry_point is not None
-        forward_points = self.price_builder.get_forward_points(
+        forward_points = self.price_builder.get_forward_points_from_sorted(
             token_price_points,
             snapshot.snapshot_ts,
             horizon.seconds,
+            timestamps=token_price_timestamps,
         )
-        future_events = _future_events(
-            events,
-            token_mint=snapshot.token_mint,
-            snapshot_ts=snapshot.snapshot_ts,
-            horizon_seconds=horizon.seconds,
-        )
+        if future_events is None:
+            future_events = _future_events(
+                events,
+                token_mint=snapshot.token_mint,
+                snapshot_ts=snapshot.snapshot_ts,
+                horizon_seconds=horizon.seconds,
+            )
 
         entry_price_source = (
             "nearest_research_fallback"
@@ -166,17 +176,31 @@ class OutcomeLabelBuilder:
         ]
         price_points = self.price_builder.build_price_points(events)
         points_by_token = self.price_builder.group_by_token(price_points)
+        point_times_by_token = _timestamps_by_token(points_by_token)
+        events_by_token = _events_by_token(events)
+        event_times_by_token = _event_times_by_token(events_by_token)
 
         labels: list[OutcomeLabel] = []
         for snapshot in filtered_snapshots:
             token_points = points_by_token.get(snapshot.token_mint, [])
+            token_price_timestamps = point_times_by_token.get(snapshot.token_mint, [])
+            token_events = events_by_token.get(snapshot.token_mint, [])
+            token_event_times = event_times_by_token.get(snapshot.token_mint, [])
             for horizon in self.horizons:
+                future_events = _future_events_from_sorted(
+                    token_events,
+                    token_event_times,
+                    snapshot_ts=snapshot.snapshot_ts,
+                    horizon_seconds=horizon.seconds,
+                )
                 labels.append(
                     self.build_label_for_snapshot(
                         snapshot=snapshot,
                         events=events,
                         token_price_points=token_points,
                         horizon=horizon,
+                        token_price_timestamps=token_price_timestamps,
+                        future_events=future_events,
                     )
                 )
         return labels
@@ -197,6 +221,48 @@ def _future_events(
         and event.block_time > snapshot_ts
         and event.block_time <= horizon_end
     ]
+
+
+def _future_events_from_sorted(
+    sorted_events: list[NormalizedEvent],
+    timestamps: list[int],
+    snapshot_ts: int,
+    horizon_seconds: int,
+) -> list[NormalizedEvent]:
+    horizon_end = snapshot_ts + horizon_seconds
+    start = bisect_right(timestamps, snapshot_ts)
+    end = bisect_right(timestamps, horizon_end)
+    return sorted_events[start:end]
+
+
+def _events_by_token(events: list[NormalizedEvent]) -> dict[str, list[NormalizedEvent]]:
+    grouped: dict[str, list[NormalizedEvent]] = {}
+    for event in events:
+        if not event.token_mint or event.block_time is None:
+            continue
+        grouped.setdefault(event.token_mint, []).append(event)
+    return {
+        token_mint: sorted(token_events, key=lambda event: event.block_time or 0)
+        for token_mint, token_events in grouped.items()
+    }
+
+
+def _event_times_by_token(
+    events_by_token: dict[str, list[NormalizedEvent]],
+) -> dict[str, list[int]]:
+    return {
+        token_mint: [event.block_time or 0 for event in token_events]
+        for token_mint, token_events in events_by_token.items()
+    }
+
+
+def _timestamps_by_token(
+    points_by_token: dict[str, list[TokenPricePoint]],
+) -> dict[str, list[int]]:
+    return {
+        token_mint: [point.ts for point in token_points]
+        for token_mint, token_points in points_by_token.items()
+    }
 
 
 def _entry_price_source(entry_point: TokenPricePoint | None, snapshot_ts: int) -> str:
