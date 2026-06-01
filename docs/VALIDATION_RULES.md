@@ -218,3 +218,7 @@
 - Diagnostic outcome rebuilds may use a wider prior-entry staleness window only when the strict gate would accept that prior price; clean/canonical labels remain separate.
 - Native SOL balance-delta price proxies are heuristic local price anchors. They must carry `transaction_native_sol_quote_over_base_v0` metadata and remain subject to outlier and gated validation review.
 - Improved price coverage from native SOL proxies is not evidence of rule validity if robust means become outlier-sensitive.
+- Native SOL proxy prices are diagnostic until quality-gated.
+- Proxy-backed rows must be separable from non-proxy rows in validation reports.
+- Rule evidence must be checked on all rows, proxy-only rows, non-proxy rows, and proxy-quality-gated rows before interpreting any proxy-driven gain.
+- Extreme proxy-driven outliers must not drive thesis decisions, rejection, promotion, paper trading, or live trading.

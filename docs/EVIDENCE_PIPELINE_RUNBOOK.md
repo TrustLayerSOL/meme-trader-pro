@@ -463,3 +463,25 @@ Use the fast offline rebuild before interpreting price-quality changes. Its diag
 Native SOL balance-delta price proxies are local heuristic anchors for swaps where the quote leg appears as lamport movement instead of a WSOL/USDC/USDT token balance delta. Treat any coverage improvement from this parser path as diagnostic until outlier reports confirm the price path is usable.
 
 Stage 35 writes gated diagnostic artifacts under `data/backtests/diagnostics/`. It does not call Helius, does not mutate canonical stores, does not optimize thresholds, and does not promote theses. Use it to decide whether the next bottleneck is clean price inference, candidate diversity, explicit outlier separation, or conservative rule rework.
+
+## Stage 38: Native SOL Proxy Hardening
+
+Run the native SOL proxy quality gate before interpreting proxy-backed rows:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_native_sol_proxy_quality_gate --real-only
+```
+
+Run the proxy-separated rule report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_proxy_separated_rule_report --real-only
+```
+
+Run the full offline hardening cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage38_proxy_hardening_cycle
+```
+
+Native SOL proxy hardening is diagnostic-only. It does not call Helius, tune rules, promote theses, enable paper trading, or enable live trading. Use the outputs to compare all rows, proxy-only rows, non-proxy rows, and proxy-quality-gated rows before deciding whether the next bottleneck is proxy price inference or bounded evidence expansion.

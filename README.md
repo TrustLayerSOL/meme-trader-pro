@@ -267,6 +267,24 @@ After bounded expansion, the fast offline rebuild uses a wider diagnostic prior-
 
 Native SOL balance-delta price proxies are heuristic local anchors for diagnostics. They improve coverage when the quote leg is native SOL, but they do not validate a rule or thesis without outlier and price-path review.
 
+Run the native SOL proxy quality gate:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_native_sol_proxy_quality_gate --real-only
+```
+
+Run the proxy-separated rule report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_proxy_separated_rule_report --real-only
+```
+
+Run the Stage 38 proxy hardening cycle:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_stage38_proxy_hardening_cycle
+```
+
 Focused tests:
 
 ```bash
@@ -278,6 +296,11 @@ Focused tests:
 ./trading_env/bin/python -m pytest research/tests/test_price_quality_failure_analysis.py
 ./trading_env/bin/python -m pytest research/tests/test_run_price_quality_failure_analysis.py
 ./trading_env/bin/python -m pytest research/tests/test_fast_offline_rebuild_review.py
+./trading_env/bin/python -m pytest research/tests/test_native_sol_proxy_quality.py
+./trading_env/bin/python -m pytest research/tests/test_native_sol_proxy_quality_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_native_sol_proxy_quality_gate.py
+./trading_env/bin/python -m pytest research/tests/test_run_proxy_separated_rule_report.py
+./trading_env/bin/python -m pytest research/tests/test_run_stage38_proxy_hardening_cycle.py
 ```
 
 Stage 35 is offline and diagnostic-only. It filters price-quality rows into a separate diagnostic dataset and compares gated results against ungated diagnostics. It does not call Helius, tune rules, promote theses, enable paper trading, or enable live trading.
