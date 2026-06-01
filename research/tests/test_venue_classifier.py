@@ -112,6 +112,21 @@ def test_venue_classifier_uses_pumpfun_migrate_program_and_log() -> None:
     assert result.confidence == 0.95
 
 
+def test_venue_classifier_uses_pumpfun_swap_program_and_log_without_inventing_side() -> None:
+    result = classify_venue(
+        _summary(
+            programs=[ProgramInvocation(program_id=PUMPFUN_PROGRAM_ID, raw_json={"accounts": ["a", "b", "c", "d"]})],
+            raw_record_role="pumpfun_bonding_curve_lifecycle_2h",
+            raw_record_source="helius_rpc",
+            logs=["Program log: Instruction: SwapTob", "Program log: Instruction: SwapV2"],
+        )
+    )
+
+    assert result.venue == "pumpfun_swap"
+    assert result.confidence == 0.95
+    assert result.reasons == ["matched_pumpfun_program_id_and_swap_instruction_log"]
+
+
 def test_venue_classifier_keeps_unknown_for_unknown_pumpfun_instruction() -> None:
     delta = TokenBalanceDelta(
         owner="wallet-1",

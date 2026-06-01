@@ -279,7 +279,15 @@ def _per_launch_classification_coverage(
     launches: list[dict[str, Any]],
     events: list[dict[str, Any]],
 ) -> dict[str, int]:
-    known_classes = {"pumpfun_create", "pumpfun_buy", "pumpfun_sell", "pumpfun_migrate", "pumpswap_trade", "raydium_trade"}
+    known_classes = {
+        "pumpfun_create",
+        "pumpfun_buy",
+        "pumpfun_sell",
+        "pumpfun_migrate",
+        "pumpfun_swap",
+        "pumpswap_trade",
+        "raydium_trade",
+    }
     classifications_by_mint: dict[str, set[str]] = {}
     for event in events:
         mint = event.get("token_mint")

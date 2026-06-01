@@ -111,6 +111,8 @@ def _classify_pumpfun_instruction(instruction_logs: list[str]) -> str | None:
             return "pumpfun_create"
         if instruction in {"migrate", "migratev2"}:
             return "pumpfun_migrate"
+        if instruction in {"swaptob", "swapv2"}:
+            return "pumpfun_swap"
     return None
 
 
