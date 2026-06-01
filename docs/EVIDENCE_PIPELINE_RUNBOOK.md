@@ -202,7 +202,8 @@ Dry-run a bounded first-two-hour raw lifecycle collection:
 ./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_lifecycle_collection \
   --lane existing \
   --target-launches 1500 \
-  --collection-method address_window
+  --collection-method address_window \
+  --address-window-workers 32
 ```
 
 Collect only after the dry-run estimate is acceptable:
@@ -213,6 +214,7 @@ HELIUS_TRANSACTION_WORKERS=32 HELIUS_TIMEOUT_SEC=45 HELIUS_MAX_RETRIES=6 HELIUS_
   --lane existing \
   --target-launches 1500 \
   --collection-method address_window \
+  --address-window-workers 32 \
   --execute
 ```
 

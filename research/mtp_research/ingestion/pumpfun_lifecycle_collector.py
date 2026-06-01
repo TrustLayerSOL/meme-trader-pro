@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+from concurrent.futures import ThreadPoolExecutor
 
 from research.mtp_research.ingestion.helius_backfill import HeliusHistoricalAdapter
 from research.mtp_research.ingestion.helius_models import HeliusBackfillRequest, HeliusTransactionRecord
@@ -50,6 +51,7 @@ def collect_pumpfun_lifecycle(
     max_signature_pages_per_launch: int = 1,
     max_transactions_per_launch: int = 100,
     collection_method: str = "signature_hydrate",
+    address_window_workers: int = 1,
     execute: bool = False,
     adapter: HeliusHistoricalAdapter | None = None,
 ) -> dict[str, Any]:
@@ -65,6 +67,7 @@ def collect_pumpfun_lifecycle(
         "max_signature_pages_per_launch": max_signature_pages_per_launch,
         "max_transactions_per_launch": max_transactions_per_launch,
         "collection_method": collection_method,
+        "address_window_workers": max(1, address_window_workers),
         "estimated_signature_requests": len(selected) * max_signature_pages_per_launch,
         "estimated_transaction_requests_up_to": len(selected) * max_transactions_per_launch,
     }
@@ -94,6 +97,20 @@ def collect_pumpfun_lifecycle(
         "raw_updated": 0,
     }
     warnings: list[str] = []
+
+    if collection_method == "address_window" and address_window_workers > 1:
+        window_totals = _collect_address_window_parallel(
+            selected,
+            adapter=adapter,
+            store=store,
+            existing_signatures=existing_signatures,
+            lane=lane,
+            max_transactions_per_launch=max_transactions_per_launch,
+            workers=address_window_workers,
+        )
+        for key, value in window_totals.items():
+            totals[key] += value
+        return {**base_summary, **totals, "warning_flags": warnings}
 
     for row in selected:
         if collection_method == "address_window":
@@ -140,6 +157,56 @@ def collect_pumpfun_lifecycle(
     return {**base_summary, **totals, "warning_flags": warnings}
 
 
+def _collect_address_window_parallel(
+    rows: list[PumpFunCreationCensusRow],
+    *,
+    adapter: HeliusHistoricalAdapter,
+    store: RawTransactionStore,
+    existing_signatures: set[str],
+    lane: str,
+    max_transactions_per_launch: int,
+    workers: int,
+) -> dict[str, int]:
+    totals = {
+        "network_calls": 0,
+        "launches_processed": 0,
+        "signatures_seen": 0,
+        "signatures_in_window": 0,
+        "transactions_fetched": 0,
+        "raw_inserted": 0,
+        "raw_updated": 0,
+    }
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        results = list(
+            executor.map(
+                lambda row: _fetch_launch_with_address_window(
+                    row,
+                    adapter=adapter,
+                    max_transactions_per_launch=max_transactions_per_launch,
+                ),
+                rows,
+            )
+        )
+    raw_records: list[RawTransactionRecord] = []
+    for row, transactions in zip(rows, results, strict=False):
+        totals["network_calls"] += 1
+        totals["launches_processed"] += 1
+        totals["signatures_seen"] += len(transactions)
+        totals["signatures_in_window"] += len(transactions)
+        for body in transactions:
+            signature = _signature_from_body(body)
+            if not signature or signature in existing_signatures:
+                continue
+            record = _raw_record_from_gtfa_body(signature, body, row, lane)
+            raw_records.append(record)
+            existing_signatures.add(signature)
+    counts = store.append_new_many(raw_records)
+    totals["transactions_fetched"] += len(raw_records)
+    totals["raw_inserted"] += counts["inserted"]
+    totals["raw_updated"] += counts["updated"]
+    return totals
+
+
 def _collect_launch_with_address_window(
     row: PumpFunCreationCensusRow,
     *,
@@ -149,14 +216,11 @@ def _collect_launch_with_address_window(
     lane: str,
     max_transactions_per_launch: int,
 ) -> dict[str, int]:
-    launch_ts = int(row.block_time or 0)
-    result = adapter.fetch_transactions_for_address_window(
-        row.bonding_curve or "",
-        start_time=launch_ts,
-        end_time=launch_ts + MAX_LIFECYCLE_SECONDS,
-        limit=max_transactions_per_launch,
+    transactions = _fetch_launch_with_address_window(
+        row,
+        adapter=adapter,
+        max_transactions_per_launch=max_transactions_per_launch,
     )
-    transactions = result["transactions"][:max_transactions_per_launch]
     raw_records = []
     for body in transactions:
         signature = _signature_from_body(body)
@@ -174,6 +238,22 @@ def _collect_launch_with_address_window(
         "raw_inserted": counts["inserted"],
         "raw_updated": counts["updated"],
     }
+
+
+def _fetch_launch_with_address_window(
+    row: PumpFunCreationCensusRow,
+    *,
+    adapter: HeliusHistoricalAdapter,
+    max_transactions_per_launch: int,
+) -> list[dict[str, Any]]:
+    launch_ts = int(row.block_time or 0)
+    result = adapter.fetch_transactions_for_address_window(
+        row.bonding_curve or "",
+        start_time=launch_ts,
+        end_time=launch_ts + MAX_LIFECYCLE_SECONDS,
+        limit=max_transactions_per_launch,
+    )
+    return result["transactions"][:max_transactions_per_launch]
 
 
 def _collect_launch_signature_records(
