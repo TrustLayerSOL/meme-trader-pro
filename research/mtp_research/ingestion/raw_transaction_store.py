@@ -108,6 +108,25 @@ class RawTransactionStore:
         self._write_all(list(existing_records.values()))
         return counts
 
+    def append_new_many(self, records: list[RawTransactionRecord]) -> dict[str, int]:
+        """Append records already known to be new by signature.
+
+        Historical backfill filters existing signatures before hydration. In that
+        path, rewriting the complete raw replay cache for every target is wasted
+        work and dominates runtime once the file gets large.
+        """
+        counts = {"inserted": 0, "updated": 0}
+        if not records:
+            return counts
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as f:
+            for record in records:
+                f.write(json.dumps(record.to_dict(), sort_keys=True))
+                f.write("\n")
+                counts["inserted"] += 1
+        return counts
+
     def _write_all(self, records: list[RawTransactionRecord]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         sorted_records = sorted(

@@ -140,6 +140,35 @@ def test_run_backfill_targets_execute_uses_mocked_adapter_and_tracks_counts(tmp_
     assert raw_store.get_by_signature("sig-1") is not None
 
 
+def test_run_backfill_targets_uses_append_path_for_known_new_raw_records(tmp_path: Path, monkeypatch) -> None:
+    adapter = FakeHeliusAdapter()
+    raw_store = RawTransactionStore(tmp_path / "raw.jsonl")
+    append_calls = 0
+    original_append = raw_store.append_new_many
+
+    def counted_append(records):
+        nonlocal append_calls
+        append_calls += 1
+        return original_append(records)
+
+    monkeypatch.setattr(raw_store, "append_new_many", counted_append)
+    pipeline = EvidencePipeline(
+        candidate_registry=_registry(tmp_path / "registry.jsonl", 1),
+        raw_transaction_store=raw_store,
+        helius_adapter=adapter,
+    )
+    targets = pipeline.plan_targets(pipeline.select_candidates(), ["mint"])
+
+    summary = pipeline.run_backfill_targets(
+        targets,
+        EvidenceRunConfig("run-1", max_signatures_per_target=2, max_transactions_per_target=2, dry_run=False),
+        execute=True,
+    )
+
+    assert append_calls == 1
+    assert summary.raw_transactions_inserted == 2
+
+
 def test_run_backfill_targets_can_fetch_bounded_signature_pages(tmp_path: Path) -> None:
     adapter = PaginatedFakeHeliusAdapter()
     raw_store = RawTransactionStore(tmp_path / "raw.jsonl")

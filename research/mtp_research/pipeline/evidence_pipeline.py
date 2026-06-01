@@ -158,7 +158,7 @@ class EvidencePipeline:
                             if body
                         ]
                         store_started = perf_counter()
-                        counts = self.raw_transaction_store.upsert_many(raw_records)
+                        counts = self.raw_transaction_store.append_new_many(raw_records)
                         target_timing["store_seconds"] += perf_counter() - store_started
                         summary.transactions_fetched += len(raw_records)
                         target_timing["transactions_fetched"] += len(raw_records)

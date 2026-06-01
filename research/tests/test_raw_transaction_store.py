@@ -57,3 +57,18 @@ def test_raw_transaction_store_upsert_many_writes_batch_once(tmp_path: Path, mon
 
     assert counts == {"inserted": 3, "updated": 0}
     assert write_calls == 1
+
+
+def test_raw_transaction_store_append_new_many_does_not_rewrite_existing_file(tmp_path: Path, monkeypatch) -> None:
+    store = RawTransactionStore(path=tmp_path / "helius_transactions.jsonl")
+    store.upsert(_record("sig-existing"))
+    monkeypatch.setattr(
+        store,
+        "_write_all",
+        lambda _records: (_ for _ in ()).throw(AssertionError("append path should not rewrite full store")),
+    )
+
+    counts = store.append_new_many([_record("sig-1"), _record("sig-2")])
+
+    assert counts == {"inserted": 2, "updated": 0}
+    assert {record.signature for record in store.load_all()} == {"sig-existing", "sig-1", "sig-2"}
