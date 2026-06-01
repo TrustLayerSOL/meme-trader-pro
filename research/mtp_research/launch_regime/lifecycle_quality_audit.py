@@ -50,6 +50,24 @@ def run_launch_lifecycle_quality_audit(
     priced_outcome_count = sum(1 for row in outcomes if _metadata_number(row, "priced_event_count") > 0)
     liquidity_proxy_outcome_count = sum(1 for row in outcomes if row.get("has_liquidity_proxy_at_120m"))
     liquidity_proxy_source_counts = _liquidity_proxy_source_counts(snapshots, outcomes)
+    valuation_rows = [*snapshots, *outcomes]
+    true_market_cap_available_count = _count_true(valuation_rows, "true_market_cap_available")
+    fdv_available_count = _count_true(valuation_rows, "fdv_available")
+    valuation_proxy_available_count = _count_true(valuation_rows, "valuation_proxy_available")
+    bonding_curve_liquidity_proxy_available_count = _count_true(
+        valuation_rows,
+        "bonding_curve_liquidity_proxy_available",
+    )
+    threshold_outcomes_usable_count = _count_true(valuation_rows, "threshold_outcomes_usable")
+    price_sol_available_count = _count_true(valuation_rows, "price_sol_available")
+    price_usd_available_count = _count_true(valuation_rows, "price_usd_available")
+    supply_available_count = _count_true(valuation_rows, "supply_available")
+    sol_usd_available_count = _count_true(valuation_rows, "sol_usd_available")
+    valuation_missing_reason_counts = _value_counts(valuation_rows, "valuation_missing_reason")
+    threshold_outcomes_missing_reason_counts = _value_counts(
+        valuation_rows,
+        "threshold_outcomes_missing_reason",
+    )
     market_cap_unknown_outcome_count = sum(
         1 for row in outcomes
         if not (row.get("metadata_json") or {}).get("market_cap_available")
@@ -84,6 +102,21 @@ def run_launch_lifecycle_quality_audit(
         "priced_outcome_count": priced_outcome_count,
         "liquidity_proxy_outcome_count": liquidity_proxy_outcome_count,
         "liquidity_proxy_source_counts": dict(sorted(liquidity_proxy_source_counts.items())),
+        "true_market_cap_available_count": true_market_cap_available_count,
+        "fdv_available_count": fdv_available_count,
+        "valuation_proxy_available_count": valuation_proxy_available_count,
+        "bonding_curve_liquidity_proxy_available_count": bonding_curve_liquidity_proxy_available_count,
+        "threshold_outcomes_usable_count": threshold_outcomes_usable_count,
+        "price_sol_available_count": price_sol_available_count,
+        "price_usd_available_count": price_usd_available_count,
+        "supply_available_count": supply_available_count,
+        "sol_usd_available_count": sol_usd_available_count,
+        "valuation_missing_reason_counts": dict(sorted(valuation_missing_reason_counts.items())),
+        "threshold_outcomes_missing_reason_counts": dict(sorted(threshold_outcomes_missing_reason_counts.items())),
+        "valuation_examples": _examples_with_fields(valuation_rows),
+        "threshold_blocked_examples": _examples_with_fields(
+            [row for row in valuation_rows if row.get("threshold_outcomes_usable") is False],
+        ),
         "market_cap_unknown_outcome_count": market_cap_unknown_outcome_count,
         "survived_counts": survived_counts,
         "event_max_age_bucket_counts": dict(sorted(event_max_age_bucket_counts.items())),
@@ -181,6 +214,34 @@ def _liquidity_proxy_source_counts(
         if source:
             counts[str(source)] += 1
     return counts
+
+
+def _count_true(rows: list[dict[str, Any]], key: str) -> int:
+    return sum(1 for row in rows if row.get(key) is True)
+
+
+def _value_counts(rows: list[dict[str, Any]], key: str) -> Counter[str]:
+    return Counter(str(row.get(key)) for row in rows if row.get(key) is not None)
+
+
+def _examples_with_fields(rows: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    examples = []
+    fields = (
+        "token_mint",
+        "launch_age_seconds",
+        "true_market_cap_available",
+        "fdv_available",
+        "valuation_proxy_available",
+        "bonding_curve_liquidity_proxy_sol",
+        "threshold_outcomes_usable",
+        "valuation_missing_reason",
+        "threshold_outcomes_missing_reason",
+    )
+    for row in rows:
+        examples.append({field: row.get(field) for field in fields if field in row})
+        if len(examples) >= limit:
+            break
+    return examples
 
 
 def _program_id_counts(events: list[dict[str, Any]], raw_records: list[dict[str, Any]]) -> Counter[str]:
@@ -374,6 +435,14 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- priced_snapshot_count: `{report['priced_snapshot_count']}`",
         f"- liquidity_proxy_snapshot_count: `{report['liquidity_proxy_snapshot_count']}`",
         f"- liquidity_proxy_outcome_count: `{report['liquidity_proxy_outcome_count']}`",
+        f"- true_market_cap_available_count: `{report['true_market_cap_available_count']}`",
+        f"- fdv_available_count: `{report['fdv_available_count']}`",
+        f"- valuation_proxy_available_count: `{report['valuation_proxy_available_count']}`",
+        f"- bonding_curve_liquidity_proxy_available_count: `{report['bonding_curve_liquidity_proxy_available_count']}`",
+        f"- threshold_outcomes_usable_count: `{report['threshold_outcomes_usable_count']}`",
+        f"- supply_available_count: `{report['supply_available_count']}`",
+        f"- sol_usd_available_count: `{report['sol_usd_available_count']}`",
+        f"- price_usd_available_count: `{report['price_usd_available_count']}`",
         f"- market_cap_unknown_outcome_count: `{report['market_cap_unknown_outcome_count']}`",
         f"- per_launch_event_classification_coverage: `{report['per_launch_event_classification_coverage']}`",
         f"- warning_flags: `{report['warning_flags']}`",
@@ -396,6 +465,12 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         "## Liquidity Proxy Sources",
         _format_counts(report["liquidity_proxy_source_counts"]),
+        "",
+        "## Valuation Missing Reasons",
+        _format_counts(report["valuation_missing_reason_counts"]),
+        "",
+        "## Threshold Missing Reasons",
+        _format_counts(report["threshold_outcomes_missing_reason_counts"]),
         "",
         "## Event Max Age Buckets",
         _format_counts(report["event_max_age_bucket_counts"]),

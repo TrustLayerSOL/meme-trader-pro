@@ -43,6 +43,17 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
                 "token_mint": "mint-a",
                 "launch_age_seconds": 30,
                 "liquidity_proxy": 2.5,
+                "true_market_cap_available": False,
+                "fdv_available": False,
+                "valuation_proxy_available": False,
+                "bonding_curve_liquidity_proxy_available": True,
+                "threshold_outcomes_usable": False,
+                "price_sol_available": False,
+                "price_usd_available": False,
+                "supply_available": False,
+                "sol_usd_available": False,
+                "valuation_missing_reason": "missing_supply_and_price",
+                "threshold_outcomes_missing_reason": "usd_valuation_unavailable",
                 "metadata_json": {
                     "event_count": 1,
                     "priced_event_count": 1,
@@ -53,6 +64,17 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
                 "token_mint": "mint-a",
                 "launch_age_seconds": 7200,
                 "liquidity_proxy": 2.8,
+                "true_market_cap_available": False,
+                "fdv_available": False,
+                "valuation_proxy_available": False,
+                "bonding_curve_liquidity_proxy_available": True,
+                "threshold_outcomes_usable": False,
+                "price_sol_available": False,
+                "price_usd_available": False,
+                "supply_available": False,
+                "sol_usd_available": False,
+                "valuation_missing_reason": "missing_supply_and_price",
+                "threshold_outcomes_missing_reason": "usd_valuation_unavailable",
                 "metadata_json": {
                     "event_count": 1,
                     "priced_event_count": 1,
@@ -69,6 +91,17 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
                 "survived_120m": False,
                 "no_future_liquidity": False,
                 "has_liquidity_proxy_at_120m": True,
+                "true_market_cap_available": False,
+                "fdv_available": False,
+                "valuation_proxy_available": False,
+                "bonding_curve_liquidity_proxy_available": True,
+                "threshold_outcomes_usable": False,
+                "price_sol_available": False,
+                "price_usd_available": False,
+                "supply_available": False,
+                "sol_usd_available": False,
+                "valuation_missing_reason": "missing_supply_and_price",
+                "threshold_outcomes_missing_reason": "usd_valuation_unavailable",
                 "metadata_json": {
                     "priced_event_count": 2,
                     "market_cap_available": False,
@@ -139,6 +172,16 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
     assert report["liquidity_proxy_snapshot_count"] == 2
     assert report["liquidity_proxy_outcome_count"] == 1
     assert report["liquidity_proxy_source_counts"] == {"bonding_curve_post_balance": 3}
+    assert report["true_market_cap_available_count"] == 0
+    assert report["fdv_available_count"] == 0
+    assert report["valuation_proxy_available_count"] == 0
+    assert report["bonding_curve_liquidity_proxy_available_count"] == 3
+    assert report["threshold_outcomes_usable_count"] == 0
+    assert report["valuation_missing_reason_counts"] == {"missing_supply_and_price": 3}
+    assert report["threshold_outcomes_missing_reason_counts"] == {"usd_valuation_unavailable": 3}
+    assert report["sol_usd_available_count"] == 0
+    assert report["supply_available_count"] == 0
+    assert report["price_usd_available_count"] == 0
     assert report["market_cap_unknown_outcome_count"] == 1
     assert report["event_max_age_bucket_counts"]["gte_120m"] == 1
     assert "market_cap_unavailable_for_threshold_outcomes" in report["warning_flags"]
