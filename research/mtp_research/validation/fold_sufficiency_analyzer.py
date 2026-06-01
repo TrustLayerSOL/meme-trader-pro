@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -22,7 +23,7 @@ from research.mtp_research.validation.fold_sufficiency_models import (
 from research.mtp_research.validation.research_dataset_builder import _quality_rank
 from research.mtp_research.validation.research_dataset_models import ResearchDatasetRow
 from research.mtp_research.validation.walk_forward_models import WalkForwardConfig
-from research.mtp_research.validation.walk_forward_splitter import WalkForwardSplitter
+from research.mtp_research.validation.walk_forward_models import WalkForwardFold, make_fold_id
 
 
 class FoldSufficiencyAnalyzer:
@@ -126,15 +127,15 @@ class FoldSufficiencyAnalyzer:
             require_forward_return=require_forward_return,
             metadata_json={"diagnostic_only": True},
         )
-        splitter = WalkForwardSplitter(walk_config)
-        folds = splitter.generate_folds(filtered)
+        row_timestamps = [row.snapshot_ts for row in filtered]
+        folds = _generate_folds_fast(row_timestamps, walk_config)
         valid_fold_count = sum(
             1 for fold in folds
             if fold.train_row_count >= config_candidate.min_train_rows
             and fold.test_row_count >= config_candidate.min_test_rows
         )
         rule_sufficiency = [
-            self._evaluate_rule(filtered, splitter, folds, rule, config_candidate)
+            self._evaluate_rule(filtered, folds, rule, config_candidate)
             for rule in rules
         ]
         warning_flags = ["diagnostic_only_not_strategy_optimization", FOLD_SUFFICIENCY_WARNING]
@@ -241,33 +242,50 @@ class FoldSufficiencyAnalyzer:
     def _evaluate_rule(
         self,
         rows: list[ResearchDatasetRow],
-        splitter: WalkForwardSplitter,
         folds,
         rule: RuleDefinition,
         config_candidate: FoldConfigCandidate,
     ) -> RuleFoldSufficiency:
         backtester = RuleBacktester(RuleBacktestConfig(config_id=f"fold_sufficiency__{rule.rule_id}"))
         selected_rows = [row for row in rows if backtester.row_passes_rule(row, rule)]
+        row_timestamps = [row.snapshot_ts for row in rows]
+        selected_timestamps = [row.snapshot_ts for row in selected_rows]
         test_selected_counts: list[int] = []
         train_selected_counts: list[int] = []
         valid_test_fold_count = 0
         folds_with_train_rows = 0
         folds_with_test_rows = 0
         for fold in folds:
-            train_rows = splitter.rows_for_train_fold(rows, fold)
-            test_rows = splitter.rows_for_test_fold(rows, fold)
-            selected_train = [row for row in train_rows if backtester.row_passes_rule(row, rule)]
-            selected_test = [row for row in test_rows if backtester.row_passes_rule(row, rule)]
-            train_selected_counts.append(len(selected_train))
-            test_selected_counts.append(len(selected_test))
-            if len(train_rows) >= config_candidate.min_train_rows:
+            train_row_count = _count_in_window(
+                row_timestamps,
+                fold.train_start_ts,
+                fold.train_end_ts,
+            )
+            test_row_count = _count_in_window(
+                row_timestamps,
+                fold.test_start_ts,
+                fold.test_end_ts,
+            )
+            selected_train_count = _count_in_window(
+                selected_timestamps,
+                fold.train_start_ts,
+                fold.train_end_ts,
+            )
+            selected_test_count = _count_in_window(
+                selected_timestamps,
+                fold.test_start_ts,
+                fold.test_end_ts,
+            )
+            train_selected_counts.append(selected_train_count)
+            test_selected_counts.append(selected_test_count)
+            if train_row_count >= config_candidate.min_train_rows:
                 folds_with_train_rows += 1
-            if len(test_rows) >= config_candidate.min_test_rows:
+            if test_row_count >= config_candidate.min_test_rows:
                 folds_with_test_rows += 1
             if (
-                len(train_rows) >= config_candidate.min_train_rows
-                and len(test_rows) >= config_candidate.min_test_rows
-                and len(selected_test) > 0
+                train_row_count >= config_candidate.min_train_rows
+                and test_row_count >= config_candidate.min_test_rows
+                and selected_test_count > 0
             ):
                 valid_test_fold_count += 1
 
@@ -346,6 +364,55 @@ def _filter_rows(
             continue
         output.append(row)
     return sorted(output, key=lambda item: (item.snapshot_ts, item.row_id))
+
+
+def _count_in_window(sorted_timestamps: list[int], start_ts: int, end_ts: int) -> int:
+    if not sorted_timestamps:
+        return 0
+    return bisect_right(sorted_timestamps, end_ts) - bisect_left(sorted_timestamps, start_ts)
+
+
+def _generate_folds_fast(
+    sorted_timestamps: list[int],
+    config: WalkForwardConfig,
+) -> list[WalkForwardFold]:
+    if not sorted_timestamps:
+        return []
+    min_ts = sorted_timestamps[0]
+    max_ts = sorted_timestamps[-1]
+    folds: list[WalkForwardFold] = []
+    fold_index = 0
+    train_start_ts = min_ts
+    while True:
+        train_end_ts = train_start_ts + config.train_window_seconds - 1
+        test_start_ts = train_end_ts + config.gap_seconds + 1
+        test_end_ts = test_start_ts + config.test_window_seconds - 1
+        if test_end_ts > max_ts:
+            break
+        folds.append(
+            WalkForwardFold(
+                fold_id=make_fold_id(config.config_id, fold_index),
+                fold_index=fold_index,
+                train_start_ts=train_start_ts,
+                train_end_ts=train_end_ts,
+                test_start_ts=test_start_ts,
+                test_end_ts=test_end_ts,
+                gap_seconds=config.gap_seconds,
+                train_row_count=_count_in_window(
+                    sorted_timestamps,
+                    train_start_ts,
+                    train_end_ts,
+                ),
+                test_row_count=_count_in_window(
+                    sorted_timestamps,
+                    test_start_ts,
+                    test_end_ts,
+                ),
+            )
+        )
+        fold_index += 1
+        train_start_ts += config.step_seconds
+    return folds
 
 
 def _best_config(results: list[FoldConfigSufficiencyResult]) -> FoldConfigSufficiencyResult | None:
