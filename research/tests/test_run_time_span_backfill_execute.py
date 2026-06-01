@@ -49,3 +49,43 @@ def test_time_span_backfill_execute_dry_run_does_not_call_helius(
     assert "targets_planned=1" in output
     assert "signatures_seen=0" in output
     assert "no_network_calls_made=True" in output
+
+
+def test_time_span_backfill_execute_accepts_transaction_worker_option(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    registry_path = tmp_path / "registry.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    CandidateRegistry(registry_path).upsert(
+        LaunchCandidate(
+            token_mint="token-1",
+            source="dexscreener",
+            first_seen_ts=datetime(2026, 5, 31, tzinfo=timezone.utc),
+            venue="raydium",
+            pool_address="pool-1",
+            liquidity_usd=20000,
+        )
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_time_span_backfill_execute",
+            "--registry-path",
+            str(registry_path),
+            "--raw-path",
+            str(raw_path),
+            "--candidate-limit",
+            "1",
+            "--transaction-workers",
+            "16",
+            "--helius-timeout-sec",
+            "20",
+        ],
+    )
+
+    assert main() == 0
+    output = capsys.readouterr().out
+    assert "transaction_workers=16" in output
+    assert "helius_timeout_sec=20" in output

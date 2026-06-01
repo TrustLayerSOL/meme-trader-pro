@@ -39,3 +39,21 @@ def test_raw_transaction_store_upsert_many_counts_inserted_updated(tmp_path: Pat
 
     assert counts == {"inserted": 1, "updated": 1}
     assert len(store.load_all()) == 2
+
+
+def test_raw_transaction_store_upsert_many_writes_batch_once(tmp_path: Path, monkeypatch) -> None:
+    store = RawTransactionStore(path=tmp_path / "helius_transactions.jsonl")
+    write_calls = 0
+    original_write_all = store._write_all
+
+    def counted_write_all(records):
+        nonlocal write_calls
+        write_calls += 1
+        original_write_all(records)
+
+    monkeypatch.setattr(store, "_write_all", counted_write_all)
+
+    counts = store.upsert_many([_record("sig-1"), _record("sig-2"), _record("sig-3")])
+
+    assert counts == {"inserted": 3, "updated": 0}
+    assert write_calls == 1

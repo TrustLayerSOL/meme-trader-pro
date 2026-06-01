@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+from time import perf_counter
 
 from research.mtp_research.features.feature_snapshot_builder import FeatureSnapshotBuilder
 from research.mtp_research.features.feature_snapshot_store import FeatureSnapshotStore
@@ -89,14 +90,35 @@ class EvidencePipeline:
         adapter = self.helius_adapter
         if adapter is None:
             try:
-                adapter = HeliusHistoricalAdapter.from_env()
+                adapter = HeliusHistoricalAdapter.from_env(
+                    transaction_workers=config.transaction_workers,
+                    timeout_sec=config.helius_timeout_sec,
+                )
             except ValueError as exc:
                 summary.warning_flags.append("missing_helius_api_key")
                 summary.metadata_json["error"] = str(exc)
                 return summary
 
         existing_signatures = {record.signature for record in self.raw_transaction_store.load_all()}
+        summary.metadata_json["performance_config"] = {
+            "transaction_workers": config.transaction_workers,
+            "helius_timeout_sec": config.helius_timeout_sec,
+            "signature_pages_per_target": config.signature_pages_per_target,
+        }
+        target_timings = []
         for target in targets:
+            target_started = perf_counter()
+            target_timing = {
+                "target_id": target.target_id,
+                "role": target.role,
+                "token_mint": target.token_mint,
+                "signature_seconds": 0.0,
+                "transaction_seconds": 0.0,
+                "store_seconds": 0.0,
+                "pages": 0,
+                "signatures_seen": 0,
+                "transactions_fetched": 0,
+            }
             try:
                 next_before = None
                 transactions_for_target = 0
@@ -110,9 +132,13 @@ class EvidencePipeline:
                         before=next_before,
                         include_failed=config.include_failed,
                     )
+                    signature_started = perf_counter()
                     signature_result = adapter.fetch_signatures_for_address(request)
+                    target_timing["signature_seconds"] += perf_counter() - signature_started
+                    target_timing["pages"] += 1
                     signatures = [record.signature for record in signature_result.records]
                     summary.signatures_seen += len(signatures)
+                    target_timing["signatures_seen"] += len(signatures)
 
                     remaining_transactions = config.max_transactions_per_target - transactions_for_target
                     if remaining_transactions <= 0:
@@ -123,14 +149,19 @@ class EvidencePipeline:
                     ]
                     selected_signatures = missing_signatures[:remaining_transactions]
                     if selected_signatures:
+                        transaction_started = perf_counter()
                         bodies = adapter.fetch_transactions(selected_signatures)
+                        target_timing["transaction_seconds"] += perf_counter() - transaction_started
                         raw_records = [
                             _raw_record_from_body(signature, body, target)
                             for signature, body in zip(selected_signatures, bodies, strict=False)
                             if body
                         ]
+                        store_started = perf_counter()
                         counts = self.raw_transaction_store.upsert_many(raw_records)
+                        target_timing["store_seconds"] += perf_counter() - store_started
                         summary.transactions_fetched += len(raw_records)
+                        target_timing["transactions_fetched"] += len(raw_records)
                         summary.raw_transactions_inserted += counts["inserted"]
                         summary.raw_transactions_updated += counts["updated"]
                         transactions_for_target += len(raw_records)
@@ -142,6 +173,10 @@ class EvidencePipeline:
             except Exception as exc:  # noqa: BLE001 - continue per target in bounded research runs
                 summary.warning_flags.append(f"target_backfill_failed:{target.target_id}")
                 summary.metadata_json.setdefault("target_errors", {})[target.target_id] = str(exc)
+            finally:
+                target_timing["total_seconds"] = perf_counter() - target_started
+                target_timings.append(target_timing)
+        summary.metadata_json["target_timings"] = target_timings
         return summary
 
     def parse_raw_transactions(self, limit: int | None = None) -> dict[str, int]:

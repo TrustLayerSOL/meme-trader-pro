@@ -19,6 +19,8 @@ class EvidenceRunConfig:
     dry_run: bool = True
     require_execute_flag: bool = True
     roles: list[str] = field(default_factory=lambda: ["mint", "pool", "creator"])
+    transaction_workers: int = 1
+    helius_timeout_sec: int = 30
     metadata_json: dict[str, Any] = field(default_factory=dict)
 
 

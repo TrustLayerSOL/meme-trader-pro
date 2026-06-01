@@ -193,8 +193,11 @@ Execute only after reviewing the plan:
   --max-signatures-per-target 75 \
   --max-transactions-per-target 75 \
   --stop-after-targets 10 \
+  --transaction-workers 16 \
   --execute
 ```
+
+Use bounded transaction workers for historical `getTransaction` hydration. This uses concurrent single RPC calls, not large JSON-RPC archival batches. Keep `target_timings` from the command output so slow runs can be separated into signature lookup, transaction hydration, and local store write time.
 
 After a bounded run, rebuild and review offline:
 

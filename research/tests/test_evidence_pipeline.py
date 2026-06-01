@@ -136,6 +136,7 @@ def test_run_backfill_targets_execute_uses_mocked_adapter_and_tracks_counts(tmp_
     assert summary.signatures_seen == 2
     assert summary.transactions_fetched == 1
     assert summary.raw_transactions_inserted == 1
+    assert summary.metadata_json["target_timings"]
     assert raw_store.get_by_signature("sig-1") is not None
 
 

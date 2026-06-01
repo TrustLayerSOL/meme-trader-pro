@@ -751,6 +751,14 @@ Execute:
 ./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_execute --candidate-limit 5 --max-signatures-per-target 75 --max-transactions-per-target 75 --stop-after-targets 10 --execute
 ```
 
+Faster bounded historical hydration:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.pipeline.run_time_span_backfill_execute --candidate-limit 5 --max-signatures-per-target 150 --max-transactions-per-target 150 --signature-pages-per-target 3 --stop-after-targets 10 --transaction-workers 16 --execute
+```
+
+The execute command prints per-target timing metadata so slow runs can be attributed to signature lookup, transaction hydration, or local JSONL storage.
+
 Post-run review:
 
 ```bash

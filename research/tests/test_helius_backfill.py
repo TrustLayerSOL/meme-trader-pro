@@ -113,6 +113,19 @@ def test_from_env_loads_project_dotenv_when_shell_env_missing(
     assert adapter.api_key == "dotenv-test-key"
 
 
+def test_from_env_accepts_explicit_performance_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "test-key")
+
+    adapter = HeliusHistoricalAdapter.from_env(
+        load_project_dotenv=False,
+        transaction_workers=12,
+        timeout_sec=11,
+    )
+
+    assert adapter.transaction_workers == 12
+    assert adapter.timeout_sec == 11
+
+
 def test_fetch_signatures_for_address_uses_mocked_http_method() -> None:
     calls = []
 

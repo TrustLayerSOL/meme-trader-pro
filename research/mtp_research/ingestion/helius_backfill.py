@@ -38,13 +38,22 @@ class HeliusHistoricalAdapter:
         self.transaction_workers = max(1, transaction_workers)
 
     @classmethod
-    def from_env(cls, load_project_dotenv: bool = True) -> "HeliusHistoricalAdapter":
+    def from_env(
+        cls,
+        load_project_dotenv: bool = True,
+        transaction_workers: int | None = None,
+        timeout_sec: int | None = None,
+    ) -> "HeliusHistoricalAdapter":
         if load_project_dotenv:
             _load_project_dotenv_if_needed()
         api_key = os.getenv("HELIUS_API_KEY")
         if not api_key:
             raise ValueError("HELIUS_API_KEY is required for real Helius RPC calls")
-        return cls(api_key=api_key, transaction_workers=_env_int("HELIUS_TRANSACTION_WORKERS", 1))
+        return cls(
+            api_key=api_key,
+            timeout_sec=timeout_sec or _env_int("HELIUS_TIMEOUT_SEC", 30),
+            transaction_workers=transaction_workers or _env_int("HELIUS_TRANSACTION_WORKERS", 1),
+        )
 
     def build_rpc_url(self) -> str:
         if self.rpc_url:

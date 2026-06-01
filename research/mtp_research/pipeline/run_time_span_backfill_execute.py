@@ -23,6 +23,10 @@ def main() -> int:
     print(f"raw_transactions_inserted={summary.raw_transactions_inserted}")
     print(f"raw_transactions_updated={summary.raw_transactions_updated}")
     print(f"warning_flags={summary.warning_flags}")
+    print(f"transaction_workers={args.transaction_workers}")
+    print(f"helius_timeout_sec={args.helius_timeout_sec}")
+    print(f"performance_config={summary.metadata_json.get('performance_config')}")
+    print(f"target_timings={summary.metadata_json.get('target_timings')}")
     print(f"recommended_next_command={plan.recommended_next_command}")
     if not args.execute:
         print("no_network_calls_made=True")
@@ -39,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stop-after-targets", type=int)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--transaction-workers", type=int, default=1)
+    parser.add_argument("--helius-timeout-sec", type=int, default=30)
     parser.add_argument("--registry-path")
     parser.add_argument("--raw-path")
     return parser.parse_args()
@@ -70,6 +76,8 @@ def run_time_span_backfill(args: argparse.Namespace):
         include_failed=False,
         dry_run=not args.execute or args.dry_run,
         roles=["pool"],
+        transaction_workers=args.transaction_workers,
+        helius_timeout_sec=args.helius_timeout_sec,
         metadata_json={"time_span_plan_id": plan.plan_id},
     )
     summary = pipeline.run_backfill_targets(targets, config, execute=args.execute and not args.dry_run)

@@ -95,9 +95,17 @@ class RawTransactionStore:
 
     def upsert_many(self, records: list[RawTransactionRecord]) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0}
+        if not records:
+            return counts
+
+        existing_records = {record.signature: record for record in self.load_all()}
         for record in records:
-            result = self.upsert(record)
-            counts[result] += 1
+            if record.signature in existing_records:
+                counts["updated"] += 1
+            else:
+                counts["inserted"] += 1
+            existing_records[record.signature] = record
+        self._write_all(list(existing_records.values()))
         return counts
 
     def _write_all(self, records: list[RawTransactionRecord]) -> None:
