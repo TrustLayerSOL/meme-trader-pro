@@ -11,7 +11,16 @@ def test_cli_dry_run_works_without_network(monkeypatch, tmp_path, capsys) -> Non
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["run_pumpfun_create_scanner", "--output-dir", str(tmp_path), "--max-batches", "2"],
+        [
+            "run_pumpfun_create_scanner",
+            "--output-dir",
+            str(tmp_path),
+            "--max-batches",
+            "2",
+            "--emit-rejected-examples",
+            "--min-confidence",
+            "medium",
+        ],
     )
 
     assert main() == 0
@@ -19,5 +28,6 @@ def test_cli_dry_run_works_without_network(monkeypatch, tmp_path, capsys) -> Non
     output = capsys.readouterr().out
     assert "executed=False" in output
     assert "max_batches=2" in output
+    assert "min_confidence=medium" in output
     assert "network_calls=0" in output
     assert (tmp_path / "pumpfun_create_scan_plan.json").exists()

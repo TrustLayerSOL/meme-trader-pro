@@ -189,6 +189,7 @@
 - Program-signature discovery must default to dry-run, use tiny explicit probes first, and avoid unbounded Helius calls.
 - Pump.fun create scanning must prove token mint, bonding curve, creator wallet, and block-time extraction before any broad launch import.
 - Bounded create-scan reports are discovery diagnostics, not launch datasets or validation artifacts.
+- Low-confidence Pump.fun create-like examples must stay in rejected/diagnostic sections unless explicitly included for parser debugging.
 - Future Helius webhooks or LaserStream can support forward self-archive, but they do not replace historical source-quality checks.
 - Rebuilding features must remain offline-only and must not change strategy thresholds.
 

@@ -29,12 +29,28 @@ class PumpFunCreateCandidate:
 
 
 @dataclass
+class PumpFunInstructionDiagnostic:
+    signature: str
+    instruction_index: int | None = None
+    account_count: int = 0
+    instruction_discriminator: str | None = None
+    instruction_classification: str = "unknown_pumpfun_instruction"
+    rejection_reasons: list[str] = field(default_factory=list)
+    metadata_json: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class PumpFunCreateScanBatch:
     batch_index: int
     signatures_seen: int = 0
     transactions_hydrated: int = 0
     direct_pumpfun_instruction_count: int = 0
     create_candidate_count: int = 0
+    rejected_create_like_count: int = 0
+    unknown_pumpfun_instruction_count: int = 0
     cursor_before: str | None = None
     next_cursor_before: str | None = None
     elapsed_seconds: float | None = None
@@ -58,6 +74,9 @@ class PumpFunCreateScanReport:
     direct_pumpfun_instruction_count: int = 0
     create_candidate_count: int = 0
     candidates: list[PumpFunCreateCandidate] = field(default_factory=list)
+    verified_create_candidates: list[PumpFunCreateCandidate] = field(default_factory=list)
+    rejected_create_like_candidates: list[PumpFunInstructionDiagnostic] = field(default_factory=list)
+    unknown_pumpfun_instructions: list[PumpFunInstructionDiagnostic] = field(default_factory=list)
     batches: list[PumpFunCreateScanBatch] = field(default_factory=list)
     viability: str = "unknown"
     recommended_next_action: str = "unknown"
@@ -67,6 +86,15 @@ class PumpFunCreateScanReport:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["candidates"] = [candidate.to_dict() for candidate in self.candidates]
+        payload["verified_create_candidates"] = [
+            candidate.to_dict() for candidate in self.verified_create_candidates
+        ]
+        payload["rejected_create_like_candidates"] = [
+            diagnostic.to_dict() for diagnostic in self.rejected_create_like_candidates
+        ]
+        payload["unknown_pumpfun_instructions"] = [
+            diagnostic.to_dict() for diagnostic in self.unknown_pumpfun_instructions
+        ]
         payload["batches"] = [batch.to_dict() for batch in self.batches]
         return payload
 

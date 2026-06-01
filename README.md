@@ -218,10 +218,13 @@ Execute only a reviewed bounded scan:
   --hydrate-limit-per-batch 25 \
   --target-create-candidates 5 \
   --max-signatures-total 250 \
+  --emit-rejected-examples \
   --execute
 ```
 
 The Pump.fun create scanner is a bounded discovery probe. It must prove create extraction quality before any broad historical scan or candidate import. Do not treat DexScreener-only launches as representative of all Pump.fun launches.
+
+By default, the scanner only counts medium/high-confidence create candidates. Rejected create-like examples and unknown Pump.fun instructions are diagnostics for parser improvement, not launch candidates.
 
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
 

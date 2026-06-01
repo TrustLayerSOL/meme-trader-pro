@@ -66,7 +66,10 @@ def _create_tx(signature: str, account_count: int = 14) -> dict:
         "blockTime": 1_780_000_000,
         "transaction": {
             "signatures": [signature],
-            "message": {"instructions": [{"programId": PUMP_FUN_PROGRAM_ID, "accounts": accounts}]},
+            "message": {
+                "accountKeys": [{"pubkey": f"creator-{signature}", "signer": True}],
+                "instructions": [{"programId": PUMP_FUN_PROGRAM_ID, "accounts": accounts}],
+            },
         },
     }
 
@@ -93,6 +96,7 @@ def test_known_create_fixture_extracts_fields_and_stops_after_target() -> None:
 
     assert report.create_candidate_count == 1
     assert report.candidates[0].token_mint == "mint-sig-1"
+    assert report.verified_create_candidates[0].token_mint == "mint-sig-1"
     assert report.candidates[0].bonding_curve == "bonding-sig-1"
     assert report.candidates[0].creator_wallet == "creator-sig-1"
     assert report.candidates[0].extraction_confidence == "medium"
@@ -107,10 +111,11 @@ def test_non_create_ten_account_instruction_is_not_classified_as_create() -> Non
 
     assert report.direct_pumpfun_instruction_count == 1
     assert report.create_candidate_count == 0
+    assert len(report.unknown_pumpfun_instructions) == 1
     assert report.viability == "not_yet_proven"
 
 
-def test_low_confidence_placeholder_accounts_do_not_make_scan_viable() -> None:
+def test_low_confidence_placeholder_accounts_are_not_create_candidates() -> None:
     tx = _create_tx("sig-1", account_count=12)
     tx["transaction"]["message"]["instructions"][0]["accounts"][2] = "So11111111111111111111111111111111111111112"
     tx["transaction"]["message"]["instructions"][0]["accounts"][7] = "11111111111111111111111111111111"
@@ -119,11 +124,49 @@ def test_low_confidence_placeholder_accounts_do_not_make_scan_viable() -> None:
 
     report = scanner.scan(execute=True, max_batches=1, signatures_per_batch=1)
 
-    assert report.create_candidate_count == 1
-    assert report.candidates[0].extraction_confidence == "low"
-    assert "invalid_bonding_curve" in report.candidates[0].warning_flags
-    assert "invalid_creator_wallet" in report.candidates[0].warning_flags
+    assert report.direct_pumpfun_instruction_count == 1
+    assert report.create_candidate_count == 0
+    assert len(report.rejected_create_like_candidates) == 1
     assert report.viability == "maybe_viable"
+
+
+def test_unknown_discriminator_is_not_classified_as_create_by_default() -> None:
+    tx = _create_tx("sig-1")
+    tx["transaction"]["message"]["instructions"][0]["data"] = "unknownDiscriminatorPayload"
+    adapter = FakeAdapter(batches=[["sig-1"]], transactions_by_signature={"sig-1": tx})
+    scanner = PumpFunCreateScanner(adapter=adapter)
+
+    report = scanner.scan(execute=True, max_batches=1, signatures_per_batch=1)
+
+    assert report.create_candidate_count == 0
+    assert len(report.unknown_pumpfun_instructions) == 1
+    assert report.unknown_pumpfun_instructions[0].rejection_reasons == ["unknown_discriminator"]
+
+
+def test_include_low_confidence_keeps_diagnostics_out_of_verified_count() -> None:
+    tx = _create_tx("sig-1", account_count=12)
+    adapter = FakeAdapter(batches=[["sig-1"]], transactions_by_signature={"sig-1": tx})
+    scanner = PumpFunCreateScanner(adapter=adapter)
+
+    report = scanner.scan(execute=True, max_batches=1, signatures_per_batch=1, include_low_confidence=True, min_confidence="medium")
+
+    assert report.create_candidate_count == 0
+    assert len(report.candidates) == 1
+    assert len(report.verified_create_candidates) == 0
+    assert report.candidates[0].extraction_confidence == "low"
+
+
+def test_same_token_repeated_candidates_are_not_counted_multiple_times() -> None:
+    tx = _create_tx("sig-1")
+    instruction = tx["transaction"]["message"]["instructions"][0]
+    tx["transaction"]["message"]["instructions"] = [instruction, dict(instruction)]
+    adapter = FakeAdapter(batches=[["sig-1"]], transactions_by_signature={"sig-1": tx})
+    scanner = PumpFunCreateScanner(adapter=adapter)
+
+    report = scanner.scan(execute=True, max_batches=1, signatures_per_batch=1)
+
+    assert report.direct_pumpfun_instruction_count == 2
+    assert report.create_candidate_count == 1
 
 
 def test_scanner_respects_max_batches() -> None:

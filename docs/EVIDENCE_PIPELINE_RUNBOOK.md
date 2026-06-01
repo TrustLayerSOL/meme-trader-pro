@@ -142,10 +142,13 @@ Reviewed bounded execute:
   --hydrate-limit-per-batch 25 \
   --target-create-candidates 5 \
   --max-signatures-total 250 \
+  --emit-rejected-examples \
   --execute
 ```
 
 This is still a discovery probe, not a launch dataset. Do not run lifecycle backfills, backtests, walk-forward validation, thesis evaluation, registry mutation, or broad historical scans until create extraction is proven from bounded reports.
+
+The scanner separates verified create candidates from rejected create-like examples and unknown Pump.fun instructions. Default output requires at least medium confidence. Use `--include-low-confidence` only for diagnostics; low-confidence rows must not be imported into the launch registry.
 
 ## Recommended First Real Run
 

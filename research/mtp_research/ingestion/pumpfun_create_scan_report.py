@@ -38,7 +38,9 @@ def _markdown(report: PumpFunCreateScanReport) -> str:
         f"- Signatures seen: `{report.signatures_seen_total}`",
         f"- Transactions hydrated: `{report.transactions_hydrated_total}`",
         f"- Direct Pump.fun instructions: `{report.direct_pumpfun_instruction_count}`",
-        f"- Create candidates: `{report.create_candidate_count}`",
+        f"- Verified create candidates: `{report.create_candidate_count}`",
+        f"- Rejected create-like candidates: `{len(report.rejected_create_like_candidates)}`",
+        f"- Unknown Pump.fun instructions: `{len(report.unknown_pumpfun_instructions)}`",
         f"- Viability: `{report.viability}`",
         f"- Recommended next action: `{report.recommended_next_action}`",
         f"- Warning flags: `{report.warning_flags}`",
@@ -61,14 +63,14 @@ def _markdown(report: PumpFunCreateScanReport) -> str:
     lines.extend(
         [
             "",
-            "## Candidate Table",
+            "## Verified Create Candidates",
             "",
             "| Signature | Block Time | Token Mint | Bonding Curve | Associated Bonding Curve | Creator Wallet | Accounts | Confidence | Warnings |",
             "|---|---:|---|---|---|---|---:|---|---|",
         ]
     )
-    if report.candidates:
-        for candidate in report.candidates:
+    if report.verified_create_candidates:
+        for candidate in report.verified_create_candidates:
             lines.append(
                 "| "
                 f"{candidate.signature} | {candidate.block_time or ''} | {candidate.token_mint or ''} | "
@@ -78,5 +80,43 @@ def _markdown(report: PumpFunCreateScanReport) -> str:
             )
     else:
         lines.append("|  |  |  |  |  |  | 0 |  |  |")
+    lines.extend(
+        [
+            "",
+            "## Rejected Create-Like Candidates",
+            "",
+            "| Signature | Instruction | Accounts | Discriminator | Reasons |",
+            "|---|---:|---:|---|---|",
+        ]
+    )
+    if report.rejected_create_like_candidates:
+        for diagnostic in report.rejected_create_like_candidates:
+            lines.append(
+                "| "
+                f"{diagnostic.signature} | {diagnostic.instruction_index or 0} | "
+                f"{diagnostic.account_count} | {diagnostic.instruction_discriminator or ''} | "
+                f"{', '.join(diagnostic.rejection_reasons)} |"
+            )
+    else:
+        lines.append("|  |  | 0 |  |  |")
+    lines.extend(
+        [
+            "",
+            "## Unknown Pump.fun Instructions",
+            "",
+            "| Signature | Instruction | Accounts | Discriminator | Reasons |",
+            "|---|---:|---:|---|---|",
+        ]
+    )
+    if report.unknown_pumpfun_instructions:
+        for diagnostic in report.unknown_pumpfun_instructions:
+            lines.append(
+                "| "
+                f"{diagnostic.signature} | {diagnostic.instruction_index or 0} | "
+                f"{diagnostic.account_count} | {diagnostic.instruction_discriminator or ''} | "
+                f"{', '.join(diagnostic.rejection_reasons)} |"
+            )
+    else:
+        lines.append("|  |  | 0 |  |  |")
     lines.append("")
     return "\n".join(lines)

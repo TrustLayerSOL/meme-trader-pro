@@ -30,6 +30,19 @@ def test_report_writer_creates_markdown_and_json(tmp_path) -> None:
                 warning_flags=["heuristic_create_detection"],
             )
         ],
+        verified_create_candidates=[
+            PumpFunCreateCandidate(
+                signature="sig-1",
+                block_time=1_780_000_000,
+                token_mint="mint-1",
+                bonding_curve="bonding-1",
+                associated_bonding_curve="assoc-1",
+                creator_wallet="creator-1",
+                account_count=14,
+                extraction_confidence="medium",
+                warning_flags=["heuristic_create_detection"],
+            )
+        ],
         viability="maybe_viable",
         recommended_next_action="improve parser using saved examples",
     )
@@ -41,4 +54,6 @@ def test_report_writer_creates_markdown_and_json(tmp_path) -> None:
     assert json.loads(paths["json"].read_text(encoding="utf-8"))["create_candidate_count"] == 1
     markdown = paths["markdown"].read_text(encoding="utf-8")
     assert "This is a bounded discovery probe, not a launch dataset." in markdown
+    assert "Verified Create Candidates" in markdown
+    assert "Rejected Create-Like Candidates" in markdown
     assert "mint-1" in markdown

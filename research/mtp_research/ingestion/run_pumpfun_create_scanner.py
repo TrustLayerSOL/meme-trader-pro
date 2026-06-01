@@ -23,6 +23,9 @@ def main() -> int:
         target_create_candidates=args.target_create_candidates,
         max_signatures_total=args.max_signatures_total,
         cursor_before=args.cursor_before,
+        include_low_confidence=args.include_low_confidence,
+        emit_rejected_examples=args.emit_rejected_examples,
+        min_confidence=args.min_confidence,
     )
     paths = write_pumpfun_create_scan_report(report, Path(args.output_dir))
     print(f"executed={report.executed}")
@@ -34,7 +37,13 @@ def main() -> int:
     print(f"transactions_hydrated_total={report.transactions_hydrated_total}")
     print(f"direct_pumpfun_instruction_count={report.direct_pumpfun_instruction_count}")
     print(f"create_candidate_count={report.create_candidate_count}")
-    for candidate in report.candidates[:5]:
+    print(f"verified_create_candidate_count={len(report.verified_create_candidates)}")
+    print(f"rejected_create_like_count={len(report.rejected_create_like_candidates)}")
+    print(f"unknown_pumpfun_instruction_count={len(report.unknown_pumpfun_instructions)}")
+    print(f"include_low_confidence={args.include_low_confidence}")
+    print(f"emit_rejected_examples={args.emit_rejected_examples}")
+    print(f"min_confidence={args.min_confidence}")
+    for candidate in report.verified_create_candidates[:5]:
         print(
             "candidate "
             f"signature={candidate.signature} block_time={candidate.block_time} "
@@ -60,6 +69,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-signatures-total", type=int, default=250)
     parser.add_argument("--cursor-before")
     parser.add_argument("--output-dir", default="data/backtests/diagnostics/reports")
+    parser.add_argument("--include-low-confidence", action="store_true")
+    parser.add_argument("--emit-rejected-examples", action="store_true")
+    parser.add_argument("--min-confidence", choices=["low", "medium", "high"], default="medium")
     parser.add_argument("--execute", action="store_true")
     return parser.parse_args()
 
