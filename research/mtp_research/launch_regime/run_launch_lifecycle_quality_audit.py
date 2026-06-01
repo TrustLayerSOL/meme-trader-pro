@@ -1,0 +1,60 @@
+"""CLI for offline launch lifecycle quality audit."""
+
+from __future__ import annotations
+
+import argparse
+
+from research.mtp_research.launch_regime.lifecycle_quality_audit import (
+    DEFAULT_REPORT_DIR,
+    run_launch_lifecycle_quality_audit,
+)
+
+
+def main() -> int:
+    args = parse_args()
+    report = run_launch_lifecycle_quality_audit(
+        launches_path=args.launches_path,
+        snapshots_path=args.snapshots_path,
+        outcomes_path=args.outcomes_path,
+        events_path=args.events_path,
+        output_dir=args.output_dir,
+    )
+    for key in (
+        "launch_count",
+        "snapshot_count",
+        "outcome_count",
+        "event_count",
+        "unique_launch_mints",
+        "unique_snapshot_mints",
+        "unique_outcome_mints",
+        "unique_event_mints",
+        "event_venue_counts",
+        "launch_venue_counts",
+        "launch_regime_counts",
+        "priced_snapshot_count",
+        "zero_event_snapshot_count",
+        "priced_outcome_count",
+        "market_cap_unknown_outcome_count",
+        "survived_counts",
+        "event_max_age_bucket_counts",
+        "warning_flags",
+        "network_calls",
+    ):
+        print(f"{key}={report[key]}")
+    print(f"json_report_path={args.output_dir}/launch_lifecycle_quality_audit.json")
+    print(f"markdown_report_path={args.output_dir}/launch_lifecycle_quality_audit.md")
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Audit launch lifecycle artifacts without network calls.")
+    parser.add_argument("--launches-path", required=True)
+    parser.add_argument("--snapshots-path", required=True)
+    parser.add_argument("--outcomes-path", required=True)
+    parser.add_argument("--events-path", required=True)
+    parser.add_argument("--output-dir", default=str(DEFAULT_REPORT_DIR))
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
