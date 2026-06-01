@@ -27,6 +27,7 @@ class FakeAdapter:
         self.transactions = transactions
         self.requests: list[HeliusBackfillRequest] = []
         self.hydrated: list[list[str]] = []
+        self.window_calls = []
 
     def fetch_signatures_for_address(self, request: HeliusBackfillRequest) -> HeliusBackfillResult:
         self.requests.append(request)
@@ -42,6 +43,22 @@ class FakeAdapter:
     def fetch_transactions(self, signatures: list[str]) -> list[dict]:
         self.hydrated.append(list(signatures))
         return [self.transactions.get(signature, {}) for signature in signatures]
+
+    def fetch_transactions_for_address_window(self, address, *, start_time, end_time, limit=1000, pagination_token=None):
+        self.window_calls.append(
+            {
+                "address": address,
+                "start_time": start_time,
+                "end_time": end_time,
+                "limit": limit,
+                "pagination_token": pagination_token,
+            }
+        )
+        txs = [
+            body for body in self.transactions.values()
+            if start_time <= body.get("blockTime", 0) <= end_time
+        ]
+        return {"transactions": txs[:limit], "pagination_token": None}
 
 
 def _ts(year: int, month: int, day: int, hour: int, minute: int = 0) -> int:
@@ -141,3 +158,35 @@ def test_lifecycle_collector_dry_run_makes_no_network_calls(tmp_path: Path) -> N
     assert summary["estimated_signature_requests"] == 1
     assert summary["estimated_transaction_requests_up_to"] == 100
     assert summary["network_calls"] == 0
+
+
+def test_lifecycle_collector_can_use_address_window_method_to_avoid_per_signature_hydration(tmp_path: Path) -> None:
+    launch_ts = _ts(2026, 6, 1, 6)
+    census_path = tmp_path / "census.jsonl"
+    raw_path = tmp_path / "raw.jsonl"
+    write_creation_census([_row("mint", launch_ts, bonding_curve="curve-1")], census_path)
+    adapter = FakeAdapter(
+        signature_pages={},
+        transactions={
+            "inside-1": {"slot": 1, "blockTime": launch_ts + 30, "meta": {"err": None}, "transaction": {"signatures": ["inside-1"]}},
+            "inside-2": {"slot": 2, "blockTime": launch_ts + 120, "meta": {"err": None}, "transaction": {"signatures": ["inside-2"]}},
+        },
+    )
+
+    summary = collect_pumpfun_lifecycle(
+        census_path=census_path,
+        raw_path=raw_path,
+        lane="existing",
+        target_launches=1,
+        adapter=adapter,
+        execute=True,
+        collection_method="address_window",
+        max_transactions_per_launch=10,
+    )
+
+    assert summary["network_calls"] == 1
+    assert summary["transactions_fetched"] == 2
+    assert summary["raw_inserted"] == 2
+    assert adapter.requests == []
+    assert adapter.hydrated == []
+    assert adapter.window_calls[0]["address"] == "curve-1"

@@ -49,6 +49,7 @@ def collect_pumpfun_lifecycle(
     signatures_per_page: int = 1000,
     max_signature_pages_per_launch: int = 1,
     max_transactions_per_launch: int = 100,
+    collection_method: str = "signature_hydrate",
     execute: bool = False,
     adapter: HeliusHistoricalAdapter | None = None,
 ) -> dict[str, Any]:
@@ -63,6 +64,7 @@ def collect_pumpfun_lifecycle(
         "signatures_per_page": signatures_per_page,
         "max_signature_pages_per_launch": max_signature_pages_per_launch,
         "max_transactions_per_launch": max_transactions_per_launch,
+        "collection_method": collection_method,
         "estimated_signature_requests": len(selected) * max_signature_pages_per_launch,
         "estimated_transaction_requests_up_to": len(selected) * max_transactions_per_launch,
     }
@@ -94,6 +96,20 @@ def collect_pumpfun_lifecycle(
     warnings: list[str] = []
 
     for row in selected:
+        if collection_method == "address_window":
+            window_totals = _collect_launch_with_address_window(
+                row,
+                adapter=adapter,
+                store=store,
+                existing_signatures=existing_signatures,
+                lane=lane,
+                max_transactions_per_launch=max_transactions_per_launch,
+            )
+            for key, value in window_totals.items():
+                totals[key] += value
+            continue
+        if collection_method != "signature_hydrate":
+            raise ValueError("collection_method must be 'signature_hydrate' or 'address_window'")
         launch_records, signature_requests = _collect_launch_signature_records(
             row,
             adapter=adapter,
@@ -122,6 +138,42 @@ def collect_pumpfun_lifecycle(
         totals["raw_updated"] += counts["updated"]
 
     return {**base_summary, **totals, "warning_flags": warnings}
+
+
+def _collect_launch_with_address_window(
+    row: PumpFunCreationCensusRow,
+    *,
+    adapter: HeliusHistoricalAdapter,
+    store: RawTransactionStore,
+    existing_signatures: set[str],
+    lane: str,
+    max_transactions_per_launch: int,
+) -> dict[str, int]:
+    launch_ts = int(row.block_time or 0)
+    result = adapter.fetch_transactions_for_address_window(
+        row.bonding_curve or "",
+        start_time=launch_ts,
+        end_time=launch_ts + MAX_LIFECYCLE_SECONDS,
+        limit=max_transactions_per_launch,
+    )
+    transactions = result["transactions"][:max_transactions_per_launch]
+    raw_records = []
+    for body in transactions:
+        signature = _signature_from_body(body)
+        if not signature or signature in existing_signatures:
+            continue
+        raw_records.append(_raw_record_from_gtfa_body(signature, body, row, lane))
+    counts = store.append_new_many(raw_records)
+    existing_signatures.update(record.signature for record in raw_records)
+    return {
+        "network_calls": 1,
+        "launches_processed": 1,
+        "signatures_seen": len(transactions),
+        "signatures_in_window": len(transactions),
+        "transactions_fetched": len(raw_records),
+        "raw_inserted": counts["inserted"],
+        "raw_updated": counts["updated"],
+    }
 
 
 def _collect_launch_signature_records(
@@ -189,6 +241,44 @@ def _raw_record_from_body(
             "max_lifecycle_seconds": MAX_LIFECYCLE_SECONDS,
         },
     )
+
+
+def _raw_record_from_gtfa_body(
+    signature: str,
+    body: dict[str, Any],
+    row: PumpFunCreationCensusRow,
+    lane: str,
+) -> RawTransactionRecord:
+    meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+    return RawTransactionRecord(
+        signature=signature,
+        slot=body.get("slot"),
+        block_time=body.get("blockTime"),
+        success=(meta.get("err") is None if meta else None),
+        address=row.bonding_curve,
+        role="pumpfun_bonding_curve_lifecycle_2h",
+        token_mint=row.mint,
+        fetched_at=datetime.now(timezone.utc),
+        raw_json=body,
+        metadata_json={
+            "source": "pumpfun_lifecycle_collector",
+            "collection_method": "address_window",
+            "lane": lane,
+            "creation_signature": row.creation_signature,
+            "launch_ts": row.block_time,
+            "max_lifecycle_seconds": MAX_LIFECYCLE_SECONDS,
+        },
+    )
+
+
+def _signature_from_body(body: dict[str, Any]) -> str | None:
+    signature = body.get("signature")
+    if isinstance(signature, str) and signature:
+        return signature
+    signatures = body.get("transaction", {}).get("signatures", [])
+    if isinstance(signatures, list) and signatures and isinstance(signatures[0], str):
+        return signatures[0]
+    return None
 
 
 def _dedupe_by_mint(rows: list[PumpFunCreationCensusRow]) -> list[PumpFunCreationCensusRow]:

@@ -106,6 +106,7 @@ def test_gtfa_census_collection_writes_verified_create_rows(tmp_path: Path) -> N
         adapter=adapter,
         output_path=output_path,
         csv_output_path=csv_path,
+        checkpoint_path=tmp_path / "checkpoint.json",
         start_date=date(2026, 6, 1),
         end_date=date(2026, 6, 1),
         target_regime_launches=1,
@@ -125,6 +126,7 @@ def test_gtfa_census_collection_dry_run_makes_no_network_calls(tmp_path: Path) -
     summary = collect_pumpfun_regime_census_with_gtfa(
         output_path=tmp_path / "census.jsonl",
         csv_output_path=tmp_path / "census.csv",
+        checkpoint_path=tmp_path / "checkpoint.json",
         start_date=date(2026, 6, 1),
         end_date=date(2026, 6, 3),
         target_regime_launches=1500,

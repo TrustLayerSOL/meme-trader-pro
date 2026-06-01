@@ -277,10 +277,11 @@ Collect bounded first-two-hour raw lifecycle evidence only after reviewing the d
 ```bash
 ./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_lifecycle_collection \
   --lane existing \
-  --target-launches 1500
+  --target-launches 1500 \
+  --collection-method address_window
 ```
 
-Execution requires `--execute`. The collector targets bonding-curve accounts, requests signature pages first, hydrates only signatures whose block time is between creation and creation plus two hours, and skips raw signatures already present locally.
+Execution requires `--execute`. The preferred `address_window` method targets bonding-curve accounts with Helius block-time filters, stores only transactions between creation and creation plus two hours, and skips raw signatures already present locally.
 
 When only compact token census rows are needed for the configured launch regime, use the faster Helius `getTransactionsForAddress` window collector:
 

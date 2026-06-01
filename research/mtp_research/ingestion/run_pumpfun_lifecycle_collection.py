@@ -17,6 +17,7 @@ def main() -> int:
         signatures_per_page=args.signatures_per_page,
         max_signature_pages_per_launch=args.max_signature_pages_per_launch,
         max_transactions_per_launch=args.max_transactions_per_launch,
+        collection_method=args.collection_method,
         execute=args.execute,
     )
     for key in [
@@ -25,6 +26,7 @@ def main() -> int:
         "selected_launches",
         "target_launches",
         "max_lifecycle_seconds",
+        "collection_method",
         "estimated_signature_requests",
         "estimated_transaction_requests_up_to",
         "network_calls",
@@ -50,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--signatures-per-page", type=int, default=1000)
     parser.add_argument("--max-signature-pages-per-launch", type=int, default=1)
     parser.add_argument("--max-transactions-per-launch", type=int, default=100)
+    parser.add_argument("--collection-method", choices=["signature_hydrate", "address_window"], default="signature_hydrate")
     parser.add_argument("--execute", action="store_true")
     return parser.parse_args()
 
