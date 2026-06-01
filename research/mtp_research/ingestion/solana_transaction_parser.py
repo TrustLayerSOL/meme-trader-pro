@@ -165,6 +165,11 @@ def summarize_raw_transaction(record: RawTransactionRecord) -> TransactionSummar
         token_balance_deltas=extract_token_balance_deltas(raw_json),
         native_balance_deltas=extract_native_balance_deltas(raw_json),
         raw_json=raw_json,
+        raw_record_address=record.address,
+        raw_record_role=record.role,
+        raw_record_token_mint=record.token_mint,
+        raw_record_source=record.source,
+        raw_record_metadata_json=record.metadata_json,
     )
 
 

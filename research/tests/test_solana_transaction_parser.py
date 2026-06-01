@@ -174,3 +174,27 @@ def test_transaction_summary_to_observed_event_includes_parser_metadata() -> Non
     assert event.metadata_json["venue_reasons"] == [
         "token_balance_deltas_present_without_known_venue"
     ]
+
+
+def test_summarize_raw_transaction_preserves_raw_record_context() -> None:
+    record = RawTransactionRecord(
+        signature="sig-1",
+        slot=1,
+        block_time=100,
+        success=True,
+        address="curve-1",
+        role="pumpfun_bonding_curve_lifecycle_2h",
+        token_mint="mint-1",
+        source="helius_rpc",
+        fetched_at=datetime(2026, 5, 30, 12, 0, 0, tzinfo=timezone.utc),
+        raw_json={"transaction": {"signatures": ["sig-1"], "message": {"accountKeys": [], "instructions": []}}, "meta": {}},
+        metadata_json={"collection_method": "address_window"},
+    )
+
+    summary = summarize_raw_transaction(record)
+
+    assert summary.raw_record_address == "curve-1"
+    assert summary.raw_record_role == "pumpfun_bonding_curve_lifecycle_2h"
+    assert summary.raw_record_token_mint == "mint-1"
+    assert summary.raw_record_source == "helius_rpc"
+    assert summary.raw_record_metadata_json == {"collection_method": "address_window"}

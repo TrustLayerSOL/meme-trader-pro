@@ -105,6 +105,45 @@ def test_launch_outcomes_store_interval_returns_and_survival() -> None:
     assert outcome.runups["max_runup_120m"] == 1.0
     assert outcome.survived_120m is True
     assert outcome.died_within_120m is False
+    assert outcome.has_activity_at_or_after_120m is True
+    assert outcome.has_price_at_120m is True
+    assert outcome.price_available_120m is True
+    assert outcome.has_liquidity_proxy_at_120m is False
+    assert outcome.liquidity_survival_120m is False
+    assert outcome.lifecycle_observed_to_120m is True
+    assert outcome.survival_label_quality == "price_observed_through_120m_without_liquidity_proxy"
+    assert outcome.market_cap_available is False
+    assert outcome.market_cap_source is None
+    assert outcome.market_cap_missing_reason == "market_cap_not_present_in_launch_or_events"
+    assert outcome.threshold_outcomes_usable is False
+
+
+def test_launch_outcomes_separate_price_proxy_survival_from_trade_activity() -> None:
+    builder = LaunchRegimeBuilder()
+    launch = builder.candidate_to_launch(_candidate())
+    events = [
+        NormalizedEvent(
+            event_id="e1",
+            signature="sig-1",
+            slot=1,
+            block_time=launch.launch_ts + 60,
+            event_type="possible_buy",
+            token_mint="token-1",
+            price_quote=1.0,
+            quote_qty=2.0,
+        ),
+    ]
+
+    outcome = builder.build_outcomes([launch], events)[0]
+
+    assert outcome.has_activity_at_or_after_120m is False
+    assert outcome.survived_120m is False
+    assert outcome.price_available_120m is True
+    assert outcome.has_price_at_120m is True
+    assert outcome.has_liquidity_proxy_at_120m is True
+    assert outcome.liquidity_survival_120m is True
+    assert outcome.lifecycle_observed_to_120m is True
+    assert outcome.survival_label_quality == "liquidity_proxy_available_by_120m_no_activity_at_120m"
 
 
 def test_event_inferred_launches_include_requested_local_fields() -> None:

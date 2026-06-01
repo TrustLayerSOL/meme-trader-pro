@@ -283,6 +283,24 @@ class LaunchRegimeBuilder:
                 ],
             ]
             max_market_cap = max([value for value in market_cap_values if value is not None], default=None)
+            market_cap_source = _market_cap_source(launch, token_events)
+            threshold_outcomes_usable = max_market_cap is not None
+            has_activity_at_or_after_120m = any(
+                event.block_time is not None and event.block_time >= launch.launch_ts + 7200
+                for event in token_events
+            )
+            price_available_120m = bool(priced)
+            has_price_at_120m = price_available_120m
+            liquidity_proxy_at_120m = _liquidity_proxy(priced)
+            has_liquidity_proxy_at_120m = liquidity_proxy_at_120m is not None and liquidity_proxy_at_120m > 0
+            liquidity_survival_120m = has_liquidity_proxy_at_120m and price_available_120m
+            lifecycle_observed_to_120m = self.config.max_lifecycle_seconds >= 7200
+            survival_label_quality = _survival_label_quality(
+                has_activity_at_or_after_120m=has_activity_at_or_after_120m,
+                has_price_at_120m=has_price_at_120m,
+                has_liquidity_proxy_at_120m=has_liquidity_proxy_at_120m,
+                lifecycle_observed_to_120m=lifecycle_observed_to_120m,
+            )
             outcomes.append(
                 LaunchOutcomeLabel(
                     outcome_id=make_outcome_id(launch.launch_id),
@@ -307,11 +325,22 @@ class LaunchRegimeBuilder:
                     survived_30m=last_age >= 1800,
                     survived_60m=last_age >= 3600,
                     survived_120m=last_age >= 7200,
+                    has_activity_at_or_after_120m=has_activity_at_or_after_120m,
+                    has_price_at_120m=has_price_at_120m,
+                    has_liquidity_proxy_at_120m=has_liquidity_proxy_at_120m,
+                    price_available_120m=price_available_120m,
+                    liquidity_survival_120m=liquidity_survival_120m,
+                    lifecycle_observed_to_120m=lifecycle_observed_to_120m,
+                    survival_label_quality=survival_label_quality,
                     no_future_liquidity=not bool(token_events),
                     died_within_10m=last_age < 600,
                     died_within_30m=last_age < 1800,
                     died_within_60m=last_age < 3600,
                     died_within_120m=last_age < 7200,
+                    market_cap_available=max_market_cap is not None,
+                    market_cap_source=market_cap_source,
+                    market_cap_missing_reason=None if max_market_cap is not None else "market_cap_not_present_in_launch_or_events",
+                    threshold_outcomes_usable=threshold_outcomes_usable,
                     ever_hit_15k=_hit_market_cap(max_market_cap, 15_000),
                     ever_hit_35k=_hit_market_cap(max_market_cap, 35_000),
                     ever_hit_50k=_hit_market_cap(max_market_cap, 50_000),
@@ -319,6 +348,8 @@ class LaunchRegimeBuilder:
                     metadata_json={
                         "priced_event_count": len(priced),
                         "market_cap_available": max_market_cap is not None,
+                        "max_observed_lifecycle_age_seconds": last_age,
+                        "liquidity_proxy_at_120m": liquidity_proxy_at_120m,
                     },
                 )
             )
@@ -402,6 +433,35 @@ def _hit_market_cap(value: float | None, threshold: float) -> bool | None:
     if value is None:
         return None
     return value >= threshold
+
+
+def _market_cap_source(launch: LaunchRegimeCandidate, events: list[NormalizedEvent]) -> str | None:
+    if launch.market_cap is not None:
+        return "launch_candidate"
+    for event in events:
+        if event.metadata_json and _float_or_none(event.metadata_json.get("market_cap")) is not None:
+            return "normalized_event_metadata"
+    return None
+
+
+def _survival_label_quality(
+    *,
+    has_activity_at_or_after_120m: bool,
+    has_price_at_120m: bool,
+    has_liquidity_proxy_at_120m: bool,
+    lifecycle_observed_to_120m: bool,
+) -> str:
+    if not lifecycle_observed_to_120m:
+        return "lifecycle_window_not_observed_to_120m"
+    if has_activity_at_or_after_120m and has_liquidity_proxy_at_120m:
+        return "activity_and_liquidity_proxy_observed_at_120m"
+    if has_activity_at_or_after_120m and has_price_at_120m:
+        return "price_observed_through_120m_without_liquidity_proxy"
+    if has_liquidity_proxy_at_120m:
+        return "liquidity_proxy_available_by_120m_no_activity_at_120m"
+    if has_price_at_120m:
+        return "price_available_by_120m_no_activity_at_120m"
+    return "missing_price_and_liquidity_proxy"
 
 
 def _float_or_none(value: object) -> float | None:

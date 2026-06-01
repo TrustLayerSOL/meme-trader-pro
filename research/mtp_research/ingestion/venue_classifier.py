@@ -11,7 +11,7 @@ from research.mtp_research.ingestion.transaction_parser_models import (
 # TODO: Replace these partial placeholder sets with verified program-id constants.
 PARSER_PROGRAM_IDS: dict[str, set[str]] = {
     "raydium": set(),
-    "pump": set(),
+    "pump": {"6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"},
     "pumpswap": set(),
     "jupiter": set(),
 }
@@ -19,6 +19,25 @@ PARSER_PROGRAM_IDS: dict[str, set[str]] = {
 
 def classify_venue(summary: TransactionSummary) -> VenueClassification:
     program_ids = {program.program_id for program in summary.programs}
+    instruction_logs = _instruction_logs(summary)
+
+    pumpfun_matches = sorted(program_ids & PARSER_PROGRAM_IDS["pump"])
+    if pumpfun_matches:
+        pumpfun_classification = _classify_pumpfun_instruction(instruction_logs)
+        if pumpfun_classification:
+            return VenueClassification(
+                venue=pumpfun_classification,
+                confidence=0.95,
+                matched_program_ids=pumpfun_matches,
+                reasons=[f"matched_pumpfun_program_id_and_{_pumpfun_reason_name(pumpfun_classification)}_instruction_log"],
+            )
+        if summary.token_balance_deltas:
+            return VenueClassification(
+                venue="unknown_token_swap_candidate",
+                confidence=0.35,
+                matched_program_ids=pumpfun_matches,
+                reasons=["pumpfun_program_seen_without_supported_instruction_log"],
+            )
 
     raydium_matches = sorted(program_ids & PARSER_PROGRAM_IDS["raydium"])
     if raydium_matches:
@@ -29,15 +48,13 @@ def classify_venue(summary: TransactionSummary) -> VenueClassification:
             reasons=["matched_raydium_program_id"],
         )
 
-    pump_matches = sorted(
-        program_ids & (PARSER_PROGRAM_IDS["pump"] | PARSER_PROGRAM_IDS["pumpswap"])
-    )
+    pump_matches = sorted(program_ids & PARSER_PROGRAM_IDS["pumpswap"])
     if pump_matches:
         return VenueClassification(
-            venue="pump_or_pumpswap",
+            venue="pumpswap_trade",
             confidence=0.7,
             matched_program_ids=pump_matches,
-            reasons=["matched_pump_or_pumpswap_program_id"],
+            reasons=["matched_pumpswap_program_id"],
         )
 
     jupiter_matches = sorted(program_ids & PARSER_PROGRAM_IDS["jupiter"])
@@ -63,3 +80,32 @@ def classify_venue(summary: TransactionSummary) -> VenueClassification:
         matched_program_ids=[],
         reasons=["no_known_venue_program_or_token_deltas"],
     )
+
+
+def _instruction_logs(summary: TransactionSummary) -> list[str]:
+    raw_logs = (summary.raw_json.get("meta") or {}).get("logMessages") or []
+    if not isinstance(raw_logs, list):
+        return []
+    output = []
+    for item in raw_logs:
+        if isinstance(item, str) and "Instruction:" in item:
+            output.append(item)
+    return output
+
+
+def _classify_pumpfun_instruction(instruction_logs: list[str]) -> str | None:
+    for log in instruction_logs:
+        instruction = log.split("Instruction:", 1)[1].strip().lower()
+        if instruction in {"buy", "buyv2", "buyexactsolin", "buyexactquoteinv2"}:
+            return "pumpfun_buy"
+        if instruction in {"sell", "sellv2"}:
+            return "pumpfun_sell"
+        if instruction in {"create", "createv2"}:
+            return "pumpfun_create"
+        if instruction in {"migrate"}:
+            return "pumpfun_migrate"
+    return None
+
+
+def _pumpfun_reason_name(classification: str) -> str:
+    return classification.removeprefix("pumpfun_")

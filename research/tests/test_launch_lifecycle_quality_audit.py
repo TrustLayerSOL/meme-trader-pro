@@ -57,8 +57,38 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
     events_path = _write_jsonl(
         tmp_path / "events.jsonl",
         [
-            {"token_mint": "mint-a", "block_time": 1030, "venue": "unknown_token_swap_candidate", "metadata_json": {}},
-            {"token_mint": "mint-a", "block_time": 8200, "venue": "unknown_token_swap_candidate", "metadata_json": {}},
+            {
+                "token_mint": "mint-a",
+                "block_time": 1030,
+                "signature": "sig-a",
+                "venue": "pumpfun_buy",
+                "metadata_json": {"venue_matched_program_ids": ["pumpfun-program"]},
+            },
+            {
+                "token_mint": "mint-a",
+                "block_time": 8200,
+                "signature": "sig-b",
+                "venue": "unknown_token_swap_candidate",
+                "metadata_json": {"venue_matched_program_ids": ["pumpfun-program"]},
+            },
+        ],
+    )
+    raw_path = _write_jsonl(
+        tmp_path / "raw.jsonl",
+        [
+            {
+                "signature": "sig-b",
+                "raw_json": {
+                    "transaction": {
+                        "message": {
+                            "instructions": [
+                                {"programId": "pumpfun-program", "accounts": ["a", "b"], "data": "abcdef123456"}
+                            ]
+                        }
+                    },
+                    "meta": {"logMessages": ["Program log: Instruction: UnknownNewInstruction"]},
+                },
+            }
         ],
     )
 
@@ -67,6 +97,7 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
         snapshots_path=snapshots_path,
         outcomes_path=outcomes_path,
         events_path=events_path,
+        raw_path=raw_path,
         output_dir=tmp_path / "reports",
     )
 
@@ -74,12 +105,15 @@ def test_lifecycle_quality_audit_counts_coverage_and_warnings(tmp_path: Path) ->
     assert report["snapshot_count"] == 2
     assert report["outcome_count"] == 1
     assert report["event_count"] == 2
-    assert report["event_venue_counts"] == {"unknown_token_swap_candidate": 2}
+    assert report["event_venue_counts"] == {"pumpfun_buy": 1, "unknown_token_swap_candidate": 1}
+    assert report["event_classification_counts"] == {"pumpfun_buy": 1, "unknown_token_swap_candidate": 1}
+    assert report["program_id_counts"] == {"pumpfun-program": 2}
+    assert report["per_launch_event_classification_coverage"]["launches_with_known_classification"] == 1
+    assert report["top_unknown_instruction_clusters"][0]["program_id"] == "pumpfun-program"
     assert report["unique_event_mints"] == 1
     assert report["priced_snapshot_count"] == 2
     assert report["market_cap_unknown_outcome_count"] == 1
     assert report["event_max_age_bucket_counts"]["gte_120m"] == 1
-    assert "unknown_event_venue_dominant" in report["warning_flags"]
     assert "market_cap_unavailable_for_threshold_outcomes" in report["warning_flags"]
     assert (tmp_path / "reports" / "launch_lifecycle_quality_audit.json").exists()
     assert (tmp_path / "reports" / "launch_lifecycle_quality_audit.md").exists()

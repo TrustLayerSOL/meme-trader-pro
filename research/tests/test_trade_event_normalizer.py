@@ -129,6 +129,35 @@ def test_flow_to_event_calculates_price_quote() -> None:
     assert event.metadata_json["parser_version"] == "trade_event_normalizer_v0"
 
 
+def test_flow_to_event_stores_venue_evidence_metadata() -> None:
+    normalizer = TradeEventNormalizer()
+    summary = _summary([_delta("owner-1", BASE_MINT, 10), _delta("owner-1", WSOL_MINT, -2)])
+    summary.venue_classification = VenueClassification(
+        venue="pumpfun_buy",
+        confidence=0.95,
+        matched_program_ids=["6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"],
+        reasons=["matched_pumpfun_program_id_and_buy_instruction_log"],
+    )
+    summary.raw_record_role = "pumpfun_bonding_curve_lifecycle_2h"
+    summary.raw_record_token_mint = BASE_MINT
+    summary.raw_record_source = "helius_rpc"
+    summary.raw_record_address = "curve-1"
+    summary.raw_record_metadata_json = {"collection_method": "address_window"}
+    flow = normalizer.infer_trade_flows(summary)[0]
+
+    event = normalizer.flow_to_normalized_event(summary, flow, index=0)
+
+    assert event.venue == "pumpfun_buy"
+    assert event.metadata_json["venue_confidence"] == 0.95
+    assert event.metadata_json["venue_reasons"] == ["matched_pumpfun_program_id_and_buy_instruction_log"]
+    assert event.metadata_json["venue_matched_program_ids"] == ["6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"]
+    assert event.metadata_json["raw_record_role"] == "pumpfun_bonding_curve_lifecycle_2h"
+    assert event.metadata_json["raw_record_token_mint"] == BASE_MINT
+    assert event.metadata_json["raw_record_source"] == "helius_rpc"
+    assert event.metadata_json["raw_record_address"] == "curve-1"
+    assert event.metadata_json["raw_record_metadata_json"] == {"collection_method": "address_window"}
+
+
 def test_multiple_token_deltas_lower_confidence_and_add_reason() -> None:
     flows = TradeEventNormalizer().infer_trade_flows(
         _summary(

@@ -17,6 +17,7 @@ def main() -> int:
         snapshots_path=args.snapshots_path,
         outcomes_path=args.outcomes_path,
         events_path=args.events_path,
+        raw_path=args.raw_path,
         output_dir=args.output_dir,
     )
     for key in (
@@ -29,14 +30,18 @@ def main() -> int:
         "unique_outcome_mints",
         "unique_event_mints",
         "event_venue_counts",
+        "event_classification_counts",
         "launch_venue_counts",
         "launch_regime_counts",
+        "program_id_counts",
+        "per_launch_event_classification_coverage",
         "priced_snapshot_count",
         "zero_event_snapshot_count",
         "priced_outcome_count",
         "market_cap_unknown_outcome_count",
         "survived_counts",
         "event_max_age_bucket_counts",
+        "top_unknown_instruction_clusters",
         "warning_flags",
         "network_calls",
     ):
@@ -52,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--snapshots-path", required=True)
     parser.add_argument("--outcomes-path", required=True)
     parser.add_argument("--events-path", required=True)
+    parser.add_argument("--raw-path")
     parser.add_argument("--output-dir", default=str(DEFAULT_REPORT_DIR))
     return parser.parse_args()
 

@@ -73,3 +73,8 @@ class TransactionSummary:
     native_balance_deltas: list[NativeBalanceDelta] = field(default_factory=list)
     venue_classification: VenueClassification | None = None
     raw_json: dict[str, Any] = field(default_factory=dict)
+    raw_record_address: str | None = None
+    raw_record_role: str | None = None
+    raw_record_token_mint: str | None = None
+    raw_record_source: str | None = None
+    raw_record_metadata_json: dict[str, Any] = field(default_factory=dict)

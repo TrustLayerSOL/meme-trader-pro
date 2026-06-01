@@ -112,6 +112,10 @@ class TradeEventNormalizer:
         venue_confidence = (
             summary.venue_classification.confidence if summary.venue_classification else None
         )
+        venue_reasons = summary.venue_classification.reasons if summary.venue_classification else []
+        venue_matched_program_ids = (
+            summary.venue_classification.matched_program_ids if summary.venue_classification else []
+        )
 
         return NormalizedEvent(
             event_id=make_event_id(summary.signature, event_type, index=index),
@@ -132,6 +136,13 @@ class TradeEventNormalizer:
                 "confidence": flow.confidence,
                 "reasons": reasons,
                 "venue_confidence": venue_confidence,
+                "venue_reasons": venue_reasons,
+                "venue_matched_program_ids": venue_matched_program_ids,
+                "raw_record_address": summary.raw_record_address,
+                "raw_record_role": summary.raw_record_role,
+                "raw_record_token_mint": summary.raw_record_token_mint,
+                "raw_record_source": summary.raw_record_source,
+                "raw_record_metadata_json": summary.raw_record_metadata_json,
                 "source_signature": summary.signature,
                 "parser_version": "trade_event_normalizer_v0",
                 "price_inference_method": price_inference_method,
