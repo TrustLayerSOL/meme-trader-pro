@@ -179,6 +179,30 @@ Example run:
 
 ## Milestone 9: Research Dataset Builder v0
 
+## Launch-Regime Discovery Audit
+
+Launch-regime studies need broad launch discovery, not only DexScreener-visible tokens. DexScreener and routeable-token sources can be survivorship-biased because many failed Pump.fun launches never reach visible liquidity or listing surfaces.
+
+Run the source-bias audit:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_discovery_source_bias_audit
+```
+
+Plan program-signature discovery without network calls:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_program_signature_discovery_plan
+```
+
+Tiny program probes are dry-run by default. Add `--execute` only after reviewing the plan:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_program_signature_probe --program-id <PROGRAM_ID> --limit 10
+```
+
+Event-inferred launch times are approximate first-observed local events, not verified pair creation. Serious launch-timing analysis should prefer verified pair creation, bonding-curve creation, mint creation, or verified first-trade timestamps.
+
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
 
 Run the focused Milestone 9 tests:

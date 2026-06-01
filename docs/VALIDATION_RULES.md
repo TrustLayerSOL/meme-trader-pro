@@ -178,6 +178,16 @@
 - Feature snapshots should not create validation rows for a token outside that token's observed local activity window unless an explicit global-grid diagnostic is being run.
 - Global snapshot grids can be useful for debugging, but they can inflate `no_price` labels when applied to every token.
 - Token-active feature rebuilds are preferred before clean-label price coverage review.
+
+## Launch-regime discovery controls
+
+- Launch-regime studies require broad launch discovery before validation claims.
+- DexScreener-visible tokens can be survivorship-biased and must not be treated as the full launch universe.
+- Event-inferred launch timestamps are approximate first-observed normalized events, not verified launches.
+- Serious launch-timing analysis should prefer verified pair creation, verified bonding-curve creation, verified mint creation, or verified first-trade timestamps.
+- Source-bias audits and program-signature plans are data-quality controls, not backtests.
+- Program-signature discovery must default to dry-run, use tiny explicit probes first, and avoid unbounded Helius calls.
+- Future Helius webhooks or LaserStream can support forward self-archive, but they do not replace historical source-quality checks.
 - Rebuilding features must remain offline-only and must not change strategy thresholds.
 
 ## Selected-row and price-outlier audit

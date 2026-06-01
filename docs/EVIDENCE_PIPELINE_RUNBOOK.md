@@ -86,6 +86,43 @@ If backfill is skipped or not executed, results depend only on already-local dat
 - Start with tiny candidate limits.
 - Backfill and rebuild steps are separated so derived artifacts can be regenerated without spending credits.
 
+## Launch-Regime Discovery Source Audit
+
+DexScreener-visible candidates can create survivorship bias. Many Pump.fun launches may fail before DexScreener visibility, boosts, routing, or pool enrichment. Launch-regime studies therefore need a broader launch discovery source before any thesis validation claim is made.
+
+Audit current source concentration:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_discovery_source_bias_audit
+```
+
+Review the reports:
+
+```text
+data/backtests/diagnostics/reports/discovery_source_bias_audit.md
+data/backtests/diagnostics/reports/discovery_source_bias_audit.json
+```
+
+Plan program-signature discovery without network calls:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_program_signature_discovery_plan
+```
+
+Tiny probe dry-run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_program_signature_probe --program-id <PROGRAM_ID> --limit 10
+```
+
+Execute only a tiny explicit probe after reviewing the plan:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_program_signature_probe --program-id <PROGRAM_ID> --limit 10 --execute
+```
+
+Do not hydrate full transactions unless the tiny signature sample looks useful and `--hydrate-sample` is explicitly justified. Future forward self-archive may use Helius webhooks or LaserStream, but this lane is historical research and remains dry-run by default.
+
 ## Recommended First Real Run
 
 ```bash

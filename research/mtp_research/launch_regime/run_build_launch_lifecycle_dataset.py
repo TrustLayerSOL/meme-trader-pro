@@ -40,6 +40,8 @@ def main() -> int:
     JsonlArtifactStore(outcome_path).write_all(outcomes, sort_key=lambda row: (row.launch_ts, row.token_mint))
 
     regime_counts = Counter(launch.launch_regime for launch in launches)
+    timestamp_source_counts = Counter(launch.launch_timestamp_source for launch in launches)
+    timestamp_confidence_counts = Counter("verified" if launch.launch_timestamp_verified else "inferred" for launch in launches)
     warnings = []
     if len(launches) < args.target_launches:
         warnings.append("launch_target_not_reached_from_current_candidate_sources")
@@ -50,6 +52,8 @@ def main() -> int:
     print(f"snapshot_rows_created={len(snapshots)}")
     print(f"outcome_rows_created={len(outcomes)}")
     print(f"launch_regime_coverage={dict(sorted(regime_counts.items()))}")
+    print(f"launch_timestamp_source_counts={dict(sorted(timestamp_source_counts.items()))}")
+    print(f"launch_timestamp_confidence_counts={dict(sorted(timestamp_confidence_counts.items()))}")
     print(f"launch_time_span_seconds={_time_span(launches)}")
     print(f"launch_candidates_path={launch_path}")
     print(f"snapshot_path={snapshot_path}")

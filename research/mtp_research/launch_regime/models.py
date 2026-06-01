@@ -25,6 +25,9 @@ class LaunchRegimeCandidate:
     venue: str | None = None
     liquidity_usd: float | None = None
     market_cap: float | None = None
+    launch_timestamp_source: str = "unknown"
+    launch_timestamp_confidence: int = 0
+    launch_timestamp_verified: bool = False
     metadata_json: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,6 +47,9 @@ class LaunchRegimeCandidate:
             "venue": self.venue,
             "liquidity_usd": self.liquidity_usd,
             "market_cap": self.market_cap,
+            "launch_timestamp_source": self.launch_timestamp_source,
+            "launch_timestamp_confidence": self.launch_timestamp_confidence,
+            "launch_timestamp_verified": self.launch_timestamp_verified,
             "metadata_json": self.metadata_json,
         }
 
@@ -65,6 +71,9 @@ class LaunchRegimeCandidate:
             venue=payload.get("venue"),
             liquidity_usd=payload.get("liquidity_usd"),
             market_cap=payload.get("market_cap"),
+            launch_timestamp_source=payload.get("launch_timestamp_source", "unknown"),
+            launch_timestamp_confidence=int(payload.get("launch_timestamp_confidence", 0)),
+            launch_timestamp_verified=bool(payload.get("launch_timestamp_verified", False)),
             metadata_json=dict(payload.get("metadata_json", {})),
         )
 
@@ -85,6 +94,9 @@ class LaunchFeatureSnapshot:
     launch_minute_local: int
     launch_day_of_week: int
     launch_is_weekend: bool
+    launch_timestamp_source: str = "unknown"
+    launch_timestamp_confidence: int = 0
+    launch_timestamp_verified: bool = False
     buy_count: int = 0
     sell_count: int = 0
     buy_sell_imbalance: int = 0
@@ -114,6 +126,9 @@ class LaunchOutcomeLabel:
     launch_minute_local: int
     launch_day_of_week: int
     launch_is_weekend: bool
+    launch_timestamp_source: str = "unknown"
+    launch_timestamp_confidence: int = 0
+    launch_timestamp_verified: bool = False
     returns: dict[str, float | None] = field(default_factory=dict)
     runups: dict[str, float | None] = field(default_factory=dict)
     drawdowns: dict[str, float | None] = field(default_factory=dict)

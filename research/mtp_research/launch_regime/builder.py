@@ -17,6 +17,11 @@ from research.mtp_research.launch_regime.models import (
     make_snapshot_id,
     utc_iso_from_ts,
 )
+from research.mtp_research.validation.launch_timestamp_confidence import (
+    confidence_rank,
+    classify_launch_timestamp_source,
+    is_verified_launch_timestamp,
+)
 
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -47,6 +52,7 @@ class LaunchRegimeBuilder:
         if local.weekday() not in self.config.weekdays or not in_window:
             return None
         launch_id = make_launch_id(candidate.token_mint, launch_ts)
+        timestamp_source = classify_launch_timestamp_source(candidate.to_dict())
         return LaunchRegimeCandidate(
             launch_id=launch_id,
             token_mint=candidate.token_mint,
@@ -63,6 +69,9 @@ class LaunchRegimeBuilder:
             source=candidate.source,
             liquidity_usd=candidate.liquidity_usd,
             market_cap=candidate.market_cap,
+            launch_timestamp_source=timestamp_source,
+            launch_timestamp_confidence=confidence_rank(timestamp_source),
+            launch_timestamp_verified=is_verified_launch_timestamp(timestamp_source),
             metadata_json={
                 "dexscreener_url": candidate.dexscreener_url,
                 "candidate_metadata": candidate.metadata_json,
@@ -90,6 +99,12 @@ class LaunchRegimeBuilder:
             if local.weekday() not in self.config.weekdays or not in_window:
                 continue
             launch_id = make_launch_id(token, int(event.block_time or 0))
+            timestamp_source = classify_launch_timestamp_source(
+                {
+                    "source": "normalized_event_first_seen",
+                    "metadata_json": {"launch_timestamp_quality": "first_observed_event_not_verified_pair_creation"},
+                }
+            )
             launches.append(
                 LaunchRegimeCandidate(
                     launch_id=launch_id,
@@ -104,6 +119,9 @@ class LaunchRegimeBuilder:
                     launch_regime=self._launch_regime_name(local),
                     source="normalized_event_first_seen",
                     venue=event.venue,
+                    launch_timestamp_source=timestamp_source,
+                    launch_timestamp_confidence=confidence_rank(timestamp_source),
+                    launch_timestamp_verified=is_verified_launch_timestamp(timestamp_source),
                     metadata_json={
                         "first_seen_signature": event.signature,
                         "launch_timestamp_quality": "first_observed_event_not_verified_pair_creation",
@@ -143,6 +161,9 @@ class LaunchRegimeBuilder:
                         launch_minute_local=launch.launch_minute_local,
                         launch_day_of_week=launch.launch_day_of_week,
                         launch_is_weekend=launch.launch_is_weekend,
+                        launch_timestamp_source=launch.launch_timestamp_source,
+                        launch_timestamp_confidence=launch.launch_timestamp_confidence,
+                        launch_timestamp_verified=launch.launch_timestamp_verified,
                         buy_count=sum(1 for event in window_events if event.side in {"buy", "accumulate"}),
                         sell_count=sum(1 for event in window_events if event.side in {"sell", "distribution"}),
                         buy_sell_imbalance=sum(1 for event in window_events if event.side in {"buy", "accumulate"})
@@ -206,6 +227,9 @@ class LaunchRegimeBuilder:
                     launch_minute_local=launch.launch_minute_local,
                     launch_day_of_week=launch.launch_day_of_week,
                     launch_is_weekend=launch.launch_is_weekend,
+                    launch_timestamp_source=launch.launch_timestamp_source,
+                    launch_timestamp_confidence=launch.launch_timestamp_confidence,
+                    launch_timestamp_verified=launch.launch_timestamp_verified,
                     returns=returns,
                     runups=runups,
                     drawdowns=drawdowns,
