@@ -183,11 +183,16 @@
 
 - Launch-regime studies require broad launch discovery before validation claims.
 - DexScreener-visible tokens can be survivorship-biased and must not be treated as the full launch universe.
+- The current gating task is Pump.fun creation-event census precision, not directional flow-rule validation.
+- Generic flow and imbalance rule families are baseline/control families until the creation-event census and launch-state labels are reviewed.
 - Event-inferred launch timestamps are approximate first-observed normalized events, not verified launches.
 - Serious launch-timing analysis should prefer verified pair creation, verified bonding-curve creation, verified mint creation, or verified first-trade timestamps.
 - Source-bias audits and program-signature plans are data-quality controls, not backtests.
 - Program-signature discovery must default to dry-run, use tiny explicit probes first, and avoid unbounded Helius calls.
 - Pump.fun create scanning must prove token mint, bonding curve, creator wallet, and block-time extraction before any broad launch import.
+- Pump.fun creation census rows with `rejection_reason` are parser diagnostics, not accepted launches.
+- Broad historical discovery must wait for a deterministic manual precision audit with `reviewed_valid`, `reviewed_invalid`, and `uncertain` labels.
+- First-two-hour lifecycle labels and launch-state feature families are schema stubs until census precision is acceptable.
 - Bounded create-scan reports are discovery diagnostics, not launch datasets or validation artifacts.
 - Low-confidence Pump.fun create-like examples must stay in rejected/diagnostic sections unless explicitly included for parser debugging.
 - Future Helius webhooks or LaserStream can support forward self-archive, but they do not replace historical source-quality checks.

@@ -92,7 +92,9 @@ This registry tracks candidate sources for broad historical launch discovery. It
 
 ## Current Recommendation
 
-Use tiny bounded program-signature probes first, starting with Pump.fun creation/bonding-curve signatures. If the probe can identify token mints and launch timestamps cheaply, scale bounded program-signature discovery before spending credits on deeper lifecycle hydration.
+Use Pump.fun creation-event census and precision auditing as the current gate. DexScreener-visible launches are not representative enough for launch-regime conclusions. Generic flow and imbalance rule families remain baseline/control only until the launch universe is sourced from reviewed creation events.
+
+Do not scale bounded historical discovery until the parser has an acceptable deterministic precision sample. Rejected create-like rows and unknown Pump.fun instructions are parser diagnostics, not accepted launches.
 
 ## Pump.fun Create Scanner Guardrail
 
@@ -107,3 +109,13 @@ Before any broad historical import, the scanner must demonstrate extraction of:
 - verified block time
 
 Reports from this scanner remain discovery diagnostics. They are not launch datasets, backtests, strategy validation, or thesis evidence until a bounded importer writes reviewed candidate rows.
+
+## Precision Audit Before Scale
+
+The precision audit must sample parsed census rows deterministically and label each reviewed row as:
+
+- `reviewed_valid`
+- `reviewed_invalid`
+- `uncertain`
+
+The audit summary must report reviewed precision and warning flags. Until precision is acceptable, the next action is parser improvement or manual decoder inspection, not broad Helius expansion.

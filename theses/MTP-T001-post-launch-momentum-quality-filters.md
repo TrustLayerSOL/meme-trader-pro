@@ -4,7 +4,7 @@ name: Post-Launch Momentum with Quality Filters
 status: active
 priority: high
 strategy_family: post_launch_momentum
-current_stage: research
+current_stage: baseline_control
 primary_metric: walk_forward_avg_test_net_return
 risk_level: high
 created_at: 2026-05-31
@@ -40,13 +40,13 @@ Consistent positive test-fold results, sufficient sample size, visible cost assu
 Weak or negative test-fold returns, low fold consistency, excessive rug-like outcomes, or insufficient clean context.
 
 # Current Evidence
-Initial rule and walk-forward infrastructure exists; evidence-bearing dataset population is still required.
+Initial rule and walk-forward infrastructure exists, but the current launch population can be survivorship-biased. Momentum/flow signals are baseline/control only until Pump.fun creation-event census precision is reviewed.
 
 # Known Gaps
 Needs larger clean historical rows and stronger liquidity/depth features.
 
 # Next Actions
-Populate ResearchDatasetStore and rerun baseline, rule backtest, and walk-forward reports.
+Complete Pump.fun creation-event census precision audit and build first-two-hour launch-state labels before rerunning baseline, rule backtest, or walk-forward reports.
 
 # Notes
 This thesis is not a live trading rule.

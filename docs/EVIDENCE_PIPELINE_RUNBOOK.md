@@ -150,6 +150,31 @@ This is still a discovery probe, not a launch dataset. Do not run lifecycle back
 
 The scanner separates verified create candidates from rejected create-like examples and unknown Pump.fun instructions. Default output requires at least medium confidence. Use `--include-low-confidence` only for diagnostics; low-confidence rows must not be imported into the launch registry.
 
+## Pump.fun Creation Census Gate
+
+The current launch-regime research lane is a creation-event census and launch-state classification task. Flow and imbalance rules are baseline/control families only until the launch universe is sourced from verified creation events instead of DexScreener-visible survivors.
+
+Build the census from a bounded scanner report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_creation_census \
+  --scan-report data/backtests/diagnostics/reports/<PUMPFUN_SCAN_REPORT>.json
+```
+
+Create the deterministic precision-audit template:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_sample --sample-size 25
+```
+
+Import reviewed labels and write the summary:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_import
+```
+
+Allowed review labels are `reviewed_valid`, `reviewed_invalid`, and `uncertain`. Broad historical Pump.fun discovery stays blocked until the parser has an acceptable reviewed precision sample. This gate is parser QA only; it must not run lifecycle backfills, backtests, walk-forward validation, thesis evaluation, paper trading, live trading, threshold optimization, grid search, or ML.
+
 ## Recommended First Real Run
 
 ```bash

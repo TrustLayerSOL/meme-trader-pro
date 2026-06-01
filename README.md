@@ -226,6 +226,31 @@ The Pump.fun create scanner is a bounded discovery probe. It must prove create e
 
 By default, the scanner only counts medium/high-confidence create candidates. Rejected create-like examples and unknown Pump.fun instructions are diagnostics for parser improvement, not launch candidates.
 
+## Current Gate: Pump.fun Creation Census
+
+The next research sprint treats meme-token launches as a creation-event census and launch-state classification problem. Generic directional flow rules are baseline/control families only until the launch universe is less survivorship-biased.
+
+Build a local census from a reviewed bounded scan report:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_creation_census \
+  --scan-report data/backtests/diagnostics/reports/<PUMPFUN_SCAN_REPORT>.json
+```
+
+Create a deterministic manual precision-review sample:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_sample --sample-size 25
+```
+
+After human labels are filled as `reviewed_valid`, `reviewed_invalid`, or `uncertain`, import the audit:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_pumpfun_precision_import
+```
+
+Do not scale broad historical discovery until parser precision is acceptable. The first-two-hour lifecycle label and feature-family stubs are schema placeholders only; this sprint does not run backtests, walk-forward validation, paper trading, live trading, threshold optimization, or thesis promotion.
+
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
 
 Run the focused Milestone 9 tests:
