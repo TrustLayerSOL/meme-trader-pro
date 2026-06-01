@@ -29,12 +29,13 @@ Current classified lifecycle artifacts:
 Current classified event counts:
 
 - `pumpfun_buy`: `98,588`
-- `pumpfun_sell`: `79,033`
+- `pumpfun_sell`: `78,670`
 - `pumpfun_create`: `6,545`
 - `pumpfun_migrate`: `2`
-- `unknown_token_swap_candidate`: `21`
+- `pumpfun_swap`: `709`
+- `unknown_token_swap_candidate`: `0`
 
-The previous lifecycle event file classified all `184,189` events as `unknown_token_swap_candidate`. The classified replay reduced unknowns to `21` using deterministic Pump.fun program-id plus instruction-log evidence, with invalid account layouts failing closed.
+The previous lifecycle event file classified all `184,189` events as `unknown_token_swap_candidate`. The classified replay reduced unknowns to `0` using deterministic Pump.fun program-id plus instruction-log evidence, with invalid account layouts failing closed. Pump.fun `SwapTob` and `SwapV2` logs are classified as `pumpfun_swap` without inventing buy/sell side from venue evidence alone.
 
 ## Survival Semantics
 
@@ -81,10 +82,9 @@ Current blockers:
 
 - Market cap enrichment is missing for threshold outcome work.
 - Liquidity survival is now bonding-curve reserve proxy-based, not confirmed external pool liquidity.
-- The remaining unknown Pump.fun/Pump-related clusters should be inspected, especially migration and auxiliary routing instructions.
 
 Next recommended action:
 
 ```text
-Add deterministic market-cap enrichment and inspect the 21 remaining unknown lifecycle events before running any thesis, validation, or strategy analysis.
+Add deterministic market-cap enrichment before running any thesis, validation, or strategy analysis.
 ```
