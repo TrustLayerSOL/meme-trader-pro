@@ -216,6 +216,17 @@ HELIUS_TRANSACTION_WORKERS=32 HELIUS_TIMEOUT_SEC=45 HELIUS_MAX_RETRIES=6 HELIUS_
 
 Use `--lane regime` only after the creation census has enough launches in the configured Monday/Tuesday/Wednesday windows. The collector stores raw transactions only. Normalization, lifecycle label building, backtests, walk-forward validation, and thesis evaluation remain separate offline steps and must not be inferred from collection alone.
 
+If the normal program-signature crawl is too slow to reach the desired launch windows, use the Helius `getTransactionsForAddress` path. It queries exact PT date windows with block-time filters and stores only compact census rows:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_gtfa_census_collection \
+  --start-date 2026-05-25 \
+  --end-date 2026-06-01 \
+  --target-regime-launches 1500
+```
+
+Execution still requires `--execute`. This path is for token census discovery only; it must not store first-two-hour raw lifecycle history while the local drive is constrained.
+
 ## Recommended First Real Run
 
 ```bash

@@ -282,6 +282,17 @@ Collect bounded first-two-hour raw lifecycle evidence only after reviewing the d
 
 Execution requires `--execute`. The collector targets bonding-curve accounts, requests signature pages first, hydrates only signatures whose block time is between creation and creation plus two hours, and skips raw signatures already present locally.
 
+When only compact token census rows are needed for the configured launch regime, use the faster Helius `getTransactionsForAddress` window collector:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_gtfa_census_collection \
+  --start-date 2026-05-25 \
+  --end-date 2026-06-01 \
+  --target-regime-launches 1500
+```
+
+This stores launch census rows, not first-two-hour lifecycle raw history.
+
 v3 now joins feature snapshots with outcome labels into clean research dataset rows for baseline analysis, rule-based backtests, walk-forward validation, and thesis testing.
 
 Run the focused Milestone 9 tests:

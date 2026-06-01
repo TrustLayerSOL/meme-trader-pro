@@ -181,6 +181,62 @@ def test_build_get_transaction_payload_is_standard_json_rpc() -> None:
     }
 
 
+def test_build_get_transactions_for_address_payload_uses_time_window_filters() -> None:
+    adapter = HeliusHistoricalAdapter(api_key="test-key")
+
+    payload = adapter.build_get_transactions_for_address_payload(
+        address="program-1",
+        start_time=100,
+        end_time=200,
+        limit=1000,
+        pagination_token="123:4",
+    )
+
+    assert payload["method"] == "getTransactionsForAddress"
+    assert payload["params"][0] == "program-1"
+    assert payload["params"][1]["transactionDetails"] == "full"
+    assert payload["params"][1]["encoding"] == "jsonParsed"
+    assert payload["params"][1]["sortOrder"] == "asc"
+    assert payload["params"][1]["paginationToken"] == "123:4"
+    assert payload["params"][1]["filters"]["blockTime"] == {"gte": 100, "lte": 200}
+    assert payload["params"][1]["filters"]["status"] == "succeeded"
+
+
+def test_fetch_transactions_for_address_window_normalizes_full_transaction_entries() -> None:
+    calls = []
+
+    def fake_http_post(_url: str, payload: dict, _timeout_sec: int) -> dict:
+        calls.append(payload)
+        return {
+            "jsonrpc": "2.0",
+            "result": {
+                "data": [
+                    {
+                        "slot": 10,
+                        "timestamp": 123,
+                        "signature": "sig-1",
+                        "transaction": {"message": {"instructions": []}},
+                        "meta": {"err": None},
+                    }
+                ],
+                "paginationToken": None,
+            },
+        }
+
+    adapter = HeliusHistoricalAdapter(
+        rpc_url="https://mock-helius.invalid",
+        http_post=fake_http_post,
+    )
+
+    result = adapter.fetch_transactions_for_address_window("program-1", start_time=100, end_time=200)
+
+    assert len(calls) == 1
+    assert result["transactions"][0]["blockTime"] == 123
+    assert result["transactions"][0]["slot"] == 10
+    assert result["transactions"][0]["transaction"]["message"]["instructions"] == []
+    assert result["pagination_token"] is None
+
+
 def test_fetch_transaction_uses_mocked_http_method() -> None:
     calls = []
 

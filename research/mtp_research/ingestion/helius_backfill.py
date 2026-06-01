@@ -151,6 +151,69 @@ class HeliusHistoricalAdapter:
             ],
         }
 
+    def build_get_transactions_for_address_payload(
+        self,
+        *,
+        address: str,
+        start_time: int,
+        end_time: int,
+        limit: int = 1000,
+        pagination_token: str | None = None,
+        transaction_details: str = "full",
+    ) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "transactionDetails": transaction_details,
+            "encoding": "jsonParsed",
+            "maxSupportedTransactionVersion": 0,
+            "sortOrder": "asc",
+            "limit": limit,
+            "filters": {
+                "blockTime": {"gte": start_time, "lte": end_time},
+                "status": "succeeded",
+                "tokenAccounts": "none",
+            },
+        }
+        if pagination_token:
+            options["paginationToken"] = pagination_token
+        return {
+            "jsonrpc": "2.0",
+            "id": "mtp-helius-get-transactions-for-address",
+            "method": "getTransactionsForAddress",
+            "params": [address, options],
+        }
+
+    def fetch_transactions_for_address_window(
+        self,
+        address: str,
+        *,
+        start_time: int,
+        end_time: int,
+        limit: int = 1000,
+        pagination_token: str | None = None,
+        transaction_details: str = "full",
+    ) -> dict[str, Any]:
+        payload = self.build_get_transactions_for_address_payload(
+            address=address,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            pagination_token=pagination_token,
+            transaction_details=transaction_details,
+        )
+        response = self._http_post(self.build_rpc_url(), payload, self.timeout_sec)
+        if "error" in response:
+            raise RuntimeError(f"Helius RPC error: {response['error']}")
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Helius RPC getTransactionsForAddress result was not an object")
+        data = result.get("data", [])
+        if not isinstance(data, list):
+            raise RuntimeError("Helius RPC getTransactionsForAddress data was not a list")
+        return {
+            "transactions": [_normalize_transactions_for_address_entry(entry) for entry in data if isinstance(entry, dict)],
+            "pagination_token": result.get("paginationToken"),
+        }
+
     def fetch_transaction(self, signature: str) -> dict[str, Any]:
         payload = self.build_get_transaction_payload(signature)
         response = self._http_post(self.build_rpc_url(), payload, self.timeout_sec)
@@ -232,6 +295,16 @@ def _strip_env_value(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
+
+
+def _normalize_transactions_for_address_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    block_time = entry.get("blockTime", entry.get("timestamp"))
+    normalized = dict(entry)
+    if block_time is not None:
+        normalized["blockTime"] = block_time
+    if "transaction" not in normalized and isinstance(entry.get("raw_json"), dict):
+        normalized.update(entry["raw_json"])
+    return normalized
 
 
 def _env_int(name: str, default: int) -> int:
