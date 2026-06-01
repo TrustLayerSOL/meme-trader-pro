@@ -19,6 +19,10 @@ Current classified lifecycle artifacts:
 - Strict launch-regime snapshots: `18,000`
 - Strict launch-regime outcomes: `1,500`
 - Normalized lifecycle events: `184,189`
+- All collected liquidity-proxy snapshots: `36,000`
+- All collected liquidity-proxy outcomes: `3,000`
+- Strict launch-regime liquidity-proxy snapshots: `18,000`
+- Strict launch-regime liquidity-proxy outcomes: `1,500`
 
 ## Event Classification Coverage
 
@@ -48,6 +52,14 @@ New labels separate the concepts:
 
 Current status: survival semantics are separated, but liquidity survival is still proxy-based. It is not confirmed pool liquidity survival.
 
+The current classified lifecycle artifacts now populate a bonding-curve reserve proxy from the Pump.fun bonding-curve account post balance:
+
+- Liquidity proxy source: `bonding_curve_post_balance`
+- All collected liquidity-proxy source rows: `39,000`
+- Strict launch-regime liquidity-proxy source rows: `19,500`
+
+This improves lifecycle survival labeling, but it is still a SOL reserve proxy. It is not market cap, not confirmed DexScreener liquidity, and not a tradability claim.
+
 ## Market Cap Status
 
 Market cap remains unavailable in the current lifecycle event set.
@@ -67,12 +79,12 @@ The dataset is improved but not research-ready for conclusions.
 
 Current blockers:
 
-- Market cap/liquidity enrichment is missing for threshold outcome work.
-- Liquidity survival is proxy-based, not confirmed.
+- Market cap enrichment is missing for threshold outcome work.
+- Liquidity survival is now bonding-curve reserve proxy-based, not confirmed external pool liquidity.
 - The remaining unknown Pump.fun/Pump-related clusters should be inspected, especially migration and auxiliary routing instructions.
 
 Next recommended action:
 
 ```text
-Add deterministic liquidity/market-cap enrichment or pool-state proxy collection before running any thesis, validation, or strategy analysis.
+Add deterministic market-cap enrichment and inspect the 21 remaining unknown lifecycle events before running any thesis, validation, or strategy analysis.
 ```
