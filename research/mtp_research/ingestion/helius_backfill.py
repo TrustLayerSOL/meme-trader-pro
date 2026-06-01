@@ -159,9 +159,15 @@ class HeliusHistoricalAdapter:
 
     def fetch_transactions(self, signatures: list[str]) -> list[dict[str, Any]]:
         if self.transaction_workers == 1 or len(signatures) <= 1:
-            return [self.fetch_transaction(signature) for signature in signatures]
+            return [self.fetch_transaction_or_empty(signature) for signature in signatures]
         with ThreadPoolExecutor(max_workers=self.transaction_workers) as executor:
-            return list(executor.map(self.fetch_transaction, signatures))
+            return list(executor.map(self.fetch_transaction_or_empty, signatures))
+
+    def fetch_transaction_or_empty(self, signature: str) -> dict[str, Any]:
+        try:
+            return self.fetch_transaction(signature)
+        except Exception:
+            return {}
 
     def _post_json(self, url: str, payload: dict[str, Any], timeout_sec: int) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
