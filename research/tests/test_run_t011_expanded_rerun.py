@@ -61,6 +61,8 @@ def test_cli_runs_expanded_rerun_without_sidecars(tmp_path: Path, monkeypatch, c
             "",
             "--output-dir",
             str(output_dir),
+            "--status-path",
+            str(tmp_path / "T011_STATUS.md"),
         ],
     )
 

@@ -90,6 +90,7 @@ def test_expanded_rerun_writes_reports_and_keeps_guardrails(tmp_path: Path) -> N
     report, paths = build_t011_expanded_rerun_report(
         snapshot_paths=[snapshots],
         output_dir=tmp_path / "reports",
+        status_path=tmp_path / "T011_STATUS.md",
     )
 
     assert report["review_type"] == "descriptive_rerun_stability_only"

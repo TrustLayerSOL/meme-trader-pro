@@ -94,6 +94,7 @@ def build_t011_expanded_rerun_report(
     *,
     snapshot_paths: list[Path | str],
     output_dir: Path | str,
+    status_path: Path | str = STATUS_PATH,
     holder_state_snapshots_path: Path | str | None = None,
     entity_proxy_path: Path | str | None = None,
     migration_labels_path: Path | str | None = None,
@@ -190,7 +191,7 @@ def build_t011_expanded_rerun_report(
             "robustness": {key: str(value) for key, value in robustness_paths.items()},
         },
     }
-    paths.update(write_t011_expanded_rerun_outputs(report, output_dir=output, status_path=STATUS_PATH))
+    paths.update(write_t011_expanded_rerun_outputs(report, output_dir=output, status_path=status_path))
     return report, paths
 
 
