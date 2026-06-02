@@ -42,12 +42,14 @@ def build_t001_early_ownership_report(
     events_path: Path | str,
     snapshots_path: Path | str,
     outcomes_path: Path | str,
+    holder_state_snapshots_path: Path | str | None = None,
     bucket_count: int = 5,
     observation_window_seconds: int = 120,
 ) -> dict[str, Any]:
     candidates = _read_jsonl(candidates_path)
     events_by_mint = _group_by_mint(_read_jsonl(events_path))
     snapshots_by_mint = _group_by_mint(_read_jsonl(snapshots_path))
+    holder_state_by_mint = _group_by_mint(_read_jsonl(holder_state_snapshots_path)) if holder_state_snapshots_path else {}
     outcomes_by_mint = {row["token_mint"]: row for row in _read_jsonl(outcomes_path)}
     launch_rows = []
     for candidate in sorted(candidates, key=lambda row: (row.get("launch_ts", 0), row.get("token_mint", ""))):
@@ -56,6 +58,7 @@ def build_t001_early_ownership_report(
             candidate=candidate,
             events=events_by_mint.get(mint, []),
             snapshots=snapshots_by_mint.get(mint, []),
+            holder_state_snapshots=holder_state_by_mint.get(mint, []),
             outcome=outcomes_by_mint.get(mint, {}),
             observation_window_seconds=observation_window_seconds,
         )
@@ -83,6 +86,7 @@ def build_t001_early_ownership_report(
             "candidates_path": str(candidates_path),
             "events_path": str(events_path),
             "snapshots_path": str(snapshots_path),
+            "holder_state_snapshots_path": str(holder_state_snapshots_path) if holder_state_snapshots_path else None,
             "outcomes_path": str(outcomes_path),
             "launch_count": len(launch_rows),
             "strict_launch_regime": True,
@@ -106,6 +110,7 @@ def build_t001_early_ownership_report(
             "no_parameter_search",
             "no_future_leakage",
             "fdv_proxy_not_true_market_cap",
+            "holder_state_observed_delta_replay_not_full_chain_state" if holder_state_snapshots_path else "holder_state_unavailable",
         ],
         "launch_rows": launch_rows,
         "sample_counts": _sample_counts(launch_rows),
@@ -119,6 +124,7 @@ def build_t001_early_ownership_report(
             candidates_path,
             events_path,
             snapshots_path,
+            holder_state_snapshots_path,
             outcomes_path,
             bucket_count,
             observation_window_seconds,
@@ -153,6 +159,7 @@ def _build_launch_row(
     candidate: dict[str, Any],
     events: list[dict[str, Any]],
     snapshots: list[dict[str, Any]],
+    holder_state_snapshots: list[dict[str, Any]],
     outcome: dict[str, Any],
     observation_window_seconds: int,
 ) -> dict[str, Any]:
@@ -171,14 +178,17 @@ def _build_launch_row(
         event for event in eligible_events
         if event.get("venue") == "pumpfun_create" and _positive_qty(event)
     ]
+    holder_state = _nearest_holder_state_snapshot(holder_state_snapshots, observation_window_seconds)
     features = {
         "first_10_buyer_share": _largest_actor_share(buy_events[:10]),
         "first_20_buyer_share": _largest_actor_share(buy_events[:20]),
-        "creator_share": _creator_share(create_events + buy_events[:20], creator),
+        "creator_share": _holder_state_value(holder_state, "creator_holder_share")
+        if _holder_state_value(holder_state, "creator_holder_share") is not None
+        else _creator_share(create_events + buy_events[:20], creator),
         "sniper_share": _sniper_share(buy_events, launch_ts),
         "insider_share": None,
         "bundler_share": None,
-        "top_holder_share": None,
+        "top_holder_share": _holder_state_value(holder_state, "top_holder_share"),
     }
     return {
         "launch_id": candidate.get("launch_id"),
@@ -197,8 +207,10 @@ def _build_launch_row(
             "unavailable_feature_reasons": {
                 "insider_share": "no_insider_wallet_labels",
                 "bundler_share": "no_bundle_detection_labels",
-                "top_holder_share": "no_holder_snapshot_state",
+                "top_holder_share": None if features["top_holder_share"] is not None else "no_holder_snapshot_state",
             },
+            "holder_state_snapshot_age_seconds": holder_state.get("snapshot_age_seconds") if holder_state else None,
+            "holder_state_confidence": holder_state.get("holder_snapshot_confidence") if holder_state else None,
         },
     }
 
@@ -359,8 +371,10 @@ def _classify(feature_reports: dict[str, dict[str, Any]], warning_flags: list[st
 
 def _warning_flags(rows: list[dict[str, Any]], missing_value_audit: dict[str, dict[str, Any]]) -> list[str]:
     warnings = []
-    if any(missing_value_audit[name]["missing_count"] for name in ("insider_share", "bundler_share", "top_holder_share")):
+    if missing_value_audit["top_holder_share"]["missing_count"]:
         warnings.append("missing_holder_state_features")
+    if any(missing_value_audit[name]["missing_count"] for name in ("insider_share", "bundler_share")):
+        warnings.append("missing_wallet_label_features")
     if any(not row["outcomes"].get("proxy_threshold_outcomes_usable") for row in rows):
         warnings.append("fdv_proxy_thresholds_not_fully_usable")
     if any(row["outcomes"].get("true_market_cap_available") for row in rows):
@@ -379,7 +393,9 @@ def _data_quality_caveats(warning_flags: list[str]) -> list[str]:
         "No trading rules, entry logic, exit logic, or profitability claims are produced.",
     ]
     if "missing_holder_state_features" in warning_flags:
-        caveats.append("Insider, bundler, and top-holder shares require separate wallet/holder labeling.")
+        caveats.append("Top-holder share requires replay-safe holder-state snapshots.")
+    if "missing_wallet_label_features" in warning_flags:
+        caveats.append("Insider and bundler shares require separate wallet labeling.")
     return caveats
 
 
@@ -453,6 +469,7 @@ def _markdown_summary(report: dict[str, Any]) -> str:
 
 
 def _status_markdown(report: dict[str, Any], markdown_path: Path, json_path: Path) -> str:
+    audit = report["missing_value_audit"]
     return "\n".join(
         [
             "# T001 Early Ownership Concentration Status",
@@ -460,7 +477,10 @@ def _status_markdown(report: dict[str, Any], markdown_path: Path, json_path: Pat
             f"- Thesis ID: `{report['thesis_id']}`",
             f"- Current classification: `{report['final_classification']}`",
             f"- Dataset: strict launch-regime FDV-proxy lifecycle dataset",
+            f"- Holder-state snapshots: `{report['dataset'].get('holder_state_snapshots_path')}`",
             f"- Launches analyzed: `{report['sample_counts']['launch_count']}`",
+            f"- `top_holder_share` available: `{audit['top_holder_share']['available_count']}`",
+            f"- `creator_share` available: `{audit['creator_share']['available_count']}`",
             f"- Markdown summary: `{markdown_path}`",
             f"- JSON summary: `{json_path}`",
             "- No trading rules were generated.",
@@ -475,22 +495,30 @@ def _reproducible_command(
     candidates_path: Path | str,
     events_path: Path | str,
     snapshots_path: Path | str,
+    holder_state_snapshots_path: Path | str | None,
     outcomes_path: Path | str,
     bucket_count: int,
     observation_window_seconds: int,
 ) -> str:
-    return (
-        "./trading_env/bin/python -m research.mtp_research.validation.run_early_ownership_concentration_thesis "
-        f"--candidates-path \"{candidates_path}\" "
-        f"--events-path \"{events_path}\" "
-        f"--snapshots-path \"{snapshots_path}\" "
-        f"--outcomes-path \"{outcomes_path}\" "
-        f"--bucket-count {bucket_count} "
-        f"--observation-window-seconds {observation_window_seconds}"
-    )
+    parts = [
+        "./trading_env/bin/python -m research.mtp_research.validation.run_early_ownership_concentration_thesis",
+        f"--candidates-path \"{candidates_path}\"",
+        f"--events-path \"{events_path}\"",
+        f"--snapshots-path \"{snapshots_path}\"",
+    ]
+    if holder_state_snapshots_path:
+        parts.append(f"--holder-state-snapshots-path \"{holder_state_snapshots_path}\"")
+    parts.extend([
+        f"--outcomes-path \"{outcomes_path}\"",
+        f"--bucket-count {bucket_count}",
+        f"--observation-window-seconds {observation_window_seconds}",
+    ])
+    return " ".join(parts)
 
 
 def _read_jsonl(path: Path | str) -> list[dict[str, Any]]:
+    if path is None:
+        return []
     rows = []
     with Path(path).open("r", encoding="utf-8") as f:
         for line in f:
@@ -502,10 +530,38 @@ def _read_jsonl(path: Path | str) -> list[dict[str, Any]]:
 def _group_by_mint(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        mint = row.get("token_mint")
+        mint = row.get("token_mint") or row.get("mint")
         if mint:
             grouped[str(mint)].append(row)
     return grouped
+
+
+def _nearest_holder_state_snapshot(rows: list[dict[str, Any]], max_age_seconds: int) -> dict[str, Any] | None:
+    usable = [
+        row for row in rows
+        if _holder_age(row) is not None
+        and _holder_age(row) <= max_age_seconds
+        and row.get("holder_count") is not None
+    ]
+    if not usable:
+        return None
+    return max(usable, key=lambda row: int(_holder_age(row) or 0))
+
+
+def _holder_age(row: dict[str, Any]) -> int | None:
+    value = row.get("snapshot_age_seconds")
+    if value is None:
+        value = row.get("launch_age_seconds")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _holder_state_value(row: dict[str, Any] | None, field: str) -> float | None:
+    if not row:
+        return None
+    return _float_or_none(row.get(field))
 
 
 def _largest_actor_share(events: list[dict[str, Any]]) -> float | None:

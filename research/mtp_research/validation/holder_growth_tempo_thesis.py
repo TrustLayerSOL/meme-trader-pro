@@ -63,10 +63,13 @@ def build_t002_holder_growth_report(
     candidates_path: Path | str,
     snapshots_path: Path | str,
     outcomes_path: Path | str,
+    holder_state_snapshots_path: Path | str | None = None,
     bucket_count: int = 5,
 ) -> dict[str, Any]:
     candidates = _read_jsonl(candidates_path)
     snapshots = _read_jsonl(snapshots_path)
+    if holder_state_snapshots_path:
+        snapshots = _merge_holder_state_snapshots(snapshots, _read_jsonl(holder_state_snapshots_path))
     snapshots_by_mint = _group_by_mint(snapshots)
     outcomes_by_mint = {row["token_mint"]: row for row in _read_jsonl(outcomes_path)}
     field_audit = _field_coverage_audit(snapshots, FIELD_AUDIT_FIELDS)
@@ -98,6 +101,7 @@ def build_t002_holder_growth_report(
         "dataset": {
             "candidates_path": str(candidates_path),
             "snapshots_path": str(snapshots_path),
+            "holder_state_snapshots_path": str(holder_state_snapshots_path) if holder_state_snapshots_path else None,
             "outcomes_path": str(outcomes_path),
             "launch_count": len(launch_rows),
             "strict_launch_regime": True,
@@ -110,6 +114,7 @@ def build_t002_holder_growth_report(
             "feature_windows_seconds": [30, 180, 600, 1800],
             "candidate_features": FEATURES,
             "holder_count_policy": "do_not_fabricate_missing_holder_count",
+            "holder_state_semantics": "observed_delta_replay_not_full_chain_state" if holder_state_snapshots_path else "not_provided",
         },
         "methodology_flags": [
             "research_only",
@@ -121,6 +126,7 @@ def build_t002_holder_growth_report(
             "no_ml_black_boxes",
             "no_future_leakage",
             "fdv_proxy_not_true_market_cap",
+            "holder_state_observed_delta_replay_not_full_chain_state" if holder_state_snapshots_path else "holder_state_unavailable",
         ],
         "field_coverage_audit": field_audit,
         "launch_rows": launch_rows,
@@ -136,6 +142,7 @@ def build_t002_holder_growth_report(
         "reproducible_command": _reproducible_command(
             candidates_path,
             snapshots_path,
+            holder_state_snapshots_path,
             outcomes_path,
             bucket_count,
         ),
@@ -222,6 +229,47 @@ def _build_features(snapshots: dict[int, dict[str, Any] | None]) -> tuple[dict[s
         if value is None:
             missing_reasons[feature] = "holder_count_unavailable" if feature in HOLDER_FEATURES else "required_snapshot_field_unavailable"
     return features, missing_reasons
+
+
+def _merge_holder_state_snapshots(
+    valuation_snapshots: list[dict[str, Any]],
+    holder_state_snapshots: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    holder_by_key = {
+        (row.get("mint") or row.get("token_mint"), _holder_age(row)): row
+        for row in holder_state_snapshots
+        if (row.get("mint") or row.get("token_mint")) and _holder_age(row) is not None
+    }
+    merged = []
+    for row in valuation_snapshots:
+        copy = dict(row)
+        key = (copy.get("token_mint"), _holder_age(copy))
+        holder = holder_by_key.get(key)
+        if holder:
+            copy["holder_count"] = holder.get("holder_count")
+            copy["top_holder_share"] = holder.get("top_holder_share")
+            copy["top_10_holder_share"] = holder.get("top_10_holder_share")
+            copy["creator_holder_share"] = holder.get("creator_holder_share")
+            copy["holder_snapshot_confidence"] = holder.get("holder_snapshot_confidence")
+            copy["holder_snapshot_state"] = holder.get("holder_snapshot_state")
+            copy["holder_snapshot_missing_reason"] = holder.get("holder_snapshot_missing_reason")
+            metadata = dict(copy.get("metadata_json") or {})
+            metadata["holder_state_source"] = holder.get("holder_snapshot_source")
+            metadata["holder_state_is_observed_delta_replay"] = holder.get("is_observed_delta_replay")
+            metadata["holder_state_is_confirmed_full_chain_snapshot"] = holder.get("is_confirmed_full_chain_snapshot")
+            copy["metadata_json"] = metadata
+        merged.append(copy)
+    return merged
+
+
+def _holder_age(row: dict[str, Any]) -> int | None:
+    value = row.get("launch_age_seconds")
+    if value is None:
+        value = row.get("snapshot_age_seconds")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _field_coverage_audit(rows: list[dict[str, Any]], fields: list[str]) -> dict[str, dict[str, Any]]:
@@ -550,6 +598,7 @@ def _markdown_summary(report: dict[str, Any]) -> str:
 
 def _status_markdown(report: dict[str, Any], markdown_path: Path, json_path: Path) -> str:
     coverage = report["field_coverage_audit"]
+    missing = report["missing_value_audit"]
     return "\n".join(
         [
             "# T002 Holder Growth Tempo Status",
@@ -561,6 +610,7 @@ def _status_markdown(report: dict[str, Any], markdown_path: Path, json_path: Pat
             "## Dataset Used",
             "",
             "- Strict launch-regime FDV-proxy lifecycle dataset",
+            f"- Holder-state snapshots: `{report['dataset'].get('holder_state_snapshots_path')}`",
             f"- Launches analyzed: `{report['sample_counts']['launch_count']}`",
             "",
             "## Feature Coverage",
@@ -569,6 +619,8 @@ def _status_markdown(report: dict[str, Any], markdown_path: Path, json_path: Pat
             f"- `active_wallets`: `{coverage.get('active_wallets', {}).get('coverage_pct', 0):.2f}%`",
             f"- `buy_count`: `{coverage['buy_count']['coverage_pct']:.2f}%`",
             f"- `event_count`: `{coverage['event_count']['coverage_pct']:.2f}%`",
+            f"- `holder_growth_30s_to_3m` available launches: `{missing['holder_growth_30s_to_3m']['available_count']}`",
+            f"- `holder_growth_30s_to_30m` available launches: `{missing['holder_growth_30s_to_30m']['available_count']}`",
             "",
             "## Outcome Coverage",
             "",
@@ -599,16 +651,22 @@ def _status_markdown(report: dict[str, Any], markdown_path: Path, json_path: Pat
 def _reproducible_command(
     candidates_path: Path | str,
     snapshots_path: Path | str,
+    holder_state_snapshots_path: Path | str | None,
     outcomes_path: Path | str,
     bucket_count: int,
 ) -> str:
-    return (
-        "./trading_env/bin/python -m research.mtp_research.validation.run_holder_growth_tempo_thesis "
-        f"--candidates-path \"{candidates_path}\" "
-        f"--snapshots-path \"{snapshots_path}\" "
-        f"--outcomes-path \"{outcomes_path}\" "
-        f"--bucket-count {bucket_count}"
-    )
+    parts = [
+        "./trading_env/bin/python -m research.mtp_research.validation.run_holder_growth_tempo_thesis",
+        f"--candidates-path \"{candidates_path}\"",
+        f"--snapshots-path \"{snapshots_path}\"",
+    ]
+    if holder_state_snapshots_path:
+        parts.append(f"--holder-state-snapshots-path \"{holder_state_snapshots_path}\"")
+    parts.extend([
+        f"--outcomes-path \"{outcomes_path}\"",
+        f"--bucket-count {bucket_count}",
+    ])
+    return " ".join(parts)
 
 
 def _distribution_summary(values: list[float]) -> dict[str, Any]:

@@ -29,6 +29,12 @@ DEFAULT_OUTCOMES_PATH = data_lake_path(
     "launch_regime_valuation_enriched",
     "launch_lifecycle_outcomes_valuation_enriched.jsonl",
 )
+DEFAULT_HOLDER_STATE_SNAPSHOTS_PATH = data_lake_path(
+    "data",
+    "backtests",
+    "holder_state",
+    "strict_cohort_holder_state_snapshots.jsonl",
+)
 DEFAULT_OUTPUT_DIR = data_lake_path(
     "data", "backtests", "diagnostics", "reports", "T001_early_ownership_concentration"
 )
@@ -42,6 +48,7 @@ def main() -> int:
         events_path=args.events_path,
         snapshots_path=args.snapshots_path,
         outcomes_path=args.outcomes_path,
+        holder_state_snapshots_path=args.holder_state_snapshots_path,
         bucket_count=args.bucket_count,
         observation_window_seconds=args.observation_window_seconds,
     )
@@ -66,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidates-path", default=DEFAULT_CANDIDATES_PATH)
     parser.add_argument("--events-path", default=DEFAULT_EVENTS_PATH)
     parser.add_argument("--snapshots-path", default=DEFAULT_SNAPSHOTS_PATH)
+    parser.add_argument("--holder-state-snapshots-path", default=None)
     parser.add_argument("--outcomes-path", default=DEFAULT_OUTCOMES_PATH)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--status-path", default=DEFAULT_STATUS_PATH)
