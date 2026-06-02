@@ -53,6 +53,9 @@ def test_detects_first_milestone_crossings_and_tier(tmp_path: Path) -> None:
     assert row["crossed_200k_fdv_proxy"] is True
     assert row["milestone_tier"] == "reached_200k_but_never_500k"
     assert report["milestone_counts"]["crossed_100k_fdv_proxy"] == 1
+    tier_features = report["milestone_tier_anatomy"]["reached_200k_but_never_500k"]["feature_medians"]
+    assert tier_features["fdv_per_event"] == 5_000
+    assert tier_features["fdv_per_buy"] == 20_000 / 3
     assert "no_threshold_optimization" in report["methodology_flags"]
 
 

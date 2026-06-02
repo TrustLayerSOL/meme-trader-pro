@@ -64,6 +64,8 @@ def test_t011_uses_first_20k_crossing_and_no_future_features(tmp_path: Path) -> 
     assert rows["winner"]["trigger_age_seconds"] == 60
     assert rows["winner"]["features"]["buy_count_at_20k"] == 4
     assert rows["winner"]["features"]["active_wallets_at_20k"] == 4
+    assert rows["winner"]["features"]["fdv_per_event_at_20k"] == 4_000
+    assert rows["winner"]["features"]["fdv_per_buy_at_20k"] == 5_000
     assert rows["winner"]["features"]["event_count_growth_before_20k"] == 2
     assert rows["winner"]["outcomes"]["crossed_100k_after_20k"] is True
     assert rows["stall"]["outcomes"]["reached_20k_but_never_50k"] is True
