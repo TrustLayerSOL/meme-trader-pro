@@ -11,6 +11,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/features/launch_state_feature_stubs.py"),
     Path("research/mtp_research/validation/early_ownership_concentration_thesis.py"),
     Path("research/mtp_research/validation/run_early_ownership_concentration_thesis.py"),
+    Path("research/mtp_research/validation/holder_growth_tempo_thesis.py"),
+    Path("research/mtp_research/validation/run_holder_growth_tempo_thesis.py"),
 ]
 
 
@@ -39,4 +41,9 @@ def test_creation_census_sprint_does_not_add_trading_or_private_key_logic() -> N
 
 
 def _strip_allowed_negative_guardrail_labels(text: str) -> str:
-    return text.replace("no_threshold_optimization", "")
+    return (
+        text
+        .replace("no_threshold_optimization", "")
+        .replace("no_grid_search", "")
+        .replace("no_ml_black_boxes", "")
+    )
