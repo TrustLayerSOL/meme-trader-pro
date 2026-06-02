@@ -309,11 +309,50 @@ Stop if:
 - Current parser may need migration-specific layout handling.
 - Missing timestamps make labels unusable for leakage-safe creator history.
 
-## Next Recommendation
+## Latest Status After Capped Collection
 
-The dry-run migration/graduation enrichment planner is now implemented. Do not fetch data yet.
+The bounded collection path is implemented and has been exercised, but the blind mint-window strategy is too sparse for efficient scaling.
 
-Implemented dry-run command:
+Executed collection summary:
+
+- Clean selected mints: `250`
+- Selected creators: `65`
+- Window: `24h`
+- Requests used: `4,842`
+- Signatures fetched: `14,372`
+- Transactions fetched: `4,341`
+- Candidate rows: `250`
+- Duplicate mints: `0`
+- Exact Pump.fun migration labels found in clean selected cohort: `0`
+- Readiness classification: `migration_labels_partial_needs_parser_repair`
+
+Parser correction:
+
+- Initial pilot surfaced migration-like logs.
+- Manual raw-log review showed `MigrateBondingCurveCreator` fee-sharing logs were false positives.
+- The parser now accepts only exact `Migrate` and `MigrateV2` instruction names for `pumpfun_migrate_event_observed`.
+- Resume output is deduped by mint.
+- Planner selection now preserves prefixes as mint limits grow, which keeps checkpoint expansion stable.
+
+Targeted dry-run discovery result:
+
+- Raw migration/graduation transactions scanned: `5,299`
+- Exact migration events found in preserved raw evidence: `1`
+- Exact migration mints: `1`
+- Migration-like false positives: `13`
+- Network calls: `0`
+- Helius calls: `0`
+- Classification: `migration_targeted_probe_ready`
+- Recommended next action: `build_known_migration_fixture_probe_then_test_positive_address_strategy`
+
+Targeted reports:
+
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_targeted_discovery_plan/migration_targeted_discovery_plan.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_targeted_discovery_plan/migration_targeted_discovery_plan.md`
+
+## Implemented Commands
+
+Dry-run estimator:
 
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_migration_graduation_enrichment_planner \
@@ -326,28 +365,30 @@ Implemented dry-run command:
   --dry-run
 ```
 
-Latest dry-run interpretation:
-
-- Selected mints: `100`
-- Selected creators: `21`
-- Primary window: `24h`
-- Base projected requests: `600`
-- High projected requests: `2800`
-- Request ceiling status: `within_ceiling`
-- Stop/go classification: `dry_run_pilot_go`
-- Network calls: `0`
-- Helius calls: `0`
-- Thesis runs: `0`
-
-Dry-run reports:
-
-- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_graduation_enrichment_plan/migration_graduation_enrichment_dry_run_plan.json`
-- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_graduation_enrichment_plan/migration_graduation_enrichment_dry_run_plan.md`
-
-Generated later execute command, not run:
+Bounded collector:
 
 ```bash
 ./trading_env/bin/python -m research.mtp_research.validation.run_migration_graduation_enrichment_collection --mint-limit 100 --window 24h --max-signature-pages-per-mint 3 --max-transactions-per-mint 25 --max-total-transactions 2500 --request-ceiling 3000 --hard-stop-projected-requests 5000 --execute
 ```
 
-The next action is to implement the capped execute path behind explicit `--execute`. T008 should remain blocked until enrichment produces a non-empty and meaningful `creator_has_4plus_prior_migrations` cohort.
+Targeted dry-run planner:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_migration_targeted_discovery_plan --dry-run
+```
+
+## Next Recommendation
+
+Do not run T008 yet. Do not run another broad mint-window pull as the next step.
+
+Next action:
+
+1. Build a known-migration fixture probe from the preserved exact `MigrateV2` transaction.
+2. Test which low-cost address strategy retrieves that known migration most cheaply: mint, bonding curve, associated bonding curve, or creator-adjacent account.
+3. Only after the positive-control address strategy works, run a capped migration-positive probe.
+
+Reason:
+
+The blind mint-window strategy hydrated thousands of transactions and found no exact migration labels in the clean deterministic 250-mint cohort. A positive-control probe is needed before any larger collection so we know the source path can actually retrieve migration events efficiently.
+
+T008 remains blocked until enrichment produces leakage-safe migration timestamps and a meaningful creator prior-migration cohort.
