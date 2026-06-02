@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from research.mtp_research.validation.creator_migration_reputation_feasibility import (
+    READINESS_ALL_COLLECTED_READY,
     READINESS_PARTIAL,
     build_creator_migration_reputation_report,
     write_creator_migration_reputation_outputs,
@@ -178,6 +179,43 @@ def test_readiness_partial_when_four_plus_filter_is_empty(tmp_path: Path) -> Non
     assert report["readiness_classification"] == READINESS_PARTIAL
     assert report["t008_creator_migration_reputation_feasible_now"] is False
     assert "four_plus_prior_migration_filter_empty" in report["warning_flags"]
+
+
+def test_readiness_all_collected_ready_when_strict_four_plus_empty(tmp_path: Path) -> None:
+    strict = [_candidate(i, f"strict-creator-{i}", i * 100) for i in range(1, 3)]
+    all_candidates = list(strict)
+    labels = []
+    for creator_index in range(1, 5):
+        creator = f"creator-{creator_index}"
+        for launch_index in range(1, 20):
+            idx = 1000 + creator_index * 100 + launch_index
+            all_candidates.append(_candidate(idx, creator, idx * 100))
+            if launch_index <= 4:
+                labels.append(
+                    {
+                        "mint": f"mint-{idx}",
+                        "creator": creator,
+                        "dex_pair_detected": True,
+                        "migration_time": f"1970-01-01T{creator_index:02d}:{launch_index:02d}:00+00:00",
+                    }
+                )
+
+    report = build_creator_migration_reputation_report(
+        strict_candidates_path=_write_jsonl(tmp_path / "strict.jsonl", strict),
+        all_candidates_path=_write_jsonl(tmp_path / "all.jsonl", all_candidates),
+        events_path=_write_jsonl(tmp_path / "events.jsonl", []),
+        strict_outcomes_path=_write_jsonl(tmp_path / "strict_outcomes.jsonl", []),
+        all_outcomes_path=_write_jsonl(tmp_path / "all_outcomes.jsonl", []),
+        migration_labels_path=_write_jsonl(tmp_path / "migration_labels.jsonl", labels),
+    )
+
+    assert report["readiness_classification"] == READINESS_ALL_COLLECTED_READY
+    assert report["t008_creator_migration_reputation_feasible_now"] is True
+    assert report["t008_strict_regime_feasible_now"] is False
+    assert report["t008_all_collected_feasible_now"] is True
+    assert report["derived_field_summary"]["launches_with_4plus_prior_migrations"] == 0
+    assert report["derived_field_summary"]["all_launches_with_4plus_prior_migrations"] >= 30
+    assert "strict_regime_four_plus_empty_use_all_collected_only" in report["warning_flags"]
 
 
 def test_outputs_reports_and_optional_sample_csv(tmp_path: Path) -> None:

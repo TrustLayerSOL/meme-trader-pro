@@ -11,6 +11,7 @@ from typing import Any
 
 
 READINESS_READY = "creator_migration_reputation_ready_for_descriptive_thesis"
+READINESS_ALL_COLLECTED_READY = "creator_migration_reputation_ready_for_all_collected_descriptive_thesis"
 READINESS_PARTIAL = "creator_migration_reputation_partial_needs_migration_enrichment"
 READINESS_BLOCKED = "creator_migration_reputation_blocked"
 
@@ -95,7 +96,9 @@ def build_creator_migration_reputation_report(
         "derived_field_summary": derived_summary,
         "sample_rows": sample_rows,
         "readiness_classification": readiness,
-        "t008_creator_migration_reputation_feasible_now": readiness == READINESS_READY,
+        "t008_creator_migration_reputation_feasible_now": readiness in {READINESS_READY, READINESS_ALL_COLLECTED_READY},
+        "t008_strict_regime_feasible_now": readiness == READINESS_READY,
+        "t008_all_collected_feasible_now": readiness in {READINESS_READY, READINESS_ALL_COLLECTED_READY},
         "warning_flags": _warning_flags(observability, derived_summary, readiness),
         "next_recommendation": _next_recommendation(readiness),
         "methodology_flags": [
@@ -378,6 +381,8 @@ def _readiness(observability: dict[str, Any], derived: dict[str, Any]) -> str:
     if observability["migration_timestamp_available_count"] <= 0 or observability["creator_available_for_migrated_launches"] <= 0:
         return READINESS_BLOCKED
     if derived["launches_with_4plus_prior_migrations"] <= 0:
+        if derived["all_launches_with_4plus_prior_migrations"] >= 30 and derived["all_launches_with_at_least_1_prior_migration"] >= 30:
+            return READINESS_ALL_COLLECTED_READY
         return READINESS_PARTIAL
     if derived["strict_launches_with_at_least_1_prior_migration"] < 30:
         return READINESS_PARTIAL
@@ -392,7 +397,9 @@ def _warning_flags(observability: dict[str, Any], derived: dict[str, Any], readi
         flags.append("outcome_migration_labels_unavailable")
     if derived["launches_with_4plus_prior_migrations"] == 0:
         flags.append("four_plus_prior_migration_filter_empty")
-    if readiness != READINESS_READY:
+    if readiness == READINESS_ALL_COLLECTED_READY:
+        flags.append("strict_regime_four_plus_empty_use_all_collected_only")
+    if readiness not in {READINESS_READY, READINESS_ALL_COLLECTED_READY}:
         flags.append("migration_enrichment_needed_before_t008")
     return flags
 
@@ -400,6 +407,8 @@ def _warning_flags(observability: dict[str, Any], derived: dict[str, Any], readi
 def _next_recommendation(readiness: str) -> str:
     if readiness == READINESS_READY:
         return "design a descriptive T008 protocol, but do not run it without a separate instruction"
+    if readiness == READINESS_ALL_COLLECTED_READY:
+        return "design T008 on the all-collected cohort only; keep strict-regime T008 blocked until the 4+ prior migration cohort is non-empty"
     if readiness == READINESS_PARTIAL:
         return "enrich migration/graduation labels beyond the first 120m lifecycle window before T008"
     return "do not pursue creator migration reputation until migration labels with timestamps are available"
@@ -446,6 +455,8 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         f"- Readiness classification: `{report['readiness_classification']}`",
         f"- T008 Creator Migration Reputation feasible now: `{report['t008_creator_migration_reputation_feasible_now']}`",
+        f"- T008 strict-regime feasible now: `{report.get('t008_strict_regime_feasible_now')}`",
+        f"- T008 all-collected feasible now: `{report.get('t008_all_collected_feasible_now')}`",
         f"- Strict launches: `{obs['strict_total_launches']}`",
         f"- All-collected launches: `{obs['all_collected_total_launches']}`",
         f"- Pump.fun migrate event rows: `{obs['pumpfun_migrate_event_rows']}`",
