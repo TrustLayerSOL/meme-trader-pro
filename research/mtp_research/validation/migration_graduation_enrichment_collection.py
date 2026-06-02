@@ -335,7 +335,7 @@ def _detect_migration_candidate(signature: str, raw_json: dict[str, Any]) -> dic
     logs = [log.lower() for log in _extract_logs(raw_json)]
     program_ids = _extract_program_ids(raw_json)
     has_pumpfun = PUMPFUN_PROGRAM_ID in program_ids or any(PUMPFUN_PROGRAM_ID.lower() in log for log in logs)
-    has_migrate_log = any("instruction: migrate" in log or "instruction: migratev2" in log for log in logs)
+    has_migrate_log = any(_instruction_name(log) in {"migrate", "migratev2"} for log in logs)
     pumpfun_migrate = has_pumpfun and has_migrate_log
     block_time = _raw_block_time(raw_json)
     migration_time = _timestamp(block_time) if block_time is not None and pumpfun_migrate else None
@@ -600,6 +600,12 @@ def _write_parquet(rows: list[dict[str, Any]], path: Path) -> None:
 def _extract_logs(raw_json: dict[str, Any]) -> list[str]:
     logs = (raw_json.get("meta") or {}).get("logMessages") or []
     return [item for item in logs if isinstance(item, str)]
+
+
+def _instruction_name(log: str) -> str | None:
+    if "instruction:" not in log:
+        return None
+    return log.split("instruction:", 1)[1].strip().split()[0].lower()
 
 
 def _extract_program_ids(raw_json: Any) -> set[str]:

@@ -215,6 +215,44 @@ def test_missing_migration_reason_is_recorded(tmp_path: Path) -> None:
     assert output_rows[0]["dex_pair_detected"] is False
 
 
+def test_fee_sharing_creator_migration_log_is_not_graduation(tmp_path: Path) -> None:
+    launch_ts = 1_700_000_000
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate(1, launch_ts=launch_ts)])
+    fake_client = FakeMigrationClient(
+        signatures=[{"signature": "sig-fee-sharing", "blockTime": launch_ts + 60}],
+        transactions={
+            "sig-fee-sharing": {
+                "blockTime": launch_ts + 60,
+                "meta": {
+                    "logMessages": [
+                        "Program log: Instruction: CreateFeeSharingConfig",
+                        "Program log: Instruction: MigrateBondingCurveCreator",
+                        "Program log: Instruction: UpdateFeeShares",
+                    ]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": [{"pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}]
+                    }
+                },
+            }
+        },
+    )
+
+    run_migration_graduation_enrichment_collection(
+        candidates_path=candidates_path,
+        execute=True,
+        mint_limit=1,
+        output_paths=_paths(tmp_path),
+        client=fake_client,
+    )
+
+    output_rows = [json.loads(line) for line in _paths(tmp_path)["jsonl_path"].read_text(encoding="utf-8").splitlines()]
+    assert output_rows[0]["pumpfun_migrate_event_observed"] is False
+    assert output_rows[0]["liquidity_pool_created_after_launch"] is False
+    assert output_rows[0]["migration_missing_reason"] == "not_observed_in_window"
+
+
 def test_report_declares_no_thesis_backtest_validation_or_trading(tmp_path: Path) -> None:
     candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate(1)])
 
