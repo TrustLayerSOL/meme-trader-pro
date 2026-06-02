@@ -69,12 +69,15 @@ def run_migration_graduation_enrichment_collection(
     output_paths: dict[str, Path | str] | None = None,
     client: Any | None = None,
     output_flush_interval_mints: int = 25,
+    transaction_workers: int = 8,
 ) -> dict[str, Any]:
     """Run a dry-run or explicitly executed capped migration/graduation pilot."""
 
     started = time.time()
     if output_flush_interval_mints < 1:
         raise ValueError("output_flush_interval_mints must be >= 1")
+    if transaction_workers < 1:
+        raise ValueError("transaction_workers must be >= 1")
     paths = _resolve_output_paths(output_paths)
     plan = build_migration_graduation_enrichment_dry_run_plan(
         candidates_path=candidates_path,
@@ -119,7 +122,7 @@ def run_migration_graduation_enrichment_collection(
         _write_reports(report, paths)
         return report
 
-    rpc = client or HeliusHistoricalAdapter.from_env()
+    rpc = client or HeliusHistoricalAdapter.from_env(transaction_workers=transaction_workers)
     checkpoint = load_collection_checkpoint(paths["checkpoint_path"])
     completed_mints = set(checkpoint.get("completed_mints") or [])
     rows: list[dict[str, Any]] = _dedupe_rows_by_mint(_read_existing_jsonl(paths["jsonl_path"]))
@@ -306,18 +309,21 @@ def _collect_one_mint(
     raw_path = raw_dir / "migration_graduation_raw_transactions.jsonl"
     transactions: list[dict[str, Any]] = []
     signatures_seen = {record.signature for record in signatures if getattr(record, "signature", None)}
-    for record in signatures[:max_transactions_per_mint]:
-        if transactions_fetched_total >= max_total_transactions:
-            stopped_due_ceiling = True
-            break
-        if requests_used + 1 > request_ceiling:
-            stopped_due_ceiling = True
-            break
-        signature = record.signature
-        tx = rpc.fetch_transaction(signature)
-        requests_used += 1
+    remaining_total_transactions = max(0, max_total_transactions - transactions_fetched_total)
+    remaining_requests = max(0, request_ceiling - requests_used)
+    available_transaction_slots = min(max_transactions_per_mint, remaining_total_transactions, remaining_requests)
+    selected_records = signatures[:available_transaction_slots]
+    if len(selected_records) < min(max_transactions_per_mint, len(signatures)) and (
+        remaining_total_transactions <= len(selected_records) or remaining_requests <= len(selected_records)
+    ):
+        stopped_due_ceiling = True
+
+    hydrated_transactions = _fetch_transactions(rpc, [record.signature for record in selected_records])
+    requests_used += len(selected_records)
+    for record, tx in zip(selected_records, hydrated_transactions, strict=False):
         if not tx:
             continue
+        signature = record.signature
         transactions_fetched_total += 1
         transactions.append({"signature": signature, "block_time": getattr(record, "block_time", None), "raw_json": tx})
         if signature not in existing_signatures:
@@ -333,6 +339,15 @@ def _collect_one_mint(
         "stopped_due_ceiling": stopped_due_ceiling,
         "raw_files_written": [str(raw_path)] if raw_path.exists() else [],
     }
+
+
+def _fetch_transactions(rpc: Any, signatures: list[str]) -> list[dict[str, Any]]:
+    if not signatures:
+        return []
+    batch_fetcher = getattr(rpc, "fetch_transactions", None)
+    if callable(batch_fetcher):
+        return list(batch_fetcher(signatures))
+    return [rpc.fetch_transaction(signature) for signature in signatures]
 
 
 def _candidate_label_row(

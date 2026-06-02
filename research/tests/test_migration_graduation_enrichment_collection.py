@@ -41,6 +41,18 @@ class FakeMigrationClient:
         return dict(self.transactions.get(signature, {}))
 
 
+class BatchMigrationClient(FakeMigrationClient):
+    def __init__(self, *, signatures: list[dict] | None = None, transactions: dict[str, dict] | None = None):
+        super().__init__(signatures=signatures, transactions=transactions)
+        self.batch_transaction_calls = 0
+        self.batch_signatures = []
+
+    def fetch_transactions(self, signatures: list[str]) -> list[dict]:
+        self.batch_transaction_calls += 1
+        self.batch_signatures.append(list(signatures))
+        return [dict(self.transactions.get(signature, {})) for signature in signatures]
+
+
 class _SignatureRecord:
     def __init__(self, *, signature: str, block_time: int | None, slot: int | None, raw_json: dict):
         self.signature = signature
@@ -221,6 +233,38 @@ def test_collection_batches_output_flushes(tmp_path: Path, monkeypatch: pytest.M
     )
 
     assert parquet_writes == [(3, paths["parquet_path"])]
+
+
+def test_collection_uses_batch_transaction_hydration_when_available(tmp_path: Path) -> None:
+    launch_ts = 1_700_000_000
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate(1, launch_ts=launch_ts)])
+    fake_client = BatchMigrationClient(
+        signatures=[
+            {"signature": "sig-1", "blockTime": launch_ts + 10},
+            {"signature": "sig-2", "blockTime": launch_ts + 20},
+            {"signature": "sig-3", "blockTime": launch_ts + 30},
+        ],
+        transactions={
+            "sig-1": {"blockTime": launch_ts + 10, "meta": {"logMessages": []}},
+            "sig-2": {"blockTime": launch_ts + 20, "meta": {"logMessages": []}},
+            "sig-3": {"blockTime": launch_ts + 30, "meta": {"logMessages": []}},
+        },
+    )
+
+    result = run_migration_graduation_enrichment_collection(
+        candidates_path=candidates_path,
+        execute=True,
+        mint_limit=1,
+        max_transactions_per_mint=3,
+        output_paths=_paths(tmp_path),
+        client=fake_client,
+    )
+
+    assert fake_client.batch_transaction_calls == 1
+    assert fake_client.transaction_calls == 0
+    assert fake_client.batch_signatures == [["sig-1", "sig-2", "sig-3"]]
+    assert result["requests"]["requests_used"] == 4
+    assert result["collection"]["transactions_fetched"] == 3
 
 
 def test_execute_preserves_raw_transactions_and_writes_label_schema(tmp_path: Path) -> None:
