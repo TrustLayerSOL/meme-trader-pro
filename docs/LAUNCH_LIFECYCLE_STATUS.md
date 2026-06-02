@@ -75,13 +75,13 @@ Current availability from local lifecycle artifacts:
 - Bonding-curve virtual reserves: not available as verified virtual reserve fields.
 - Real token reserves: available in normalized event metadata, not promoted into snapshot/outcome valuation semantics.
 - Real SOL reserves: available as bonding-curve post-balance proxy.
-- Token price in SOL: available in normalized events, but not carried as absolute snapshot/outcome price.
+- Token price in SOL: available in enriched snapshot/outcome rows from the latest local priced event at each snapshot and 120-minute outcome horizon.
 - Token price in USD: not available.
 - SOL/USD source: not available.
 - Bonding-curve post balance: available.
 - Liquidity proxy fields: available.
 - Snapshot timestamp and launch age: available.
-- Price source/provenance: relative returns and event price proxies exist, but USD valuation provenance is incomplete.
+- Price source/provenance: available for SOL price via `price_source`, `price_event_signature`, `price_event_block_time`, and `price_staleness_seconds`.
 - Supply source/provenance: missing.
 
 ## Valuation Layer Status
@@ -107,6 +107,7 @@ Current enriched coverage:
 - Supply available rows: `0`
 - SOL/USD available rows: `0`
 - USD price available rows: `0`
+- SOL price available rows: `39,000` all collected, `19,500` strict launch-regime
 
 ## Market Cap Status
 
@@ -131,7 +132,6 @@ Current blockers:
 
 - Trusted supply extraction is missing.
 - Timestamp-compatible SOL/USD is missing.
-- Absolute snapshot/outcome price provenance is incomplete.
 - Market cap and FDV are unavailable for threshold outcome work.
 - Liquidity survival is now bonding-curve reserve proxy-based, not confirmed external pool liquidity.
 
