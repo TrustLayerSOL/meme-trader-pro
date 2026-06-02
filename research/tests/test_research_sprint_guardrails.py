@@ -17,6 +17,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/validation/run_creator_archetype_history_thesis.py"),
     Path("research/mtp_research/validation/liquidity_persistence_thesis.py"),
     Path("research/mtp_research/validation/run_liquidity_persistence_thesis.py"),
+    Path("research/mtp_research/validation/buy_sell_flow_baseline_thesis.py"),
+    Path("research/mtp_research/validation/run_buy_sell_flow_baseline_thesis.py"),
 ]
 
 
