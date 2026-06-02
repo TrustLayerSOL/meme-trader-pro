@@ -33,6 +33,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/validation/run_holder_state_pilot.py"),
     Path("research/mtp_research/validation/holder_state_rollout.py"),
     Path("research/mtp_research/validation/run_holder_state_rollout.py"),
+    Path("research/mtp_research/validation/explosive_runner_raw_flow_thesis.py"),
+    Path("research/mtp_research/validation/run_explosive_runner_raw_flow_thesis.py"),
 ]
 
 
@@ -66,4 +68,5 @@ def _strip_allowed_negative_guardrail_labels(text: str) -> str:
         .replace("no_threshold_optimization", "")
         .replace("no_grid_search", "")
         .replace("no_ml_black_boxes", "")
+        .replace("no_auto_buy_sell", "")
     )
