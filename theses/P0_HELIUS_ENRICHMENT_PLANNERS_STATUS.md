@@ -41,11 +41,31 @@ The top-holder replay pilot was executed as a bounded source-yield test. This us
 - readiness_classification: `top_holder_replay_ready_for_review`
 - warnings: `[]`
 
+## Creator/Funder Transfer Graph Pilot
+The creator/funder transfer graph pilot was executed as the final capped P0 structural enrichment pilot. This uses neutral creator/funder structural proxy labels only.
+
+- creators_selected: `37`
+- candidate_funders_selected: `41`
+- launches_covered: `250`
+- creators_attempted: `37`
+- creators_completed: `37`
+- requests_used: `125`
+- actual_helius_credits_estimate: `125`
+- transactions_fetched: `7471`
+- raw_responses_preserved: `7000`
+- candidate_funder_coverage_pct: `99.2`
+- shared_funder_coverage_pct: `92.8`
+- time_linked_funding_coverage_pct: `92.8`
+- creator_to_early_buyer_links_found: `0`
+- creator_to_top_holder_links_found: `0`
+- readiness_classification: `creator_funder_graph_ready_for_review`
+- warnings: `[]`
+
 ## Warning
-The executed pilots did not run a thesis, validation, backtest, paper trading, live trading, optimization, grid search, or ML workflow. Top-holder replay fields remain proxy fields unless validated against a confirmed historical account-state source.
+The executed pilots did not run a thesis, validation, backtest, paper trading, live trading, optimization, grid search, or ML workflow. Top-holder replay fields remain proxy fields unless validated against a confirmed historical account-state source. Creator/funder fields are structural proxies, not identity or unsupported relation labels.
 
 ## Next Recommended Action
-Review dry-run target previews, then approve exactly one capped pilot if the target set is acceptable.
+Build a combined structural proxy audit that joins early-buyer wallet history, top-holder replay, and creator/funder transfer graph outputs before any thesis or outcome comparison.
 
 ## Artifacts
 - Summary JSON: /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/p0_helius_planners/p0_helius_planner_summary.json
@@ -64,3 +84,9 @@ Review dry-run target previews, then approve exactly one capped pilot if the tar
 - Top Holder Replay JSONL: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/top_holder_replay_pilot.jsonl
 - Top Holder Replay Parquet: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/top_holder_replay_pilot.parquet
 - Top Holder Replay Raw Transactions: /Volumes/ORICO/MemeTraderPro/data/raw/structural_enrichment/top_holder_replay_pilot/top_holder_replay_raw_transactions.jsonl
+- Creator/Funder Graph Summary JSON: /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/p0_creator_funder_transfer_graph_pilot/creator_funder_transfer_graph_pilot_summary.json
+- Creator/Funder Graph Summary Markdown: /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/p0_creator_funder_transfer_graph_pilot/creator_funder_transfer_graph_pilot_summary.md
+- Creator/Funder Graph JSONL: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/creator_funder_transfer_graph_pilot.jsonl
+- Creator/Funder Graph Parquet: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/creator_funder_transfer_graph_pilot.parquet
+- Creator/Funder Graph Raw Transactions: /Volumes/ORICO/MemeTraderPro/data/raw/structural_enrichment/creator_funder_transfer_graph_pilot/creator_funder_transfer_graph_raw_transactions.jsonl
+- Creator/Funder Graph Checkpoint: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/creator_funder_transfer_graph_checkpoint.json
