@@ -87,3 +87,47 @@ That means the filter is currently trivially empty. Running a thesis now would m
 Do not run T008 yet.
 
 Next action: enrich migration/graduation labels beyond the current first-two-hour lifecycle event set. The enrichment should identify migration/graduation events with timestamps and join them back to creator history. Only after the `4+ prior migrations` cohort is non-empty and meaningful should T008 be considered.
+
+## 2026-06-02 Migration Enrichment Update
+
+Bounded migration/graduation enrichment was run against the all-collected `3,000` launch cohort using Helius address-window transaction reads. This was data enrichment only; no thesis, backtest, validation, paper trading, live trading, optimization, grid search, or ML workflow was run.
+
+### Runtime Fixes
+
+- Added a positive-control migration probe and verified the known Pump.fun migration signature can be found through the bonding-curve address strategy.
+- Replaced per-signature hydration with Helius address-window transaction reads for migration collection.
+- Changed migration-window reads to scan latest transactions first so late lifecycle migration events are not pushed out by early high-activity transactions.
+- Added corrected request preflight estimation for address-window collection.
+- Future large API pulls should add coordinated concurrent mint workers before execution.
+
+### Completed Enrichment Runs
+
+| Run | Window | Candidate rows | Requests used | Transactions fetched | Migrated mints detected | Warnings |
+|---|---:|---:|---:|---:|---:|---|
+| 24h all-collected | `24h` | `3,000` | `11,566` | `42,132` | `1` | `[]` |
+| 7d all-collected latest-first | `7d` | `3,000` | `5,582` | `90,721` | `15` | `[]` |
+
+### Readiness Result After 7d Labels
+
+| Metric | Value |
+|---|---:|
+| Unique migrated mints observed | `15` |
+| Strict unique migrated mints observed | `9` |
+| Migration timestamp available count | `15` |
+| Creators with at least 1 migration event | `14` |
+| Strict launches with 4+ prior migrations | `0` |
+| T008 feasible now | `false` |
+| Readiness classification | `creator_migration_reputation_partial_needs_migration_enrichment` |
+
+The migration parser and collection path are now proven and bounded, but the enriched label density is still too sparse for the intended `4+ prior migrations` creator-reputation filter. T008 remains blocked because the target cohort is empty, not because the code path cannot collect or join migration labels.
+
+### Updated Report Paths
+
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_graduation_collection/migration_graduation_collection_summary.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_graduation_collection_7d_desc/migration_graduation_collection_summary.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/creator_migration_reputation_feasibility_7d_desc/creator_migration_reputation_feasibility.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/creator_migration_reputation_feasibility_7d_desc/creator_migration_reputation_feasibility.md`
+
+### Updated Recommendation
+
+Do not run T008 yet. The next useful data step is source expansion for migration/graduation labels, not another thesis. Candidate sources to evaluate are PumpSwap pool creation, Raydium/PumpSwap pair detection, and DexScreener pair-discovery enrichment by mint. Before the next large API pull, implement coordinated concurrent mint workers to reduce wall time safely.
