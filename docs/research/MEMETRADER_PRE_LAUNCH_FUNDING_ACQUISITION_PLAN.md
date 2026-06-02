@@ -324,32 +324,37 @@ If the pilot remains partial, do not run T008. Either revise the data source or 
 
 ## Next Recommendation
 
-Build a dry-run planner first.
+The dry-run planner is now implemented.
 
-Recommended next implementation step:
+Implemented dry-run command:
 
 ```bash
-./trading_env/bin/python -m research.mtp_research.validation.run_pre_launch_funding_plan \
-  --creator-limit 50 \
+./trading_env/bin/python -m research.mtp_research.validation.run_pre_launch_funding_planner \
+  --max-creators 50 \
   --lookback-hours 24 \
-  --max-signature-pages-per-creator 2 \
-  --max-transactions-per-creator 50 \
-  --max-total-transactions 2500 \
+  --request-ceiling 3000 \
+  --hard-stop-projected-requests 5000 \
+  --creator-selection deterministic \
+  --output-dir /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/pre_launch_funding_planner \
   --dry-run
 ```
 
-Expected dry-run output:
+Latest dry-run interpretation:
 
-- selected creator count
-- launches represented
-- lookback window
-- estimated signature requests
-- estimated transaction requests
-- estimated request-equivalent total
-- estimated storage
-- projected runtime
-- stop/go classification
-- no network calls
-- no thesis run
+- Selected creators: `50`
+- Launches represented: `667`
+- Lookback window: `24h`
+- Base projected requests: `1050`
+- High projected requests: `2600`
+- Request ceiling status: `within_ceiling`
+- Stop/go classification: `dry_run_pilot_go`
+- Network calls: `0`
+- Helius calls: `0`
+- Thesis runs: `0`
 
-Only after that dry-run report should a real 50-creator pilot be considered.
+Dry-run reports:
+
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/pre_launch_funding_planner/pre_launch_funding_dry_run_plan.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/pre_launch_funding_planner/pre_launch_funding_dry_run_plan.md`
+
+The next action is to review the dry-run report and decide whether to implement the capped real collection command. A real pilot should still require explicit `--execute`.
