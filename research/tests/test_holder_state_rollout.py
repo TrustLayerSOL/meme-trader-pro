@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 
 from research.mtp_research.validation.holder_state_rollout import (
+    build_negative_balance_diagnostics,
     build_holder_state_rollout,
+    write_negative_balance_diagnostics,
     write_holder_state_rollout_outputs,
 )
 
@@ -31,7 +33,11 @@ def _candidate(mint: str, launch_ts: int = 1000, creator: str = "creator-a") -> 
         "source": "test",
         "pool_address": f"pool-{mint}",
         "venue": "pumpfun",
-        "metadata_json": {"creator_deployer": creator},
+        "metadata_json": {
+            "creator_deployer": creator,
+            "bonding_curve": f"curve-{mint}",
+            "associated_bonding_curve": f"assoc-curve-{mint}",
+        },
     }
 
 
@@ -89,9 +95,50 @@ def test_rollout_handles_negative_balance_without_silent_imputation(tmp_path: Pa
     rollout = build_holder_state_rollout(candidates_path=candidates_path, events_path=events_path)
 
     assert rollout["snapshots_built"] == 0
-    assert rollout["suspicious_negative_balance_count"] == 1
+    assert rollout["suspicious_negative_balance_count"] == 0
+    assert rollout["sell_without_prior_observed_balance_count"] == 1
     assert rollout["readiness_classification"] == "holder_state_blocked"
     assert rollout["holder_snapshots"][0]["holder_snapshot_missing_reason"] == "no_observed_holder_balances_at_snapshot"
+
+
+def test_rollout_excludes_bonding_curve_and_program_accounts_from_holder_counts(tmp_path: Path) -> None:
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate("mint-a", creator="wallet-a")])
+    events_path = _write_jsonl(
+        tmp_path / "events.jsonl",
+        [
+            _event("mint-a", "curve-mint-a", 1010, "buy", 900),
+            _event("mint-a", "assoc-curve-mint-a", 1011, "buy", 100),
+            _event("mint-a", "11111111111111111111111111111111", 1012, "buy", 50),
+            _event("mint-a", "wallet-a", 1013, "buy", 25),
+        ],
+    )
+
+    rollout = build_holder_state_rollout(candidates_path=candidates_path, events_path=events_path)
+    first = rollout["holder_snapshots"][0]
+
+    assert first["holder_count"] == 1
+    assert first["top_holder_share"] == 1.0
+    assert first["creator_holder_share"] == 1.0
+    assert rollout["excluded_program_pool_account_event_count"] == 3
+
+
+def test_rollout_skips_ambiguous_swaps_and_duplicate_events(tmp_path: Path) -> None:
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate("mint-a")])
+    duplicate = _event("mint-a", "wallet-a", 1010, "buy", 10)
+    duplicate["event_id"] = "duplicate-event"
+    duplicate["signature"] = "duplicate-signature"
+    ambiguous = _event("mint-a", "wallet-b", 1012, "buy", 5)
+    ambiguous["event_type"] = "pumpfun_swap"
+    ambiguous["side"] = "unknown"
+    events_path = _write_jsonl(tmp_path / "events.jsonl", [duplicate, dict(duplicate), ambiguous])
+
+    rollout = build_holder_state_rollout(candidates_path=candidates_path, events_path=events_path)
+    first = rollout["holder_snapshots"][0]
+
+    assert first["holder_count"] == 1
+    assert first["observed_holder_balance_sum"] == 10
+    assert rollout["duplicate_event_skipped_count"] == 1
+    assert rollout["excluded_ambiguous_event_count"] == 1
 
 
 def test_rollout_outputs_are_deterministic_and_writes_jsonl_and_parquet(tmp_path: Path) -> None:
@@ -112,3 +159,19 @@ def test_rollout_outputs_are_deterministic_and_writes_jsonl_and_parquet(tmp_path
     assert paths["audit_json_path"].exists()
     assert paths["audit_markdown_path"].exists()
     assert "full-chain" in paths["audit_markdown_path"].read_text(encoding="utf-8")
+
+
+def test_negative_balance_diagnostics_preserve_legacy_failure_mode(tmp_path: Path) -> None:
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate("mint-a")])
+    events_path = _write_jsonl(tmp_path / "events.jsonl", [_event("mint-a", "wallet-a", 1010, "sell", 10)])
+
+    diagnostics = build_negative_balance_diagnostics(candidates_path=candidates_path, events_path=events_path)
+    paths = write_negative_balance_diagnostics(diagnostics, output_dir=tmp_path / "reports")
+
+    assert diagnostics["total_negative_balance_events"] == 1
+    assert diagnostics["unique_launches_affected"] == 1
+    assert diagnostics["negative_events_by_classification"] == {"other": 1}
+    assert diagnostics["negative_events_by_snapshot_window"] == {"30s": 1}
+    assert diagnostics["before_positive_balance_seed_count"] == 1
+    assert paths["negative_balance_json_path"].exists()
+    assert paths["negative_balance_markdown_path"].exists()

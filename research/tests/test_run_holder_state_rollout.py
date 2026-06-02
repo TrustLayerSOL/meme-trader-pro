@@ -52,6 +52,7 @@ def test_rollout_cli_writes_expected_outputs(tmp_path: Path, monkeypatch, capsys
     )
     dataset_dir = tmp_path / "dataset"
     report_dir = tmp_path / "reports"
+    negative_balance_report_dir = tmp_path / "negative_balance_reports"
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -64,6 +65,8 @@ def test_rollout_cli_writes_expected_outputs(tmp_path: Path, monkeypatch, capsys
             str(dataset_dir),
             "--report-dir",
             str(report_dir),
+            "--negative-balance-report-dir",
+            str(negative_balance_report_dir),
         ],
     )
 
@@ -77,3 +80,5 @@ def test_rollout_cli_writes_expected_outputs(tmp_path: Path, monkeypatch, capsys
     assert (dataset_dir / "strict_cohort_holder_state_snapshots.parquet").exists()
     assert (report_dir / "holder_state_strict_cohort_audit.json").exists()
     assert (report_dir / "holder_state_strict_cohort_audit.md").exists()
+    assert (negative_balance_report_dir / "negative_balance_diagnostics.json").exists()
+    assert (negative_balance_report_dir / "negative_balance_diagnostics.md").exists()

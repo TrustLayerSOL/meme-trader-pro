@@ -6,7 +6,9 @@ import argparse
 
 from research.mtp_research.data_paths import data_lake_path
 from research.mtp_research.validation.holder_state_rollout import (
+    build_negative_balance_diagnostics,
     build_holder_state_rollout,
+    write_negative_balance_diagnostics,
     write_holder_state_rollout_outputs,
 )
 
@@ -19,10 +21,22 @@ DEFAULT_DATASET_DIR = data_lake_path("data", "backtests", "holder_state")
 DEFAULT_REPORT_DIR = data_lake_path(
     "data", "backtests", "diagnostics", "reports", "holder_state_strict_cohort"
 )
+DEFAULT_NEGATIVE_BALANCE_REPORT_DIR = data_lake_path(
+    "data", "backtests", "diagnostics", "reports", "holder_state_negative_balance"
+)
 
 
 def main() -> int:
     args = parse_args()
+    diagnostics = build_negative_balance_diagnostics(
+        candidates_path=args.candidates_path,
+        events_path=args.events_path,
+        max_launches=args.max_launches,
+    )
+    diagnostic_paths = write_negative_balance_diagnostics(
+        diagnostics,
+        output_dir=args.negative_balance_report_dir,
+    )
     rollout = build_holder_state_rollout(
         candidates_path=args.candidates_path,
         events_path=args.events_path,
@@ -42,8 +56,17 @@ def main() -> int:
     print(f"top_10_holder_share_coverage_pct={rollout['top_10_holder_share_coverage_pct']:.2f}")
     print(f"creator_holder_share_coverage_pct={rollout['creator_holder_share_coverage_pct']:.2f}")
     print(f"suspicious_negative_balance_count={rollout['suspicious_negative_balance_count']}")
+    print(f"original_negative_balance_count={diagnostics['total_negative_balance_events']}")
+    print(f"unique_negative_balance_launches={diagnostics['unique_launches_affected']}")
+    print(f"excluded_ambiguous_event_count={rollout['excluded_ambiguous_event_count']}")
+    print(f"excluded_program_pool_account_event_count={rollout['excluded_program_pool_account_event_count']}")
+    print(f"sell_without_prior_observed_balance_count={rollout['sell_without_prior_observed_balance_count']}")
+    print(f"sell_without_prior_observed_balance_unique_launches={rollout['sell_without_prior_observed_balance_unique_launches']}")
+    print(f"duplicate_event_skipped_count={rollout['duplicate_event_skipped_count']}")
     print(f"t001_v2_feasible={rollout['t001_v2_feasible']}")
     print(f"t002_v2_feasible={rollout['t002_v2_feasible']}")
+    for key, path in diagnostic_paths.items():
+        print(f"{key}={path}")
     for key, path in paths.items():
         print(f"{key}={path}")
     return 0
@@ -55,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--events-path", default=DEFAULT_EVENTS_PATH)
     parser.add_argument("--dataset-dir", default=DEFAULT_DATASET_DIR)
     parser.add_argument("--report-dir", default=DEFAULT_REPORT_DIR)
+    parser.add_argument("--negative-balance-report-dir", default=DEFAULT_NEGATIVE_BALANCE_REPORT_DIR)
     parser.add_argument("--max-launches", type=int, default=None)
     return parser.parse_args()
 
