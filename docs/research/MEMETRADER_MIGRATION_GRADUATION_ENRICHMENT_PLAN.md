@@ -311,6 +311,43 @@ Stop if:
 
 ## Next Recommendation
 
-Build a dry-run migration/graduation enrichment planner first. Do not fetch data yet.
+The dry-run migration/graduation enrichment planner is now implemented. Do not fetch data yet.
 
-The planner should estimate selected mints, source mix, window costs, storage, runtime, and stop/go classification. If the 100-mint `24h` dry-run stays below the request ceiling, implement the capped execute path next. T008 should remain blocked until enrichment produces a non-empty and meaningful `creator_has_4plus_prior_migrations` cohort.
+Implemented dry-run command:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_migration_graduation_enrichment_planner \
+  --mint-limit 100 \
+  --windows 24h 72h 7d \
+  --request-ceiling 3000 \
+  --hard-stop-projected-requests 5000 \
+  --selection deterministic \
+  --output-dir /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_graduation_enrichment_plan \
+  --dry-run
+```
+
+Latest dry-run interpretation:
+
+- Selected mints: `100`
+- Selected creators: `21`
+- Primary window: `24h`
+- Base projected requests: `600`
+- High projected requests: `2800`
+- Request ceiling status: `within_ceiling`
+- Stop/go classification: `dry_run_pilot_go`
+- Network calls: `0`
+- Helius calls: `0`
+- Thesis runs: `0`
+
+Dry-run reports:
+
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_graduation_enrichment_plan/migration_graduation_enrichment_dry_run_plan.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/migration_graduation_enrichment_plan/migration_graduation_enrichment_dry_run_plan.md`
+
+Generated later execute command, not run:
+
+```bash
+./trading_env/bin/python -m research.mtp_research.validation.run_migration_graduation_enrichment_collection --mint-limit 100 --window 24h --max-signature-pages-per-mint 3 --max-transactions-per-mint 25 --max-total-transactions 2500 --request-ceiling 3000 --hard-stop-projected-requests 5000 --execute
+```
+
+The next action is to implement the capped execute path behind explicit `--execute`. T008 should remain blocked until enrichment produces a non-empty and meaningful `creator_has_4plus_prior_migrations` cohort.
