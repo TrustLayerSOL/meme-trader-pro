@@ -132,6 +132,47 @@ def test_run_valuation_enrichment_is_offline_and_writes_proxy_threshold_fields(t
     assert enriched_snapshot["ever_hit_valuation_proxy_15k"] is None
 
 
+def test_enrichment_uses_supply_and_sol_usd_for_fdv_proxy_thresholds(tmp_path: Path) -> None:
+    snapshots_path = _write_jsonl(
+        tmp_path / "snapshots.jsonl",
+        [
+            {
+                "token_mint": "mint-a",
+                "metadata_json": {"price_sol": 0.0002, "price_event_block_time": 1_000},
+            }
+        ],
+    )
+    outcomes_path = _write_jsonl(tmp_path / "outcomes.jsonl", [])
+    supply_path = _write_jsonl(
+        tmp_path / "supply.jsonl",
+        [{"mint": "mint-a", "total_supply": 1_000_000_000, "supply_source": "helius_getTokenSupply"}],
+    )
+    sol_usd_path = _write_jsonl(
+        tmp_path / "sol_usd.jsonl",
+        [{"ts": 1_000, "sol_usd": 100.0, "source": "coingecko_solana_market_chart_range"}],
+    )
+
+    report = run_valuation_enrichment(
+        snapshots_path=snapshots_path,
+        outcomes_path=outcomes_path,
+        output_dir=tmp_path / "enriched",
+        supply_path=supply_path,
+        sol_usd_path=sol_usd_path,
+    )
+
+    assert report["fdv_available_count"] == 1
+    assert report["valuation_proxy_available_count"] == 1
+    assert report["proxy_threshold_outcomes_usable_count"] == 1
+    row = json.loads((tmp_path / "enriched" / "launch_lifecycle_snapshots_valuation_enriched.jsonl").read_text().splitlines()[0])
+    assert row["price_usd_available"] is True
+    assert row["fdv_usd"] == 20_000_000
+    assert row["true_market_cap_usd"] is None
+    assert row["valuation_proxy_usd"] == 20_000_000
+    assert row["threshold_outcomes_usable"] is False
+    assert row["proxy_threshold_outcomes_usable"] is True
+    assert row["ever_hit_valuation_proxy_100k"] is True
+
+
 def test_valuation_enrichment_cli_runs_without_network(tmp_path: Path) -> None:
     snapshots_path = _write_jsonl(tmp_path / "snapshots.jsonl", [{"token_mint": "mint-a"}])
     outcomes_path = _write_jsonl(tmp_path / "outcomes.jsonl", [{"token_mint": "mint-a"}])

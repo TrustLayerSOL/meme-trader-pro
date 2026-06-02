@@ -151,6 +151,38 @@ class HeliusHistoricalAdapter:
             ],
         }
 
+    def build_get_token_supply_payload(self, mint: str) -> dict[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": "mtp-helius-get-token-supply",
+            "method": "getTokenSupply",
+            "params": [mint],
+        }
+
+    def fetch_token_supply(self, mint: str) -> dict[str, Any]:
+        response = self._http_post(
+            self.build_rpc_url(),
+            self.build_get_token_supply_payload(mint),
+            self.timeout_sec,
+        )
+        if "error" in response:
+            raise RuntimeError(f"Helius RPC error: {response['error']}")
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("Helius RPC getTokenSupply result was not an object")
+        value = result.get("value")
+        if not isinstance(value, dict):
+            raise RuntimeError("Helius RPC getTokenSupply value was not an object")
+        return {
+            "mint": mint,
+            "slot": (result.get("context") or {}).get("slot"),
+            "amount": value.get("amount"),
+            "decimals": value.get("decimals"),
+            "ui_amount": value.get("uiAmount"),
+            "ui_amount_string": value.get("uiAmountString"),
+            "source": "helius_getTokenSupply",
+        }
+
     def build_get_transactions_for_address_payload(
         self,
         *,

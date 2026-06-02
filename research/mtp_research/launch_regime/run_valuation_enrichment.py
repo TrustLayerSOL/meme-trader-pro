@@ -13,6 +13,9 @@ def main() -> int:
         snapshots_path=args.snapshots_path,
         outcomes_path=args.outcomes_path,
         output_dir=args.output_dir,
+        supply_path=args.supply_path,
+        sol_usd_path=args.sol_usd_path,
+        max_sol_usd_staleness_seconds=args.max_sol_usd_staleness_seconds,
     )
     for key in (
         "snapshot_count",
@@ -22,6 +25,7 @@ def main() -> int:
         "valuation_proxy_available_count",
         "bonding_curve_liquidity_proxy_available_count",
         "threshold_outcomes_usable_count",
+        "proxy_threshold_outcomes_usable_count",
         "price_sol_available_count",
         "price_usd_available_count",
         "supply_available_count",
@@ -41,6 +45,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--snapshots-path", required=True)
     parser.add_argument("--outcomes-path", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--supply-path")
+    parser.add_argument("--sol-usd-path")
+    parser.add_argument("--max-sol-usd-staleness-seconds", type=int, default=7200)
     return parser.parse_args()
 
 

@@ -181,6 +181,47 @@ def test_build_get_transaction_payload_is_standard_json_rpc() -> None:
     }
 
 
+def test_build_get_token_supply_payload_is_standard_json_rpc() -> None:
+    adapter = HeliusHistoricalAdapter(api_key="test-key")
+
+    payload = adapter.build_get_token_supply_payload("mint-1")
+
+    assert payload["method"] == "getTokenSupply"
+    assert payload["params"] == ["mint-1"]
+
+
+def test_fetch_token_supply_parses_amount_decimals_and_ui_amount() -> None:
+    calls = []
+
+    def fake_http_post(url: str, payload: dict, timeout_sec: int) -> dict:
+        calls.append((url, payload, timeout_sec))
+        return {
+            "jsonrpc": "2.0",
+            "result": {
+                "context": {"slot": 123},
+                "value": {
+                    "amount": "1000000000000000",
+                    "decimals": 6,
+                    "uiAmount": 1000000000,
+                    "uiAmountString": "1000000000",
+                },
+            },
+        }
+
+    adapter = HeliusHistoricalAdapter(rpc_url="https://mock-helius.invalid", http_post=fake_http_post)
+
+    result = adapter.fetch_token_supply("mint-1")
+
+    assert result["mint"] == "mint-1"
+    assert result["slot"] == 123
+    assert result["amount"] == "1000000000000000"
+    assert result["decimals"] == 6
+    assert result["ui_amount"] == 1000000000
+    assert result["ui_amount_string"] == "1000000000"
+    assert result["source"] == "helius_getTokenSupply"
+    assert calls[0][1]["method"] == "getTokenSupply"
+
+
 def test_build_get_transactions_for_address_payload_uses_time_window_filters() -> None:
     adapter = HeliusHistoricalAdapter(api_key="test-key")
 
