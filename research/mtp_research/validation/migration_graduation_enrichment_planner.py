@@ -156,15 +156,7 @@ def _select_mints(candidates: list[dict[str, Any]], mint_limit: int) -> list[dic
     singleton_rows = [row for row in rows if not row.get("creator") or creator_counts[row["creator"]] <= 1]
     repeat_rows.sort(key=lambda row: (-creator_counts[row["creator"]], row["launch_ts"], row["mint"]))
     singleton_rows.sort(key=lambda row: (row["launch_ts"], row["mint"]))
-    target_singletons = 0 if mint_limit <= 2 else max(1, min(len(singleton_rows), mint_limit // 5))
-    selected = repeat_rows[: max(0, mint_limit - target_singletons)]
-    selected_mints = {row["mint"] for row in selected}
-    if target_singletons:
-        selected.extend(_time_distributed_rows([row for row in singleton_rows if row["mint"] not in selected_mints], target_singletons))
-    if len(selected) < mint_limit:
-        selected_mints = {row["mint"] for row in selected}
-        remaining = [row for row in repeat_rows + singleton_rows if row["mint"] not in selected_mints]
-        selected.extend(remaining[: mint_limit - len(selected)])
+    selected = _stable_repeat_singleton_interleave(repeat_rows, singleton_rows, mint_limit)
     return [_selection_public_row(row, creator_counts) for row in selected[:mint_limit]]
 
 
@@ -198,19 +190,22 @@ def _selection_public_row(row: dict[str, Any], creator_counts: Counter) -> dict[
     }
 
 
-def _time_distributed_rows(rows: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
-    if count <= 0 or not rows:
-        return []
-    if count >= len(rows):
-        return rows
-    selected = []
-    used = set()
-    for index in range(count):
-        source_index = round(index * (len(rows) - 1) / max(1, count - 1))
-        while source_index in used and source_index + 1 < len(rows):
-            source_index += 1
-        used.add(source_index)
-        selected.append(rows[source_index])
+def _stable_repeat_singleton_interleave(
+    repeat_rows: list[dict[str, Any]],
+    singleton_rows: list[dict[str, Any]],
+    mint_limit: int,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    repeat_index = 0
+    singleton_index = 0
+    while len(selected) < mint_limit and (repeat_index < len(repeat_rows) or singleton_index < len(singleton_rows)):
+        use_singleton = (len(selected) + 1) % 4 == 0 and singleton_index < len(singleton_rows)
+        if use_singleton or repeat_index >= len(repeat_rows):
+            selected.append(singleton_rows[singleton_index])
+            singleton_index += 1
+            continue
+        selected.append(repeat_rows[repeat_index])
+        repeat_index += 1
     return selected
 
 

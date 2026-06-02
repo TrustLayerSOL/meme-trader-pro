@@ -65,6 +65,31 @@ def test_selects_mints_deterministically_with_repeat_creator_priority_and_time_d
     assert first["scope"]["selected_creator_count"] >= 2
 
 
+def test_larger_mint_limit_preserves_smaller_selection_prefix(tmp_path: Path) -> None:
+    candidates = []
+    for index in range(1, 41):
+        creator = f"creator-repeat-{index // 2}" if index <= 30 else f"creator-single-{index}"
+        candidates.append(_candidate(index, creator, 1_700_000_000 + index))
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", candidates)
+
+    smaller = build_migration_graduation_enrichment_dry_run_plan(
+        candidates_path=candidates_path,
+        mint_limit=10,
+        windows=["24h"],
+        dry_run=True,
+    )
+    larger = build_migration_graduation_enrichment_dry_run_plan(
+        candidates_path=candidates_path,
+        mint_limit=25,
+        windows=["24h"],
+        dry_run=True,
+    )
+
+    assert [row["mint"] for row in larger["selected_mints"][:10]] == [
+        row["mint"] for row in smaller["selected_mints"]
+    ]
+
+
 def test_request_estimates_cover_all_requested_windows_and_primary_gate(tmp_path: Path) -> None:
     candidates = [_candidate(i, f"creator-{i}", 1_700_000_000 + i) for i in range(5)]
 
