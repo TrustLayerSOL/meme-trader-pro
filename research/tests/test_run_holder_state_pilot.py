@@ -31,7 +31,7 @@ def test_holder_state_pilot_cli_writes_reports(tmp_path: Path, monkeypatch, caps
                 "source": "test",
                 "pool_address": "pool-a",
                 "venue": "pumpfun",
-                "metadata_json": {},
+                "metadata_json": {"creator_deployer": "wallet-a"},
             }
         ],
     )
@@ -75,6 +75,12 @@ def test_holder_state_pilot_cli_writes_reports(tmp_path: Path, monkeypatch, caps
 
     assert "feasibility_result=feasible_offline" in output
     assert "api_calls_used=0" in output
+    assert "helius_credits_used=0" in output
+    assert "creator_holder_share_coverage_pct=100.00" in output
+    assert (output_dir / "holder_state_feasibility_audit.md").exists()
+    assert (output_dir / "holder_state_pilot_quality_report.json").exists()
+    assert (output_dir / "holder_state_pilot_quality_report.md").exists()
+    assert (output_dir / "holder_state_rollout_recommendation.md").exists()
     assert (output_dir / "holder_state_pilot_summary.json").exists()
     assert (output_dir / "holder_state_pilot_summary.md").exists()
     assert (output_dir / "holder_state_snapshots.jsonl").exists()

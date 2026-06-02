@@ -48,11 +48,17 @@ def main() -> int:
     print(f"holder_count_coverage_pct={report['holder_count_coverage_pct']:.2f}")
     print(f"top_holder_share_coverage_pct={report['top_holder_share_coverage_pct']:.2f}")
     print(f"top_10_holder_share_coverage_pct={report['top_10_holder_share_coverage_pct']:.2f}")
+    print(f"creator_holder_share_coverage_pct={report['creator_holder_share_coverage_pct']:.2f}")
     print(f"api_calls_used={report['api_calls_used']}")
+    print(f"helius_credits_used={report['helius_credits_used']}")
     print(
         "estimated_scale_holder_snapshots="
         f"{report['estimated_cost_to_scale_to_1500_launches']['holder_snapshots']}"
     )
+    print(f"estimated_helius_credits_1500={report['api_requirements']['estimated_helius_credits_for_1500_launches']}")
+    print(f"estimated_helius_credits_3000={report['api_requirements']['estimated_helius_credits_for_3000_launches']}")
+    print(f"t001_v2_feasible={report['t001_v2_feasible']}")
+    print(f"t002_v2_feasible={report['t002_v2_feasible']}")
     print(f"t001_t002_v2_feasible={report['t001_t002_v2_feasible']}")
     for key, path in paths.items():
         print(f"{key}={path}")

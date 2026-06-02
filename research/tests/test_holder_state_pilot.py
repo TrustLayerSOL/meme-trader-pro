@@ -16,7 +16,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> Path:
     return path
 
 
-def _candidate(mint: str, launch_ts: int = 1000) -> dict:
+def _candidate(mint: str, launch_ts: int = 1000, creator: str | None = None) -> dict:
     return {
         "launch_id": f"launch-{mint}",
         "token_mint": mint,
@@ -31,7 +31,7 @@ def _candidate(mint: str, launch_ts: int = 1000) -> dict:
         "source": "test",
         "pool_address": f"pool-{mint}",
         "venue": "pumpfun",
-        "metadata_json": {},
+        "metadata_json": {"creator_deployer": creator} if creator else {},
     }
 
 
@@ -55,7 +55,7 @@ def _event(mint: str, actor: str, block_time: int, side: str, qty: float) -> dic
 
 
 def test_holder_state_pilot_replays_event_deltas_deterministically(tmp_path: Path) -> None:
-    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate("mint-a")])
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate("mint-a", creator="wallet-a")])
     events_path = _write_jsonl(
         tmp_path / "events.jsonl",
         [
@@ -78,12 +78,23 @@ def test_holder_state_pilot_replays_event_deltas_deterministically(tmp_path: Pat
     assert first["holder_count"] == 2
     assert first["top_holder_share"] == 0.6
     assert first["top_10_holder_share"] == 1.0
+    assert first["creator_holder_share"] == 0.6
+    assert first["holder_snapshot_source"] == "offline_normalized_event_delta_replay_v0"
     assert first["holder_distribution_source"] == "offline_normalized_event_delta_replay_v0"
     assert three_minute["holder_count"] == 2
     assert three_minute["top_holder_share"] == 50 / 90
+    assert three_minute["creator_holder_share"] == 50 / 90
     assert three_minute["holder_retention_proxy"] == 1.0
+    assert three_minute["holder_churn_proxy"] == 0.0
+    assert report["creator_holder_share_coverage_pct"] == 100
+    assert report["confidence_distribution"]["medium"] == 5
+    assert report["feasibility_audit"]["holder_count"]["offline_reconstructable"] is True
+    assert report["feasibility_audit"]["bundle_linked_ownership"]["requires_external_reads"] is True
     assert report["api_calls_used"] == 0
+    assert report["helius_credits_used"] == 0
     assert report["feasibility_result"] == "feasible_offline"
+    assert report["t001_v2_feasible"] is True
+    assert report["t002_v2_feasible"] is True
 
 
 def test_holder_state_pilot_caps_launches_and_snapshot_attempts(tmp_path: Path) -> None:
@@ -120,5 +131,7 @@ def test_holder_state_pilot_marks_missing_without_fabricating_state(tmp_path: Pa
     assert report["holder_count_coverage_pct"] == 0
     assert report["holder_snapshots"][0]["holder_count"] is None
     assert report["holder_snapshots"][0]["holder_snapshot_missing_reason"] == "no_observed_holder_balances_at_snapshot"
+    assert report["holder_snapshots"][0]["creator_holder_share"] is None
+    assert report["missing_reason_counts"]["missing_snapshot"] == 5
     assert report["feasibility_result"] == "blocked"
     assert report["api_requirements"]["estimated_historical_holder_snapshots_for_1500_launches"] == 7500
