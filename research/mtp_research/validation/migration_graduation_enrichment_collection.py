@@ -7,6 +7,7 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from research.mtp_research.data_paths import data_lake_path
@@ -70,6 +71,7 @@ def run_migration_graduation_enrichment_collection(
     client: Any | None = None,
     output_flush_interval_mints: int = 25,
     transaction_workers: int = 8,
+    prefer_address_window_fetch: bool = True,
 ) -> dict[str, Any]:
     """Run a dry-run or explicitly executed capped migration/graduation pilot."""
 
@@ -161,6 +163,7 @@ def run_migration_graduation_enrichment_collection(
                 transactions_fetched_total=transactions_fetched,
                 raw_dir=paths["raw_dir"],
                 existing_signatures=existing_signatures,
+                prefer_address_window_fetch=prefer_address_window_fetch,
             )
         except Exception as exc:  # fail closed on provider/auth/budget errors
             auth_provider_errors.append(str(exc))
@@ -272,10 +275,29 @@ def _collect_one_mint(
     transactions_fetched_total: int,
     raw_dir: Path,
     existing_signatures: set[str],
+    prefer_address_window_fetch: bool,
 ) -> dict[str, Any]:
     start_time = int(mint_row["launch_ts"])
     end_time = start_time + window_seconds
     address = mint_row.get("bonding_curve") or mint_row.get("associated_bonding_curve") or mint_row["mint"]
+    if prefer_address_window_fetch and callable(getattr(rpc, "fetch_transactions_for_address_window", None)):
+        return _collect_one_mint_address_window(
+            rpc=rpc,
+            mint_row=mint_row,
+            address=address,
+            window=window,
+            start_time=start_time,
+            end_time=end_time,
+            max_signature_pages_per_mint=max_signature_pages_per_mint,
+            max_transactions_per_mint=max_transactions_per_mint,
+            max_total_transactions=max_total_transactions,
+            request_ceiling=request_ceiling,
+            requests_used=requests_used,
+            transactions_fetched_total=transactions_fetched_total,
+            raw_dir=raw_dir,
+            existing_signatures=existing_signatures,
+        )
+
     before = None
     signatures: list[Any] = []
     stopped_due_ceiling = False
@@ -338,6 +360,84 @@ def _collect_one_mint(
         "transactions_fetched": len(transactions),
         "stopped_due_ceiling": stopped_due_ceiling,
         "raw_files_written": [str(raw_path)] if raw_path.exists() else [],
+    }
+
+
+def _collect_one_mint_address_window(
+    *,
+    rpc: Any,
+    mint_row: dict[str, Any],
+    address: str,
+    window: str,
+    start_time: int,
+    end_time: int,
+    max_signature_pages_per_mint: int,
+    max_transactions_per_mint: int,
+    max_total_transactions: int,
+    request_ceiling: int,
+    requests_used: int,
+    transactions_fetched_total: int,
+    raw_dir: Path,
+    existing_signatures: set[str],
+) -> dict[str, Any]:
+    raw_path = raw_dir / "migration_graduation_raw_transactions.jsonl"
+    transactions: list[dict[str, Any]] = []
+    signatures_seen: set[str] = set()
+    raw_files_written: set[str] = set()
+    stopped_due_ceiling = False
+    pagination_token = None
+
+    for _ in range(max_signature_pages_per_mint):
+        if requests_used + 1 > request_ceiling:
+            stopped_due_ceiling = True
+            break
+        if transactions_fetched_total >= max_total_transactions or len(transactions) >= max_transactions_per_mint:
+            stopped_due_ceiling = transactions_fetched_total >= max_total_transactions
+            break
+
+        remaining_for_mint = max_transactions_per_mint - len(transactions)
+        remaining_total = max_total_transactions - transactions_fetched_total
+        page_limit = max(1, min(remaining_for_mint, remaining_total, 1000))
+        result = rpc.fetch_transactions_for_address_window(
+            address,
+            start_time=start_time,
+            end_time=end_time,
+            limit=page_limit,
+            pagination_token=pagination_token,
+            transaction_details="full",
+        )
+        requests_used += 1
+        page_transactions = list(result.get("transactions") or [])
+        for tx in page_transactions:
+            signature = _transaction_signature(tx)
+            if not signature:
+                continue
+            block_time = _raw_block_time(tx)
+            if not _in_window(block_time, start_time, end_time):
+                continue
+            record = SimpleNamespace(signature=signature, block_time=block_time, slot=tx.get("slot"))
+            signatures_seen.add(signature)
+            transactions_fetched_total += 1
+            transactions.append({"signature": signature, "block_time": block_time, "raw_json": tx})
+            if signature not in existing_signatures:
+                _append_raw_transaction(raw_path, mint_row, record, tx)
+                raw_files_written.add(str(raw_path))
+                existing_signatures.add(signature)
+            if transactions_fetched_total >= max_total_transactions or len(transactions) >= max_transactions_per_mint:
+                stopped_due_ceiling = transactions_fetched_total >= max_total_transactions
+                break
+        pagination_token = result.get("pagination_token")
+        if not pagination_token or not page_transactions:
+            break
+
+    candidate = _candidate_label_row(mint_row, window, signatures_seen, transactions)
+    return {
+        "candidate_row": candidate,
+        "requests_used": requests_used,
+        "signatures_fetched": len(signatures_seen),
+        "transactions_fetched": len(transactions),
+        "stopped_due_ceiling": stopped_due_ceiling,
+        "raw_files_written": sorted(raw_files_written) if raw_files_written else ([str(raw_path)] if raw_path.exists() else []),
     }
 
 
@@ -696,6 +796,16 @@ def _raw_block_time(raw_json: dict[str, Any]) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _transaction_signature(raw_json: dict[str, Any]) -> str | None:
+    signature = raw_json.get("signature")
+    if isinstance(signature, str) and signature:
+        return signature
+    signatures = (raw_json.get("transaction") or {}).get("signatures") or []
+    if signatures and isinstance(signatures[0], str):
+        return signatures[0]
+    return None
 
 
 def _in_window(value: int | None, start_time: int, end_time: int) -> bool:

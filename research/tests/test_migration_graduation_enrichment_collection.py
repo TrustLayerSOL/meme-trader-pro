@@ -11,6 +11,7 @@ from research.mtp_research.validation.migration_graduation_enrichment_collection
     load_collection_checkpoint,
     run_migration_graduation_enrichment_collection,
     write_collection_checkpoint,
+    _transaction_signature,
 )
 
 
@@ -51,6 +52,17 @@ class BatchMigrationClient(FakeMigrationClient):
         self.batch_transaction_calls += 1
         self.batch_signatures.append(list(signatures))
         return [dict(self.transactions.get(signature, {})) for signature in signatures]
+
+
+class AddressWindowMigrationClient(FakeMigrationClient):
+    def __init__(self, *, transactions: list[dict]):
+        super().__init__(signatures=[], transactions={})
+        self.window_transactions = transactions
+        self.address_window_calls = 0
+
+    def fetch_transactions_for_address_window(self, address: str, **kwargs) -> dict:
+        self.address_window_calls += 1
+        return {"transactions": list(self.window_transactions), "pagination_token": None}
 
 
 class _SignatureRecord:
@@ -265,6 +277,45 @@ def test_collection_uses_batch_transaction_hydration_when_available(tmp_path: Pa
     assert fake_client.batch_signatures == [["sig-1", "sig-2", "sig-3"]]
     assert result["requests"]["requests_used"] == 4
     assert result["collection"]["transactions_fetched"] == 3
+
+
+def test_collection_prefers_address_window_fetch_when_available(tmp_path: Path) -> None:
+    launch_ts = 1_700_000_000
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate(1, launch_ts=launch_ts)])
+    fake_client = AddressWindowMigrationClient(
+        transactions=[
+            {
+                "blockTime": launch_ts + 60,
+                "slot": 123,
+                "meta": {"logMessages": ["Program log: Instruction: Migrate"]},
+                "transaction": {
+                    "signatures": ["sig-window"],
+                    "message": {"accountKeys": [{"pubkey": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}]},
+                },
+            }
+        ]
+    )
+
+    result = run_migration_graduation_enrichment_collection(
+        candidates_path=candidates_path,
+        execute=True,
+        mint_limit=1,
+        output_paths=_paths(tmp_path),
+        client=fake_client,
+    )
+
+    assert fake_client.address_window_calls == 1
+    assert fake_client.signature_calls == 0
+    assert fake_client.transaction_calls == 0
+    assert result["requests"]["requests_used"] == 1
+    assert result["collection"]["transactions_fetched"] == 1
+    assert result["labels"]["unique_migrated_graduated_mints_detected"] == 1
+
+
+def test_transaction_signature_extracts_from_window_payload() -> None:
+    assert _transaction_signature({"signature": "top-level"}) == "top-level"
+    assert _transaction_signature({"transaction": {"signatures": ["nested"]}}) == "nested"
+    assert _transaction_signature({"transaction": {"signatures": []}}) is None
 
 
 def test_execute_preserves_raw_transactions_and_writes_label_schema(tmp_path: Path) -> None:
