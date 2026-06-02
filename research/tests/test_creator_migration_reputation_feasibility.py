@@ -90,6 +90,35 @@ def test_missing_migration_timestamp_is_not_counted(tmp_path: Path) -> None:
     assert report["migration_observability"]["migration_timestamp_available_count"] == 0
 
 
+def test_migration_labels_feed_prior_migration_counts(tmp_path: Path) -> None:
+    candidates = [_candidate(1, "creator-a", 100), _candidate(2, "creator-a", 200)]
+    labels = [
+        {
+            "mint": "mint-1",
+            "creator": "creator-a",
+            "pumpfun_migrate_event_observed": True,
+            "migration_time": "1970-01-01T00:02:30+00:00",
+            "migration_signature": "migration-from-label",
+        }
+    ]
+
+    report = build_creator_migration_reputation_report(
+        strict_candidates_path=_write_jsonl(tmp_path / "strict.jsonl", candidates),
+        all_candidates_path=_write_jsonl(tmp_path / "all.jsonl", candidates),
+        events_path=_write_jsonl(tmp_path / "events.jsonl", []),
+        strict_outcomes_path=_write_jsonl(tmp_path / "strict_outcomes.jsonl", []),
+        all_outcomes_path=_write_jsonl(tmp_path / "all_outcomes.jsonl", []),
+        migration_labels_path=_write_jsonl(tmp_path / "migration_labels.jsonl", labels),
+    )
+
+    rows = {row["mint"]: row for row in report["sample_rows"]}
+    assert rows["mint-2"]["creator_prior_migration_count"] == 1
+    assert rows["mint-2"]["creator_prior_last_migration_age_seconds"] == 50
+    assert report["migration_observability"]["deduped_migration_records"] == 1
+    assert report["migration_observability"]["migration_timestamp_available_count"] == 1
+    assert report["leakage_safe_computability"]["creator_prior_migration_count"]["classification"] == "computable_now"
+
+
 def test_four_plus_prior_migration_flag(tmp_path: Path) -> None:
     candidates = [_candidate(i, "creator-a", i * 100) for i in range(1, 7)]
     events = [_migration_event(f"mint-{i}", i * 100 + 10, signature=f"mig-{i}") for i in range(1, 5)]

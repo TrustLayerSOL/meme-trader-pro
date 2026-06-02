@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ def build_creator_migration_reputation_report(
     events_path: Path | str,
     strict_outcomes_path: Path | str,
     all_outcomes_path: Path | str,
+    migration_labels_path: Path | str | None = None,
     sample_limit: int = 100,
 ) -> dict[str, Any]:
     strict_candidates = _read_jsonl(strict_candidates_path)
@@ -40,10 +42,14 @@ def build_creator_migration_reputation_report(
     events = _read_jsonl(events_path)
     strict_outcomes = _read_jsonl(strict_outcomes_path)
     all_outcomes = _read_jsonl(all_outcomes_path)
+    migration_labels = _read_jsonl(migration_labels_path) if migration_labels_path else []
     candidate_by_mint = {_mint(row): row for row in all_candidates if _mint(row)}
     strict_mints = {_mint(row) for row in strict_candidates if _mint(row)}
     migration_events = _migration_events(events)
-    migration_records = _migration_records(migration_events, candidate_by_mint)
+    migration_records = _dedupe_migration_records([
+        *_migration_records(migration_events, candidate_by_mint),
+        *_migration_label_records(migration_labels, candidate_by_mint),
+    ])
     strict_rows = _leakage_safe_rows(strict_candidates, migration_records)
     all_rows = _leakage_safe_rows(all_candidates, migration_records)
     observability = _migration_observability(
@@ -68,6 +74,7 @@ def build_creator_migration_reputation_report(
             "events_path": str(events_path),
             "strict_outcomes_path": str(strict_outcomes_path),
             "all_outcomes_path": str(all_outcomes_path),
+            "migration_labels_path": str(migration_labels_path) if migration_labels_path else None,
             "strict_launches": len(strict_candidates),
             "all_collected_launches": len(all_candidates),
             "network_calls_used": 0,
@@ -155,6 +162,53 @@ def _migration_records(
     return list(dedup.values())
 
 
+def _migration_label_records(
+    labels: list[dict[str, Any]],
+    candidate_by_mint: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records = []
+    for label in labels:
+        if not (
+            label.get("pumpfun_migrate_event_observed")
+            or label.get("graduated_to_pumpswap")
+            or label.get("migrated_to_raydium")
+        ):
+            continue
+        mint = _mint(label)
+        candidate = candidate_by_mint.get(mint or "")
+        creator = label.get("creator") or _creator(candidate or {})
+        migration_time = _timestamp_to_int(label.get("migration_time"))
+        records.append(
+            {
+                "mint": mint,
+                "creator": creator,
+                "migration_time": migration_time,
+                "migration_signature": label.get("migration_signature"),
+                "event_count": 1,
+                "timestamp_available": migration_time is not None,
+                "creator_available": creator is not None,
+            }
+        )
+    return records
+
+
+def _dedupe_migration_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    dedup: dict[tuple[str | None, str | None], dict[str, Any]] = {}
+    for record in records:
+        key = (record.get("mint"), record.get("migration_signature"))
+        if key in dedup:
+            dedup[key]["event_count"] += record.get("event_count", 1)
+            if dedup[key].get("migration_time") is None and record.get("migration_time") is not None:
+                dedup[key]["migration_time"] = record["migration_time"]
+                dedup[key]["timestamp_available"] = True
+            if not dedup[key].get("creator") and record.get("creator"):
+                dedup[key]["creator"] = record["creator"]
+                dedup[key]["creator_available"] = True
+        else:
+            dedup[key] = dict(record)
+    return list(dedup.values())
+
+
 def _leakage_safe_rows(candidates: list[dict[str, Any]], migrations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     migrations_by_creator: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for migration in migrations:
@@ -223,7 +277,7 @@ def _migration_observability(
     migrated_mints = {_mint(row) for row in migration_records if _mint(row)}
     strict_migrated_mints = {mint for mint in migrated_mints if mint in strict_mints}
     outcome_migration_keys = _migrationish_keys(strict_outcomes + all_outcomes)
-    event_migration_timestamps = [row.get("block_time") for row in migration_events if row.get("block_time") is not None]
+    timestamp_available_count = sum(1 for row in migration_records if row.get("timestamp_available"))
     return {
         "strict_total_launches": len(strict_candidates),
         "all_collected_total_launches": len(all_candidates),
@@ -237,8 +291,8 @@ def _migration_observability(
         "migrated_launches_identifiable_from_outcomes": 0,
         "migrated_launches_identifiable_from_other_fields": 0,
         "outcome_migration_like_keys": sorted(outcome_migration_keys),
-        "migration_timestamp_available_count": len(event_migration_timestamps),
-        "migration_timestamp_missing_count": len(migration_records) - sum(1 for row in migration_records if row.get("timestamp_available")),
+        "migration_timestamp_available_count": timestamp_available_count,
+        "migration_timestamp_missing_count": len(migration_records) - timestamp_available_count,
         "creator_available_for_migrated_launches": sum(1 for row in migration_records if row.get("creator_available")),
         "creator_missing_for_migrated_launches": sum(1 for row in migration_records if not row.get("creator_available")),
     }
@@ -459,6 +513,18 @@ def _int_or_none(value: Any) -> int | None:
             return None
         return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _timestamp_to_int(value: Any) -> int | None:
+    parsed_int = _int_or_none(value)
+    if parsed_int is not None:
+        return parsed_int
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
         return None
 
 

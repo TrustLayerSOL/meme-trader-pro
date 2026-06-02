@@ -24,6 +24,9 @@ DEFAULT_STRICT_OUTCOMES_PATH = data_lake_path(
 DEFAULT_ALL_OUTCOMES_PATH = data_lake_path(
     "data", "normalized", "launch_lifecycle_collected_classified", "launch_lifecycle_outcomes.jsonl"
 )
+DEFAULT_MIGRATION_LABELS_PATH = data_lake_path(
+    "data", "backtests", "migration_graduation", "migration_graduation_7d_desc_candidates.jsonl"
+)
 DEFAULT_OUTPUT_DIR = data_lake_path(
     "data",
     "backtests",
@@ -41,6 +44,7 @@ def main() -> int:
         events_path=args.events_path,
         strict_outcomes_path=args.strict_outcomes_path,
         all_outcomes_path=args.all_outcomes_path,
+        migration_labels_path=args.migration_labels_path,
         sample_limit=args.sample_limit,
     )
     paths = write_creator_migration_reputation_outputs(report, output_dir=args.output_dir)
@@ -69,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--events-path", default=DEFAULT_EVENTS_PATH)
     parser.add_argument("--strict-outcomes-path", default=DEFAULT_STRICT_OUTCOMES_PATH)
     parser.add_argument("--all-outcomes-path", default=DEFAULT_ALL_OUTCOMES_PATH)
+    parser.add_argument("--migration-labels-path", default=DEFAULT_MIGRATION_LABELS_PATH)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--sample-limit", type=int, default=100)
     return parser.parse_args()
