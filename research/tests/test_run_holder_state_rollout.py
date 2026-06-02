@@ -53,6 +53,7 @@ def test_rollout_cli_writes_expected_outputs(tmp_path: Path, monkeypatch, capsys
     dataset_dir = tmp_path / "dataset"
     report_dir = tmp_path / "reports"
     negative_balance_report_dir = tmp_path / "negative_balance_reports"
+    missing_coverage_report_dir = tmp_path / "missing_coverage_reports"
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -67,6 +68,8 @@ def test_rollout_cli_writes_expected_outputs(tmp_path: Path, monkeypatch, capsys
             str(report_dir),
             "--negative-balance-report-dir",
             str(negative_balance_report_dir),
+            "--missing-coverage-report-dir",
+            str(missing_coverage_report_dir),
         ],
     )
 
@@ -82,3 +85,7 @@ def test_rollout_cli_writes_expected_outputs(tmp_path: Path, monkeypatch, capsys
     assert (report_dir / "holder_state_strict_cohort_audit.md").exists()
     assert (negative_balance_report_dir / "negative_balance_diagnostics.json").exists()
     assert (negative_balance_report_dir / "negative_balance_diagnostics.md").exists()
+    assert (missing_coverage_report_dir / "holder_state_missing_coverage_diagnostics.json").exists()
+    assert (missing_coverage_report_dir / "holder_state_missing_coverage_diagnostics.md").exists()
+    assert (missing_coverage_report_dir / "holder_state_sell_without_prior_diagnostics.json").exists()
+    assert (missing_coverage_report_dir / "holder_state_sell_without_prior_diagnostics.md").exists()

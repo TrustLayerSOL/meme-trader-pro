@@ -61,6 +61,11 @@ def build_holder_state_rollout(
 
     expected = len(candidates) * len(HOLDER_SNAPSHOT_AGES)
     built = sum(1 for row in holder_snapshots if row["holder_count"] is not None)
+    snapshots_with_holder_values = sum(1 for row in holder_snapshots if (row["holder_count"] or 0) > 0)
+    valid_zero_holder_snapshots = sum(1 for row in holder_snapshots if row.get("holder_snapshot_confidence") == "valid_zero")
+    insufficient_prior_state_snapshots = sum(1 for row in holder_snapshots if row.get("holder_snapshot_missing_reason") == "insufficient_prior_state")
+    missing_event_data_snapshots = sum(1 for row in holder_snapshots if row.get("holder_snapshot_missing_reason") == "missing_event_data")
+    ambiguous_event_only_snapshots = sum(1 for row in holder_snapshots if row.get("holder_snapshot_missing_reason") == "ambiguous_event_only")
     missing = expected - built
     field_coverage = {
         "holder_count": _field_coverage(holder_snapshots, "holder_count", expected),
@@ -68,11 +73,14 @@ def build_holder_state_rollout(
         "top_10_holder_share": _field_coverage(holder_snapshots, "top_10_holder_share", expected),
         "creator_holder_share": _field_coverage(holder_snapshots, "creator_holder_share", expected),
     }
-    known_creator_rows = [row for row in holder_snapshots if row.get("creator_wallet")]
+    known_creator_rows = [
+        row for row in holder_snapshots if row.get("creator_wallet") and row.get("holder_count") is not None
+    ]
     missing_known_creator_share = sum(1 for row in known_creator_rows if row.get("creator_holder_share") is None)
     readiness = _readiness_classification(
         snapshot_coverage=field_coverage["holder_count"]["coverage_pct"],
         suspicious_negative_balance_count=len(negative_balance_events),
+        insufficient_prior_state_pct=_pct(insufficient_prior_state_snapshots, expected),
         missing_known_creator_share=missing_known_creator_share,
         caveat_present=True,
     )
@@ -99,7 +107,13 @@ def build_holder_state_rollout(
         "launches_completed": len({row["launch_id"] for row in holder_snapshots if row["holder_count"] is not None}),
         "launches_failed": len(candidates) - len({row["launch_id"] for row in holder_snapshots if row["holder_count"] is not None}),
         "snapshots_expected": expected,
+        "snapshot_rows_written": len(holder_snapshots),
         "snapshots_built": built,
+        "snapshots_with_holder_values": snapshots_with_holder_values,
+        "valid_zero_holder_snapshots": valid_zero_holder_snapshots,
+        "insufficient_prior_state_snapshots": insufficient_prior_state_snapshots,
+        "missing_event_data_snapshots": missing_event_data_snapshots,
+        "ambiguous_event_only_snapshots": ambiguous_event_only_snapshots,
         "missing_snapshots": missing,
         "field_coverage": field_coverage,
         "holder_count_coverage_pct": field_coverage["holder_count"]["coverage_pct"],
@@ -123,6 +137,7 @@ def build_holder_state_rollout(
         "sell_without_prior_observed_balance_unique_launches": sell_without_prior_unique_launches,
         "sell_without_prior_observed_balance_unique_mints": sell_without_prior_unique_mints,
         "sell_without_prior_observed_balance_examples": sell_without_prior_events[:20],
+        "sell_without_prior_observed_balance_all": sell_without_prior_events,
         "duplicate_event_skipped_count": len(duplicate_events),
         "duplicate_event_examples": duplicate_events[:20],
         "balance_conservation_warnings": balance_warnings[:20],
@@ -143,7 +158,10 @@ def build_holder_state_rollout(
         "readiness_classification": readiness,
         "readiness_criteria": {
             "min_snapshot_coverage_pct": 95.0,
+            "max_insufficient_prior_state_pct": 5.0,
             "snapshot_coverage_pass": field_coverage["holder_count"]["coverage_pct"] >= 95.0,
+            "insufficient_prior_state_pct": _pct(insufficient_prior_state_snapshots, expected),
+            "insufficient_prior_state_pass": _pct(insufficient_prior_state_snapshots, expected) <= 5.0,
             "no_unexplained_negative_balances": len(negative_balance_events) == 0,
             "negative_balances_eliminated_or_classified": len(negative_balance_events) == 0,
             "program_pool_bonding_curve_accounts_excluded": True,
@@ -192,6 +210,74 @@ def write_holder_state_rollout_outputs(
         "parquet_path": parquet_path,
         "audit_json_path": audit_json_path,
         "audit_markdown_path": audit_markdown_path,
+    }
+
+
+def write_missing_coverage_diagnostics(
+    diagnostics: dict[str, Any],
+    *,
+    output_dir: Path | str,
+) -> dict[str, Path]:
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    json_path = output / "holder_state_missing_coverage_diagnostics.json"
+    markdown_path = output / "holder_state_missing_coverage_diagnostics.md"
+    sell_json_path = output / "holder_state_sell_without_prior_diagnostics.json"
+    sell_markdown_path = output / "holder_state_sell_without_prior_diagnostics.md"
+    json_path.write_text(json.dumps(diagnostics["missing_coverage"], indent=2, sort_keys=True), encoding="utf-8")
+    markdown_path.write_text(_missing_coverage_markdown(diagnostics["missing_coverage"]), encoding="utf-8")
+    sell_json_path.write_text(json.dumps(diagnostics["sell_without_prior"], indent=2, sort_keys=True), encoding="utf-8")
+    sell_markdown_path.write_text(_sell_without_prior_markdown(diagnostics["sell_without_prior"]), encoding="utf-8")
+    return {
+        "missing_coverage_json_path": json_path,
+        "missing_coverage_markdown_path": markdown_path,
+        "sell_without_prior_json_path": sell_json_path,
+        "sell_without_prior_markdown_path": sell_markdown_path,
+    }
+
+
+def build_missing_coverage_diagnostics(
+    *,
+    candidates_path: Path | str,
+    events_path: Path | str,
+    rollout: dict[str, Any],
+    max_launches: int | None = None,
+) -> dict[str, Any]:
+    candidates = _select_candidates(_read_jsonl(candidates_path), max_launches=max_launches)
+    candidates_by_launch = {row["launch_id"]: row for row in candidates}
+    events_by_mint = _events_by_mint(_read_jsonl(events_path), {row["token_mint"] for row in candidates})
+    snapshots = rollout["holder_snapshots"]
+    missing = [row for row in snapshots if row.get("holder_count") is None]
+    by_launch = Counter(row["launch_id"] for row in missing)
+    launch_diagnostics = [
+        _launch_coverage_diagnostic(candidate, events_by_mint.get(candidate["token_mint"], []), snapshots)
+        for candidate in candidates
+    ]
+    sell_events = list(rollout.get("sell_without_prior_observed_balance_examples") or [])
+    # Include all classified sell-without-prior events when available from rollout internals.
+    sell_events = rollout.get("sell_without_prior_observed_balance_all") or sell_events
+    sell_diagnostics = _sell_without_prior_diagnostics(candidates_by_launch, events_by_mint, sell_events)
+    return {
+        "missing_coverage": {
+            "report_id": "holder_state_missing_coverage_diagnostics_v0",
+            "scope": "diagnostic_only",
+            "total_missing_holder_value_snapshots": len(missing),
+            "missing_snapshots_by_snapshot_window": _counter_dict(row.get("snapshot_label") for row in missing),
+            "missing_snapshots_by_launch": _top_counts((row["launch_id"] for row in missing), limit=50),
+            "launches_with_all_snapshots_missing": [
+                launch_id for launch_id, count in sorted(by_launch.items()) if count == len(HOLDER_SNAPSHOT_AGES)
+            ],
+            "launches_with_early_present_later_missing": [
+                item["launch_id"] for item in launch_diagnostics if item["early_present_later_missing"]
+            ],
+            "launches_with_later_present_early_missing": [
+                item["launch_id"] for item in launch_diagnostics if item["later_present_early_missing"]
+            ],
+            "missing_reason_counts": _counter_dict(row.get("holder_snapshot_missing_reason") for row in missing),
+            "snapshot_state_counts": _counter_dict(row.get("holder_snapshot_state") for row in snapshots),
+            "launch_diagnostics_examples": launch_diagnostics[:50],
+        },
+        "sell_without_prior": sell_diagnostics,
     }
 
 
@@ -323,6 +409,126 @@ def _top_counts(values, limit: int = 15) -> list[dict[str, Any]]:
     return [{"value": value, "count": count} for value, count in Counter(str(value) for value in values).most_common(limit)]
 
 
+def _launch_coverage_diagnostic(
+    candidate: dict[str, Any],
+    events: list[dict[str, Any]],
+    snapshots: list[dict[str, Any]],
+) -> dict[str, Any]:
+    launch_id = candidate["launch_id"]
+    mint = candidate["token_mint"]
+    launch_ts = int(candidate["launch_ts"])
+    launch_snapshots = [row for row in snapshots if row["launch_id"] == launch_id]
+    missing = [row for row in launch_snapshots if row.get("holder_count") is None]
+    present_labels = {row["snapshot_label"] for row in launch_snapshots if row.get("holder_count") is not None}
+    missing_labels = {row["snapshot_label"] for row in missing}
+    first_event = min((int(row["block_time"]) for row in events if row.get("block_time") is not None), default=None)
+    first_human_buy = min(
+        (
+            int(row["block_time"])
+            for row in events
+            if row.get("block_time") is not None
+            and not _event_exclusion_reason(candidate, row)
+            and (_event_balance_delta(row) or 0) > 0
+        ),
+        default=None,
+    )
+    first_sell_without_prior = min(
+        (
+            int(row["snapshot_time"])
+            for row in missing
+            if row.get("holder_snapshot_missing_reason") == "insufficient_prior_state"
+        ),
+        default=None,
+    )
+    deterministic_human_events = [
+        row for row in events if row.get("block_time") is not None and not _event_exclusion_reason(candidate, row) and _event_balance_delta(row) is not None
+    ]
+    excluded_events = [row for row in events if _event_exclusion_reason(candidate, row)]
+    ambiguous_events = [row for row in events if _event_exclusion_reason(candidate, row) == "ambiguous_swap_direction"]
+    return {
+        "launch_id": launch_id,
+        "mint": mint,
+        "missing_snapshot_count": len(missing),
+        "missing_snapshot_labels": sorted(missing_labels),
+        "present_snapshot_labels": sorted(present_labels),
+        "early_present_later_missing": bool({"30s", "3m"} & present_labels and {"30m", "120m"} & missing_labels),
+        "later_present_early_missing": bool({"30s", "3m"} & missing_labels and {"30m", "120m"} & present_labels),
+        "first_event_age_seconds": (first_event - launch_ts) if first_event is not None else None,
+        "first_deterministic_human_holder_buy_age_seconds": (first_human_buy - launch_ts) if first_human_buy is not None else None,
+        "first_sell_without_prior_age_seconds": (first_sell_without_prior - launch_ts) if first_sell_without_prior is not None else None,
+        "creator_seed_exists": False,
+        "mint_seed_exists": False,
+        "only_excluded_program_pool_events": bool(events and excluded_events and len(excluded_events) == len(events)),
+        "only_ambiguous_swaps": bool(events and ambiguous_events and len(ambiguous_events) == len(events)),
+        "no_deterministic_human_holder_events": len(deterministic_human_events) == 0,
+    }
+
+
+def _sell_without_prior_diagnostics(
+    candidates_by_launch: dict[str, dict[str, Any]],
+    events_by_mint: dict[str, list[dict[str, Any]]],
+    sell_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    enriched: list[dict[str, Any]] = []
+    for event in sell_events:
+        candidate = candidates_by_launch.get(event["launch_id"])
+        events = events_by_mint.get(event["mint"], []) if candidate else []
+        actor = event.get("actor")
+        event_time = event.get("block_time")
+        prior_events = [
+            row for row in events
+            if row.get("actor") == actor
+            and row.get("block_time") is not None
+            and event_time is not None
+            and int(row["block_time"]) < int(event_time)
+        ]
+        actor_prior_positive = any((_event_balance_delta(row) or 0) > 0 for row in prior_events)
+        first_buy_time = min(
+            (
+                int(row["block_time"])
+                for row in events
+                if candidate
+                and row.get("block_time") is not None
+                and not _event_exclusion_reason(candidate, row)
+                and (_event_balance_delta(row) or 0) > 0
+            ),
+            default=None,
+        )
+        enriched.append({
+            **event,
+            "actor_has_any_prior_buy_in_normalized_events": actor_prior_positive,
+            "actor_has_any_prior_token_positive_delta": actor_prior_positive,
+            "actor_is_creator": bool(candidate and _actor_role(candidate, actor) == "creator"),
+            "actor_is_excluded_program_pool_bonding_curve": bool(candidate and _actor_role(candidate, actor) in {"bonding_curve", "associated_bonding_curve", "pool_address", "program_account", "mint_account"}),
+            "actor_appears_in_create_or_init_accounts": bool(candidate and actor in {
+                _creator_wallet(candidate),
+                (candidate.get("metadata_json") or {}).get("bonding_curve"),
+                (candidate.get("metadata_json") or {}).get("associated_bonding_curve"),
+                candidate.get("pool_address"),
+                candidate.get("token_mint"),
+            }),
+            "sells_before_first_deterministic_buy_in_launch_window": bool(
+                event_time is not None and first_buy_time is not None and int(event_time) < first_buy_time
+            ),
+        })
+    return {
+        "report_id": "holder_state_sell_without_prior_diagnostics_v0",
+        "scope": "diagnostic_only",
+        "sell_without_prior_count": len(sell_events),
+        "sell_without_prior_count_by_launch": _top_counts((row["launch_id"] for row in sell_events), limit=50),
+        "sell_without_prior_count_by_actor": _top_counts((row.get("actor") for row in sell_events), limit=50),
+        "sell_without_prior_count_by_snapshot_window": _counter_dict(row.get("snapshot_window") for row in sell_events),
+        "event_age_seconds_distribution": _distribution(row.get("event_age_seconds") for row in sell_events),
+        "actor_prior_buy_count": sum(1 for row in enriched if row["actor_has_any_prior_buy_in_normalized_events"]),
+        "actor_prior_positive_delta_count": sum(1 for row in enriched if row["actor_has_any_prior_token_positive_delta"]),
+        "actor_is_creator_count": sum(1 for row in enriched if row["actor_is_creator"]),
+        "actor_is_excluded_program_pool_bonding_curve_count": sum(1 for row in enriched if row["actor_is_excluded_program_pool_bonding_curve"]),
+        "actor_appears_in_create_or_init_accounts_count": sum(1 for row in enriched if row["actor_appears_in_create_or_init_accounts"]),
+        "sells_before_first_deterministic_buy_in_launch_window_count": sum(1 for row in enriched if row["sells_before_first_deterministic_buy_in_launch_window"]),
+        "examples": enriched[:50],
+    }
+
+
 def _events_by_mint(rows: list[dict[str, Any]], mints: set[str]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -350,6 +556,11 @@ def _build_launch_snapshots(
     duplicates: list[dict[str, Any]] = []
     snapshots: list[dict[str, Any]] = []
     observed_count = 0
+    deterministic_human_event_count = 0
+    human_positive_event_count = 0
+    ambiguous_event_count = 0
+    excluded_program_event_count = 0
+    sell_without_prior_count = 0
     seen_event_keys: set[tuple[str | None, str | None]] = set()
     for age in HOLDER_SNAPSHOT_AGES:
         snapshot_ts = launch_ts + age
@@ -365,23 +576,34 @@ def _build_launch_snapshots(
             exclusion_reason = _event_exclusion_reason(candidate, event)
             if exclusion_reason:
                 exclusions.append(_excluded_event(candidate, event, exclusion_reason))
+                if exclusion_reason == "ambiguous_swap_direction":
+                    ambiguous_event_count += 1
+                if exclusion_reason in {"program_account_excluded", "bonding_curve_account_excluded", "pool_account_excluded"}:
+                    excluded_program_event_count += 1
                 observed_count += 1
                 event_index += 1
                 continue
             delta = _event_balance_delta(event)
             if actor and delta is not None:
+                deterministic_human_event_count += 1
                 before = balances.get(str(actor), 0.0)
                 after = before + delta
                 if after < -1e-9:
                     reason = "sell_without_prior_observed_balance" if before <= 0 else "insufficient_prior_state"
+                    sell_without_prior_count += 1
                     sells_without_prior.append({
                         "launch_id": candidate["launch_id"],
                         "mint": candidate["token_mint"],
                         "actor": str(actor),
                         "signature": event.get("signature"),
                         "block_time": event.get("block_time"),
+                        "event_age_seconds": (int(event["block_time"]) - launch_ts) if event.get("block_time") is not None else None,
+                        "snapshot_window": _snapshot_window(candidate, event),
                         "event_type": event.get("event_type"),
                         "venue": event.get("venue"),
+                        "actor_role": _actor_role(candidate, actor),
+                        "actor_had_prior_observed_buy": before > 0,
+                        "actor_had_prior_token_positive_delta": before > 0,
                         "balance_before": before,
                         "delta": delta,
                         "balance_after": after,
@@ -390,12 +612,27 @@ def _build_launch_snapshots(
                         "negative_balance_flag": True,
                     })
                     after = 0.0
+                elif delta > 0:
+                    human_positive_event_count += 1
                 balances[str(actor)] = after
                 if balances[str(actor)] <= 0:
                     balances.pop(str(actor), None)
             observed_count += 1
             event_index += 1
-        snapshot = _snapshot_row(candidate, age, snapshot_ts, balances, previous_holders, observed_count)
+        snapshot = _snapshot_row(
+            candidate,
+            age,
+            snapshot_ts,
+            balances,
+            previous_holders,
+            observed_count,
+            total_event_count=len(events),
+            deterministic_human_event_count=deterministic_human_event_count,
+            human_positive_event_count=human_positive_event_count,
+            ambiguous_event_count=ambiguous_event_count,
+            excluded_program_event_count=excluded_program_event_count,
+            sell_without_prior_count=sell_without_prior_count,
+        )
         if snapshot["observed_holder_balance_sum"] is not None and snapshot["observed_holder_balance_sum"] < 0:
             warnings.append({"launch_id": candidate["launch_id"], "mint": candidate["token_mint"], "reason": "negative_balance_sum"})
         snapshots.append(snapshot)
@@ -412,6 +649,12 @@ def _snapshot_row(
     balances: dict[str, float],
     previous_holders: set[str] | None,
     observed_count: int,
+    total_event_count: int,
+    deterministic_human_event_count: int,
+    human_positive_event_count: int,
+    ambiguous_event_count: int,
+    excluded_program_event_count: int,
+    sell_without_prior_count: int,
 ) -> dict[str, Any]:
     positive = {holder: balance for holder, balance in balances.items() if balance > 0}
     total = sum(positive.values())
@@ -429,8 +672,41 @@ def _snapshot_row(
         "is_observed_delta_replay": True,
         "is_confirmed_full_chain_snapshot": False,
         "observed_event_count_through_snapshot": observed_count,
+        "total_event_count_for_launch": total_event_count,
+        "deterministic_human_event_count_through_snapshot": deterministic_human_event_count,
+        "human_positive_event_count_through_snapshot": human_positive_event_count,
+        "ambiguous_event_count_through_snapshot": ambiguous_event_count,
+        "excluded_program_event_count_through_snapshot": excluded_program_event_count,
+        "sell_without_prior_count_through_snapshot": sell_without_prior_count,
     }
     if not positive or total <= 0:
+        zero_or_missing = _zero_or_missing_state(
+            total_event_count=total_event_count,
+            observed_count=observed_count,
+            deterministic_human_event_count=deterministic_human_event_count,
+            human_positive_event_count=human_positive_event_count,
+            ambiguous_event_count=ambiguous_event_count,
+            excluded_program_event_count=excluded_program_event_count,
+            sell_without_prior_count=sell_without_prior_count,
+        )
+        if zero_or_missing["holder_count"] == 0:
+            creator_share = 0.0 if creator else None
+            return base | {
+                "holder_count": 0,
+                "top_holder_share": 0.0,
+                "top_10_holder_share": 0.0,
+                "creator_holder_share": creator_share,
+                "observed_holder_balance_sum": 0.0,
+                "holder_snapshot_confidence": "valid_zero",
+                "holder_snapshot_state": zero_or_missing["state"],
+                "holder_snapshot_missing_reason": zero_or_missing["reason"],
+                "holder_retention_proxy": None,
+                "holder_churn_proxy": None,
+                "net_new_holders": 0,
+                "exited_holder_count": None,
+                "new_holder_count": None,
+                "creator_linked_share": creator_share,
+            }
         return base | {
             "holder_count": None,
             "top_holder_share": None,
@@ -438,7 +714,8 @@ def _snapshot_row(
             "creator_holder_share": None,
             "observed_holder_balance_sum": None,
             "holder_snapshot_confidence": "missing",
-            "holder_snapshot_missing_reason": "no_observed_holder_balances_at_snapshot",
+            "holder_snapshot_state": zero_or_missing["state"],
+            "holder_snapshot_missing_reason": zero_or_missing["reason"],
             "holder_retention_proxy": None,
             "holder_churn_proxy": None,
             "net_new_holders": None,
@@ -458,6 +735,7 @@ def _snapshot_row(
         "creator_holder_share": _creator_share(positive, total, creator),
         "observed_holder_balance_sum": total,
         "holder_snapshot_confidence": "medium",
+        "holder_snapshot_state": "observed_human_holders",
         "holder_snapshot_missing_reason": None,
         "holder_retention_proxy": retention,
         "holder_churn_proxy": (1.0 - retention) if retention is not None else None,
@@ -479,6 +757,33 @@ def _event_balance_delta(event: dict[str, Any]) -> float | None:
     if side in {"sell", "distribute"} or event_type in {"possible_sell", "token_distribution", "pumpfun_sell"}:
         return -abs(qty)
     return None
+
+
+def _zero_or_missing_state(
+    *,
+    total_event_count: int,
+    observed_count: int,
+    deterministic_human_event_count: int,
+    human_positive_event_count: int,
+    ambiguous_event_count: int,
+    excluded_program_event_count: int,
+    sell_without_prior_count: int,
+) -> dict[str, Any]:
+    if sell_without_prior_count > 0:
+        return {"holder_count": None, "state": "insufficient_prior_state", "reason": "insufficient_prior_state"}
+    if total_event_count == 0:
+        return {"holder_count": None, "state": "missing_event_data", "reason": "missing_event_data"}
+    if deterministic_human_event_count == 0 and ambiguous_event_count > 0 and excluded_program_event_count == 0:
+        return {"holder_count": None, "state": "ambiguous_event_only", "reason": "ambiguous_event_only"}
+    if deterministic_human_event_count == 0:
+        if excluded_program_event_count > 0:
+            return {"holder_count": 0, "state": "excluded_program_only", "reason": "valid_zero_observed_human_holders"}
+        if observed_count == 0:
+            return {"holder_count": 0, "state": "no_deterministic_human_holder_events_yet", "reason": "valid_zero_observed_human_holders"}
+        return {"holder_count": 0, "state": "valid_zero_observed_human_holders", "reason": "valid_zero_observed_human_holders"}
+    if human_positive_event_count == 0:
+        return {"holder_count": 0, "state": "valid_zero_observed_human_holders", "reason": "valid_zero_observed_human_holders"}
+    return {"holder_count": 0, "state": "valid_zero_observed_human_holders", "reason": "valid_zero_observed_human_holders"}
 
 
 def _event_exclusion_reason(candidate: dict[str, Any], event: dict[str, Any]) -> str | None:
@@ -554,10 +859,17 @@ def _readiness_classification(
     *,
     snapshot_coverage: float,
     suspicious_negative_balance_count: int,
+    insufficient_prior_state_pct: float,
     missing_known_creator_share: int,
     caveat_present: bool,
 ) -> str:
-    if snapshot_coverage >= 95.0 and suspicious_negative_balance_count == 0 and missing_known_creator_share == 0 and caveat_present:
+    if (
+        snapshot_coverage >= 95.0
+        and suspicious_negative_balance_count == 0
+        and insufficient_prior_state_pct <= 5.0
+        and missing_known_creator_share == 0
+        and caveat_present
+    ):
         return READINESS_READY
     if snapshot_coverage == 0 or suspicious_negative_balance_count > 0:
         return READINESS_BLOCKED
@@ -579,7 +891,12 @@ def _audit_markdown(rollout: dict[str, Any]) -> str:
         f"- Launches completed: `{rollout['launches_completed']}`",
         f"- Launches failed: `{rollout['launches_failed']}`",
         f"- Snapshots expected: `{rollout['snapshots_expected']}`",
+        f"- Snapshot rows written: `{rollout['snapshot_rows_written']}`",
         f"- Snapshots built: `{rollout['snapshots_built']}`",
+        f"- Snapshots with holder values: `{rollout['snapshots_with_holder_values']}`",
+        f"- Valid zero-holder snapshots: `{rollout['valid_zero_holder_snapshots']}`",
+        f"- Insufficient prior-state snapshots: `{rollout['insufficient_prior_state_snapshots']}`",
+        f"- Missing event-data snapshots: `{rollout['missing_event_data_snapshots']}`",
         f"- Missing snapshots: `{rollout['missing_snapshots']}`",
         f"- Holder count coverage: `{rollout['holder_count_coverage_pct']:.2f}%`",
         f"- Top holder share coverage: `{rollout['top_holder_share_coverage_pct']:.2f}%`",
@@ -644,6 +961,45 @@ def _negative_balance_markdown(diagnostics: dict[str, Any]) -> str:
         "",
         "This report describes the legacy replay failure mode before conservative holder-delta repair rules are applied.",
         "It is diagnostic evidence only and does not make thesis or trading claims.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _missing_coverage_markdown(diagnostics: dict[str, Any]) -> str:
+    lines = [
+        "# Holder-State Missing Coverage Diagnostics",
+        "",
+        f"- Total missing holder-value snapshots: `{diagnostics['total_missing_holder_value_snapshots']}`",
+        f"- Missing by window: `{diagnostics['missing_snapshots_by_snapshot_window']}`",
+        f"- Missing reasons: `{diagnostics['missing_reason_counts']}`",
+        f"- Snapshot states: `{diagnostics['snapshot_state_counts']}`",
+        f"- Launches with all snapshots missing: `{len(diagnostics['launches_with_all_snapshots_missing'])}`",
+        f"- Early present, later missing launches: `{len(diagnostics['launches_with_early_present_later_missing'])}`",
+        f"- Later present, early missing launches: `{len(diagnostics['launches_with_later_present_early_missing'])}`",
+        "",
+        "This report separates valid zero observed human-holder snapshots from genuinely missing or insufficient replay states.",
+        "It is a data-quality report only and does not rerun or promote theses.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _sell_without_prior_markdown(diagnostics: dict[str, Any]) -> str:
+    lines = [
+        "# Holder-State Sell Without Prior Diagnostics",
+        "",
+        f"- Sell without prior count: `{diagnostics['sell_without_prior_count']}`",
+        f"- Count by snapshot window: `{diagnostics['sell_without_prior_count_by_snapshot_window']}`",
+        f"- Event age seconds distribution: `{diagnostics['event_age_seconds_distribution']}`",
+        f"- Actor prior buy count: `{diagnostics['actor_prior_buy_count']}`",
+        f"- Actor prior positive delta count: `{diagnostics['actor_prior_positive_delta_count']}`",
+        f"- Actor is creator count: `{diagnostics['actor_is_creator_count']}`",
+        f"- Actor is excluded program/pool/bonding-curve count: `{diagnostics['actor_is_excluded_program_pool_bonding_curve_count']}`",
+        f"- Actor appears in create/init accounts count: `{diagnostics['actor_appears_in_create_or_init_accounts_count']}`",
+        f"- Sells before first deterministic buy count: `{diagnostics['sells_before_first_deterministic_buy_in_launch_window_count']}`",
+        "",
+        "These events are classified as insufficient prior state unless a deterministic acquisition exists earlier in normalized events.",
         "",
     ]
     return "\n".join(lines)

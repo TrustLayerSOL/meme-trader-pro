@@ -98,7 +98,8 @@ def test_rollout_handles_negative_balance_without_silent_imputation(tmp_path: Pa
     assert rollout["suspicious_negative_balance_count"] == 0
     assert rollout["sell_without_prior_observed_balance_count"] == 1
     assert rollout["readiness_classification"] == "holder_state_blocked"
-    assert rollout["holder_snapshots"][0]["holder_snapshot_missing_reason"] == "no_observed_holder_balances_at_snapshot"
+    assert rollout["holder_snapshots"][0]["holder_snapshot_missing_reason"] == "insufficient_prior_state"
+    assert rollout["holder_snapshots"][0]["holder_count"] is None
 
 
 def test_rollout_excludes_bonding_curve_and_program_accounts_from_holder_counts(tmp_path: Path) -> None:
@@ -120,6 +121,44 @@ def test_rollout_excludes_bonding_curve_and_program_accounts_from_holder_counts(
     assert first["top_holder_share"] == 1.0
     assert first["creator_holder_share"] == 1.0
     assert rollout["excluded_program_pool_account_event_count"] == 3
+
+
+def test_rollout_treats_excluded_program_only_snapshot_as_valid_zero_human_holders(tmp_path: Path) -> None:
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate("mint-a", creator="wallet-a")])
+    events_path = _write_jsonl(
+        tmp_path / "events.jsonl",
+        [
+            _event("mint-a", "curve-mint-a", 1010, "buy", 900),
+            _event("mint-a", "assoc-curve-mint-a", 1011, "buy", 100),
+        ],
+    )
+
+    rollout = build_holder_state_rollout(candidates_path=candidates_path, events_path=events_path)
+    first = rollout["holder_snapshots"][0]
+
+    assert first["holder_count"] == 0
+    assert first["top_holder_share"] == 0.0
+    assert first["top_10_holder_share"] == 0.0
+    assert first["creator_holder_share"] == 0.0
+    assert first["holder_snapshot_confidence"] == "valid_zero"
+    assert first["holder_snapshot_missing_reason"] == "valid_zero_observed_human_holders"
+    assert rollout["valid_zero_holder_snapshots"] == 5
+    assert rollout["missing_snapshots"] == 0
+
+
+def test_rollout_marks_ambiguous_only_snapshot_as_missing_not_zero(tmp_path: Path) -> None:
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate("mint-a")])
+    ambiguous = _event("mint-a", "wallet-b", 1012, "buy", 5)
+    ambiguous["event_type"] = "pumpfun_swap"
+    ambiguous["side"] = "unknown"
+    events_path = _write_jsonl(tmp_path / "events.jsonl", [ambiguous])
+
+    rollout = build_holder_state_rollout(candidates_path=candidates_path, events_path=events_path)
+    first = rollout["holder_snapshots"][0]
+
+    assert first["holder_count"] is None
+    assert first["holder_snapshot_missing_reason"] == "ambiguous_event_only"
+    assert rollout["ambiguous_event_only_snapshots"] == 5
 
 
 def test_rollout_skips_ambiguous_swaps_and_duplicate_events(tmp_path: Path) -> None:
