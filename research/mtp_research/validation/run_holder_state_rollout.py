@@ -1,0 +1,63 @@
+"""CLI for strict-cohort holder-state offline replay rollout."""
+
+from __future__ import annotations
+
+import argparse
+
+from research.mtp_research.data_paths import data_lake_path
+from research.mtp_research.validation.holder_state_rollout import (
+    build_holder_state_rollout,
+    write_holder_state_rollout_outputs,
+)
+
+
+DEFAULT_CANDIDATES_PATH = data_lake_path(
+    "data", "normalized", "launch_regime_classified", "launch_regime_candidates.jsonl"
+)
+DEFAULT_EVENTS_PATH = data_lake_path("data", "normalized", "pumpfun_lifecycle_events_classified.jsonl")
+DEFAULT_DATASET_DIR = data_lake_path("data", "backtests", "holder_state")
+DEFAULT_REPORT_DIR = data_lake_path(
+    "data", "backtests", "diagnostics", "reports", "holder_state_strict_cohort"
+)
+
+
+def main() -> int:
+    args = parse_args()
+    rollout = build_holder_state_rollout(
+        candidates_path=args.candidates_path,
+        events_path=args.events_path,
+        max_launches=args.max_launches,
+    )
+    paths = write_holder_state_rollout_outputs(
+        rollout,
+        dataset_dir=args.dataset_dir,
+        report_dir=args.report_dir,
+    )
+    print(f"readiness_classification={rollout['readiness_classification']}")
+    print(f"launches_attempted={rollout['launches_attempted']}")
+    print(f"snapshots_expected={rollout['snapshots_expected']}")
+    print(f"snapshots_built={rollout['snapshots_built']}")
+    print(f"holder_count_coverage_pct={rollout['holder_count_coverage_pct']:.2f}")
+    print(f"top_holder_share_coverage_pct={rollout['top_holder_share_coverage_pct']:.2f}")
+    print(f"top_10_holder_share_coverage_pct={rollout['top_10_holder_share_coverage_pct']:.2f}")
+    print(f"creator_holder_share_coverage_pct={rollout['creator_holder_share_coverage_pct']:.2f}")
+    print(f"suspicious_negative_balance_count={rollout['suspicious_negative_balance_count']}")
+    print(f"t001_v2_feasible={rollout['t001_v2_feasible']}")
+    print(f"t002_v2_feasible={rollout['t002_v2_feasible']}")
+    for key, path in paths.items():
+        print(f"{key}={path}")
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run strict-cohort holder-state offline replay rollout.")
+    parser.add_argument("--candidates-path", default=DEFAULT_CANDIDATES_PATH)
+    parser.add_argument("--events-path", default=DEFAULT_EVENTS_PATH)
+    parser.add_argument("--dataset-dir", default=DEFAULT_DATASET_DIR)
+    parser.add_argument("--report-dir", default=DEFAULT_REPORT_DIR)
+    parser.add_argument("--max-launches", type=int, default=None)
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

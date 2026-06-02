@@ -23,6 +23,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/validation/run_participation_quality_thesis.py"),
     Path("research/mtp_research/validation/holder_state_pilot.py"),
     Path("research/mtp_research/validation/run_holder_state_pilot.py"),
+    Path("research/mtp_research/validation/holder_state_rollout.py"),
+    Path("research/mtp_research/validation/run_holder_state_rollout.py"),
 ]
 
 
