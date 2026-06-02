@@ -5,21 +5,21 @@ The aligned P0 medium scale-up had low creator coverage and low all-three struct
 
 ## Creator Coverage
 - Unknown before: `143`
-- Recovered: `0`
-- Unknown after: `143`
+- Recovered: `143`
+- Unknown after: `0`
 
 ## All-Three Overlap
 - Before: `16`
 - After metadata repair: `16`
-- Cause counts: `{'unknown_creator': 143, 'no_early_buyers_before_trigger': 141}`
+- Cause counts: `{'no_creator_funder_target': 112, 'no_early_buyers_before_trigger': 172}`
 
 ## Repo-Local Artifact Cleanup
 - Artifacts handled: `2`
 
 ## Second Aligned Target Plan
-- Target count: `3`
+- Target count: `116`
 - Known creator share: `100.0`
-- Projected credits: `88`
+- Projected credits: `1584`
 - Recommended: `False`
 
 ## Next Action
