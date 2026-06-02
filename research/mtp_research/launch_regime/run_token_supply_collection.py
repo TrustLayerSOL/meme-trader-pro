@@ -15,6 +15,7 @@ def main() -> int:
         execute=args.execute,
         limit=args.limit,
         request_pause_seconds=args.request_pause_seconds,
+        workers=args.workers,
     )
     for key in (
         "execute",
@@ -36,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--request-pause-seconds", type=float, default=0.0)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--execute", action="store_true")
     return parser.parse_args()
 

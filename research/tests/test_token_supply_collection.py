@@ -62,6 +62,24 @@ def test_collect_token_supply_writes_supply_rows(tmp_path: Path) -> None:
     assert rows[0]["supply_provenance"] == "current_spl_mint_supply"
 
 
+def test_collect_token_supply_supports_worker_concurrency(tmp_path: Path) -> None:
+    launches = _write_jsonl(tmp_path / "launches.jsonl", [{"token_mint": f"mint-{idx}"} for idx in range(5)])
+    adapter = FakeAdapter()
+
+    report = collect_token_supply(
+        launches_path=launches,
+        output_path=tmp_path / "token_supply.jsonl",
+        adapter=adapter,
+        execute=True,
+        workers=3,
+    )
+
+    assert report["supply_rows_written"] == 5
+    assert report["network_calls"] == 5
+    rows = [json.loads(line) for line in (tmp_path / "token_supply.jsonl").read_text().splitlines()]
+    assert [row["mint"] for row in rows] == [f"mint-{idx}" for idx in range(5)]
+
+
 def test_collect_token_supply_dry_run_does_not_call_adapter(tmp_path: Path) -> None:
     launches = _write_jsonl(tmp_path / "launches.jsonl", [{"token_mint": "mint-a"}])
     adapter = FakeAdapter()
