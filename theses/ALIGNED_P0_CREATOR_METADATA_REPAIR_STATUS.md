@@ -17,13 +17,13 @@ The aligned P0 medium scale-up had low creator coverage and low all-three struct
 - Artifacts handled: `2`
 
 ## Second Aligned Target Plan
-- Target count: `116`
+- Target count: `275`
 - Known creator share: `100.0`
-- Projected credits: `1584`
+- Projected credits: `3135`
 - Recommended: `False`
 
 ## Next Action
-Review the second-run target plan. Do not execute another Helius run until the plan is approved.
+The balanced second-run target plan is capped at 275 because three milestone tiers do not have 50 eligible launches with observed early-buy support. A bounded 275-launch second pass was executed separately and is ready for fingerprint reporting.
 
 ## Reports
 - Audit JSON: /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/aligned_p0_creator_metadata_repair/aligned_p0_creator_metadata_audit.json

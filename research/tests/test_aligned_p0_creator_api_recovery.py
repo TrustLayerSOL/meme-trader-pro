@@ -96,6 +96,7 @@ def test_dry_run_plans_unknown_creators_without_api_calls(tmp_path: Path) -> Non
     report = run_aligned_p0_creator_api_recovery(
         structural_features_path=structural,
         output_root=tmp_path / "lake",
+        status_path=tmp_path / "STATUS.md",
         execute=False,
         client=client,
     )
@@ -118,6 +119,7 @@ def test_execute_recovers_creator_from_verified_pumpfun_create(tmp_path: Path) -
     report = run_aligned_p0_creator_api_recovery(
         structural_features_path=structural,
         output_root=tmp_path / "lake",
+        status_path=tmp_path / "STATUS.md",
         execute=True,
         client=client,
         request_ceiling=10,
@@ -146,6 +148,7 @@ def test_unknown_layout_fails_closed(tmp_path: Path) -> None:
     report = run_aligned_p0_creator_api_recovery(
         structural_features_path=structural,
         output_root=tmp_path / "lake",
+        status_path=tmp_path / "STATUS.md",
         execute=True,
         client=client,
         request_ceiling=10,
@@ -170,6 +173,7 @@ def test_request_ceiling_blocks_execute_before_fetch(tmp_path: Path) -> None:
     report = run_aligned_p0_creator_api_recovery(
         structural_features_path=structural,
         output_root=tmp_path / "lake",
+        status_path=tmp_path / "STATUS.md",
         execute=True,
         client=client,
         request_ceiling=0,
