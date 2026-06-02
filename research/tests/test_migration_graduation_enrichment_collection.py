@@ -315,6 +315,39 @@ def test_collection_prefers_address_window_fetch_when_available(tmp_path: Path) 
     assert result["labels"]["unique_migrated_graduated_mints_detected"] == 1
 
 
+def test_address_window_estimate_allows_wider_window_when_within_cap(tmp_path: Path) -> None:
+    launch_ts = 1_700_000_000
+    candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate(1, launch_ts=launch_ts)])
+    fake_client = AddressWindowMigrationClient(
+        transactions=[
+            {
+                "blockTime": launch_ts + 60,
+                "slot": 123,
+                "meta": {"logMessages": []},
+                "transaction": {"signatures": ["sig-window"], "message": {"accountKeys": []}},
+            }
+        ]
+    )
+
+    result = run_migration_graduation_enrichment_collection(
+        candidates_path=candidates_path,
+        execute=True,
+        mint_limit=1,
+        window="7d",
+        max_signature_pages_per_mint=3,
+        request_ceiling=5,
+        hard_stop_projected_requests=5,
+        output_paths=_paths(tmp_path),
+        client=fake_client,
+    )
+
+    assert fake_client.address_window_calls == 1
+    assert result["requests"]["base_projected_requests"] == 1
+    assert result["requests"]["high_projected_requests"] == 3
+    assert result["requests"]["request_ceiling_status"] == "within_ceiling"
+    assert result["requests"]["requests_used"] == 1
+
+
 def test_transaction_signature_extracts_from_window_payload() -> None:
     assert _transaction_signature({"signature": "top-level"}) == "top-level"
     assert _transaction_signature({"transaction": {"signatures": ["nested"]}}) == "nested"

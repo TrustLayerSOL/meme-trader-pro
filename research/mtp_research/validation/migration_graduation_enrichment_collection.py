@@ -91,6 +91,16 @@ def run_migration_graduation_enrichment_collection(
         dry_run=True,
     )
     selected = plan["selected_mints"]
+    address_window_supported = prefer_address_window_fetch and (
+        client is None or callable(getattr(client, "fetch_transactions_for_address_window", None))
+    )
+    if address_window_supported:
+        plan = _with_address_window_request_estimate(
+            plan=plan,
+            selected_count=len(selected),
+            max_signature_pages_per_mint=max_signature_pages_per_mint,
+            request_ceiling=request_ceiling,
+        )
     planned_high = plan["request_estimate"]["primary_high_projected_requests"]
 
     base_report = _base_report(
@@ -110,7 +120,7 @@ def run_migration_graduation_enrichment_collection(
         _write_reports(report, paths)
         return report
 
-    if planned_high > hard_stop_projected_requests or plan["dry_run_classification"] != CLASSIFICATION_GO:
+    if planned_high > hard_stop_projected_requests or _projected_gate_failed(plan):
         failed = plan["stop_go"]["failed_gates"]
         report = {
             **base_report,
@@ -234,6 +244,41 @@ def write_collection_checkpoint(path: Path | str, payload: dict[str, Any]) -> No
     checkpoint_path = Path(path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _with_address_window_request_estimate(
+    *,
+    plan: dict[str, Any],
+    selected_count: int,
+    max_signature_pages_per_mint: int,
+    request_ceiling: int,
+) -> dict[str, Any]:
+    base_requests = selected_count
+    high_requests = selected_count * max_signature_pages_per_mint
+    estimate = {
+        **plan["request_estimate"],
+        "estimator": "helius_address_window_fetch",
+        "primary_base_projected_requests": base_requests,
+        "primary_high_projected_requests": high_requests,
+        "request_ceiling_status": "within_ceiling" if high_requests <= request_ceiling else "above_ceiling",
+    }
+    failed_gates = [
+        gate
+        for gate in plan["stop_go"]["failed_gates"]
+        if gate not in {"primary_high_requests_above_request_ceiling", "primary_high_requests_above_hard_stop"}
+    ]
+    if high_requests > request_ceiling:
+        failed_gates.append("primary_high_requests_above_request_ceiling")
+    return {
+        **plan,
+        "request_estimate": estimate,
+        "dry_run_classification": CLASSIFICATION_GO if not failed_gates else plan["dry_run_classification"],
+        "stop_go": {**plan["stop_go"], "failed_gates": failed_gates},
+    }
+
+
+def _projected_gate_failed(plan: dict[str, Any]) -> bool:
+    return bool(plan["stop_go"]["failed_gates"]) or plan["dry_run_classification"] != CLASSIFICATION_GO
 
 
 def _flush_collection_outputs(
