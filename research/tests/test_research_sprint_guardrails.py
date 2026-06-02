@@ -15,6 +15,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/validation/run_holder_growth_tempo_thesis.py"),
     Path("research/mtp_research/validation/t002_holder_growth_chronological_robustness.py"),
     Path("research/mtp_research/validation/run_t002_holder_growth_chronological_robustness.py"),
+    Path("research/mtp_research/validation/entity_manipulation_feasibility.py"),
+    Path("research/mtp_research/validation/run_entity_manipulation_feasibility.py"),
     Path("research/mtp_research/validation/creator_archetype_history_thesis.py"),
     Path("research/mtp_research/validation/run_creator_archetype_history_thesis.py"),
     Path("research/mtp_research/validation/liquidity_persistence_thesis.py"),
