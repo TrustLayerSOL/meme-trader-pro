@@ -4,31 +4,33 @@ from __future__ import annotations
 
 import argparse
 
+from research.mtp_research.data_paths import data_lake_path
 from research.mtp_research.validation.early_ownership_concentration_thesis import (
     build_t001_early_ownership_report,
     write_t001_report_outputs,
 )
 
 
-DEFAULT_CANDIDATES_PATH = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/normalized/"
-    "launch_regime_classified/launch_regime_candidates.jsonl"
+DEFAULT_CANDIDATES_PATH = data_lake_path(
+    "data", "normalized", "launch_regime_classified", "launch_regime_candidates.jsonl"
 )
-DEFAULT_EVENTS_PATH = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/normalized/"
-    "pumpfun_lifecycle_events_classified.jsonl"
+DEFAULT_EVENTS_PATH = data_lake_path(
+    "data", "normalized", "pumpfun_lifecycle_events_classified.jsonl"
 )
-DEFAULT_SNAPSHOTS_PATH = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/normalized/"
-    "launch_regime_valuation_enriched/launch_lifecycle_snapshots_valuation_enriched.jsonl"
+DEFAULT_SNAPSHOTS_PATH = data_lake_path(
+    "data",
+    "normalized",
+    "launch_regime_valuation_enriched",
+    "launch_lifecycle_snapshots_valuation_enriched.jsonl",
 )
-DEFAULT_OUTCOMES_PATH = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/normalized/"
-    "launch_regime_valuation_enriched/launch_lifecycle_outcomes_valuation_enriched.jsonl"
+DEFAULT_OUTCOMES_PATH = data_lake_path(
+    "data",
+    "normalized",
+    "launch_regime_valuation_enriched",
+    "launch_lifecycle_outcomes_valuation_enriched.jsonl",
 )
-DEFAULT_OUTPUT_DIR = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/backtests/diagnostics/reports/"
-    "T001_early_ownership_concentration"
+DEFAULT_OUTPUT_DIR = data_lake_path(
+    "data", "backtests", "diagnostics", "reports", "T001_early_ownership_concentration"
 )
 DEFAULT_STATUS_PATH = "theses/T001_EARLY_OWNERSHIP_CONCENTRATION_STATUS.md"
 

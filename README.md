@@ -11,7 +11,17 @@ MemeTraderPro v3 is a research-first Solana meme coin trading intelligence proje
 - `research/mtp_research/` — research pipeline modules and backtesting scaffold
 - `trader/` — v3 execution surface and adapter scaffolding
 - `shared/` — shared schema artifacts
-- `data/` — managed datasets for new v3 workflows
+- `data/` — lightweight placeholders only; generated research data lives on the portable data lake
+
+## Data Lake
+
+Generated MemeTraderPro research data is stored on the ORICO portable drive:
+
+```bash
+export MEMETRADER_DATA_ROOT="/Volumes/ORICO/MemeTraderPro"
+```
+
+The repo-local `data/` tree should stay small. See `docs/MEMETRADER_DATA_STORAGE.md` for migration verification paths and storage rules.
 
 ## Principles
 

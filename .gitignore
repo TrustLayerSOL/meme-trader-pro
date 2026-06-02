@@ -24,7 +24,11 @@ data/paper/*
 !data/raw/.gitkeep
 !data/seeds/.gitkeep
 !data/normalized/.gitkeep
+!data/normalized/**/
+!data/normalized/**/.gitkeep
 !data/features/.gitkeep
 !data/backtests/.gitkeep
+!data/backtests/**/
+!data/backtests/**/.gitkeep
 !data/paper/.gitkeep
 *.log

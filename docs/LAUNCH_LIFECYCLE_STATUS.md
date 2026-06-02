@@ -7,7 +7,7 @@ This status is research-only. It does not authorize backtests, walk-forward vali
 External data lake root:
 
 ```text
-/Volumes/Polymarket Data/MemeTraderPro
+/Volumes/ORICO/MemeTraderPro
 ```
 
 Current classified lifecycle artifacts:

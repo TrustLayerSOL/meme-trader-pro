@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gated-dataset-path", default=DEFAULT_GATED_DATASET)
     parser.add_argument("--walk-forward-store-path", default=DEFAULT_GATED_WALK_FORWARD)
     parser.add_argument("--output-dir", default=DEFAULT_REPORT_DIR)
-    parser.add_argument("--real-only", action="store_true", default=True)
+    parser.add_argument("--real-only", action="store_true")
     return parser.parse_args()
 
 
@@ -112,22 +112,25 @@ def run_cycle(args: argparse.Namespace) -> dict:
     wf_values = _parse_key_values(walk_forward)
     report_paths["walk_forward_json"] = wf_values.get("walk_forward_json_path", "")
 
-    review = _run(
-        [
-            python,
-            "-m",
-            "research.mtp_research.validation.run_diagnostic_walk_forward_review",
-            "--dataset-path",
-            args.gated_dataset_path,
-            "--walk-forward-store-path",
-            args.walk_forward_store_path,
-            "--output-dir",
-            args.output_dir,
-            *real_only,
-        ]
-    )
-    review_values = _parse_key_values(review)
-    report_paths["diagnostic_walk_forward_review_json"] = review_values.get("json_path", "")
+    review = ""
+    review_values: dict[str, str] = {}
+    if wf_values.get("walk_forward_ran") == "True":
+        review = _run(
+            [
+                python,
+                "-m",
+                "research.mtp_research.validation.run_diagnostic_walk_forward_review",
+                "--dataset-path",
+                args.gated_dataset_path,
+                "--walk-forward-store-path",
+                args.walk_forward_store_path,
+                "--output-dir",
+                args.output_dir,
+                *real_only,
+            ]
+        )
+        review_values = _parse_key_values(review)
+        report_paths["diagnostic_walk_forward_review_json"] = review_values.get("json_path", "")
 
     outlier = _run(
         [
@@ -192,7 +195,7 @@ def run_cycle(args: argparse.Namespace) -> dict:
             "--fold-sufficiency-json",
             report_paths["fold_sufficiency_json"],
             "--diagnostic-walk-forward-review-json",
-            report_paths["diagnostic_walk_forward_review_json"],
+            report_paths.get("diagnostic_walk_forward_review_json", ""),
             "--dataset-sufficiency-json",
             report_paths["dataset_sufficiency_json"],
             *real_only,

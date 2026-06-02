@@ -4,27 +4,30 @@ from __future__ import annotations
 
 import argparse
 
+from research.mtp_research.data_paths import data_lake_path
 from research.mtp_research.validation.holder_growth_tempo_thesis import (
     build_t002_holder_growth_report,
     write_t002_report_outputs,
 )
 
 
-DEFAULT_CANDIDATES_PATH = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/normalized/"
-    "launch_regime_classified/launch_regime_candidates.jsonl"
+DEFAULT_CANDIDATES_PATH = data_lake_path(
+    "data", "normalized", "launch_regime_classified", "launch_regime_candidates.jsonl"
 )
-DEFAULT_SNAPSHOTS_PATH = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/normalized/"
-    "launch_regime_valuation_enriched/launch_lifecycle_snapshots_valuation_enriched.jsonl"
+DEFAULT_SNAPSHOTS_PATH = data_lake_path(
+    "data",
+    "normalized",
+    "launch_regime_valuation_enriched",
+    "launch_lifecycle_snapshots_valuation_enriched.jsonl",
 )
-DEFAULT_OUTCOMES_PATH = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/normalized/"
-    "launch_regime_valuation_enriched/launch_lifecycle_outcomes_valuation_enriched.jsonl"
+DEFAULT_OUTCOMES_PATH = data_lake_path(
+    "data",
+    "normalized",
+    "launch_regime_valuation_enriched",
+    "launch_lifecycle_outcomes_valuation_enriched.jsonl",
 )
-DEFAULT_OUTPUT_DIR = (
-    "/Volumes/Polymarket Data/MemeTraderPro/data/backtests/diagnostics/reports/"
-    "T002_holder_growth_tempo"
+DEFAULT_OUTPUT_DIR = data_lake_path(
+    "data", "backtests", "diagnostics", "reports", "T002_holder_growth_tempo"
 )
 DEFAULT_STATUS_PATH = "theses/T002_HOLDER_GROWTH_TEMPO_STATUS.md"
 

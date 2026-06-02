@@ -37,8 +37,8 @@ Do healthier launches exhibit different holder-growth and participation-growth t
 
 add replay-safe holder-count snapshots before rerunning true holder-growth analysis
 
-- Markdown summary: `/Volumes/Polymarket Data/MemeTraderPro/data/backtests/diagnostics/reports/T002_holder_growth_tempo/T002_holder_growth_tempo_summary.md`
-- JSON summary: `/Volumes/Polymarket Data/MemeTraderPro/data/backtests/diagnostics/reports/T002_holder_growth_tempo/T002_holder_growth_tempo_summary.json`
+- Markdown summary: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/T002_holder_growth_tempo/T002_holder_growth_tempo_summary.md`
+- JSON summary: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/T002_holder_growth_tempo/T002_holder_growth_tempo_summary.json`
 - No trading rules were generated.
 - No profitability claims were generated.
 - True market-cap claims remain blocked.
