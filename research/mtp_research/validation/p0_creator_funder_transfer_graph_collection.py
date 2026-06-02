@@ -560,6 +560,8 @@ def _transfers(tx: dict[str, Any]) -> list[dict[str, Any]]:
             output.append({"source": source, "destination": destination, "amount_sol": None, "amount_token": str(amount)})
     for instruction in _all_parsed_instructions(tx):
         parsed = instruction.get("parsed") or {}
+        if not isinstance(parsed, dict):
+            continue
         info = parsed.get("info") or {}
         source = info.get("source")
         destination = info.get("destination")

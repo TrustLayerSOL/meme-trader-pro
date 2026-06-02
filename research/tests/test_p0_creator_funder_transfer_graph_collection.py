@@ -191,6 +191,46 @@ def test_budget_cap_checkpoint_and_missing_reason_handling(tmp_path: Path, monke
     assert report["quality"]["missing_reason_counts"]["no_prelaunch_transfer_found"] >= 1
 
 
+def test_string_parsed_instruction_is_skipped_without_crashing(tmp_path: Path, monkeypatch) -> None:
+    target = _target_rows()[:1]
+    candidate = _candidate_rows()[:1]
+    fake = FakeGraphClient(
+        {
+            "creator-a": [
+                {
+                    "signature": "sig-string-parsed",
+                    "blockTime": 900,
+                    "transaction": {
+                        "message": {
+                            "instructions": [
+                                {"parsed": "not-a-parsed-dict"},
+                                {"parsed": {"type": "noop"}},
+                            ]
+                        }
+                    },
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        "research.mtp_research.validation.p0_creator_funder_transfer_graph_collection._write_parquet",
+        lambda rows, path: Path(path).write_text("stub", encoding="utf-8"),
+    )
+
+    report = run_creator_funder_transfer_graph_collection(
+        target_path=_write_csv(tmp_path / "targets.csv", target),
+        candidates_path=_write_jsonl(tmp_path / "candidates.jsonl", candidate),
+        execute=True,
+        request_ceiling=20,
+        credit_cap=25_000,
+        output_paths=_paths(tmp_path),
+        client=fake,
+    )
+
+    assert report["quality"]["missing_reason_counts"]["no_prelaunch_transfer_found"] == 1
+    assert report["warnings"]
+
+
 def test_report_uses_neutral_labels_only(tmp_path: Path) -> None:
     report = run_creator_funder_transfer_graph_collection(
         target_path=_write_csv(tmp_path / "targets.csv", _target_rows()),
