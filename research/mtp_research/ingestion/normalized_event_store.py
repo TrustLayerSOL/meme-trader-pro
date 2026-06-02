@@ -59,6 +59,30 @@ class NormalizedEventStore:
         self._write_all(list(existing_events.values()))
         return counts
 
+    def append_new_many(self, events: list[NormalizedEvent]) -> dict[str, int]:
+        """Append events already known to be new by event id."""
+        counts = {"inserted": 0, "updated": 0}
+        if not events:
+            return counts
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        sorted_events = sorted(
+            events,
+            key=lambda event: (
+                event.block_time is None,
+                event.block_time or 0,
+                event.slot is None,
+                event.slot or 0,
+                event.event_id,
+            ),
+        )
+        with self.path.open("a", encoding="utf-8") as f:
+            for event in sorted_events:
+                f.write(json.dumps(event.to_dict(), sort_keys=True))
+                f.write("\n")
+                counts["inserted"] += 1
+        return counts
+
     def _write_all(self, events: list[NormalizedEvent]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         sorted_events = sorted(

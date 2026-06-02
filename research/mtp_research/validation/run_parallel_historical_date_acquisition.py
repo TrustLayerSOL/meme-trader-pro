@@ -9,6 +9,8 @@ from research.mtp_research.validation.parallel_historical_date_acquisition impor
     DEFAULT_CHECKPOINT_PATH,
     DEFAULT_CSV_PATH,
     DEFAULT_EXISTING_CENSUS_PATH,
+    DEFAULT_NEW_CENSUS_PATH,
+    DEFAULT_NEW_CSV_PATH,
     DEFAULT_RAW_DIR,
     DEFAULT_REPORT_DIR,
     run_parallel_historical_date_acquisition,
@@ -21,7 +23,9 @@ def main() -> int:
         existing_census_path=args.existing_census_path,
         output_paths={
             "census_path": args.census_path,
+            "new_census_path": args.new_census_path,
             "csv_path": args.csv_path,
+            "new_csv_path": args.new_csv_path,
             "raw_dir": args.raw_dir,
             "checkpoint_path": args.checkpoint_path,
             "report_dir": args.report_dir,
@@ -43,7 +47,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a bounded parallel historical date acquisition pilot.")
     parser.add_argument("--existing-census-path", default=str(DEFAULT_EXISTING_CENSUS_PATH))
     parser.add_argument("--census-path", default=str(DEFAULT_CENSUS_PATH))
+    parser.add_argument("--new-census-path", default=str(DEFAULT_NEW_CENSUS_PATH))
     parser.add_argument("--csv-path", default=str(DEFAULT_CSV_PATH))
+    parser.add_argument("--new-csv-path", default=str(DEFAULT_NEW_CSV_PATH))
     parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR))
     parser.add_argument("--checkpoint-path", default=str(DEFAULT_CHECKPOINT_PATH))
     parser.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR))
@@ -76,6 +82,7 @@ def _print_summary(result: dict) -> None:
     print(f"accepted_added={collection.get('accepted_added', 0)}")
     print(f"merged_census_rows={collection.get('merged_census_rows', 0)}")
     print(f"census_path={result.get('outputs', {}).get('census_path')}")
+    print(f"new_census_path={result.get('outputs', {}).get('new_census_path')}")
     print(f"raw_dir={result.get('outputs', {}).get('raw_dir')}")
     print(f"report_dir={result.get('outputs', {}).get('report_dir')}")
     print(f"recommended_next_command={result.get('recommended_next_command')}")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import date, datetime, time as dt_time
 from pathlib import Path
@@ -34,8 +34,14 @@ DEFAULT_EXISTING_CENSUS_PATH = data_lake_path("data", "normalized", "pumpfun_cre
 DEFAULT_CENSUS_PATH = data_lake_path(
     "data", "backtests", "explosive_runner_expanded", "parallel_pilot", "pumpfun_creation_census_parallel_pilot.jsonl"
 )
+DEFAULT_NEW_CENSUS_PATH = data_lake_path(
+    "data", "backtests", "explosive_runner_expanded", "parallel_pilot", "pumpfun_creation_census_parallel_pilot_new_only.jsonl"
+)
 DEFAULT_CSV_PATH = data_lake_path(
     "data", "backtests", "explosive_runner_expanded", "parallel_pilot", "pumpfun_creation_census_parallel_pilot.csv"
+)
+DEFAULT_NEW_CSV_PATH = data_lake_path(
+    "data", "backtests", "explosive_runner_expanded", "parallel_pilot", "pumpfun_creation_census_parallel_pilot_new_only.csv"
 )
 DEFAULT_RAW_DIR = data_lake_path(
     "data", "backtests", "explosive_runner_expanded", "parallel_pilot", "raw_creation_shards"
@@ -128,7 +134,7 @@ def run_parallel_historical_date_acquisition(
             **base_report,
             "readiness_classification": plan["stop_go"]["classification"],
             "warnings": ["dry_run_only_no_collection_performed"],
-            "recommended_next_command": _recommended_lifecycle_command(paths["census_path"]),
+            "recommended_next_command": _recommended_lifecycle_command(paths["new_census_path"]),
         }
         _write_reports(report, paths)
         return report
@@ -159,7 +165,7 @@ def run_parallel_historical_date_acquisition(
             )
             for item in selected_dates
         ]
-        for future in futures:
+        for future in as_completed(futures):
             result = future.result()
             shard_results.append(result)
             completed_dates.add(result["date"])
@@ -171,11 +177,23 @@ def run_parallel_historical_date_acquisition(
                     "last_result": result,
                 },
             )
+            print(
+                "date_shard_progress "
+                f"date={result['date']} "
+                f"requests_used={result['requests_used']} "
+                f"transactions_seen={result['transactions_seen']} "
+                f"accepted_added={result['accepted_added']} "
+                f"completed_dates={len(completed_dates)}",
+                flush=True,
+            )
 
     existing_rows = load_census_rows(existing_census_path)
-    merged_rows = _merge_rows(existing_rows, [row for result in shard_results for row in result["census_rows"]])
+    new_rows = [row for result in shard_results for row in result["census_rows"]]
+    merged_rows = _merge_rows(existing_rows, new_rows)
     write_creation_census(merged_rows, paths["census_path"])
     write_creation_census_csv(merged_rows, paths["csv_path"])
+    write_creation_census(_merge_rows([], new_rows), paths["new_census_path"])
+    write_creation_census_csv(_merge_rows([], new_rows), paths["new_csv_path"])
     report = _final_report(base_report, shard_results, merged_rows, started, paths)
     _write_reports(report, paths)
     return report
@@ -320,7 +338,7 @@ def _final_report(
         },
         "date_shards": [_json_safe_result(result) for result in shard_results],
         "warnings": [],
-        "recommended_next_command": _recommended_lifecycle_command(paths["census_path"]),
+        "recommended_next_command": _recommended_lifecycle_command(paths["new_census_path"]),
     }
 
 
@@ -359,7 +377,9 @@ def _resolve_output_paths(paths: dict[str, Path | str] | None) -> dict[str, Path
     supplied = paths or {}
     return {
         "census_path": Path(supplied.get("census_path", DEFAULT_CENSUS_PATH)),
+        "new_census_path": Path(supplied.get("new_census_path", DEFAULT_NEW_CENSUS_PATH)),
         "csv_path": Path(supplied.get("csv_path", DEFAULT_CSV_PATH)),
+        "new_csv_path": Path(supplied.get("new_csv_path", DEFAULT_NEW_CSV_PATH)),
         "raw_dir": Path(supplied.get("raw_dir", DEFAULT_RAW_DIR)),
         "checkpoint_path": Path(supplied.get("checkpoint_path", DEFAULT_CHECKPOINT_PATH)),
         "report_dir": Path(supplied.get("report_dir", DEFAULT_REPORT_DIR)),

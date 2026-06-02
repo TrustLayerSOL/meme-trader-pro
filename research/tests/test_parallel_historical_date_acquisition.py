@@ -142,7 +142,7 @@ def test_hard_stop_blocks_before_network_calls(tmp_path: Path) -> None:
     assert result["requests"]["request_ceiling_status"] == "above_ceiling"
 
 
-def test_execute_collects_date_shards_preserves_raw_and_writes_census(tmp_path: Path) -> None:
+def test_execute_collects_date_shards_preserves_raw_and_writes_census(tmp_path: Path, capsys) -> None:
     morning = datetime(2026, 5, 18, 6, 0, tzinfo=PACIFIC)
     evening = datetime(2026, 5, 18, 17, 0, tzinfo=PACIFIC)
     tx1 = _create_v2_tx("sig-a", int(morning.timestamp()) + 60)
@@ -167,14 +167,20 @@ def test_execute_collects_date_shards_preserves_raw_and_writes_census(tmp_path: 
     )
 
     rows = load_census_rows(paths["census_path"])
+    new_rows = load_census_rows(paths["new_census_path"])
     raw_rows = [json.loads(line) for line in paths["raw_dir"].joinpath("date=2026-05-18.jsonl").read_text().splitlines()]
     assert result["execution"]["mode"] == "execute"
     assert result["collection"]["accepted_added"] == 2
     assert result["collection"]["transactions_seen"] == 2
     assert result["requests"]["requests_used"] == 2
     assert {row.mint for row in rows} == {"existing-mint", "mint-sig-a", "mint-sig-b"}
+    assert {row.mint for row in new_rows} == {"mint-sig-a", "mint-sig-b"}
     assert {row["signature"] for row in raw_rows} == {"sig-a", "sig-b"}
+    assert str(paths["new_census_path"]) in result["recommended_next_command"]
     assert result["recommended_next_command"].startswith("./trading_env/bin/python -m research.mtp_research.ingestion.run_pumpfun_lifecycle_collection")
+    output = capsys.readouterr().out
+    assert "date_shard_progress date=2026-05-18" in output
+    assert "accepted_added=2" in output
 
 
 def test_build_plan_reports_existing_dates_and_target_gap(tmp_path: Path) -> None:
@@ -194,7 +200,9 @@ def test_build_plan_reports_existing_dates_and_target_gap(tmp_path: Path) -> Non
 def _paths(tmp_path: Path) -> dict[str, Path]:
     return {
         "census_path": tmp_path / "parallel_census.jsonl",
+        "new_census_path": tmp_path / "parallel_census_new_only.jsonl",
         "csv_path": tmp_path / "parallel_census.csv",
+        "new_csv_path": tmp_path / "parallel_census_new_only.csv",
         "raw_dir": tmp_path / "raw_creation_shards",
         "checkpoint_path": tmp_path / "checkpoint.json",
         "report_dir": tmp_path / "reports",

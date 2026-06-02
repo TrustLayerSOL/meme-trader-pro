@@ -36,11 +36,12 @@ T011 validation failed because the selected holdout bucket was date-dominated. T
 
 ## Coverage Result
 
-- Expanded $20k-trigger dates: `3`
-- Expanded $20k-trigger rows: `422`
-- Top date share: `0.7630331753554502`
-- Top 3 date share: `1.0`
-- Readiness: `historical_expansion_requires_external_acquisition`
+- Expanded $20k-trigger dates: `61` combined across current, pilot, wide, and deep 2026 expansion outputs
+- Expanded $20k-trigger rows: `9,210` combined across current, pilot, wide, and deep 2026 expansion outputs
+- Median rows per active date: `111`
+- Top date share: `0.16286644951140064`
+- Top 3 date share: `0.3257328990228013`
+- Readiness: `historical_date_expansion_target_reached_for_next_review`
 
 ## Parallel Acquisition Pilot
 
@@ -63,6 +64,25 @@ T011 validation failed because the selected holdout bucket was date-dominated. T
 
 The faster data collection process worked. The next bottleneck is not runtime; it is collecting enough additional independent dates with useful $20k-trigger rows.
 
+## Parallel Deep 2026 Expansion
+
+- Incremental creation rows after dedupe: `9,178`
+- Lifecycle address-window requests used: `9,178`
+- Lifecycle raw transactions inserted: `256,705`
+- Normalized lifecycle events written: `511,572`
+- Launch rows built: `9,178`
+- Snapshot rows built: `110,136`
+- Outcome rows built: `9,178`
+- FDV-proxy rows available: `60,721`
+- Deep-run $20k-trigger dates: `48`
+- Deep-run $20k-trigger rows: `568`
+- Combined active $20k-trigger dates after deep run: `61`
+- Combined $20k-trigger rows after deep run: `9,210`
+- Combined top date share after deep run: `0.16286644951140064`
+- Combined top 3 date share after deep run: `0.3257328990228013`
+
+Runtime note: the normalizer was changed from full-selection buffering to streaming batch writes with progress output. The parallel date-sharded acquisition controller now processes finished shards as they complete, writes checkpoints immediately, and emits per-date progress.
+
 ## Outputs
 
 - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/historical_date_expansion/historical_coverage_audit.json`
@@ -77,4 +97,4 @@ The faster data collection process worked. The next bottleneck is not runtime; i
 
 ## Next Recommended Action
 
-Run the next bounded external acquisition with more parallel date shards. Do not rerun winner anatomy, T011, robustness, or validation until the preferred date-balance target is met.
+Review the expanded coverage reports, then decide whether to run winner anatomy/T011 stability checks on the expanded FDV-proxy sample. Do not make trading, validation, or promotion claims from the expansion step itself.

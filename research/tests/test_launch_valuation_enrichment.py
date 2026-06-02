@@ -173,6 +173,36 @@ def test_enrichment_uses_supply_and_sol_usd_for_fdv_proxy_thresholds(tmp_path: P
     assert row["ever_hit_valuation_proxy_100k"] is True
 
 
+def test_valuation_report_handles_mixed_missing_reason_keys(tmp_path: Path) -> None:
+    snapshots_path = _write_jsonl(
+        tmp_path / "snapshots.jsonl",
+        [
+            {"token_mint": "mint-a", "metadata_json": {"price_sol": 0.0002, "price_event_block_time": 1_000}},
+            {"token_mint": "mint-b", "metadata_json": {"price_sol": 0.0002, "price_event_block_time": 1_000}},
+        ],
+    )
+    outcomes_path = _write_jsonl(tmp_path / "outcomes.jsonl", [])
+    supply_path = _write_jsonl(
+        tmp_path / "supply.jsonl",
+        [{"mint": "mint-a", "total_supply": 1_000_000_000, "supply_source": "helius_getTokenSupply"}],
+    )
+    sol_usd_path = _write_jsonl(
+        tmp_path / "sol_usd.jsonl",
+        [{"ts": 1_000, "sol_usd": 100.0, "source": "coingecko_solana_market_chart_range"}],
+    )
+
+    report = run_valuation_enrichment(
+        snapshots_path=snapshots_path,
+        outcomes_path=outcomes_path,
+        output_dir=tmp_path / "enriched",
+        supply_path=supply_path,
+        sol_usd_path=sol_usd_path,
+    )
+
+    assert report["valuation_missing_reason_counts"]["none"] == 1
+    assert report["valuation_missing_reason_counts"]["missing_supply"] == 1
+
+
 def test_valuation_enrichment_cli_runs_without_network(tmp_path: Path) -> None:
     snapshots_path = _write_jsonl(tmp_path / "snapshots.jsonl", [{"token_mint": "mint-a"}])
     outcomes_path = _write_jsonl(tmp_path / "outcomes.jsonl", [{"token_mint": "mint-a"}])

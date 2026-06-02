@@ -154,15 +154,15 @@ def test_run_normalize_trade_events_writes_events_once_per_run(
     raw_path = tmp_path / "raw.jsonl"
     events_path = tmp_path / "events.jsonl"
     RawTransactionStore(path=raw_path).upsert_many([_record("sig-1"), _record("sig-2")])
-    write_calls = 0
-    original_upsert_many = NormalizedEventStore.upsert_many
+    append_calls = 0
+    original_append_new_many = NormalizedEventStore.append_new_many
 
-    def counted_upsert_many(self, events):
-        nonlocal write_calls
-        write_calls += 1
-        return original_upsert_many(self, events)
+    def counted_append_new_many(self, events):
+        nonlocal append_calls
+        append_calls += 1
+        return original_append_new_many(self, events)
 
-    monkeypatch.setattr(NormalizedEventStore, "upsert_many", counted_upsert_many)
+    monkeypatch.setattr(NormalizedEventStore, "append_new_many", counted_append_new_many)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -177,7 +177,45 @@ def test_run_normalize_trade_events_writes_events_once_per_run(
     )
 
     assert main() == 0
-    assert write_calls == 1
+    assert append_calls == 1
+
+
+def test_run_normalize_trade_events_flushes_streaming_batches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw_path = tmp_path / "raw.jsonl"
+    events_path = tmp_path / "events.jsonl"
+    RawTransactionStore(path=raw_path).upsert_many(
+        [_record("sig-1"), _record("sig-2"), _record("sig-3")]
+    )
+    append_calls = 0
+    original_append_new_many = NormalizedEventStore.append_new_many
+
+    def counted_append_new_many(self, events):
+        nonlocal append_calls
+        append_calls += 1
+        return original_append_new_many(self, events)
+
+    monkeypatch.setattr(NormalizedEventStore, "append_new_many", counted_append_new_many)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_normalize_trade_events",
+            "--raw-path",
+            str(raw_path),
+            "--events-path",
+            str(events_path),
+            "--limit",
+            "100",
+            "--write-batch-size",
+            "2",
+        ],
+    )
+
+    assert main() == 0
+    assert append_calls == 2
+    assert len(NormalizedEventStore(path=events_path).load_all()) == 3
 
 
 def test_run_normalize_trade_events_streams_raw_records_without_load_all(

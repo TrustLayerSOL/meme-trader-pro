@@ -187,9 +187,9 @@ def run_valuation_enrichment(
         "price_usd_available_count": _count_true(rows, "price_usd_available"),
         "supply_available_count": _count_true(rows, "supply_available"),
         "sol_usd_available_count": _count_true(rows, "sol_usd_available"),
-        "valuation_missing_reason_counts": dict(sorted(Counter(row.get("valuation_missing_reason") for row in rows).items())),
+        "valuation_missing_reason_counts": _sorted_counter(row.get("valuation_missing_reason") for row in rows),
         "threshold_outcomes_missing_reason_counts": dict(
-            sorted(Counter(row.get("threshold_outcomes_missing_reason") for row in rows).items())
+            _sorted_counter(row.get("threshold_outcomes_missing_reason") for row in rows)
         ),
         "snapshot_output_path": str(snapshot_output),
         "outcome_output_path": str(outcome_output),
@@ -358,6 +358,11 @@ def _count_true(rows: list[dict[str, Any]], key: str) -> int:
 
 def _count_positive(rows: list[dict[str, Any]], key: str) -> int:
     return sum(1 for row in rows if (_float_or_none(row.get(key)) or 0) > 0)
+
+
+def _sorted_counter(values) -> dict[str, int]:
+    counts = Counter("none" if value is None else str(value) for value in values)
+    return dict(sorted(counts.items()))
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
