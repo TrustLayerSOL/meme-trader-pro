@@ -39,6 +39,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/validation/run_t011_explosive_runner_raw_flow_robustness.py"),
     Path("research/mtp_research/validation/t011_explosive_runner_validation.py"),
     Path("research/mtp_research/validation/run_t011_explosive_runner_validation.py"),
+    Path("research/mtp_research/validation/historical_date_expansion.py"),
+    Path("research/mtp_research/validation/run_historical_date_expansion.py"),
 ]
 
 
