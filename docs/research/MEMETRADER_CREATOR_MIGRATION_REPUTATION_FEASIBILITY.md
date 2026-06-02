@@ -131,3 +131,45 @@ The migration parser and collection path are now proven and bounded, but the enr
 ### Updated Recommendation
 
 Do not run T008 yet. The next useful data step is source expansion for migration/graduation labels, not another thesis. Candidate sources to evaluate are PumpSwap pool creation, Raydium/PumpSwap pair detection, and DexScreener pair-discovery enrichment by mint. Before the next large API pull, implement coordinated concurrent mint workers to reduce wall time safely.
+
+## 2026-06-02 DexScreener Pair-Detection Update
+
+DexScreener pair-detection enrichment was added and run across the all-collected `3,000` launch cohort. This used the public batched token endpoint and was not a Helius pull. No thesis, backtest, validation, paper/live trading, optimization, grid search, or ML workflow was run.
+
+### DexScreener Enrichment Result
+
+| Metric | Value |
+|---|---:|
+| Selected mints | `3,000` |
+| Public API requests used | `100` |
+| Dex pair detected mints | `234` |
+| Liquidity pool created after launch | `234` |
+| Dex counts | `{'pumpfun': 222, 'pumpswap': 12}` |
+| Warnings | `[]` |
+
+### Combined Readiness Result
+
+After combining Pump.fun 7d migration labels with DexScreener pair-detection labels:
+
+| Metric | Value |
+|---|---:|
+| Unique migrated/graduated mints observed | `238` |
+| Strict unique migrated/graduated mints observed | `20` |
+| Migration/graduation timestamp available count | `249` |
+| Creators with at least 1 migration/graduation event | `180` |
+| Strict launches with 4+ prior migrations/graduations | `0` |
+| All-collected launches with 4+ prior migrations/graduations | `58` |
+| T008 strict-regime feasible now | `false` |
+| T008 all-collected feasible now | `true` |
+| Readiness classification | `creator_migration_reputation_ready_for_all_collected_descriptive_thesis` |
+
+T008 is now ready for an all-collected descriptive thesis run only. Strict-regime T008 remains blocked because the strict `4+ prior migrations` cohort is still empty.
+
+Updated status file:
+
+- `theses/T008_CREATOR_MIGRATION_REPUTATION_STATUS.md`
+
+Updated report paths:
+
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/dexscreener_pair_graduation_enrichment/dexscreener_pair_graduation_enrichment.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/creator_migration_reputation_feasibility_combined_labels_v2/creator_migration_reputation_feasibility.json`
