@@ -27,6 +27,7 @@ def main() -> int:
         max_total_transactions=args.max_total_transactions,
         request_ceiling=args.request_ceiling,
         hard_stop_projected_requests=args.hard_stop_projected_requests,
+        output_flush_interval_mints=args.output_flush_interval_mints,
         output_paths={
             "raw_dir": args.raw_dir,
             "jsonl_path": args.jsonl_path,
@@ -69,6 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-total-transactions", type=int, default=2500)
     parser.add_argument("--request-ceiling", type=int, default=3000)
     parser.add_argument("--hard-stop-projected-requests", type=int, default=5000)
+    parser.add_argument("--output-flush-interval-mints", type=int, default=25)
     parser.add_argument("--raw-dir", default=DEFAULT_RAW_DIR)
     parser.add_argument("--jsonl-path", default=DEFAULT_JSONL_PATH)
     parser.add_argument("--parquet-path", default=DEFAULT_PARQUET_PATH)

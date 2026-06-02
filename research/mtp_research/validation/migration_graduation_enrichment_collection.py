@@ -68,10 +68,13 @@ def run_migration_graduation_enrichment_collection(
     hard_stop_projected_requests: int = 5000,
     output_paths: dict[str, Path | str] | None = None,
     client: Any | None = None,
+    output_flush_interval_mints: int = 25,
 ) -> dict[str, Any]:
     """Run a dry-run or explicitly executed capped migration/graduation pilot."""
 
     started = time.time()
+    if output_flush_interval_mints < 1:
+        raise ValueError("output_flush_interval_mints must be >= 1")
     paths = _resolve_output_paths(output_paths)
     plan = build_migration_graduation_enrichment_dry_run_plan(
         candidates_path=candidates_path,
@@ -128,6 +131,8 @@ def run_migration_graduation_enrichment_collection(
     transactions_fetched = int(checkpoint.get("transactions_fetched") or 0)
     mints_attempted = 0
     mints_completed = 0
+    mints_since_flush = 0
+    last_completed_mint = checkpoint.get("last_mint")
     stopped_due_ceiling = False
     window_seconds = _window_seconds(window)
 
@@ -167,21 +172,32 @@ def run_migration_graduation_enrichment_collection(
         rows.append(collected["candidate_row"])
         completed_mints.add(mint)
         mints_completed += 1
-        _write_jsonl(paths["jsonl_path"], rows)
-        _write_parquet(rows, paths["parquet_path"])
-        write_collection_checkpoint(
-            paths["checkpoint_path"],
-            {
-                "completed_mints": sorted(completed_mints),
-                "requests_used": requests_used,
-                "signatures_fetched": signatures_fetched,
-                "transactions_fetched": transactions_fetched,
-                "last_mint": mint,
-                "updated_at": _utc_now(),
-            },
-        )
+        mints_since_flush += 1
+        last_completed_mint = mint
+        if mints_since_flush >= output_flush_interval_mints:
+            _flush_collection_outputs(
+                paths=paths,
+                rows=rows,
+                completed_mints=completed_mints,
+                requests_used=requests_used,
+                signatures_fetched=signatures_fetched,
+                transactions_fetched=transactions_fetched,
+                last_mint=last_completed_mint,
+            )
+            mints_since_flush = 0
         if stopped_due_ceiling:
             break
+
+    if mints_since_flush:
+        _flush_collection_outputs(
+            paths=paths,
+            rows=rows,
+            completed_mints=completed_mints,
+            requests_used=requests_used,
+            signatures_fetched=signatures_fetched,
+            transactions_fetched=transactions_fetched,
+            last_mint=last_completed_mint,
+        )
 
     report = _final_report(
         base_report=base_report,
@@ -212,6 +228,31 @@ def write_collection_checkpoint(path: Path | str, payload: dict[str, Any]) -> No
     checkpoint_path = Path(path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _flush_collection_outputs(
+    *,
+    paths: dict[str, Path],
+    rows: list[dict[str, Any]],
+    completed_mints: set[str],
+    requests_used: int,
+    signatures_fetched: int,
+    transactions_fetched: int,
+    last_mint: str | None,
+) -> None:
+    _write_jsonl(paths["jsonl_path"], rows)
+    _write_parquet(rows, paths["parquet_path"])
+    write_collection_checkpoint(
+        paths["checkpoint_path"],
+        {
+            "completed_mints": sorted(completed_mints),
+            "requests_used": requests_used,
+            "signatures_fetched": signatures_fetched,
+            "transactions_fetched": transactions_fetched,
+            "last_mint": last_mint,
+            "updated_at": _utc_now(),
+        },
+    )
 
 
 def _collect_one_mint(

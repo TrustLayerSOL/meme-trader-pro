@@ -189,6 +189,40 @@ def test_resume_collapses_duplicate_existing_candidate_rows(tmp_path: Path) -> N
     assert output_rows[0]["migration_missing_reason"] == "newer_duplicate"
 
 
+def test_collection_batches_output_flushes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    candidates_path = _write_jsonl(
+        tmp_path / "candidates.jsonl",
+        [_candidate(1), _candidate(2), _candidate(3)],
+    )
+    paths = _paths(tmp_path)
+    fake_client = FakeMigrationClient(
+        signatures=[{"signature": "sig-unknown", "blockTime": 1_700_000_010}],
+        transactions={"sig-unknown": {"blockTime": 1_700_000_010, "meta": {"logMessages": []}}},
+    )
+    parquet_writes = []
+
+    def fake_write_parquet(rows, path):
+        parquet_writes.append((len(rows), path))
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "research.mtp_research.validation.migration_graduation_enrichment_collection._write_parquet",
+        fake_write_parquet,
+    )
+
+    run_migration_graduation_enrichment_collection(
+        candidates_path=candidates_path,
+        execute=True,
+        mint_limit=3,
+        output_paths=paths,
+        client=fake_client,
+        output_flush_interval_mints=10,
+    )
+
+    assert parquet_writes == [(3, paths["parquet_path"])]
+
+
 def test_execute_preserves_raw_transactions_and_writes_label_schema(tmp_path: Path) -> None:
     launch_ts = 1_700_000_000
     candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate(1, launch_ts=launch_ts)])
