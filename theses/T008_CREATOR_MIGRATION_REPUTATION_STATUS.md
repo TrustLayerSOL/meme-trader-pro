@@ -2,100 +2,75 @@
 
 ## Thesis Description
 
-Does a creator's prior migration/graduation history have a descriptive relationship with launch lifecycle outcomes?
+Does leakage-safe creator migration/graduation history show a descriptive relationship with all-collected FDV-proxy lifecycle outcomes?
 
-This thesis is intended to evaluate the practical creator-reputation filter:
+## Dataset Used
 
-- same creator only
-- migration/graduation timestamp must exist
-- prior migration/graduation must be strictly before the current launch
-- missing timestamps are not counted
-- no future leakage
+- All-collected 3,000-launch FDV-proxy lifecycle dataset
+- Strict-only T008 was not run because strict 4+ prior history remains empty.
+- Launches analyzed: `3000`
 
-## Current Readiness
+## Feature Coverage
 
-`creator_migration_reputation_ready_for_all_collected_descriptive_thesis`
+- `creator_prior_migration_count`: `3000` available, `100.00%` coverage
+- `creator_prior_graduation_count`: `3000` available, `100.00%` coverage
+- `creator_prior_migration_or_graduation_count`: `3000` available, `100.00%` coverage
+- `creator_has_prior_migration_or_graduation`: `3000` available, `100.00%` coverage
+- `creator_has_2plus_prior_migrations_or_graduations`: `3000` available, `100.00%` coverage
+- `creator_has_4plus_prior_migrations_or_graduations`: `3000` available, `100.00%` coverage
+- `creator_prior_launch_count`: `3000` available, `100.00%` coverage
+- `creator_prior_migration_or_graduation_rate`: `1952` available, `65.07%` coverage
+- `creator_prior_last_migration_or_graduation_age_seconds`: `329` available, `10.97%` coverage
 
-T008 is ready for an all-collected descriptive thesis run only.
+## Prior Migration / Graduation Bucket Counts
 
-T008 is not ready for a strict launch-regime-only thesis because the strict `4+ prior migrations` cohort remains empty.
+- `0`: `2671`
+- `1`: `138`
+- `2_to_3`: `133`
+- `4_plus`: `58`
 
-## Dataset Scope
+## Outcome Coverage
 
-Allowed T008 dataset:
+- `fdv_proxy_runup_available`: `3000`
+- `fdv_proxy_drawdown_available`: `3000`
+- `price_available_120m`: `3000`
+- `liquidity_proxy_available_120m`: `3000`
 
-- all-collected launch cohort
-- `3,000` launches
-- combined Pump.fun migration and DexScreener pair-detection graduation labels
-- FDV-proxy lifecycle outcomes only
+## Classification
 
-Blocked T008 dataset:
+`weak_signal`
 
-- strict launch-regime-only cohort
-- `1,500` launches
-- blocked because strict launches with `4+` prior migrations = `0`
+## Migration Versus Raw Prior Launch Count
 
-## Evidence Inputs
+`raw_prior_launch_count_more_informative_descriptively`
 
-- Pump.fun 7d latest-first migration labels: `/Volumes/ORICO/MemeTraderPro/data/backtests/migration_graduation/migration_graduation_7d_desc_candidates.jsonl`
-- DexScreener pair-detection graduation labels: `/Volumes/ORICO/MemeTraderPro/data/backtests/migration_graduation/dexscreener_pair_graduation_labels.jsonl`
-- Combined labels: `/Volumes/ORICO/MemeTraderPro/data/backtests/migration_graduation/combined_migration_graduation_labels.jsonl`
+## Source Split
 
-## Readiness Metrics
+- `pumpfun_migration_event`: `15`
+- `dexscreener_pair_detection`: `234`
+- `other_combined_label`: `0`
 
-| Metric | Value |
-|---|---:|
-| Strict launches | `1,500` |
-| All-collected launches | `3,000` |
-| Unique migrated/graduated mints observed | `238` |
-| Strict unique migrated/graduated mints observed | `20` |
-| Migration/graduation timestamp available count | `249` |
-| Creators with at least 1 migration/graduation event | `180` |
-| Strict launches with at least 1 prior migration/graduation | `20` |
-| Strict launches with 4+ prior migrations/graduations | `0` |
-| All-collected launches with at least 1 prior migration/graduation | `329` |
-| All-collected launches with 4+ prior migrations/graduations | `58` |
+## Robustness Caveats
 
-## Caveats
+- `four_plus_bucket_dominant_creator_share`: `0.7586`
+- `two_plus_bucket_dominant_creator_share`: `0.5550`
+- `source_sensitivity_interpretation`: `both_source_sensitivities_available`
 
-- DexScreener pair detection is a graduation proxy, not a confirmed Pump.fun migrate instruction.
+## Limitations
+
+- This is descriptive research only and does not produce trading rules.
+- DexScreener pair detection is a graduation proxy and may carry survivorship/source bias.
+- Pump.fun migration labels are sparse relative to DexScreener pair-detected labels.
+- FDV proxy is not true market cap because circulating supply remains unavailable.
+- Current launch migration/graduation outcome is reported separately from prior-history features.
+
+## Next Recommendation
+
+run a separate chronological and source-robustness review for T008 before any validation design
+
+- Markdown summary: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/T008_creator_migration_reputation/T008_creator_migration_reputation_summary.md`
+- JSON summary: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/T008_creator_migration_reputation/T008_creator_migration_reputation_summary.json`
+- No thesis promotion was performed.
+- No trading rules were generated.
+- No profitability claims were generated.
 - True market-cap claims remain blocked.
-- The run must remain descriptive: no trading rules, no profitability claims, no threshold optimization, no grid search, no ML, no thesis promotion.
-- The `4+ prior migrations` cutoff is a user-provided practical filter, not an optimized threshold.
-- Strict-regime conclusions remain blocked until that cohort has non-empty `4+` prior migration coverage.
-
-## Next Allowed Command
-
-Implement and run T008 as an all-collected descriptive thesis only, using the combined migration/graduation labels:
-
-```bash
-./trading_env/bin/python -m research.mtp_research.validation.run_creator_migration_reputation_thesis \
-  --dataset all-collected \
-  --migration-labels-path /Volumes/ORICO/MemeTraderPro/data/backtests/migration_graduation/combined_migration_graduation_labels.jsonl
-```
-
-The command does not exist yet and must be implemented with tests before running.
-
-## Guardrails
-
-- No paper trading.
-- No live trading.
-- No auto-buy/sell.
-- No wallet execution.
-- No profitability claims.
-- No entry/exit logic.
-- No threshold optimization.
-- No grid search.
-- No ML black boxes.
-- No thesis promotion from a single result.
-- No future leakage.
-
-## Report Paths
-
-- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/dexscreener_pair_graduation_enrichment/dexscreener_pair_graduation_enrichment.json`
-- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/creator_migration_reputation_feasibility_combined_labels_v2/creator_migration_reputation_feasibility.json`
-- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/creator_migration_reputation_feasibility_combined_labels_v2/creator_migration_reputation_feasibility.md`
-
-## Recommendation
-
-Proceed to implement T008 as a descriptive all-collected thesis. Do not run strict-only T008 yet.
