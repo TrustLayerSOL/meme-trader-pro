@@ -9,6 +9,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/validation/run_pumpfun_precision_import.py"),
     Path("research/mtp_research/launch_regime/launch_state_labels.py"),
     Path("research/mtp_research/features/launch_state_feature_stubs.py"),
+    Path("research/mtp_research/validation/early_ownership_concentration_thesis.py"),
+    Path("research/mtp_research/validation/run_early_ownership_concentration_thesis.py"),
 ]
 
 
@@ -31,6 +33,10 @@ def test_creation_census_sprint_does_not_add_trading_or_private_key_logic() -> N
     for path in GUARDED_PATHS:
         if not path.exists():
             continue
-        text = path.read_text(encoding="utf-8").lower()
+        text = _strip_allowed_negative_guardrail_labels(path.read_text(encoding="utf-8").lower())
         for pattern in FORBIDDEN_RUNTIME_PATTERNS:
             assert pattern not in text, f"{pattern} found in {path}"
+
+
+def _strip_allowed_negative_guardrail_labels(text: str) -> str:
+    return text.replace("no_threshold_optimization", "")
