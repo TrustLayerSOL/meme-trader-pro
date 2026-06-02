@@ -66,6 +66,27 @@ def test_outcome_enrichment_keeps_thresholds_unusable_when_valuation_unavailable
     assert enriched["threshold_outcomes_semantics"] == "unusable_no_usd_valuation"
 
 
+def test_outcome_enrichment_reads_price_sol_at_120m_but_blocks_usd_without_sol_usd() -> None:
+    enriched = enrich_outcome_row(
+        {
+            "token_mint": "mint-a",
+            "metadata_json": {
+                "price_sol_at_120m": 0.000002,
+                "price_source_120m": "balance_delta_quote_over_base_v0",
+                "liquidity_proxy_at_120m": 2.8,
+            },
+        }
+    )
+
+    assert enriched["price_sol_available"] is True
+    assert enriched["price_usd_available"] is False
+    assert enriched["sol_usd_available"] is False
+    assert enriched["true_market_cap_usd"] is None
+    assert enriched["fdv_usd"] is None
+    assert enriched["threshold_outcomes_usable"] is False
+    assert enriched["valuation_missing_reason"] == "missing_supply_and_sol_usd"
+
+
 def test_enrichment_blocks_usd_fields_without_sol_usd_even_when_price_sol_is_present() -> None:
     enriched = enrich_snapshot_row(
         {

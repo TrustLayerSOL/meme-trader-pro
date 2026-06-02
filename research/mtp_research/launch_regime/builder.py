@@ -216,6 +216,7 @@ class LaunchRegimeBuilder:
                 priced = [event for event in window_events if event.price_quote is not None and event.price_quote > 0]
                 last_price = priced[-1].price_quote if priced else None
                 liquidity_proxy, liquidity_proxy_source = _liquidity_proxy_with_source(priced)
+                price_metadata = _price_metadata(priced[-1] if priced else None, launch.launch_ts + age)
                 snapshots.append(
                     LaunchFeatureSnapshot(
                         snapshot_id=make_snapshot_id(launch.launch_id, age),
@@ -249,6 +250,7 @@ class LaunchRegimeBuilder:
                             "event_count": len(window_events),
                             "priced_event_count": len(priced),
                             "liquidity_proxy_source": liquidity_proxy_source,
+                            **price_metadata,
                         },
                     )
                 )
@@ -296,6 +298,7 @@ class LaunchRegimeBuilder:
             )
             price_available_120m = bool(priced)
             has_price_at_120m = price_available_120m
+            price_metadata_120m = _price_metadata(priced[-1] if priced else None, launch.launch_ts + 7200, suffix="_120m")
             liquidity_proxy_at_120m, liquidity_proxy_source_120m = _liquidity_proxy_with_source(priced)
             has_liquidity_proxy_at_120m = liquidity_proxy_at_120m is not None and liquidity_proxy_at_120m > 0
             liquidity_survival_120m = has_liquidity_proxy_at_120m and price_available_120m
@@ -356,6 +359,7 @@ class LaunchRegimeBuilder:
                         "max_observed_lifecycle_age_seconds": last_age,
                         "liquidity_proxy_at_120m": liquidity_proxy_at_120m,
                         "liquidity_proxy_source_120m": liquidity_proxy_source_120m,
+                        **price_metadata_120m,
                     },
                 )
             )
@@ -446,6 +450,21 @@ def _liquidity_proxy_with_source(priced_events: list[NormalizedEvent]) -> tuple[
         return reserve_values[-1], "bonding_curve_post_balance"
     quotes = [event.quote_qty for event in priced_events if event.quote_qty is not None]
     return (sum(abs(value) for value in quotes), "quote_qty_sum") if quotes else (None, None)
+
+
+def _price_metadata(event: NormalizedEvent | None, as_of_ts: int, suffix: str = "") -> dict[str, object]:
+    if event is None or event.price_quote is None or event.price_quote <= 0:
+        return {}
+    block_time = event.block_time
+    staleness = as_of_ts - block_time if block_time is not None else None
+    price_key = "price_sol_at_120m" if suffix == "_120m" else f"price_sol{suffix}"
+    return {
+        price_key: event.price_quote,
+        f"price_source{suffix}": (event.metadata_json or {}).get("price_inference_method"),
+        f"price_event_signature{suffix}": event.signature,
+        f"price_event_block_time{suffix}": block_time,
+        f"price_staleness_seconds{suffix}": staleness,
+    }
 
 
 def _hit_market_cap(value: float | None, threshold: float) -> bool | None:

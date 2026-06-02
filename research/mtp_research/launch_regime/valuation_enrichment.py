@@ -52,7 +52,7 @@ def enrich_snapshot_row(row: dict[str, Any]) -> dict[str, Any]:
 def enrich_outcome_row(row: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(row)
     metadata = dict(row.get("metadata_json") or {})
-    price_sol = _first_number(row, metadata, ("price_sol", "price_quote_sol", "price_sol_120m"))
+    price_sol = _first_number(row, metadata, ("price_sol", "price_quote_sol", "price_sol_at_120m", "price_sol_120m"))
     price_usd = _first_number(row, metadata, ("price_usd", "price_quote_usd", "price_usd_120m"))
     total_supply = _first_number(row, metadata, ("total_supply", "token_total_supply"))
     circulating_supply = _first_number(row, metadata, ("circulating_supply",))

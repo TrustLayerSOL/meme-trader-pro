@@ -101,6 +101,45 @@ def test_launch_snapshots_use_bonding_curve_liquidity_proxy_when_available() -> 
     assert outcome.metadata_json["liquidity_proxy_at_120m"] == 2.5
 
 
+def test_launch_snapshots_and_outcomes_store_absolute_sol_price_provenance() -> None:
+    builder = LaunchRegimeBuilder()
+    launch = builder.candidate_to_launch(_candidate())
+    events = [
+        NormalizedEvent(
+            event_id="e1",
+            signature="sig-1",
+            slot=1,
+            block_time=launch.launch_ts + 30,
+            event_type="possible_buy",
+            token_mint="token-1",
+            price_quote=0.000001,
+            metadata_json={"price_inference_method": "transaction_native_sol_quote_over_base_v0"},
+        ),
+        NormalizedEvent(
+            event_id="e2",
+            signature="sig-2",
+            slot=2,
+            block_time=launch.launch_ts + 300,
+            event_type="possible_sell",
+            token_mint="token-1",
+            price_quote=0.000002,
+            metadata_json={"price_inference_method": "balance_delta_quote_over_base_v0"},
+        ),
+    ]
+
+    snapshots = {row.launch_age_seconds: row for row in builder.build_snapshots([launch], events)}
+    outcome = builder.build_outcomes([launch], events)[0]
+
+    assert snapshots[30].metadata_json["price_sol"] == 0.000001
+    assert snapshots[30].metadata_json["price_source"] == "transaction_native_sol_quote_over_base_v0"
+    assert snapshots[30].metadata_json["price_staleness_seconds"] == 0
+    assert snapshots[300].metadata_json["price_sol"] == 0.000002
+    assert snapshots[300].metadata_json["price_source"] == "balance_delta_quote_over_base_v0"
+    assert outcome.metadata_json["price_sol_at_120m"] == 0.000002
+    assert outcome.metadata_json["price_source_120m"] == "balance_delta_quote_over_base_v0"
+    assert outcome.metadata_json["price_staleness_seconds_120m"] == 6900
+
+
 def test_launch_outcomes_store_interval_returns_and_survival() -> None:
     builder = LaunchRegimeBuilder()
     launch = builder.candidate_to_launch(_candidate())
