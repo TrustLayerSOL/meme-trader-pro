@@ -172,6 +172,7 @@ def _migration_label_records(
             label.get("pumpfun_migrate_event_observed")
             or label.get("graduated_to_pumpswap")
             or label.get("migrated_to_raydium")
+            or label.get("dex_pair_detected")
         ):
             continue
         mint = _mint(label)
