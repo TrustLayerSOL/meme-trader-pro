@@ -25,6 +25,36 @@ Existing local data does not meet the preferred date-balance target. The next da
 - goal: `prove trigger reconstruction and rows/date before scaling`
 - success: `>=10 $20k-trigger rows/date with >=90% forward path coverage`
 
+## Parallel Pilot Result
+
+- Creation discovery dates: `2026-05-18`, `2026-05-19`, `2026-05-20`, `2026-05-11`, `2026-05-12`, `2026-05-13`
+- Creation discovery requests used: `24`
+- Creation transactions scanned: `24,000`
+- Accepted creation rows added: `297`
+- Lifecycle launches processed: `500`
+- Lifecycle address-window requests used: `500`
+- Lifecycle raw transactions inserted: `16,287`
+- Pilot snapshots built: `6,000`
+- Pilot outcomes built: `500`
+- Pilot FDV-proxy valuation coverage: `6,500 / 6,500`
+- Pilot $20k-trigger rows: `49`
+- Pilot active $20k-trigger dates: `8`
+- Combined active $20k-trigger dates after pilot: `10`
+- Combined $20k-trigger rows after pilot: `448`
+- Combined top date share remains too high: `0.71875`
+- Combined top 3 date share remains too high: `0.9352678571428571`
+
+## Updated Acquisition Direction
+
+The faster parallel process works and should be used for the next pull. The bottleneck is now coverage yield per historical date, not runtime. The next pull should widen to more date shards while keeping the same pattern:
+
+- Keep date-sharded Pump.fun creation discovery.
+- Preserve raw creation transactions by target date.
+- Use parallel address-window lifecycle pulls.
+- Avoid adding more `2026-06-01` rows.
+- Prefer more new dates over deeper history on already-active dates.
+- Recompute coverage before rerunning winner anatomy, T011, robustness, or validation.
+
 ## Guardrails
 
 - Preserve raw transactions before parsing.

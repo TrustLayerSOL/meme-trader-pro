@@ -42,6 +42,27 @@ T011 validation failed because the selected holdout bucket was date-dominated. T
 - Top 3 date share: `1.0`
 - Readiness: `historical_expansion_requires_external_acquisition`
 
+## Parallel Acquisition Pilot
+
+- Creation discovery requests used: `24`
+- Creation transactions scanned: `24,000`
+- Accepted creation rows added: `297`
+- Lifecycle address-window requests used: `500`
+- Lifecycle raw transactions inserted: `16,287`
+- Pilot launch rows built: `500`
+- Pilot snapshot rows built: `6,000`
+- Pilot outcome rows built: `500`
+- Pilot FDV-proxy valuation coverage: `6,500 / 6,500`
+- Pilot $20k-trigger dates: `8`
+- Pilot $20k-trigger rows: `49`
+- Combined active $20k-trigger dates after pilot: `10`
+- Combined $20k-trigger rows after pilot: `448`
+- Combined top date share after pilot: `0.71875`
+- Combined top 3 date share after pilot: `0.9352678571428571`
+- Current readiness: `historical_expansion_requires_external_acquisition`
+
+The faster data collection process worked. The next bottleneck is not runtime; it is collecting enough additional independent dates with useful $20k-trigger rows.
+
 ## Outputs
 
 - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/historical_date_expansion/historical_coverage_audit.json`
@@ -56,4 +77,4 @@ T011 validation failed because the selected holdout bucket was date-dominated. T
 
 ## Next Recommended Action
 
-Run a bounded external acquisition pilot using parallel date shards. Do not rerun winner anatomy, T011, or validation until the preferred date-balance target is met.
+Run the next bounded external acquisition with more parallel date shards. Do not rerun winner anatomy, T011, robustness, or validation until the preferred date-balance target is met.

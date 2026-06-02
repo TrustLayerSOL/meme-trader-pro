@@ -41,6 +41,8 @@ GUARDED_PATHS = [
     Path("research/mtp_research/validation/run_t011_explosive_runner_validation.py"),
     Path("research/mtp_research/validation/historical_date_expansion.py"),
     Path("research/mtp_research/validation/run_historical_date_expansion.py"),
+    Path("research/mtp_research/validation/parallel_historical_date_acquisition.py"),
+    Path("research/mtp_research/validation/run_parallel_historical_date_acquisition.py"),
 ]
 
 
