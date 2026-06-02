@@ -156,6 +156,39 @@ def test_checkpoint_round_trip(tmp_path: Path) -> None:
     assert load_collection_checkpoint(tmp_path / "missing.json") == {}
 
 
+def test_resume_collapses_duplicate_existing_candidate_rows(tmp_path: Path) -> None:
+    launch_ts = 1_700_000_000
+    candidates_path = _write_jsonl(
+        tmp_path / "candidates.jsonl",
+        [_candidate(1, launch_ts=launch_ts), _candidate(2, launch_ts=launch_ts + 100)],
+    )
+    paths = _paths(tmp_path)
+    _write_jsonl(
+        paths["jsonl_path"],
+        [
+            {"mint": "mint-1", "launch_id": "launch-1", "migration_missing_reason": "old_duplicate"},
+            {"mint": "mint-1", "launch_id": "launch-1", "migration_missing_reason": "newer_duplicate"},
+        ],
+    )
+    write_collection_checkpoint(paths["checkpoint_path"], {"completed_mints": ["mint-1"], "requests_used": 0})
+    fake_client = FakeMigrationClient(
+        signatures=[{"signature": "sig-2", "blockTime": launch_ts + 160}],
+        transactions={"sig-2": {"blockTime": launch_ts + 160, "meta": {"logMessages": []}}},
+    )
+
+    run_migration_graduation_enrichment_collection(
+        candidates_path=candidates_path,
+        execute=True,
+        mint_limit=2,
+        output_paths=paths,
+        client=fake_client,
+    )
+
+    output_rows = [json.loads(line) for line in paths["jsonl_path"].read_text(encoding="utf-8").splitlines()]
+    assert [row["mint"] for row in output_rows] == ["mint-1", "mint-2"]
+    assert output_rows[0]["migration_missing_reason"] == "newer_duplicate"
+
+
 def test_execute_preserves_raw_transactions_and_writes_label_schema(tmp_path: Path) -> None:
     launch_ts = 1_700_000_000
     candidates_path = _write_jsonl(tmp_path / "candidates.jsonl", [_candidate(1, launch_ts=launch_ts)])

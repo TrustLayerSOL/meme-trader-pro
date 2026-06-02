@@ -119,7 +119,7 @@ def run_migration_graduation_enrichment_collection(
     rpc = client or HeliusHistoricalAdapter.from_env()
     checkpoint = load_collection_checkpoint(paths["checkpoint_path"])
     completed_mints = set(checkpoint.get("completed_mints") or [])
-    rows: list[dict[str, Any]] = _read_existing_jsonl(paths["jsonl_path"])
+    rows: list[dict[str, Any]] = _dedupe_rows_by_mint(_read_existing_jsonl(paths["jsonl_path"]))
     existing_signatures = _read_existing_raw_signatures(paths["raw_dir"] / "migration_graduation_raw_transactions.jsonl")
     raw_files_written: set[str] = set()
     auth_provider_errors: list[str] = []
@@ -163,6 +163,7 @@ def run_migration_graduation_enrichment_collection(
         transactions_fetched += collected["transactions_fetched"]
         stopped_due_ceiling = stopped_due_ceiling or collected["stopped_due_ceiling"]
         raw_files_written.update(collected["raw_files_written"])
+        rows = [row for row in rows if row.get("mint") != mint]
         rows.append(collected["candidate_row"])
         completed_mints.add(mint)
         mints_completed += 1
@@ -580,6 +581,18 @@ def _read_existing_jsonl(path: Path) -> list[dict[str, Any]]:
         return []
     with path.open("r", encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def _dedupe_rows_by_mint(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+    anonymous: list[dict[str, Any]] = []
+    for row in rows:
+        mint = row.get("mint")
+        if not mint:
+            anonymous.append(row)
+            continue
+        output[mint] = row
+    return [*anonymous, *output.values()]
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
