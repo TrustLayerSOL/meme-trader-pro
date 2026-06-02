@@ -405,6 +405,7 @@ def _collect_one_mint_address_window(
             limit=page_limit,
             pagination_token=pagination_token,
             transaction_details="full",
+            sort_order="desc",
         )
         requests_used += 1
         page_transactions = list(result.get("transactions") or [])

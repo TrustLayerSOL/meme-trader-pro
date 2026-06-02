@@ -192,12 +192,13 @@ class HeliusHistoricalAdapter:
         limit: int = 1000,
         pagination_token: str | None = None,
         transaction_details: str = "full",
+        sort_order: str = "asc",
     ) -> dict[str, Any]:
         options: dict[str, Any] = {
             "transactionDetails": transaction_details,
             "encoding": "jsonParsed",
             "maxSupportedTransactionVersion": 0,
-            "sortOrder": "asc",
+            "sortOrder": sort_order,
             "limit": limit,
             "filters": {
                 "blockTime": {"gte": start_time, "lte": end_time},
@@ -223,6 +224,7 @@ class HeliusHistoricalAdapter:
         limit: int = 1000,
         pagination_token: str | None = None,
         transaction_details: str = "full",
+        sort_order: str = "asc",
     ) -> dict[str, Any]:
         payload = self.build_get_transactions_for_address_payload(
             address=address,
@@ -231,6 +233,7 @@ class HeliusHistoricalAdapter:
             limit=limit,
             pagination_token=pagination_token,
             transaction_details=transaction_details,
+            sort_order=sort_order,
         )
         response = self._http_post(self.build_rpc_url(), payload, self.timeout_sec)
         if "error" in response:

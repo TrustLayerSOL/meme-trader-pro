@@ -59,9 +59,11 @@ class AddressWindowMigrationClient(FakeMigrationClient):
         super().__init__(signatures=[], transactions={})
         self.window_transactions = transactions
         self.address_window_calls = 0
+        self.address_window_kwargs = []
 
     def fetch_transactions_for_address_window(self, address: str, **kwargs) -> dict:
         self.address_window_calls += 1
+        self.address_window_kwargs.append(dict(kwargs))
         return {"transactions": list(self.window_transactions), "pagination_token": None}
 
 
@@ -307,6 +309,7 @@ def test_collection_prefers_address_window_fetch_when_available(tmp_path: Path) 
     assert fake_client.address_window_calls == 1
     assert fake_client.signature_calls == 0
     assert fake_client.transaction_calls == 0
+    assert fake_client.address_window_kwargs[0]["sort_order"] == "desc"
     assert result["requests"]["requests_used"] == 1
     assert result["collection"]["transactions_fetched"] == 1
     assert result["labels"]["unique_migrated_graduated_mints_detected"] == 1
