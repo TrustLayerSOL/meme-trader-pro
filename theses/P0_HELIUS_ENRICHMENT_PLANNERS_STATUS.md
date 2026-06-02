@@ -26,8 +26,23 @@ The early-buyer wallet-history pilot was executed as the first capped P0 pilot.
 - readiness_classification: `early_buyer_history_ready_for_review`
 - warnings: `[]`
 
+## Top-Holder Replay Pilot
+The top-holder replay pilot was executed as a bounded source-yield test. This uses mint transaction balance-delta replay and is not a confirmed full-chain historical account-state snapshot.
+
+- selected_mints: `25`
+- selected_milestones: `75`
+- mints_completed: `25`
+- milestones_completed: `75`
+- requests_used: `49`
+- network_calls_made: `49`
+- transactions_fetched: `754`
+- milestones_with_holder_proxy: `75`
+- replay_proxy_coverage_pct: `100.0`
+- readiness_classification: `top_holder_replay_ready_for_review`
+- warnings: `[]`
+
 ## Warning
-The top-holder milestone snapshot pilot remains a dry-run target preview only because historical top-holder snapshots require a concrete holder-state source decision before execution. The executed pilot did not run a thesis, validation, backtest, paper trading, live trading, optimization, grid search, or ML workflow.
+The executed pilots did not run a thesis, validation, backtest, paper trading, live trading, optimization, grid search, or ML workflow. Top-holder replay fields remain proxy fields unless validated against a confirmed historical account-state source.
 
 ## Next Recommended Action
 Review dry-run target previews, then approve exactly one capped pilot if the target set is acceptable.
@@ -44,3 +59,8 @@ Review dry-run target previews, then approve exactly one capped pilot if the tar
 - Early Buyer Parsed JSONL: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/early_buyer_wallet_history_pilot.jsonl
 - Early Buyer Parsed Parquet: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/early_buyer_wallet_history_pilot.parquet
 - Early Buyer Raw Transactions: /Volumes/ORICO/MemeTraderPro/data/raw/structural_enrichment/early_buyer_wallet_history_pilot/early_buyer_wallet_history_raw_transactions.jsonl
+- Top Holder Replay Summary JSON: /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/p0_top_holder_replay_pilot/top_holder_replay_pilot_summary.json
+- Top Holder Replay Summary Markdown: /Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/p0_top_holder_replay_pilot/top_holder_replay_pilot_summary.md
+- Top Holder Replay JSONL: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/top_holder_replay_pilot.jsonl
+- Top Holder Replay Parquet: /Volumes/ORICO/MemeTraderPro/data/backtests/structural_enrichment/top_holder_replay_pilot.parquet
+- Top Holder Replay Raw Transactions: /Volumes/ORICO/MemeTraderPro/data/raw/structural_enrichment/top_holder_replay_pilot/top_holder_replay_raw_transactions.jsonl
