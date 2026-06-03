@@ -75,6 +75,13 @@ def test_birth_to_trigger_audit_detects_later_fdv_by_mint(tmp_path: Path) -> Non
     assert summary["birth_mints_with_any_trigger_cross"] == 1
     assert summary["trigger_cross_counts"]["10k"] == 1
     assert summary["trigger_cross_counts"]["15k"] == 0
+    assert summary["conversion_funnel"]["birth_watch_mints"] == 2
+    assert summary["conversion_funnel"]["births_with_fdv_followup"] == 1
+    assert summary["conversion_funnel"]["crossed_10k"] == 1
+    assert summary["conversion_funnel"]["birth_to_10k_conversion_rate"] == 0.5
+    assert summary["conversion_funnel"]["birth_to_20k_conversion_rate"] == 0.0
+    assert summary["conversion_funnel"]["estimated_births_needed_for_300_crossed_10k"] == 600
+    assert summary["conversion_funnel"]["target_trigger_qualified_sample"] == 300
     assert summary["per_mint"][0]["mint"] == "mint-a"
     assert summary["per_mint"][0]["first_fdv_proxy"] == 12_500
     assert summary["per_mint"][0]["first_trigger_level"] == "10k"

@@ -128,6 +128,11 @@ A read-only follow-up audit and bounded follow-up collector were added and run a
 - Birth-watch mints with any trigger crossing: `0`
 - Follow-up status counts: `{'fdv_followup_below_trigger': 8, 'needs_followup_collection': 2}`
 - Readiness classification: `birth_to_trigger_fdv_followup_below_trigger`
+- Target trigger-qualified progress at `10k`: `0/300`
+- Target trigger-qualified progress at `20k`: `0/300`
+- Birth-to-FDV follow-up rate: `0.8`
+- Birth-to-10k conversion rate: `0.0`
+- Birth-to-20k conversion rate: `0.0`
 - Network/Helius calls made by audit: `0`
 
 Reports:
@@ -143,4 +148,5 @@ Interpretation:
 - The create-scanner bridge is producing birth-watch rows correctly.
 - The bounded follow-up collector can recheck current birth-watch mints and append FDV/path rows without adding duplicate candidate rows.
 - The first follow-up pass found deterministic FDV evidence for `8` of `10` birth-watch mints, but all observed FDV values remain below the `10k` trigger.
-- The next required step is another bounded follow-up pass after more time has elapsed, not broader candidate scaling or thesis work.
+- Status reporting must keep two targets separate: birth inventory size and trigger-qualified birth-to-FDV sample size.
+- The next useful checkpoint is a larger birth inventory, then repeated bounded follow-up passes to estimate the real birth-to-trigger conversion funnel.

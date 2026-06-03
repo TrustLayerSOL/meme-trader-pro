@@ -11,6 +11,7 @@ import csv
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,7 @@ def build_birth_to_trigger_followup_audit(
         level: sum(1 for row in per_mint if row.get(f"first_crossed_{level}_time") is not None)
         for level in TRIGGER_LEVELS
     }
+    conversion_funnel = _conversion_funnel(per_mint, trigger_counts)
     followup_status_counts = Counter(row["followup_status"] for row in per_mint)
     summary = {
         "report_id": REPORT_ID,
@@ -95,6 +97,7 @@ def build_birth_to_trigger_followup_audit(
         "birth_mints_with_followup_fdv": sum(1 for row in per_mint if row["followup_fdv_path_rows"] > 0),
         "birth_mints_with_any_trigger_cross": sum(1 for row in per_mint if row["first_trigger_level"] is not None),
         "trigger_cross_counts": trigger_counts,
+        "conversion_funnel": conversion_funnel,
         "followup_status_counts": dict(followup_status_counts),
         "file_row_counts": {
             "candidates": len(candidates.rows),
@@ -236,6 +239,64 @@ def _recommendation(per_mint: list[dict[str, Any]]) -> str:
     return "Run the birth-watch scanner before follow-up auditing."
 
 
+def _conversion_funnel(
+    per_mint: list[dict[str, Any]],
+    trigger_counts: dict[str, int],
+    *,
+    target_trigger_qualified_sample: int = 300,
+) -> dict[str, Any]:
+    births = len(per_mint)
+    fdv_followup = sum(1 for row in per_mint if row["followup_fdv_path_rows"] > 0)
+    crossed_10k = int(trigger_counts.get("10k", 0))
+    crossed_15k = int(trigger_counts.get("15k", 0))
+    crossed_20k = int(trigger_counts.get("20k", 0))
+    crossed_30k = int(trigger_counts.get("30k", 0))
+    crossed_50k = int(trigger_counts.get("50k", 0))
+    crossed_100k = int(trigger_counts.get("100k", 0))
+    crossed_500k = int(trigger_counts.get("500k", 0))
+    crossed_1m = int(trigger_counts.get("1m", 0))
+    return {
+        "birth_watch_mints": births,
+        "births_with_fdv_followup": fdv_followup,
+        "crossed_10k": crossed_10k,
+        "crossed_15k": crossed_15k,
+        "crossed_20k": crossed_20k,
+        "crossed_30k": crossed_30k,
+        "crossed_50k": crossed_50k,
+        "crossed_100k": crossed_100k,
+        "crossed_500k": crossed_500k,
+        "crossed_1m": crossed_1m,
+        "fdv_followup_rate": _rate(fdv_followup, births),
+        "birth_to_10k_conversion_rate": _rate(crossed_10k, births),
+        "birth_to_15k_conversion_rate": _rate(crossed_15k, births),
+        "birth_to_20k_conversion_rate": _rate(crossed_20k, births),
+        "birth_to_30k_conversion_rate": _rate(crossed_30k, births),
+        "birth_to_50k_conversion_rate": _rate(crossed_50k, births),
+        "birth_to_100k_conversion_rate": _rate(crossed_100k, births),
+        "birth_to_500k_conversion_rate": _rate(crossed_500k, births),
+        "birth_to_1m_conversion_rate": _rate(crossed_1m, births),
+        "10k_to_20k_conversion_rate": _rate(crossed_20k, crossed_10k),
+        "20k_to_100k_conversion_rate": _rate(crossed_100k, crossed_20k),
+        "target_trigger_qualified_sample": target_trigger_qualified_sample,
+        "target_trigger_qualified_progress_10k": f"{crossed_10k}/{target_trigger_qualified_sample}",
+        "target_trigger_qualified_progress_20k": f"{crossed_20k}/{target_trigger_qualified_sample}",
+        "estimated_births_needed_for_300_crossed_10k": _estimated_births_needed(target_trigger_qualified_sample, crossed_10k, births),
+        "estimated_births_needed_for_300_crossed_20k": _estimated_births_needed(target_trigger_qualified_sample, crossed_20k, births),
+    }
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 6)
+
+
+def _estimated_births_needed(target: int, crossed: int, births: int) -> int | None:
+    if crossed <= 0 or births <= 0:
+        return None
+    return int(ceil(target / (crossed / births)))
+
+
 def _load_jsonl(path: Path) -> LoadedJsonl:
     if not path.exists():
         return LoadedJsonl(rows=[], malformed_rows=0, missing=True)
@@ -283,6 +344,7 @@ def _write_markdown(path: Path, summary: dict[str, Any]) -> Path:
         f"- Mints with later FDV evidence: `{summary['birth_mints_with_followup_fdv']}`",
         f"- Mints with any trigger crossing: `{summary['birth_mints_with_any_trigger_cross']}`",
         f"- Trigger cross counts: `{summary['trigger_cross_counts']}`",
+        f"- Conversion funnel: `{summary['conversion_funnel']}`",
         f"- Follow-up statuses: `{summary['followup_status_counts']}`",
         f"- Readiness classification: `{summary['readiness_classification']}`",
         f"- Recommendation: `{summary['recommendation']}`",
