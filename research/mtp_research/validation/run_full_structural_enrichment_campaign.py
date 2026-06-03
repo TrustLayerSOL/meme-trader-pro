@@ -18,6 +18,10 @@ def main() -> int:
         "trigger_rows": Path(args.trigger_rows_path),
         "combined_repaired": Path(args.combined_repaired_path),
     }
+    if args.events_path is not None:
+        input_paths["events"] = Path(args.events_path)
+    if args.sol_usd_path is not None:
+        input_paths["sol_usd"] = Path(args.sol_usd_path)
     report, paths = run_full_structural_enrichment_campaign(
         data_root=Path(args.data_root) if args.data_root else None,
         input_paths=input_paths,
@@ -48,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--trigger-rows-path", default=DEFAULT_TRIGGER_ROWS_PATH)
     parser.add_argument("--combined-repaired-path", default=DEFAULT_COMBINED_REPAIRED_PATH)
+    parser.add_argument("--events-path", default=None)
+    parser.add_argument("--sol-usd-path", default=None)
     parser.add_argument("--status-path", default=None)
     parser.add_argument("--max-helius-credits", type=int, default=500_000)
     parser.add_argument("--execute-helius", action="store_true")

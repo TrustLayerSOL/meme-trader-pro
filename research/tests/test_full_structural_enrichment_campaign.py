@@ -21,6 +21,11 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
     pd.DataFrame(rows).to_parquet(path, index=False)
 
 
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
 def test_budget_estimate_allows_local_only_campaign_under_cap() -> None:
     estimate = estimate_campaign_budget(
         launch_count=1_143,
@@ -171,6 +176,10 @@ def test_full_campaign_builds_master_and_reports_from_local_sources(tmp_path: Pa
             "top_holder_layers": [top_holder_path],
             "early_buyer_layers": [early_buyer_path],
             "creator_funder_layers": [funder_path],
+            "holder_state": None,
+            "entity_proxy": None,
+            "events": None,
+            "sol_usd": None,
         },
         output_paths={"status_path": tmp_path / "FULL_STRUCTURAL_ENRICHMENT_CAMPAIGN_STATUS.md"},
         execute_helius=False,
@@ -189,6 +198,141 @@ def test_full_campaign_builds_master_and_reports_from_local_sources(tmp_path: Pa
     assert paths["preflight_json_path"].exists()
     assert summary["helius"]["credits_used"] == 0
     assert "no_live_trading" in json.dumps(summary)
+
+
+def test_full_campaign_adds_visible_attention_and_flow_features(tmp_path: Path) -> None:
+    trigger_path = tmp_path / "trigger_rows.csv"
+    combined_path = tmp_path / "combined.parquet"
+    events_path = tmp_path / "events.jsonl"
+    sol_usd_path = tmp_path / "sol_usd.jsonl"
+    output_root = tmp_path / "orico"
+
+    _write_csv(
+        trigger_path,
+        [
+            {
+                "launch_id": "L1",
+                "token_mint": "Mint1",
+                "creator": "Creator1",
+                "launch_ts": 1_700_000_000,
+                "trigger_fdv_proxy": 20_000,
+                "trigger_age_seconds": 90,
+                "buy_count_at_20k": 3,
+                "event_count_at_20k": 4,
+                "active_wallets_at_20k": 2,
+                "top_holder_share_at_20k": 0.42,
+                "creator_prior_migration_or_graduation_count": 5,
+            },
+            {
+                "launch_id": "L2",
+                "token_mint": "Mint2",
+                "creator": "Creator2",
+                "launch_ts": 1_700_000_000,
+                "trigger_fdv_proxy": 20_000,
+                "trigger_age_seconds": 400,
+                "buy_count_at_20k": 1,
+                "event_count_at_20k": 1,
+                "active_wallets_at_20k": 1,
+                "top_holder_share_at_20k": 0.25,
+                "creator_prior_migration_or_graduation_count": 0,
+            },
+        ],
+    )
+    _write_parquet(
+        combined_path,
+        [
+            {
+                "launch_id": "L1",
+                "mint": "Mint1",
+                "fdv_per_event_at_20k": 5000.0,
+                "fdv_per_buy_at_20k": 6666.67,
+                "fdv_per_active_wallet_at_20k": 10000.0,
+            },
+            {
+                "launch_id": "L2",
+                "mint": "Mint2",
+                "fdv_per_event_at_20k": 20000.0,
+                "fdv_per_buy_at_20k": 20000.0,
+                "fdv_per_active_wallet_at_20k": 20000.0,
+            },
+        ],
+    )
+    _write_jsonl(
+        events_path,
+        [
+            {
+                "token_mint": "Mint1",
+                "block_time": 1_700_000_010,
+                "side": "accumulate",
+                "venue": "pumpfun_buy",
+                "actor": "BuyerA",
+                "quote_qty": 2.0,
+                "signature": "sig-a",
+            },
+            {
+                "token_mint": "Mint1",
+                "block_time": 1_700_000_020,
+                "side": "accumulate",
+                "venue": "pumpfun_buy",
+                "actor": "BuyerB",
+                "quote_qty": 1.0,
+                "signature": "sig-b",
+            },
+            {
+                "token_mint": "Mint1",
+                "block_time": 1_700_000_080,
+                "side": "accumulate",
+                "venue": "pumpfun_buy",
+                "actor": "LateBuyer",
+                "quote_qty": 5.0,
+                "signature": "sig-late",
+            },
+            {
+                "token_mint": "Mint2",
+                "block_time": 1_700_000_020,
+                "side": "distribute",
+                "venue": "pumpfun_sell",
+                "actor": "SellerA",
+                "quote_qty": 1.0,
+                "signature": "sig-sell",
+            },
+        ],
+    )
+    _write_jsonl(sol_usd_path, [{"ts": 1_700_000_000, "sol_usd": 100.0, "source": "test"}])
+
+    report, paths = run_full_structural_enrichment_campaign(
+        data_root=output_root,
+        input_paths={
+            "trigger_rows": trigger_path,
+            "combined_repaired": combined_path,
+            "top_holder_layers": [],
+            "early_buyer_layers": [],
+            "creator_funder_layers": [],
+            "holder_state": None,
+            "entity_proxy": None,
+            "events": events_path,
+            "sol_usd": sol_usd_path,
+        },
+        output_paths={"status_path": tmp_path / "FULL_STRUCTURAL_ENRICHMENT_CAMPAIGN_STATUS.md"},
+        execute_helius=False,
+        execute_dexscreener=False,
+    )
+
+    master = pd.read_parquet(paths["master_parquet_path"])
+    l1 = master[master["launch_id"] == "L1"].iloc[0]
+    l2 = master[master["launch_id"] == "L2"].iloc[0]
+
+    assert l1["first_minute_usd_volume"] == 300.0
+    assert l1["first_60s_buy_count"] == 2
+    assert l1["first_60s_unique_buyers"] == 2
+    assert l1["whale_buy_sequence_proxy"] == 2.0 / 3.0
+    assert l1["early_holder_concentration"] == 0.42
+    assert l1["deployer_prior_migration_count"] == 5
+    assert l1["pair_migration_liquidity_delay_proxy"] == 90
+    assert pd.isna(l1["topicality_flag"])
+    assert bool(l1["has_visible_attention_and_flow_layer"]) is True
+    assert l2["first_60s_buy_count"] == 0
+    assert report["layer_coverage"]["visible_attention_and_flow"]["covered_rows"] == 2
 
 
 def test_layer_coverage_is_deterministic() -> None:

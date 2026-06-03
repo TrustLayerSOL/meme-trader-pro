@@ -66,6 +66,8 @@ DEFAULT_HOLDER_STATE_PATH = data_lake_path(
 DEFAULT_ENTITY_PROXY_PATH = data_lake_path(
     "data", "backtests", "entity_proxy", "entity_proxy_strict_cohort.parquet"
 )
+DEFAULT_EVENTS_PATH = data_lake_path("data", "normalized", "pumpfun_lifecycle_events_classified.jsonl")
+DEFAULT_SOL_USD_PATH = data_lake_path("data", "normalized", "valuation_inputs", "sol_usd_coingecko.jsonl")
 
 METHODOLOGY_FLAGS = [
     "research_only",
@@ -114,6 +116,7 @@ def run_full_structural_enrichment_campaign(
     creator_funder = _build_creator_funder_layer(base, combined, inputs["creator_funder_layers"])
     cluster = _build_cluster_layer(base, inputs["entity_proxy"])
     distribution = _build_distribution_layer(base)
+    visible_flow = _build_visible_attention_and_flow_layer(base, top_holder, inputs["events"], inputs["sol_usd"])
     visibility = _build_visibility_attention_layer(base)
     contract = _build_contract_authority_layer(base)
     master = _build_master(
@@ -124,6 +127,7 @@ def run_full_structural_enrichment_campaign(
         creator_funder=creator_funder,
         cluster=cluster,
         distribution=distribution,
+        visible_flow=visible_flow,
         visibility=visibility,
         contract=contract,
     )
@@ -159,6 +163,7 @@ def run_full_structural_enrichment_campaign(
         creator_funder=creator_funder,
         cluster=cluster,
         distribution=distribution,
+        visible_flow=visible_flow,
         visibility=visibility,
         contract=contract,
         master=master,
@@ -231,6 +236,7 @@ def build_layer_coverage(master: pd.DataFrame) -> dict[str, dict[str, Any]]:
         "creator_funder_graph": "has_creator_funder_layer",
         "cluster_coordination": "has_cluster_proxy_layer",
         "distribution_exit_behavior": "has_distribution_layer",
+        "visible_attention_and_flow": "has_visible_attention_and_flow_layer",
         "visibility_attention_context": "has_visibility_layer",
         "contract_authority_context": "has_contract_layer",
     }
@@ -276,6 +282,8 @@ def _resolve_paths(root: Path, overrides: dict[str, Path | str] | None) -> dict[
         "creator_funder_jsonl_path": parsed_dir / "creator_funder_transfer_graph_enriched.jsonl",
         "cluster_parquet_path": parsed_dir / "cluster_coordination_proxies.parquet",
         "distribution_parquet_path": parsed_dir / "distribution_exit_behavior_enriched.parquet",
+        "visible_attention_flow_parquet_path": parsed_dir / "visible_attention_and_flow_features.parquet",
+        "visible_attention_flow_jsonl_path": parsed_dir / "visible_attention_and_flow_features.jsonl",
         "visibility_parquet_path": parsed_dir / "visibility_attention_context.parquet",
         "contract_parquet_path": parsed_dir / "contract_authority_context.parquet",
         "master_parquet_path": parsed_dir / "master_enriched_runner_fingerprint.parquet",
@@ -296,6 +304,8 @@ def _resolve_input_paths(input_paths: dict[str, Any] | None) -> dict[str, Any]:
         "creator_funder_layers": DEFAULT_CREATOR_FUNDER_LAYER_PATHS,
         "holder_state": DEFAULT_HOLDER_STATE_PATH,
         "entity_proxy": DEFAULT_ENTITY_PROXY_PATH,
+        "events": DEFAULT_EVENTS_PATH,
+        "sol_usd": DEFAULT_SOL_USD_PATH,
     }
     if input_paths:
         paths.update(input_paths)
@@ -622,6 +632,79 @@ def _build_distribution_layer(base: pd.DataFrame) -> pd.DataFrame:
     return layer
 
 
+def _build_visible_attention_and_flow_layer(
+    base: pd.DataFrame,
+    top_holder: pd.DataFrame,
+    events_path: Path | str | None,
+    sol_usd_path: Path | str | None,
+) -> pd.DataFrame:
+    layer = _select_existing(
+        base,
+        [
+            "launch_id",
+            "mint",
+            "token_mint",
+            "launch_ts",
+            "trigger_age_seconds",
+            "creator_prior_migration_or_graduation_count",
+            "top_holder_share_at_20k",
+        ],
+    )
+    if "mint" not in layer.columns and "token_mint" in layer.columns:
+        layer["mint"] = layer["token_mint"]
+    if "token_mint" not in layer.columns and "mint" in layer.columns:
+        layer["token_mint"] = layer["mint"]
+
+    event_features = _first_minute_event_features(layer, events_path, sol_usd_path)
+    holder_concentration = _select_existing(
+        top_holder,
+        ["launch_id", "top_holder_share_proxy", "top_holder_share_at_20k"],
+    )
+    layer = _merge_fill(layer, event_features, "launch_id")
+    layer = _merge_fill(layer, holder_concentration, "launch_id")
+    layer["first_minute_usd_volume"] = _ensure_column(layer, "first_minute_usd_volume")
+    layer["first_60s_buy_count"] = _ensure_column(layer, "first_60s_buy_count", default=0)
+    layer["first_60s_unique_buyers"] = _ensure_column(layer, "first_60s_unique_buyers", default=0)
+    layer["first_60s_transfer_spike_zscore"] = _ensure_column(layer, "first_60s_transfer_spike_zscore")
+    layer["whale_buy_sequence_proxy"] = _ensure_column(layer, "whale_buy_sequence_proxy")
+    layer["early_holder_concentration"] = _coalesce(
+        layer, ["top_holder_share_proxy", "top_holder_share_at_20k"]
+    )
+    layer["deployer_prior_migration_count"] = _coalesce(
+        layer, ["creator_prior_migration_or_graduation_count"]
+    )
+    layer["topicality_flag"] = pd.NA
+    layer["topicality_missing_reason"] = "topicality_source_not_available_in_local_artifacts"
+    layer["pair_migration_liquidity_delay_proxy"] = _coalesce(layer, ["trigger_age_seconds"])
+    layer["pair_migration_liquidity_delay_proxy_source"] = layer[
+        "pair_migration_liquidity_delay_proxy"
+    ].notna().map(lambda ok: "trigger_20k_age_seconds_proxy" if ok else None)
+    layer["visible_attention_and_flow_source"] = "local_events_and_milestone_proxies"
+    layer["visible_attention_and_flow_missing_reason"] = layer.apply(_visible_flow_missing_reason, axis=1)
+    return _select_existing(
+        layer,
+        [
+            "launch_id",
+            "first_minute_usd_volume",
+            "first_minute_quote_sol_volume",
+            "first_minute_usd_volume_source",
+            "first_60s_buy_count",
+            "first_60s_unique_buyers",
+            "first_60s_transfer_count",
+            "first_60s_transfer_spike_zscore",
+            "whale_buy_sequence_proxy",
+            "early_holder_concentration",
+            "deployer_prior_migration_count",
+            "topicality_flag",
+            "topicality_missing_reason",
+            "pair_migration_liquidity_delay_proxy",
+            "pair_migration_liquidity_delay_proxy_source",
+            "visible_attention_and_flow_source",
+            "visible_attention_and_flow_missing_reason",
+        ],
+    )
+
+
 def _build_visibility_attention_layer(base: pd.DataFrame) -> pd.DataFrame:
     layer = _select_existing(base, ["launch_id", "mint", "token_mint"])
     layer["dexscreener_first_seen_available"] = False
@@ -649,6 +732,7 @@ def _build_master(
     creator_funder: pd.DataFrame,
     cluster: pd.DataFrame,
     distribution: pd.DataFrame,
+    visible_flow: pd.DataFrame,
     visibility: pd.DataFrame,
     contract: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -667,7 +751,7 @@ def _build_master(
             "peak_fdv_proxy",
         ],
     )
-    for layer in [fdv, top_holder, early_buyer, creator_funder, cluster, distribution, visibility, contract]:
+    for layer in [fdv, top_holder, early_buyer, creator_funder, cluster, distribution, visible_flow, visibility, contract]:
         master = _merge_fill(master, layer, "launch_id")
 
     master["has_fdv_efficiency_layer"] = master.get("fdv_per_event_at_20k", pd.Series(index=master.index)).notna()
@@ -676,6 +760,11 @@ def _build_master(
     master["has_creator_funder_layer"] = master.get("candidate_funder", pd.Series(index=master.index)).notna()
     master["has_cluster_proxy_layer"] = master.get("repeated_actor_overlap_proxy", pd.Series(index=master.index)).notna()
     master["has_distribution_layer"] = master.get("sell_count_at_20k", pd.Series(index=master.index)).notna()
+    master["has_visible_attention_and_flow_layer"] = (
+        master.get("first_60s_buy_count", pd.Series(index=master.index)).notna()
+        | master.get("pair_migration_liquidity_delay_proxy", pd.Series(index=master.index)).notna()
+        | master.get("early_holder_concentration", pd.Series(index=master.index)).notna()
+    )
     master["has_visibility_layer"] = master.get("visibility_attention_context_available", pd.Series(False, index=master.index)).fillna(False)
     master["has_contract_layer"] = master.get("contract_authority_context_available", pd.Series(False, index=master.index)).fillna(False)
     master["has_core_entry_side_layers"] = (
@@ -722,6 +811,7 @@ def _write_layers(
     creator_funder: pd.DataFrame,
     cluster: pd.DataFrame,
     distribution: pd.DataFrame,
+    visible_flow: pd.DataFrame,
     visibility: pd.DataFrame,
     contract: pd.DataFrame,
     master: pd.DataFrame,
@@ -732,6 +822,7 @@ def _write_layers(
     _write_parquet_jsonl(creator_funder, paths["creator_funder_parquet_path"], paths["creator_funder_jsonl_path"])
     _write_parquet(cluster, paths["cluster_parquet_path"])
     _write_parquet(distribution, paths["distribution_parquet_path"])
+    _write_parquet_jsonl(visible_flow, paths["visible_attention_flow_parquet_path"], paths["visible_attention_flow_jsonl_path"])
     _write_parquet(visibility, paths["visibility_parquet_path"])
     _write_parquet(contract, paths["contract_parquet_path"])
     _write_parquet_jsonl(master, paths["master_parquet_path"], paths["master_jsonl_path"])
@@ -806,6 +897,186 @@ def _external_gaps() -> list[dict[str, str]]:
             "reason": "current holder values are observed replay/proxy fields, not confirmed full-chain snapshots",
         },
     ]
+
+
+def _first_minute_event_features(
+    base: pd.DataFrame,
+    events_path: Path | str | None,
+    sol_usd_path: Path | str | None,
+) -> pd.DataFrame:
+    launches = _select_existing(base, ["launch_id", "token_mint", "mint", "launch_ts"])
+    if launches.empty:
+        return pd.DataFrame()
+    if "token_mint" not in launches.columns and "mint" in launches.columns:
+        launches["token_mint"] = launches["mint"]
+    result = launches[["launch_id"]].copy()
+    events = _load_optional_frame(events_path)
+    if events.empty or "token_mint" not in events.columns or "block_time" not in events.columns:
+        result["first_minute_quote_sol_volume"] = pd.NA
+        result["first_minute_usd_volume"] = pd.NA
+        result["first_minute_usd_volume_source"] = "event_source_unavailable"
+        result["first_60s_buy_count"] = 0
+        result["first_60s_unique_buyers"] = 0
+        result["first_60s_transfer_count"] = 0
+        result["first_60s_transfer_spike_zscore"] = pd.NA
+        result["whale_buy_sequence_proxy"] = pd.NA
+        return result
+
+    launch_map = launches.dropna(subset=["token_mint"]).drop_duplicates("token_mint")
+    events = events.merge(
+        launch_map[["launch_id", "token_mint", "launch_ts"]],
+        on="token_mint",
+        how="inner",
+    )
+    if events.empty:
+        return _first_minute_empty_result(launches)
+    events["block_time"] = pd.to_numeric(events["block_time"], errors="coerce")
+    events["launch_ts"] = pd.to_numeric(events["launch_ts"], errors="coerce")
+    events["launch_age_seconds"] = events["block_time"] - events["launch_ts"]
+    first_minute = events[
+        events["launch_age_seconds"].notna()
+        & (events["launch_age_seconds"] >= 0)
+        & (events["launch_age_seconds"] <= 60)
+    ].copy()
+    if first_minute.empty:
+        return _first_minute_empty_result(launches)
+    first_minute["is_buy_event"] = first_minute.apply(_is_first_minute_buy_event, axis=1)
+    first_minute["quote_qty"] = pd.to_numeric(first_minute.get("quote_qty"), errors="coerce").fillna(0.0)
+    transfer_counts = first_minute.groupby("launch_id").size().rename("first_60s_transfer_count")
+    buys = first_minute[first_minute["is_buy_event"]].copy()
+    if buys.empty:
+        buy_features = pd.DataFrame(columns=["launch_id"])
+    else:
+        buy_group = buys.groupby("launch_id")
+        buy_features = pd.DataFrame(
+            {
+                "launch_id": buy_group.size().index,
+                "first_60s_buy_count": buy_group.size().values,
+                "first_60s_unique_buyers": buy_group["actor"].nunique(dropna=True).values
+                if "actor" in buys.columns
+                else buy_group.size().values,
+                "first_minute_quote_sol_volume": buy_group["quote_qty"].sum().values,
+                "first_minute_max_quote_sol_buy": buy_group["quote_qty"].max().values,
+            }
+        )
+        buy_features["whale_buy_sequence_proxy"] = _safe_div(
+            buy_features["first_minute_max_quote_sol_buy"],
+            buy_features["first_minute_quote_sol_volume"],
+        )
+        buy_features = buy_features.drop(columns=["first_minute_max_quote_sol_buy"])
+
+    result = launches[["launch_id", "launch_ts"]].copy()
+    result = result.merge(transfer_counts.reset_index(), on="launch_id", how="left")
+    result = result.merge(buy_features, on="launch_id", how="left")
+    result["first_60s_transfer_count"] = result["first_60s_transfer_count"].fillna(0).astype(int)
+    result["first_60s_buy_count"] = result["first_60s_buy_count"].fillna(0).astype(int)
+    result["first_60s_unique_buyers"] = result["first_60s_unique_buyers"].fillna(0).astype(int)
+    result["first_minute_quote_sol_volume"] = result["first_minute_quote_sol_volume"].where(
+        result["first_60s_buy_count"] > 0
+    )
+    sol_usd = _nearest_sol_usd_by_launch(result[["launch_id", "launch_ts"]], sol_usd_path)
+    result = result.merge(sol_usd, on="launch_id", how="left")
+    result["first_minute_usd_volume"] = result["first_minute_quote_sol_volume"] * result["sol_usd"]
+    result["first_minute_usd_volume_source"] = result.apply(_first_minute_usd_source, axis=1)
+    result["first_60s_transfer_spike_zscore"] = _zscore(result["first_60s_transfer_count"])
+    return _select_existing(
+        result,
+        [
+            "launch_id",
+            "first_minute_usd_volume",
+            "first_minute_quote_sol_volume",
+            "first_minute_usd_volume_source",
+            "first_60s_buy_count",
+            "first_60s_unique_buyers",
+            "first_60s_transfer_count",
+            "first_60s_transfer_spike_zscore",
+            "whale_buy_sequence_proxy",
+        ],
+    )
+
+
+def _first_minute_empty_result(launches: pd.DataFrame) -> pd.DataFrame:
+    result = launches[["launch_id"]].copy()
+    result["first_minute_quote_sol_volume"] = pd.NA
+    result["first_minute_usd_volume"] = pd.NA
+    result["first_minute_usd_volume_source"] = "no_matching_first_60s_events"
+    result["first_60s_buy_count"] = 0
+    result["first_60s_unique_buyers"] = 0
+    result["first_60s_transfer_count"] = 0
+    result["first_60s_transfer_spike_zscore"] = 0.0
+    result["whale_buy_sequence_proxy"] = pd.NA
+    return result
+
+
+def _is_first_minute_buy_event(row: pd.Series) -> bool:
+    side = str(row.get("side") or row.get("event_type") or "").lower()
+    venue = str(row.get("venue") or "").lower()
+    if "create" in venue:
+        return False
+    return side in {"accumulate", "buy", "possible_buy"} or "buy" in venue
+
+
+def _nearest_sol_usd_by_launch(launches: pd.DataFrame, sol_usd_path: Path | str | None) -> pd.DataFrame:
+    sol = _load_optional_frame(sol_usd_path)
+    result = launches[["launch_id"]].copy()
+    if sol.empty or "ts" not in sol.columns or "sol_usd" not in sol.columns or "launch_ts" not in launches.columns:
+        result["sol_usd"] = pd.NA
+        return result
+    left = launches[["launch_id", "launch_ts"]].copy()
+    left["launch_ts"] = pd.to_numeric(left["launch_ts"], errors="coerce")
+    right = sol[["ts", "sol_usd"]].copy()
+    right["ts"] = pd.to_numeric(right["ts"], errors="coerce")
+    right["sol_usd"] = pd.to_numeric(right["sol_usd"], errors="coerce")
+    left = left.dropna(subset=["launch_ts"]).sort_values("launch_ts")
+    right = right.dropna(subset=["ts", "sol_usd"]).sort_values("ts")
+    if left.empty or right.empty:
+        result["sol_usd"] = pd.NA
+        return result
+    merged = pd.merge_asof(left, right, left_on="launch_ts", right_on="ts", direction="nearest")
+    return result.merge(merged[["launch_id", "sol_usd"]], on="launch_id", how="left")
+
+
+def _first_minute_usd_source(row: pd.Series) -> str:
+    if pd.notna(row.get("first_minute_usd_volume")):
+        return "quote_qty_sol_times_local_sol_usd_cache"
+    if int(row.get("first_60s_buy_count") or 0) == 0:
+        return "no_first_60s_buy_events"
+    if pd.isna(row.get("sol_usd")):
+        return "sol_usd_cache_missing"
+    return "quote_qty_missing"
+
+
+def _zscore(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    std = numeric.std(ddof=0)
+    if not std:
+        return pd.Series([0.0] * len(numeric), index=values.index)
+    return (numeric - numeric.mean()) / std
+
+
+def _ensure_column(frame: pd.DataFrame, column: str, default: Any = pd.NA) -> pd.Series:
+    if column in frame.columns:
+        return frame[column]
+    return pd.Series([default] * len(frame), index=frame.index)
+
+
+def _visible_flow_missing_reason(row: pd.Series) -> str | None:
+    missing = []
+    if pd.isna(row.get("first_minute_usd_volume")):
+        missing.append(str(row.get("first_minute_usd_volume_source") or "first_minute_usd_volume_unavailable"))
+    if pd.isna(row.get("first_60s_transfer_spike_zscore")):
+        missing.append("first_60s_transfer_spike_zscore_unavailable")
+    if pd.isna(row.get("whale_buy_sequence_proxy")):
+        missing.append("whale_buy_sequence_proxy_unavailable")
+    if pd.isna(row.get("early_holder_concentration")):
+        missing.append("early_holder_concentration_unavailable")
+    if pd.isna(row.get("deployer_prior_migration_count")):
+        missing.append("deployer_prior_migration_count_unavailable")
+    if pd.isna(row.get("topicality_flag")):
+        missing.append("topicality_source_not_available_in_local_artifacts")
+    if pd.isna(row.get("pair_migration_liquidity_delay_proxy")):
+        missing.append("pair_migration_liquidity_delay_proxy_unavailable")
+    return ";".join(sorted(set(missing))) if missing else None
 
 
 def _derive_fdv_fields(frame: pd.DataFrame) -> pd.DataFrame:
@@ -971,6 +1242,7 @@ def _coverage_markdown(report: dict[str, Any]) -> str:
 
 
 def _status_markdown(report: dict[str, Any]) -> str:
+    visible = report["layer_coverage"].get("visible_attention_and_flow", {})
     return "\n".join(
         [
             "# Full Structural Enrichment Campaign Status",
@@ -981,6 +1253,12 @@ def _status_markdown(report: dict[str, Any]) -> str:
             f"- Helius credits used: {report['helius']['credits_used']}",
             f"- DexScreener calls used: {report['dexscreener']['calls_used']}",
             "- Scope: data enrichment only; no thesis, validation, backtest, paper/live trading, or strategy logic.",
+            "",
+            "## Visible Attention And Flow Features",
+            "",
+            f"- Layer coverage: {visible.get('covered_rows', 0)} / {visible.get('total_rows', 0)}",
+            "- Added: first_minute_usd_volume, first_60s_buy_count, first_60s_unique_buyers, first_60s_transfer_spike_zscore, whale_buy_sequence_proxy, early_holder_concentration, deployer_prior_migration_count, topicality_flag, pair_migration_liquidity_delay_proxy.",
+            "- Topicality remains unavailable unless a separate attention/source feed is added.",
             "",
             "## Next Action",
             "",
