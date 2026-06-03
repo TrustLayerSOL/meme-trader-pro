@@ -150,3 +150,57 @@ Interpretation:
 - The first follow-up pass found deterministic FDV evidence for `8` of `10` birth-watch mints, but all observed FDV values remain below the `10k` trigger.
 - Status reporting must keep two targets separate: birth inventory size and trigger-qualified birth-to-FDV sample size.
 - The next useful checkpoint is a larger birth inventory, then repeated bounded follow-up passes to estimate the real birth-to-trigger conversion funnel.
+
+## Parallel Scanner Scale-up Attempt
+
+A larger scanner expansion was attempted with bounded parallel Helius transaction hydration.
+
+- Data root: `/Volumes/ORICO/MemeTraderPro`
+- Scanner source: `helius-pumpfun-create-scanner`
+- Parallel hydration setting used: `HELIUS_TRANSACTION_WORKERS=16`
+- Target total forward candidates: `800`
+- Intended birth inventory checkpoint: about `500` birth-watch mints
+- Final total forward candidates observed: `416`
+- Final birth-watch mints observed: `116`
+- Estimated Helius requests after scanner run: `26387`
+- Scanner warnings: `[]`
+- Duplicate mints after interrupted slow run repair: `0`
+- Checkpoint repair note: `checkpoint_seen_mints_repaired_after_interrupted_birth_scan`
+
+The scanner did not reach the `500` birth inventory checkpoint because the currently available Pump.fun program-signature window stopped returning enough new signatures/candidates before the target was reached. This is a live collection-rate/source-window limit, not a parser failure.
+
+## Current Birth-to-Trigger Funnel
+
+The follow-up collector was then run against the expanded birth-watch inventory.
+
+- Follow-up selected mints: `108`
+- Follow-up projected requests: `1188`
+- Follow-up actual network calls: `1122`
+- Follow-up rows written: `1925`
+- Follow-up warnings: `[]`
+- Birth-watch mints: `116`
+- Births with deterministic FDV follow-up: `100`
+- Crossed `10k`: `9`
+- Crossed `15k`: `8`
+- Crossed `20k`: `8`
+- Crossed `30k`: `8`
+- Crossed `50k`: `7`
+- Crossed `100k`: `6`
+- Crossed `500k`: `4`
+- Crossed `1m`: `4`
+- Birth-to-FDV follow-up rate: `0.862069`
+- Birth-to-10k conversion rate: `0.077586`
+- Birth-to-20k conversion rate: `0.068966`
+- 10k-to-20k conversion rate: `0.888889`
+- 20k-to-100k conversion rate: `0.75`
+- Target trigger-qualified progress at `10k`: `9/300`
+- Target trigger-qualified progress at `20k`: `8/300`
+- Estimated births needed for `300` crossed-10k observations at the current rate: `3867`
+- Estimated births needed for `300` crossed-20k observations at the current rate: `4350`
+
+Current recommendation:
+
+- Keep the two targets separate in every report: birth inventory and trigger-qualified observations.
+- Continue live/new-signature birth collection over time instead of repeatedly rescanning an exhausted signature window.
+- Run bounded follow-up after each new birth inventory batch.
+- Do not run thesis tests or strategy analysis from this forward funnel yet; the trigger-qualified sample is still only `9/300` at `10k`.
