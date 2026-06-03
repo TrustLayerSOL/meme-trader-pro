@@ -17,6 +17,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Protocol
 from urllib import request as urllib_request
 from urllib.parse import parse_qsl, urlparse, urlunparse
@@ -62,6 +63,11 @@ PUMP_FUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 PUMPSWAP_PROGRAM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 RAYDIUM_LAUNCHLAB_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"
 RAYDIUM_CPMM_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNuxFYvWzqMe9J1KLcXxj3xV"
+SOL_MINT = "So11111111111111111111111111111111111111112"
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4bT8oQrEed7mVRV3S3qj"
+USD1_MINT = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB"
+QUOTE_MINTS = {SOL_MINT, USDC_MINT, USDT_MINT, USD1_MINT}
 LIVE_EVENT_SCHEMA_FIELDS = [
     "source",
     "source_adapter",
@@ -428,10 +434,20 @@ class HeliusProgramProbeClient:
     program instruction shapes for human review.
     """
 
-    def __init__(self, rpc_url: str, *, timeout_sec: int = 10, rpc_post: Any | None = None) -> None:
+    def __init__(
+        self,
+        rpc_url: str,
+        *,
+        timeout_sec: int = 10,
+        rpc_post: Any | None = None,
+        valuation_supply_proxy: float = 1_000_000_000.0,
+        sol_usd_price: float = 1.0,
+    ) -> None:
         self.rpc_url = rpc_url
         self.timeout_sec = timeout_sec
         self._rpc_post = rpc_post or _post_json_rpc
+        self.valuation_supply_proxy = valuation_supply_proxy
+        self.sol_usd_price = sol_usd_price
         self.requests_used = 0
         self.raw_transactions: list[dict[str, Any]] = []
 
@@ -444,6 +460,13 @@ class HeliusProgramProbeClient:
     ) -> dict[str, Any]:
         signatures: list[dict[str, Any]] = []
         transactions: list[dict[str, Any]] = []
+        tx_adapter_names: dict[str, str] = {}
+        signatures_by_program: dict[str, list[dict[str, Any]]] = {}
+        adapter_by_program_id = {
+            program_id: adapter_name
+            for adapter_name, program_config in program_configs.items()
+            for program_id in program_config.program_ids
+        }
         program_ids: list[str] = []
         for program_config in program_configs.values():
             program_ids.extend(program_config.program_ids)
@@ -460,20 +483,40 @@ class HeliusProgramProbeClient:
                 if isinstance(rows, list):
                     for row in rows:
                         if isinstance(row, dict):
-                            signatures.append({"program_id": program_id, **row})
+                            signature = row.get("signature")
+                            if signature:
+                                tx_adapter_names[str(signature)] = adapter_by_program_id.get(program_id, "")
+                            signature_row = {"program_id": program_id, **row}
+                            signatures.append(signature_row)
+                            signatures_by_program.setdefault(program_id, []).append(signature_row)
         if hydrate_sample:
             seen: set[str] = set()
-            for row in signatures[: max(1, min(int(limit), 25))]:
-                signature = str(row.get("signature") or "")
-                if not signature or signature in seen:
-                    continue
-                seen.add(signature)
-                tx = self._fetch_transaction(signature)
-                if tx:
-                    transactions.append(tx)
-                    self.raw_transactions.append(tx)
+            per_program_limit = max(1, min(int(limit), 25))
+            for program_id in program_ids:
+                for row in signatures_by_program.get(program_id, [])[:per_program_limit]:
+                    signature = str(row.get("signature") or "")
+                    if not signature or signature in seen:
+                        continue
+                    seen.add(signature)
+                    tx = self._fetch_transaction(signature)
+                    if tx:
+                        transactions.append(tx)
+                        self.raw_transactions.append(tx)
         instruction_rows = _extract_program_instruction_rows(transactions, set(program_ids))
         clusters = _instruction_clusters(instruction_rows)
+        parsed_events = []
+        for tx in transactions:
+            signature = _transaction_signature(tx)
+            adapter_name = tx_adapter_names.get(str(signature or ""), "")
+            event = _normalize_probe_transaction_event(
+                tx,
+                adapter_name=adapter_name,
+                program_configs=program_configs,
+                valuation_supply_proxy=self.valuation_supply_proxy,
+                sol_usd_price=self.sol_usd_price,
+            )
+            if event and event.get("mint") and event.get("fdv_proxy") is not None:
+                parsed_events.append(event)
         return {
             "signatures_seen": len({str(row.get("signature")) for row in signatures if row.get("signature")}),
             "signature_rows_seen": len(signatures),
@@ -481,6 +524,8 @@ class HeliusProgramProbeClient:
             "program_instruction_count": len(instruction_rows),
             "instruction_clusters": clusters,
             "example_signatures": [row.get("signature") for row in signatures[:5] if row.get("signature")],
+            "parseable_event_count": len(parsed_events),
+            "parsed_event_examples": parsed_events[:5],
             "candidate_rows_created": 0,
             "requests_used": self.requests_used,
         }
@@ -806,6 +851,99 @@ def normalize_pumpfun_transaction_event(
     )
 
 
+def normalize_amm_transaction_event(
+    tx: dict[str, Any],
+    *,
+    source_adapter: str,
+    program_id: str,
+    event_type: str,
+    valuation_supply_proxy: float,
+    sol_usd_price: float = 1.0,
+) -> dict[str, Any]:
+    signature = _transaction_signature(tx)
+    summary = summarize_raw_transaction(
+        RawTransactionRecord(
+            signature=signature or "",
+            slot=tx.get("slot"),
+            block_time=tx.get("blockTime"),
+            success=(tx.get("meta") or {}).get("err") is None,
+            address=program_id,
+            role="forward_efficient_mover_observer",
+            raw_json=tx,
+            source="helius_rpc",
+        )
+    )
+    pair = _single_amm_token_quote_pair(
+        summary.token_balance_deltas,
+        native_deltas=summary.native_balance_deltas,
+        signer_pubkeys=_signer_pubkeys(tx),
+        side_hint=_single_direction_side_hint(tx),
+    )
+    if pair is None:
+        return normalize_live_source_event(
+            {
+                "source_adapter": source_adapter,
+                "program_id": program_id,
+                "signature": signature,
+                "slot": tx.get("slot"),
+                "block_time": tx.get("blockTime"),
+                "event_type": event_type,
+                "pool_address": _program_pool_address(tx, program_id),
+                "parse_confidence": "hydrated_amm_ambiguous_token_quote_delta",
+                "missing_reason": "ambiguous_amm_token_or_quote_delta",
+            }
+        )
+    token_delta, quote_delta = pair
+    token_amount = abs(float(token_delta.delta or 0.0))
+    quote_amount = abs(float(quote_delta.delta or 0.0))
+    if token_amount <= 0 or quote_amount <= 0:
+        return normalize_live_source_event(
+            {
+                "source_adapter": source_adapter,
+                "program_id": program_id,
+                "signature": signature,
+                "slot": tx.get("slot"),
+                "block_time": tx.get("blockTime"),
+                "event_type": event_type,
+                "pool_address": _program_pool_address(tx, program_id),
+                "parse_confidence": "hydrated_amm_zero_delta",
+                "missing_reason": "zero_token_or_quote_delta_for_fdv_proxy",
+            }
+        )
+    quote_usd = float(sol_usd_price or 1.0) if quote_delta.mint == SOL_MINT else 1.0
+    price_proxy = quote_amount / token_amount
+    fdv_proxy = price_proxy * quote_usd * float(valuation_supply_proxy)
+    side = "buy" if float(token_delta.delta or 0.0) > 0 else "sell"
+    wallet = token_delta.owner or token_delta.account
+    return normalize_live_source_event(
+        {
+            "source_adapter": source_adapter,
+            "program_id": program_id,
+            "signature": signature,
+            "slot": tx.get("slot"),
+            "block_time": tx.get("blockTime"),
+            "event_type": event_type,
+            "mint": token_delta.mint,
+            "pool_address": _program_pool_address(tx, program_id),
+            "buyer": wallet if side == "buy" else None,
+            "seller": wallet if side == "sell" else None,
+            "wallet": wallet,
+            "side": side,
+            "sol_amount": round(quote_amount, 12) if quote_delta.mint == SOL_MINT else None,
+            "sol_usd": round(float(sol_usd_price or 1.0), 8) if quote_delta.mint == SOL_MINT else None,
+            "token_amount": round(token_amount, 12),
+            "price_proxy": round(price_proxy, 12),
+            "fdv_proxy": round(fdv_proxy, 6),
+            "event_count": 1,
+            "buy_count": 1 if side == "buy" else 0,
+            "sell_count": 1 if side == "sell" else 0,
+            "active_wallet_count": 1 if wallet else 0,
+            "parse_confidence": "hydrated_amm_token_quote_delta",
+            "missing_reason": None,
+        }
+    )
+
+
 def build_live_event_candidate(event: dict[str, Any]) -> dict[str, Any] | None:
     mint = event.get("mint")
     fdv = safe_float(event.get("fdv_proxy"))
@@ -1000,6 +1138,8 @@ def run_live_program_probe(
         live_config.rpc_url,
         timeout_sec=live_config.timeout_sec,
         rpc_post=rpc_post,
+        valuation_supply_proxy=live_config.valuation_supply_proxy,
+        sol_usd_price=live_config.sol_usd_price,
     )
     probe = client.probe_programs(
         live_config.program_configs,
@@ -1022,6 +1162,8 @@ def run_live_program_probe(
         "program_instruction_count": probe["program_instruction_count"],
         "instruction_clusters": probe["instruction_clusters"],
         "example_signatures": probe["example_signatures"],
+        "parseable_event_count": probe.get("parseable_event_count", 0),
+        "parsed_event_examples": probe.get("parsed_event_examples", []),
         "candidate_rows_created": 0,
         "network_calls_made": client.requests_used,
         "estimated_helius_credits_used": client.requests_used,
@@ -1447,6 +1589,120 @@ def _primary_native_delta_sol(deltas: list[Any]) -> Any | None:
     return max(candidates, key=lambda delta: abs(float(delta.delta_sol or 0.0)))
 
 
+def _single_amm_token_quote_pair(
+    deltas: list[Any],
+    *,
+    native_deltas: list[Any] | None = None,
+    signer_pubkeys: set[str] | None = None,
+    side_hint: str | None = None,
+) -> tuple[Any, Any] | None:
+    nonzero = [delta for delta in deltas if abs(float(getattr(delta, "delta", 0.0) or 0.0)) > 0 and getattr(delta, "mint", None)]
+    token_mints = {delta.mint for delta in nonzero if delta.mint not in QUOTE_MINTS}
+    quote_deltas = [delta for delta in nonzero if delta.mint in QUOTE_MINTS]
+    if len(token_mints) != 1:
+        return None
+    token_mint = next(iter(token_mints))
+    token_deltas = [delta for delta in nonzero if delta.mint == token_mint]
+    owner_pairs = []
+    for token_delta in token_deltas:
+        token_owner = getattr(token_delta, "owner", None) or getattr(token_delta, "account", None)
+        token_value = float(getattr(token_delta, "delta", 0.0) or 0.0)
+        if not token_owner or token_value == 0:
+            continue
+        for quote_delta in quote_deltas:
+            quote_owner = getattr(quote_delta, "owner", None) or getattr(quote_delta, "account", None)
+            quote_value = float(getattr(quote_delta, "delta", 0.0) or 0.0)
+            if quote_owner == token_owner and quote_value and token_value * quote_value < 0:
+                owner_pairs.append((token_delta, quote_delta))
+    signer_pairs = [
+        pair
+        for pair in owner_pairs
+        if ((getattr(pair[0], "owner", None) or getattr(pair[0], "account", None)) in (signer_pubkeys or set()))
+    ]
+    if len(signer_pairs) == 1:
+        return signer_pairs[0]
+    if side_hint in {"buy", "sell"}:
+        desired_sign = 1 if side_hint == "buy" else -1
+        side_pairs = [
+            pair
+            for pair in owner_pairs
+            if (float(getattr(pair[0], "delta", 0.0) or 0.0) > 0) == (desired_sign > 0)
+        ]
+        if len(side_pairs) == 1:
+            return side_pairs[0]
+    native_pair = _native_sol_signer_pair(token_deltas, native_deltas or [], signer_pubkeys or set(), side_hint=side_hint)
+    if native_pair:
+        return native_pair
+    if len(owner_pairs) != 1:
+        return None
+    return owner_pairs[0]
+
+
+def _native_sol_signer_pair(
+    token_deltas: list[Any],
+    native_deltas: list[Any],
+    signer_pubkeys: set[str],
+    *,
+    side_hint: str | None,
+) -> tuple[Any, Any] | None:
+    pairs = []
+    for token_delta in token_deltas:
+        token_owner = getattr(token_delta, "owner", None) or getattr(token_delta, "account", None)
+        token_value = float(getattr(token_delta, "delta", 0.0) or 0.0)
+        if token_owner not in signer_pubkeys or token_value == 0:
+            continue
+        if side_hint == "buy" and token_value < 0:
+            continue
+        if side_hint == "sell" and token_value > 0:
+            continue
+        for native_delta in native_deltas:
+            native_owner = getattr(native_delta, "owner", None) or getattr(native_delta, "account", None)
+            native_value = float(getattr(native_delta, "delta_sol", 0.0) or 0.0)
+            if native_owner == token_owner and native_value and token_value * native_value < 0:
+                quote_delta = SimpleNamespace(
+                    mint=SOL_MINT,
+                    owner=native_owner,
+                    account=getattr(native_delta, "account", None),
+                    delta=native_value,
+                )
+                pairs.append((token_delta, quote_delta))
+    if len(pairs) == 1:
+        return pairs[0]
+    return None
+
+
+def _single_direction_side_hint(tx: dict[str, Any]) -> str | None:
+    logs = (tx.get("meta") or {}).get("logMessages") or []
+    lowered = " ".join(str(log).lower() for log in logs)
+    buy_seen = "instruction: buy" in lowered or "buyexact" in lowered
+    sell_seen = "instruction: sell" in lowered or "sellexact" in lowered
+    if buy_seen and not sell_seen:
+        return "buy"
+    if sell_seen and not buy_seen:
+        return "sell"
+    return None
+
+
+def _signer_pubkeys(tx: dict[str, Any]) -> set[str]:
+    account_keys = ((tx.get("transaction") or {}).get("message") or {}).get("accountKeys") or []
+    signers = set()
+    for account in account_keys:
+        if isinstance(account, dict) and account.get("signer") and account.get("pubkey"):
+            signers.add(str(account["pubkey"]))
+    return signers
+
+
+def _program_pool_address(tx: dict[str, Any], program_id: str) -> str | None:
+    message = (tx.get("transaction") or {}).get("message") or {}
+    for instruction in message.get("instructions") or []:
+        if instruction.get("programId") != program_id:
+            continue
+        accounts = instruction.get("accounts") or []
+        if isinstance(accounts, list) and len(accounts) > 1:
+            return str(accounts[1])
+    return None
+
+
 def _extract_program_instruction_rows(transactions: list[dict[str, Any]], program_ids: set[str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for tx in transactions:
@@ -1540,6 +1796,49 @@ def _instruction_clusters(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(clusters.values(), key=lambda item: (-int(item["count"]), str(item.get("program_id") or "")))
 
 
+def _normalize_probe_transaction_event(
+    tx: dict[str, Any],
+    *,
+    adapter_name: str,
+    program_configs: dict[str, ProgramSourceConfig],
+    valuation_supply_proxy: float,
+    sol_usd_price: float,
+) -> dict[str, Any] | None:
+    program_config = program_configs.get(adapter_name)
+    if not program_config:
+        return None
+    program_id = _first_direct_program_id(tx, set(program_config.program_ids))
+    if not program_id:
+        return None
+    if adapter_name == "helius_program_logs_pumpfun":
+        return normalize_pumpfun_transaction_event(
+            tx,
+            source_adapter=adapter_name,
+            program_id=program_id,
+            valuation_supply_proxy=valuation_supply_proxy,
+            sol_usd_price=sol_usd_price,
+        )
+    if adapter_name in {"helius_program_logs_pumpswap", "helius_program_logs_raydium"}:
+        return normalize_amm_transaction_event(
+            tx,
+            source_adapter=adapter_name,
+            program_id=program_id,
+            event_type=program_config.event_type,
+            valuation_supply_proxy=valuation_supply_proxy,
+            sol_usd_price=sol_usd_price,
+        )
+    return None
+
+
+def _first_direct_program_id(tx: dict[str, Any], program_ids: set[str]) -> str | None:
+    message = (tx.get("transaction") or {}).get("message") or {}
+    for instruction in message.get("instructions") or []:
+        program_id = instruction.get("programId") or instruction.get("program_id")
+        if program_id in program_ids:
+            return str(program_id)
+    return None
+
+
 def _instruction_data_bytes(data: Any) -> bytes | None:
     if data is None:
         return None
@@ -1573,11 +1872,15 @@ def _program_probe_readiness(probe: dict[str, Any]) -> str:
         return "program_probe_signatures_only"
     if int(probe.get("program_instruction_count") or 0) <= 0:
         return "program_probe_no_direct_program_instructions"
+    if int(probe.get("parseable_event_count") or 0) > 0:
+        return "program_probe_candidate_fields_parseable"
     return "program_probe_semantics_maybe_viable"
 
 
 def _program_probe_next_recommendation(probe: dict[str, Any]) -> str:
     readiness = _program_probe_readiness(probe)
+    if readiness == "program_probe_candidate_fields_parseable":
+        return "run_tiny_observe_with_adapter_still_under_review_or_add_adapter_enable_gate"
     if readiness == "program_probe_semantics_maybe_viable":
         return "review_instruction_clusters_before_enabling_adapter"
     if readiness == "program_probe_signatures_only":
@@ -1593,6 +1896,8 @@ def _program_probe_warnings(probe: dict[str, Any]) -> list[str]:
         warnings.append("no_hydrated_transactions_available")
     if int(probe.get("program_instruction_count") or 0) <= 0:
         warnings.append("program_instruction_semantics_not_confirmed")
+    if int(probe.get("parseable_event_count") or 0) <= 0:
+        warnings.append("candidate_field_extraction_not_confirmed")
     return warnings
 
 
@@ -1702,6 +2007,7 @@ def _live_program_probe_markdown(report: dict[str, Any]) -> str:
         f"- Signatures seen: `{report.get('signatures_seen', 0)}`",
         f"- Transactions hydrated: `{report.get('transactions_hydrated', 0)}`",
         f"- Direct program instructions: `{report.get('program_instruction_count', 0)}`",
+        f"- Parseable candidate-field events: `{report.get('parseable_event_count', 0)}`",
         f"- Candidate rows created: `{report.get('candidate_rows_created', 0)}`",
         f"- Network calls made: `{report.get('network_calls_made', 0)}`",
         f"- Next recommendation: `{report.get('next_recommendation')}`",

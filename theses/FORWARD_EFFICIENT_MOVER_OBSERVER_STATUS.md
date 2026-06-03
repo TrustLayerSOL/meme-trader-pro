@@ -94,15 +94,18 @@ Latest PumpSwap/Raydium tiny probe result:
 
 - PumpSwap signatures seen: `10`
 - PumpSwap transactions hydrated: `10`
-- PumpSwap direct program instructions: `15`
+- PumpSwap direct program instructions: `25`
+- PumpSwap parseable candidate-field events: `9`
 - PumpSwap Helius request-equivalent credits used: `11`
 - Raydium signatures seen: `10`
 - Raydium transactions hydrated: `10`
-- Raydium direct program instructions: `18`
+- Raydium direct program instructions: `17`
+- Raydium parseable candidate-field events: `1`
 - Raydium Helius request-equivalent credits used: `12`
 - Candidate rows created by probes: `0`
+- Probe readiness classification: `program_probe_candidate_fields_parseable`
 - Probe reports:
   - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/live_program_probe_helius-pumpswap.json`
   - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/live_program_probe_helius-raydium.json`
 
-Current implementation completion: Pump.fun Helius forward observation is live and writing ORICO candidate/path/event/metadata/holder/drawdown rows. PumpSwap and Raydium have bounded probe evidence with direct program instruction clusters, but they remain review-limited until candidate-field extraction is implemented and tested from those clusters.
+Current implementation completion: Pump.fun Helius forward observation is live and writing ORICO candidate/path/event/metadata/holder/drawdown rows. PumpSwap and Raydium have bounded probe evidence with direct program instruction clusters and deterministic candidate-field extraction. They remain review-limited until an explicit adapter enable gate is added and a tiny observe run confirms no low-confidence rows enter the candidate stream.

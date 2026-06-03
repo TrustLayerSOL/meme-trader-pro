@@ -65,6 +65,7 @@ def main() -> int:
         print(f"signatures_seen={report.get('signatures_seen', 0)}")
         print(f"transactions_hydrated={report.get('transactions_hydrated', 0)}")
         print(f"program_instruction_count={report.get('program_instruction_count', 0)}")
+        print(f"parseable_event_count={report.get('parseable_event_count', 0)}")
         print(f"candidate_rows_created={report.get('candidate_rows_created', 0)}")
         print(f"network_calls_made={report.get('network_calls_made', 0)}")
         print(f"warnings={report.get('warnings', [])}")
