@@ -11,6 +11,7 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     MockCandidateSource,
     print_status,
     run_dry_run,
+    run_live_program_probe,
     run_observe,
     run_status,
 )
@@ -51,6 +52,24 @@ def main() -> int:
         tally = run_status(config)
         print(print_status(tally))
         return 0
+    if args.mode == "probe":
+        report = run_live_program_probe(
+            config,
+            source=args.source,
+            limit=args.probe_limit,
+            hydrate_sample=args.hydrate_sample,
+        )
+        print("## Forward Efficient Mover Live Program Probe")
+        print(f"source={report.get('source')}")
+        print(f"readiness_classification={report.get('readiness_classification')}")
+        print(f"signatures_seen={report.get('signatures_seen', 0)}")
+        print(f"transactions_hydrated={report.get('transactions_hydrated', 0)}")
+        print(f"program_instruction_count={report.get('program_instruction_count', 0)}")
+        print(f"candidate_rows_created={report.get('candidate_rows_created', 0)}")
+        print(f"network_calls_made={report.get('network_calls_made', 0)}")
+        print(f"warnings={report.get('warnings', [])}")
+        print(f"report_root={config.report_root}")
+        return 0
     if args.mode == "observe":
         source = None
         if args.source == "mock":
@@ -73,7 +92,7 @@ def main() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Forward efficient-mover observation logger.")
-    parser.add_argument("--mode", choices=["dry-run", "observe", "status"], default="dry-run")
+    parser.add_argument("--mode", choices=["dry-run", "observe", "status", "probe"], default="dry-run")
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--source",
@@ -94,6 +113,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metadata-refresh-interval-seconds", type=int, default=60)
     parser.add_argument("--holder-refresh-interval-seconds", type=int, default=30)
     parser.add_argument("--max-observe-iterations", type=int, default=None)
+    parser.add_argument("--probe-limit", type=int, default=10)
+    parser.add_argument("--hydrate-sample", action="store_true")
     parser.add_argument("--live-health-check", action="store_true")
     parser.add_argument("--enable-dexscreener-metadata", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Compatibility flag; use --mode dry-run for dry-run behavior.")

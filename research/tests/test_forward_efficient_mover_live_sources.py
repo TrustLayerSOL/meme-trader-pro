@@ -5,6 +5,7 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     HeliusLiveCandidateSource,
     HeliusLiveSourceConfig,
     HeliusRpcPollingClient,
+    HeliusProgramProbeClient,
     MockHeliusEventClient,
     build_live_event_candidate,
     default_program_configs,
@@ -13,6 +14,7 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     normalize_live_source_event,
     resolve_helius_rpc_url,
     resolve_helius_ws_url,
+    run_live_program_probe,
     run_live_source_readiness,
     run_observe,
 )
@@ -183,6 +185,60 @@ def test_helius_rpc_polling_client_hydrates_and_extracts_pumpfun_candidate() -> 
     assert events[0]["parse_confidence"] == "hydrated_transaction_token_native_delta"
 
 
+def test_program_probe_client_hydrates_unverified_program_without_candidate_rows() -> None:
+    calls: list[str] = []
+
+    def fake_post(_url, payload, _timeout):
+        calls.append(payload["method"])
+        if payload["method"] == "getSignaturesForAddress":
+            return {"result": [{"signature": "sig-probe", "slot": 101, "blockTime": 1_700_000_100}]}
+        assert payload["method"] == "getTransaction"
+        return {"result": _pumpswap_probe_transaction()}
+
+    client = HeliusProgramProbeClient("https://mock-helius.invalid/?api-key=test", rpc_post=fake_post)
+    report = client.probe_programs(
+        {"helius_program_logs_pumpswap": default_program_configs()["helius_program_logs_pumpswap"]},
+        limit=10,
+        hydrate_sample=True,
+    )
+
+    assert calls == ["getSignaturesForAddress", "getTransaction"]
+    assert client.requests_used == 2
+    assert report["signatures_seen"] == 1
+    assert report["transactions_hydrated"] == 1
+    assert report["candidate_rows_created"] == 0
+    assert report["program_instruction_count"] == 1
+    assert report["instruction_clusters"][0]["program_id"] == "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+    assert report["instruction_clusters"][0]["account_count"] == 4
+    assert report["instruction_clusters"][0]["example_signatures"] == ["sig-probe"]
+
+
+def test_run_live_program_probe_writes_reports_and_keeps_observer_rows_empty(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "test-secret-key")
+
+    def fake_post(_url, payload, _timeout):
+        if payload["method"] == "getSignaturesForAddress":
+            return {"result": [{"signature": "sig-probe", "slot": 101, "blockTime": 1_700_000_100}]}
+        return {"result": _pumpswap_probe_transaction()}
+
+    config = ForwardObserverConfig(data_root=tmp_path, source="helius-pumpswap", max_helius_credits=10)
+    report = run_live_program_probe(
+        config,
+        source="helius-pumpswap",
+        limit=10,
+        hydrate_sample=True,
+        rpc_post=fake_post,
+        load_project_dotenv=False,
+    )
+
+    assert report["readiness_classification"] in {"program_probe_semantics_unknown", "program_probe_semantics_maybe_viable"}
+    assert report["candidate_rows_created"] == 0
+    assert report["network_calls_made"] == 2
+    assert (config.report_root / "live_program_probe_helius-pumpswap.json").exists()
+    assert (config.report_root / "live_program_probe_helius-pumpswap.md").exists()
+    assert not (config.observation_root / "candidates.jsonl").exists()
+
+
 def test_normalize_pumpfun_transaction_event_fails_closed_without_fdv() -> None:
     tx = _pumpfun_buy_transaction()
     tx["meta"]["postTokenBalances"] = []
@@ -265,5 +321,34 @@ def _pumpfun_buy_transaction() -> dict:
                     "uiTokenAmount": {"uiAmountString": "100", "decimals": 6},
                 }
             ],
+        },
+    }
+
+
+def _pumpswap_probe_transaction() -> dict:
+    return {
+        "slot": 101,
+        "blockTime": 1_700_000_100,
+        "transaction": {
+            "signatures": ["sig-probe"],
+            "message": {
+                "accountKeys": [
+                    {"pubkey": "payer-a", "signer": True, "writable": True},
+                    {"pubkey": "pool-a", "signer": False, "writable": True},
+                    {"pubkey": "mint-a", "signer": False, "writable": False},
+                ],
+                "instructions": [
+                    {
+                        "programId": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+                        "accounts": ["payer-a", "pool-a", "mint-a", "quote-a"],
+                        "data": "3Bxs4NN8M2Yn4TLb",
+                    }
+                ],
+            },
+        },
+        "meta": {
+            "err": None,
+            "logMessages": ["Program log: Instruction: Swap"],
+            "innerInstructions": [],
         },
     }

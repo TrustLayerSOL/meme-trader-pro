@@ -46,6 +46,13 @@ Status:
 MEMETRADER_DATA_ROOT=/Volumes/ORICO/MemeTraderPro ./trading_env/bin/python -m research.mtp_research.validation.run_forward_efficient_mover_observer --mode status
 ```
 
+Tiny source-semantics probe:
+
+```bash
+MEMETRADER_DATA_ROOT=/Volumes/ORICO/MemeTraderPro ./trading_env/bin/python -m research.mtp_research.validation.run_forward_efficient_mover_observer --mode probe --source helius-pumpswap --probe-limit 10 --hydrate-sample --max-helius-credits 50
+MEMETRADER_DATA_ROOT=/Volumes/ORICO/MemeTraderPro ./trading_env/bin/python -m research.mtp_research.validation.run_forward_efficient_mover_observer --mode probe --source helius-raydium --probe-limit 10 --hydrate-sample --max-helius-credits 50
+```
+
 ## Target Sample Sizes
 
 - 50 candidates: sanity check.
@@ -83,4 +90,19 @@ Latest bounded smoke result:
 - Reached 1m: `1`
 - Stop/review flag: `target_reached_review_before_continuing`
 
-Current implementation completion: Pump.fun Helius forward observation is live and writing ORICO candidate/path/event/metadata/holder/drawdown rows. PumpSwap and Raydium remain present but unverified until their source semantics are confirmed with tiny probes.
+Latest PumpSwap/Raydium tiny probe result:
+
+- PumpSwap signatures seen: `10`
+- PumpSwap transactions hydrated: `10`
+- PumpSwap direct program instructions: `15`
+- PumpSwap Helius request-equivalent credits used: `11`
+- Raydium signatures seen: `10`
+- Raydium transactions hydrated: `10`
+- Raydium direct program instructions: `18`
+- Raydium Helius request-equivalent credits used: `12`
+- Candidate rows created by probes: `0`
+- Probe reports:
+  - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/live_program_probe_helius-pumpswap.json`
+  - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/live_program_probe_helius-raydium.json`
+
+Current implementation completion: Pump.fun Helius forward observation is live and writing ORICO candidate/path/event/metadata/holder/drawdown rows. PumpSwap and Raydium have bounded probe evidence with direct program instruction clusters, but they remain review-limited until candidate-field extraction is implemented and tested from those clusters.

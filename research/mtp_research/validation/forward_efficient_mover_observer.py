@@ -54,6 +54,7 @@ RAW_SOURCE_FILES = {
     "helius_ws": "helius_ws_raw.jsonl",
     "helius_rpc": "helius_rpc_raw.jsonl",
     "dexscreener": "dexscreener_raw.jsonl",
+    "helius_program_probe": "helius_program_probe_raw.jsonl",
 }
 LIVE_READINESS_JSON = "live_source_readiness.json"
 LIVE_READINESS_MD = "live_source_readiness.md"
@@ -404,6 +405,90 @@ class HeliusRpcPollingClient:
         payload = {
             "jsonrpc": "2.0",
             "id": "mtp-forward-observer-get-transaction",
+            "method": "getTransaction",
+            "params": [
+                signature,
+                {
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                },
+            ],
+        }
+        response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
+        self.requests_used += 1
+        result = response.get("result") if isinstance(response, dict) else None
+        return result if isinstance(result, dict) else {}
+
+
+class HeliusProgramProbeClient:
+    """Tiny probe client for unverified program semantics.
+
+    This intentionally does not normalize candidates or change adapter
+    readiness. It only samples signatures/transactions and summarizes direct
+    program instruction shapes for human review.
+    """
+
+    def __init__(self, rpc_url: str, *, timeout_sec: int = 10, rpc_post: Any | None = None) -> None:
+        self.rpc_url = rpc_url
+        self.timeout_sec = timeout_sec
+        self._rpc_post = rpc_post or _post_json_rpc
+        self.requests_used = 0
+        self.raw_transactions: list[dict[str, Any]] = []
+
+    def probe_programs(
+        self,
+        program_configs: dict[str, ProgramSourceConfig],
+        *,
+        limit: int = 10,
+        hydrate_sample: bool = False,
+    ) -> dict[str, Any]:
+        signatures: list[dict[str, Any]] = []
+        transactions: list[dict[str, Any]] = []
+        program_ids: list[str] = []
+        for program_config in program_configs.values():
+            program_ids.extend(program_config.program_ids)
+            for program_id in program_config.program_ids:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": "mtp-forward-observer-probe-signatures",
+                    "method": "getSignaturesForAddress",
+                    "params": [program_id, {"limit": max(1, min(int(limit), 25))}],
+                }
+                response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
+                self.requests_used += 1
+                rows = response.get("result") if isinstance(response, dict) else None
+                if isinstance(rows, list):
+                    for row in rows:
+                        if isinstance(row, dict):
+                            signatures.append({"program_id": program_id, **row})
+        if hydrate_sample:
+            seen: set[str] = set()
+            for row in signatures[: max(1, min(int(limit), 25))]:
+                signature = str(row.get("signature") or "")
+                if not signature or signature in seen:
+                    continue
+                seen.add(signature)
+                tx = self._fetch_transaction(signature)
+                if tx:
+                    transactions.append(tx)
+                    self.raw_transactions.append(tx)
+        instruction_rows = _extract_program_instruction_rows(transactions, set(program_ids))
+        clusters = _instruction_clusters(instruction_rows)
+        return {
+            "signatures_seen": len({str(row.get("signature")) for row in signatures if row.get("signature")}),
+            "signature_rows_seen": len(signatures),
+            "transactions_hydrated": len(transactions),
+            "program_instruction_count": len(instruction_rows),
+            "instruction_clusters": clusters,
+            "example_signatures": [row.get("signature") for row in signatures[:5] if row.get("signature")],
+            "candidate_rows_created": 0,
+            "requests_used": self.requests_used,
+        }
+
+    def _fetch_transaction(self, signature: str) -> dict[str, Any]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "mtp-forward-observer-probe-transaction",
             "method": "getTransaction",
             "params": [
                 signature,
@@ -879,6 +964,77 @@ def run_status(config: ForwardObserverConfig) -> dict[str, Any]:
     return tally
 
 
+def run_live_program_probe(
+    config: ForwardObserverConfig,
+    *,
+    source: str | None = None,
+    limit: int = 10,
+    hydrate_sample: bool = False,
+    rpc_post: Any | None = None,
+    load_project_dotenv: bool = True,
+) -> dict[str, Any]:
+    ensure_dirs(config)
+    selected_source = source or config.source
+    live_config = HeliusLiveSourceConfig.from_observer_config(
+        ForwardObserverConfig(
+            data_root=config.data_root,
+            source=selected_source,
+            max_helius_credits=config.max_helius_credits,
+        ),
+        load_project_dotenv=load_project_dotenv,
+    )
+    if live_config.max_helius_credits <= 0:
+        report = {
+            "report_id": "forward_efficient_mover_live_program_probe_v0",
+            "created_at": utc_now_iso(),
+            "source": selected_source,
+            "readiness_classification": "program_probe_blocked_budget_cap",
+            "network_calls_made": 0,
+            "candidate_rows_created": 0,
+            "warnings": ["max_helius_credits_zero_or_negative"],
+            "guardrails": guardrails(),
+        }
+        _write_live_program_probe_report(config, selected_source, report)
+        return report
+    client = HeliusProgramProbeClient(
+        live_config.rpc_url,
+        timeout_sec=live_config.timeout_sec,
+        rpc_post=rpc_post,
+    )
+    probe = client.probe_programs(
+        live_config.program_configs,
+        limit=max(1, min(int(limit), 25)),
+        hydrate_sample=hydrate_sample,
+    )
+    if client.raw_transactions:
+        append_jsonl(config.raw_root / RAW_SOURCE_FILES["helius_program_probe"], client.raw_transactions)
+    report = {
+        "report_id": "forward_efficient_mover_live_program_probe_v0",
+        "created_at": utc_now_iso(),
+        "source": selected_source,
+        "source_adapters": {name: item.to_dict() for name, item in live_config.program_configs.items()},
+        "rpc_endpoint_masked": live_config.rpc_endpoint_masked,
+        "limit": max(1, min(int(limit), 25)),
+        "hydrate_sample": hydrate_sample,
+        "signatures_seen": probe["signatures_seen"],
+        "signature_rows_seen": probe["signature_rows_seen"],
+        "transactions_hydrated": probe["transactions_hydrated"],
+        "program_instruction_count": probe["program_instruction_count"],
+        "instruction_clusters": probe["instruction_clusters"],
+        "example_signatures": probe["example_signatures"],
+        "candidate_rows_created": 0,
+        "network_calls_made": client.requests_used,
+        "estimated_helius_credits_used": client.requests_used,
+        "readiness_classification": _program_probe_readiness(probe),
+        "next_recommendation": _program_probe_next_recommendation(probe),
+        "warnings": _program_probe_warnings(probe),
+        "raw_output_path": str(config.raw_root / RAW_SOURCE_FILES["helius_program_probe"]),
+        "guardrails": guardrails(),
+    }
+    _write_live_program_probe_report(config, selected_source, report)
+    return report
+
+
 def build_observation_rows(candidate: dict[str, Any], *, start_trigger: float, observation_id: str, observed_at: int) -> dict[str, Any]:
     mint = str(candidate.get("mint") or candidate.get("token_mint"))
     fdv = safe_float(candidate.get("fdv_proxy")) or 0.0
@@ -1291,6 +1447,155 @@ def _primary_native_delta_sol(deltas: list[Any]) -> Any | None:
     return max(candidates, key=lambda delta: abs(float(delta.delta_sol or 0.0)))
 
 
+def _extract_program_instruction_rows(transactions: list[dict[str, Any]], program_ids: set[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for tx in transactions:
+        signature = _transaction_signature(tx)
+        slot = tx.get("slot")
+        block_time = tx.get("blockTime")
+        message = (tx.get("transaction") or {}).get("message") or {}
+        for instruction in message.get("instructions") or []:
+            row = _program_instruction_row(
+                instruction,
+                signature=signature,
+                slot=slot,
+                block_time=block_time,
+                program_ids=program_ids,
+                instruction_location="outer",
+            )
+            if row:
+                rows.append(row)
+        for inner_group in (tx.get("meta") or {}).get("innerInstructions") or []:
+            for instruction in inner_group.get("instructions") or []:
+                row = _program_instruction_row(
+                    instruction,
+                    signature=signature,
+                    slot=slot,
+                    block_time=block_time,
+                    program_ids=program_ids,
+                    instruction_location="inner",
+                )
+                if row:
+                    rows.append(row)
+    return rows
+
+
+def _program_instruction_row(
+    instruction: dict[str, Any],
+    *,
+    signature: str | None,
+    slot: Any,
+    block_time: Any,
+    program_ids: set[str],
+    instruction_location: str,
+) -> dict[str, Any] | None:
+    program_id = instruction.get("programId") or instruction.get("program_id")
+    if program_id not in program_ids:
+        return None
+    accounts = instruction.get("accounts") or []
+    data = instruction.get("data")
+    data_bytes = _instruction_data_bytes(data)
+    parsed_type = ((instruction.get("parsed") or {}) if isinstance(instruction.get("parsed"), dict) else {}).get("type")
+    return {
+        "signature": signature,
+        "slot": slot,
+        "block_time": block_time,
+        "program_id": program_id,
+        "instruction_location": instruction_location,
+        "account_count": len(accounts) if isinstance(accounts, list) else 0,
+        "data_length": len(data_bytes) if data_bytes is not None else None,
+        "first_8_data_bytes_hex": data_bytes[:8].hex() if data_bytes is not None else None,
+        "instruction_data_prefix": str(data)[:16] if data is not None else None,
+        "parsed_type": parsed_type,
+    }
+
+
+def _instruction_clusters(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    clusters: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row.get("program_id"),
+            row.get("first_8_data_bytes_hex"),
+            row.get("account_count"),
+            row.get("data_length"),
+            row.get("parsed_type"),
+        )
+        cluster = clusters.setdefault(
+            key,
+            {
+                "program_id": row.get("program_id"),
+                "first_8_data_bytes_hex": row.get("first_8_data_bytes_hex"),
+                "instruction_data_prefix": row.get("instruction_data_prefix"),
+                "account_count": row.get("account_count"),
+                "data_length": row.get("data_length"),
+                "parsed_type": row.get("parsed_type"),
+                "count": 0,
+                "example_signatures": [],
+            },
+        )
+        cluster["count"] += 1
+        signature = row.get("signature")
+        if signature and signature not in cluster["example_signatures"] and len(cluster["example_signatures"]) < 5:
+            cluster["example_signatures"].append(signature)
+    return sorted(clusters.values(), key=lambda item: (-int(item["count"]), str(item.get("program_id") or "")))
+
+
+def _instruction_data_bytes(data: Any) -> bytes | None:
+    if data is None:
+        return None
+    if isinstance(data, list):
+        try:
+            return bytes(int(item) & 0xFF for item in data)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(data, str):
+        return _base58_decode(data)
+    return None
+
+
+def _base58_decode(value: str) -> bytes | None:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    decoded = 0
+    try:
+        for char in value:
+            decoded = decoded * 58 + alphabet.index(char)
+    except ValueError:
+        return None
+    leading_zeroes = len(value) - len(value.lstrip("1"))
+    payload = decoded.to_bytes((decoded.bit_length() + 7) // 8, "big") if decoded else b""
+    return b"\x00" * leading_zeroes + payload
+
+
+def _program_probe_readiness(probe: dict[str, Any]) -> str:
+    if int(probe.get("signatures_seen") or 0) <= 0:
+        return "program_probe_no_recent_signatures"
+    if int(probe.get("transactions_hydrated") or 0) <= 0:
+        return "program_probe_signatures_only"
+    if int(probe.get("program_instruction_count") or 0) <= 0:
+        return "program_probe_no_direct_program_instructions"
+    return "program_probe_semantics_maybe_viable"
+
+
+def _program_probe_next_recommendation(probe: dict[str, Any]) -> str:
+    readiness = _program_probe_readiness(probe)
+    if readiness == "program_probe_semantics_maybe_viable":
+        return "review_instruction_clusters_before_enabling_adapter"
+    if readiness == "program_probe_signatures_only":
+        return "rerun_tiny_probe_with_hydrate_sample"
+    if readiness == "program_probe_no_recent_signatures":
+        return "try_known_active_time_window_or_alternate_program_id"
+    return "inspect_raw_transactions_or_try_alternate_source"
+
+
+def _program_probe_warnings(probe: dict[str, Any]) -> list[str]:
+    warnings = ["probe_only_no_candidate_rows_created", "adapter_readiness_not_changed"]
+    if int(probe.get("transactions_hydrated") or 0) <= 0:
+        warnings.append("no_hydrated_transactions_available")
+    if int(probe.get("program_instruction_count") or 0) <= 0:
+        warnings.append("program_instruction_semantics_not_confirmed")
+    return warnings
+
+
 def _post_json_rpc(url: str, payload: dict[str, Any], timeout_sec: int) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     request = urllib_request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
@@ -1352,6 +1657,19 @@ def _write_live_readiness_report(config: ForwardObserverConfig, report: dict[str
     (config.report_root / LIVE_READINESS_MD).write_text(_live_readiness_markdown(report), encoding="utf-8")
 
 
+def _write_live_program_probe_report(config: ForwardObserverConfig, source: str, report: dict[str, Any]) -> None:
+    config.report_root.mkdir(parents=True, exist_ok=True)
+    safe_source = source.replace("/", "_")
+    (config.report_root / f"live_program_probe_{safe_source}.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True, default=json_default) + "\n",
+        encoding="utf-8",
+    )
+    (config.report_root / f"live_program_probe_{safe_source}.md").write_text(
+        _live_program_probe_markdown(report),
+        encoding="utf-8",
+    )
+
+
 def _live_readiness_markdown(report: dict[str, Any]) -> str:
     helius = report.get("helius") or {}
     lines = [
@@ -1370,6 +1688,47 @@ def _live_readiness_markdown(report: dict[str, Any]) -> str:
         "",
         "This is read-only observation infrastructure. It does not contain paper trading, live trading, order routing, transaction signing, or buy/sell rules.",
     ]
+    return "\n".join(lines) + "\n"
+
+
+def _live_program_probe_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Forward Efficient Mover Live Program Probe",
+        "",
+        f"- Source: `{report.get('source')}`",
+        f"- Readiness classification: `{report.get('readiness_classification')}`",
+        f"- Limit: `{report.get('limit')}`",
+        f"- Hydrate sample: `{report.get('hydrate_sample')}`",
+        f"- Signatures seen: `{report.get('signatures_seen', 0)}`",
+        f"- Transactions hydrated: `{report.get('transactions_hydrated', 0)}`",
+        f"- Direct program instructions: `{report.get('program_instruction_count', 0)}`",
+        f"- Candidate rows created: `{report.get('candidate_rows_created', 0)}`",
+        f"- Network calls made: `{report.get('network_calls_made', 0)}`",
+        f"- Next recommendation: `{report.get('next_recommendation')}`",
+        f"- Warnings: `{report.get('warnings', [])}`",
+        "",
+        "## Instruction Clusters",
+        "",
+    ]
+    clusters = report.get("instruction_clusters") or []
+    if not clusters:
+        lines.append("- No direct instruction clusters observed.")
+    for cluster in clusters[:20]:
+        lines.append(
+            "- "
+            f"program=`{cluster.get('program_id')}` "
+            f"count=`{cluster.get('count')}` "
+            f"first_8_data_bytes_hex=`{cluster.get('first_8_data_bytes_hex')}` "
+            f"account_count=`{cluster.get('account_count')}` "
+            f"data_length=`{cluster.get('data_length')}` "
+            f"examples=`{cluster.get('example_signatures')}`"
+        )
+    lines.extend(
+        [
+            "",
+            "Probe only. No candidate rows, no strategy logic, no paper/live trading, no order routing, and no adapter readiness changes.",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
