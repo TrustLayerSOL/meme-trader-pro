@@ -67,9 +67,13 @@ def test_sanity_audit_dedupes_and_revises_funnel_counts(tmp_path: Path) -> None:
     assert summary["milestone_provenance_summary"]["observed_followup_path"] == 5
     assert summary["freshness_summary"]["true_birth_observed"] == 1
     assert summary["freshness_summary"]["unknown_birth_freshness"] == 1
+    assert summary["ten_k_mover_completeness_summary"]["total_10k_crossers"] == 1
+    assert summary["ten_k_mover_completeness_summary"]["freshness_groups"]["true/near-birth observed 10k crossers"] == 1
+    assert summary["ten_k_mover_completeness_summary"]["field_coverage"]["mint"]["available"] == 1
     assert paths["summary_json"].exists()
     assert paths["summary_markdown"].exists()
     assert paths["dedupe_csv"].exists()
+    assert paths["ten_k_mover_completeness_csv"].exists()
     assert paths["manual_review_sample_csv"].exists()
     assert paths["status_markdown"].exists()
 

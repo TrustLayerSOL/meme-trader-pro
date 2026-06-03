@@ -97,12 +97,53 @@ def main() -> int:
         print(f"warnings={result.get('warnings', [])}")
         print(f"output_path={result.get('output_path')}")
         return 0
+    if args.mode == "observe-births-with-immediate-followup":
+        from research.mtp_research.validation.forward_birth_watch_followup_collector import (
+            run_immediate_birth_followup_observation,
+        )
+
+        result = run_immediate_birth_followup_observation(
+            args.data_root or "/Volumes/ORICO/MemeTraderPro",
+            target_births=args.target_births,
+            followup_duration_seconds=args.followup_duration_seconds,
+            first_pass_delay_seconds=args.first_pass_delay_seconds,
+            followup_poll_seconds=args.followup_poll_seconds,
+            max_followup_passes_per_mint=args.max_followup_passes_per_mint,
+            max_active_birth_followups=args.max_active_birth_followups,
+            max_runtime_minutes=args.max_runtime_minutes,
+            max_helius_credits=args.max_helius_credits,
+            signatures_per_mint=args.signatures_per_mint,
+            transactions_per_mint=args.transactions_per_mint,
+            execute=args.execute,
+        )
+        print("## Forward Birth Watch Immediate Follow-up")
+        print(f"execute={result.get('execute')}")
+        print(f"smoke_birth_count={result.get('smoke_birth_count', 0)}")
+        print(f"immediate_followup_started_count={result.get('immediate_followup_started_count', 0)}")
+        print(f"first_followup_path_rows={result.get('first_followup_path_rows', 0)}")
+        print(f"first_followup_before_10k_count={result.get('first_followup_before_10k_count', 0)}")
+        print(f"first_followup_before_20k_count={result.get('first_followup_before_20k_count', 0)}")
+        print(f"true_near_birth_observed_count={result.get('true_near_birth_observed_count', 0)}")
+        print(f"crossed_10k_count={result.get('crossed_10k_count', 0)}")
+        print(f"crossed_20k_count={result.get('crossed_20k_count', 0)}")
+        print(f"median_seconds_create_to_first_followup_attempt={result.get('median_seconds_create_to_first_followup_attempt')}")
+        print(f"median_seconds_create_to_first_path={result.get('median_seconds_create_to_first_path')}")
+        print(f"network_calls_made={result.get('network_calls_made', 0)}")
+        print(f"estimated_helius_credits_used={result.get('estimated_helius_credits_used', 0)}")
+        print(f"readiness_classification={result.get('readiness_classification')}")
+        print(f"warnings={result.get('warnings', [])}")
+        print(f"output_files={result.get('output_files', {})}")
+        return 0
     raise ValueError(f"unsupported mode: {args.mode}")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Forward efficient-mover observation logger.")
-    parser.add_argument("--mode", choices=["dry-run", "observe", "status", "probe"], default="dry-run")
+    parser.add_argument(
+        "--mode",
+        choices=["dry-run", "observe", "status", "probe", "observe-births-with-immediate-followup"],
+        default="dry-run",
+    )
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--source",
@@ -144,6 +185,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--birth-scan-max-signatures-total", type=int, default=1_000)
     parser.add_argument("--birth-scan-min-confidence", choices=["low", "medium", "high"], default="medium")
     parser.add_argument("--birth-scan-cursor-before", default=None)
+    parser.add_argument("--target-births", type=int, default=25)
+    parser.add_argument("--followup-duration-seconds", type=int, default=120)
+    parser.add_argument("--first-pass-delay-seconds", type=float, default=0.0)
+    parser.add_argument("--followup-poll-seconds", type=float, default=2.0)
+    parser.add_argument("--max-followup-passes-per-mint", type=int, default=60)
+    parser.add_argument("--max-active-birth-followups", type=int, default=100)
+    parser.add_argument("--signatures-per-mint", type=int, default=10)
+    parser.add_argument("--transactions-per-mint", type=int, default=10)
+    parser.add_argument("--execute", action="store_true")
     parser.add_argument("--live-health-check", action="store_true")
     parser.add_argument("--enable-dexscreener-metadata", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Compatibility flag; use --mode dry-run for dry-run behavior.")

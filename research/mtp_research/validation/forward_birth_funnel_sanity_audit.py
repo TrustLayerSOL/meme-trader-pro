@@ -34,6 +34,7 @@ REPORT_NAMES = {
     "bias_csv": "birth_funnel_followup_bias_audit.csv",
     "time_to_milestone_csv": "birth_funnel_time_to_milestone.csv",
     "manual_review_sample_csv": "birth_funnel_manual_review_sample.csv",
+    "ten_k_mover_completeness_csv": "birth_funnel_10k_mover_completeness.csv",
     "summary_json": "birth_funnel_sanity_summary.json",
     "summary_md": "birth_funnel_sanity_summary.md",
 }
@@ -107,6 +108,13 @@ def build_forward_birth_funnel_sanity_audit(
     bias_rows, bias_risk = _build_bias_rows(strict_birth_rows, paths_by_mint, events_by_mint)
     time_rows = _build_time_to_milestone_rows(strict_birth_rows, observed_milestones_by_mint)
     manual_rows = _build_manual_review_rows(strict_birth_rows, paths_by_mint, observed_milestones_by_mint, freshness_rows)
+    ten_k_completeness_rows, ten_k_completeness_summary = _build_10k_mover_completeness_rows(
+        strict_birth_rows,
+        paths_by_mint,
+        events_by_mint,
+        observed_milestones_by_mint,
+        freshness_rows,
+    )
 
     observed_only_counts = _funnel_counts(strict_birth_rows, paths_by_mint, observed_milestones_by_mint=observed_milestones_by_mint)
     true_near_mints = {
@@ -147,6 +155,7 @@ def build_forward_birth_funnel_sanity_audit(
         "milestone_provenance_summary": provenance_summary,
         "milestone_ordering_summary": ordering_summary,
         "freshness_summary": freshness_summary,
+        "ten_k_mover_completeness_summary": ten_k_completeness_summary,
         "followup_bias_summary": {
             "bias_risk": bias_risk,
             "group_counts": dict(Counter(row["group"] for row in bias_rows)),
@@ -190,6 +199,10 @@ def build_forward_birth_funnel_sanity_audit(
             "bias_csv": _write_csv(report_root / REPORT_NAMES["bias_csv"], bias_rows),
             "time_to_milestone_csv": _write_csv(report_root / REPORT_NAMES["time_to_milestone_csv"], time_rows),
             "manual_review_sample_csv": _write_csv(report_root / REPORT_NAMES["manual_review_sample_csv"], manual_rows),
+            "ten_k_mover_completeness_csv": _write_csv(
+                report_root / REPORT_NAMES["ten_k_mover_completeness_csv"],
+                ten_k_completeness_rows,
+            ),
             "summary_json": _write_json(report_root / REPORT_NAMES["summary_json"], summary),
             "summary_markdown": _write_summary_markdown(report_root / REPORT_NAMES["summary_md"], summary),
             "status_markdown": _write_status_markdown(
@@ -587,6 +600,104 @@ def _build_manual_review_rows(
     return rows
 
 
+def _build_10k_mover_completeness_rows(
+    strict_birth_rows: list[dict[str, Any]],
+    paths_by_mint: dict[str, list[dict[str, Any]]],
+    events_by_mint: dict[str, list[dict[str, Any]]],
+    observed_milestones_by_mint: dict[str, dict[str, dict[str, Any]]],
+    freshness_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    freshness_by_mint = {row["mint"]: row for row in freshness_rows}
+    birth_by_mint = {_mint(row): row for row in strict_birth_rows}
+    ten_k_mints = sorted(mint for mint, milestones in observed_milestones_by_mint.items() if "10k" in milestones)
+    rows: list[dict[str, Any]] = []
+    field_names = [
+        "mint",
+        "creator",
+        "token_symbol",
+        "token_name",
+        "create_signature",
+        "create_time",
+        "create_observed_at",
+        "first_followup_time",
+        "first_followup_fdv",
+        "first_followup_event_count",
+        "first_followup_buy_count",
+        "first_followup_sell_count",
+        "first_followup_active_wallets",
+        "crossed_10k_time",
+        "crossed_10k_fdv",
+        "transaction_signature",
+        "source",
+    ]
+    field_coverage: dict[str, dict[str, int]] = {field: {"available": 0, "missing": 0} for field in field_names}
+    for mint in ten_k_mints:
+        birth = birth_by_mint.get(mint, {})
+        freshness = freshness_by_mint.get(mint, {})
+        first_path = _first_fdv_path(paths_by_mint.get(mint, [])) or {}
+        first_event = next((row for row in events_by_mint.get(mint, []) if not _is_create_event(row)), {})
+        milestone = observed_milestones_by_mint[mint]["10k"]
+        freshness_group = _ten_k_freshness_group(freshness)
+        row = {
+            "mint": mint,
+            "freshness_group": freshness_group,
+            "creator": birth.get("creator"),
+            "token_symbol": birth.get("token_symbol"),
+            "token_name": birth.get("token_name"),
+            "create_signature": freshness.get("create_signature") or birth.get("transaction_signature"),
+            "create_time": freshness.get("create_time") or _create_time(birth),
+            "create_observed_at": freshness.get("create_observed_at") or birth.get("observed_at"),
+            "first_followup_time": freshness.get("first_followup_time"),
+            "first_followup_fdv": freshness.get("first_observed_fdv"),
+            "first_followup_event_count": freshness.get("first_observed_event_count"),
+            "first_followup_buy_count": freshness.get("first_observed_buy_count"),
+            "first_followup_sell_count": first_path.get("sell_count"),
+            "first_followup_active_wallets": first_path.get("active_wallets"),
+            "crossed_10k_time": milestone.get("crossing_time"),
+            "crossed_10k_fdv": milestone.get("crossing_fdv"),
+            "transaction_signature": first_event.get("transaction_signature"),
+            "source": first_path.get("source") or milestone.get("source_file"),
+            "usable_for_actionability_research": freshness_group
+            in {"true/near-birth observed 10k crossers", "pre-10k observed 10k crossers"},
+            "missing_fields": "",
+        }
+        missing = []
+        for field in field_names:
+            if row.get(field) in (None, ""):
+                field_coverage[field]["missing"] += 1
+                missing.append(field)
+            else:
+                field_coverage[field]["available"] += 1
+        row["missing_fields"] = ";".join(missing)
+        rows.append(row)
+    group_counts = dict(Counter(row["freshness_group"] for row in rows))
+    summary = {
+        "total_10k_crossers": len(rows),
+        "actionability_usable_10k_crossers": sum(1 for row in rows if row["usable_for_actionability_research"]),
+        "freshness_groups": group_counts,
+        "field_coverage": field_coverage,
+    }
+    return rows, summary
+
+
+def _ten_k_freshness_group(freshness: dict[str, Any]) -> str:
+    classification = str(freshness.get("freshness_classification") or "")
+    if classification in {"true_birth_observed", "near_birth_observed"}:
+        return "true/near-birth observed 10k crossers"
+    if freshness.get("first_followup_before_10k") is True:
+        return "pre-10k observed 10k crossers"
+    if classification in {"first_followup_after_activity", "immediate_followup_after_first_trade"}:
+        return "first-followup-after-activity 10k crossers"
+    if (
+        freshness.get("first_followup_already_above_10k") is True
+        or freshness.get("first_followup_already_above_20k") is True
+        or freshness.get("first_followup_already_above_50k") is True
+        or freshness.get("first_followup_already_above_100k") is True
+    ):
+        return "already-above-trigger 10k crossers"
+    return "unknown freshness 10k crossers"
+
+
 def _classify_validity(
     *,
     duplicate_counts: dict[str, int],
@@ -845,6 +956,7 @@ def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> Path:
         f"- Milestone provenance: `{summary['milestone_provenance_summary']}`",
         f"- Ordering summary: `{summary['milestone_ordering_summary']}`",
         f"- Freshness summary: `{summary['freshness_summary']}`",
+        f"- 10k mover completeness: `{summary['ten_k_mover_completeness_summary']}`",
         f"- Follow-up bias: `{summary['followup_bias_summary']}`",
         f"- Validity classification: `{summary['validity_classification']}`",
         f"- Recommendation: `{summary['recommendation']}`",
@@ -873,6 +985,7 @@ def _write_status_markdown(path: Path, summary: dict[str, Any]) -> Path:
         f"- Milestone provenance result: `{summary['milestone_provenance_summary']}`",
         f"- Ordering result: `{summary['milestone_ordering_summary']}`",
         f"- Freshness result: `{summary['freshness_summary']}`",
+        f"- 10k mover completeness: `{summary['ten_k_mover_completeness_summary']}`",
         f"- Follow-up bias result: `{summary['followup_bias_summary']}`",
         f"- Validity classification: `{summary['validity_classification']}`",
         f"- Recommendation: `{summary['recommendation']}`",

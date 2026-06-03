@@ -1588,6 +1588,7 @@ def calculate_status_tally(observation_root: Path | str, *, target_candidates: i
     metadata = list(read_jsonl(root / OUTPUT_FILES["metadata"]))
     holders = list(read_jsonl(root / OUTPUT_FILES["holders"]))
     events = list(read_jsonl(root / OUTPUT_FILES["events"]))
+    birth_freshness_status = _birth_freshness_status(root)
     total = len(unique_by(candidates, "observation_id"))
     active = sum(1 for row in candidates if row.get("status") == "active")
     completed = sum(1 for row in candidates if row.get("status") == "completed")
@@ -1628,6 +1629,7 @@ def calculate_status_tally(observation_root: Path | str, *, target_candidates: i
         "target_reached": total >= target_candidates,
         "data_files_written": {key: str(root / name) for key, name in OUTPUT_FILES.items()},
         "recommended_stop_review_flag": recommend_stop_review(total, target_candidates),
+        "birth_watch_freshness": birth_freshness_status,
     }
     return tally
 
@@ -1665,6 +1667,67 @@ def observation_readiness(source_reports: list[dict[str, Any]]) -> str:
     return "forward_observer_needs_source_config"
 
 
+def _birth_freshness_status(root: Path) -> dict[str, Any]:
+    path = root / "birth_followup_status.json"
+    if not path.exists():
+        return {
+            "birth_watch_mints": 0,
+            "immediate_followup_started": 0,
+            "first_followup_path_rows": 0,
+            "true_near_birth_observed": 0,
+            "first_followup_before_10k": 0,
+            "first_followup_before_20k": 0,
+            "first_followup_after_activity": 0,
+            "first_followup_already_above_10k": 0,
+            "first_followup_already_above_20k": 0,
+            "crossed_10k": 0,
+            "crossed_20k": 0,
+            "trigger_qualified_true_near_birth_mints": 0,
+            "target_trigger_qualified_true_near_birth_mints": 300,
+            "freshness_repair_status": "freshness_repair_not_started",
+            "median_seconds_create_to_first_followup_attempt": None,
+            "median_seconds_create_to_first_path": None,
+            "attempt_within_5s_pct": None,
+            "attempt_within_15s_pct": None,
+            "attempt_within_30s_pct": None,
+            "attempt_within_60s_pct": None,
+            "path_within_5s_pct": None,
+            "path_within_15s_pct": None,
+            "path_within_30s_pct": None,
+            "path_within_60s_pct": None,
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        payload = {}
+    return {
+        "birth_watch_mints": payload.get("birth_watch_mints", 0),
+        "immediate_followup_started": payload.get("immediate_followup_started", 0),
+        "first_followup_path_rows": payload.get("first_followup_path_rows", 0),
+        "true_near_birth_observed": payload.get("true_near_birth_observed", 0),
+        "first_followup_before_10k": payload.get("first_followup_before_10k", 0),
+        "first_followup_before_20k": payload.get("first_followup_before_20k", 0),
+        "first_followup_after_activity": payload.get("first_followup_after_activity", 0),
+        "first_followup_already_above_10k": payload.get("first_followup_already_above_10k", 0),
+        "first_followup_already_above_20k": payload.get("first_followup_already_above_20k", 0),
+        "crossed_10k": payload.get("crossed_10k", 0),
+        "crossed_20k": payload.get("crossed_20k", 0),
+        "trigger_qualified_true_near_birth_mints": payload.get("trigger_qualified_true_near_birth_mints", 0),
+        "target_trigger_qualified_true_near_birth_mints": payload.get("target_trigger_qualified_true_near_birth_mints", 300),
+        "freshness_repair_status": payload.get("freshness_repair_status"),
+        "median_seconds_create_to_first_followup_attempt": payload.get("median_seconds_create_to_first_followup_attempt"),
+        "median_seconds_create_to_first_path": payload.get("median_seconds_create_to_first_path"),
+        "attempt_within_5s_pct": payload.get("attempt_within_5s_pct"),
+        "attempt_within_15s_pct": payload.get("attempt_within_15s_pct"),
+        "attempt_within_30s_pct": payload.get("attempt_within_30s_pct"),
+        "attempt_within_60s_pct": payload.get("attempt_within_60s_pct"),
+        "path_within_5s_pct": payload.get("path_within_5s_pct"),
+        "path_within_15s_pct": payload.get("path_within_15s_pct"),
+        "path_within_30s_pct": payload.get("path_within_30s_pct"),
+        "path_within_60s_pct": payload.get("path_within_60s_pct"),
+    }
+
+
 def ensure_dirs(config: ForwardObserverConfig) -> None:
     config.observation_root.mkdir(parents=True, exist_ok=True)
     config.raw_root.mkdir(parents=True, exist_ok=True)
@@ -1696,6 +1759,25 @@ def status_markdown(payload: dict[str, Any]) -> str:
         f"- Metadata snapshots: `{payload.get('metadata_snapshots_collected', 0)}`",
         f"- Holder snapshots: `{payload.get('holder_snapshots_collected', 0)}`",
         f"- Event rows: `{payload.get('event_rows_collected', 0)}`",
+        "",
+        "## Birth Watch Freshness",
+        "",
+        f"- Birth-watch mints: `{(payload.get('birth_watch_freshness') or {}).get('birth_watch_mints', 0)}`",
+        f"- Immediate follow-up started: `{(payload.get('birth_watch_freshness') or {}).get('immediate_followup_started', 0)}`",
+        f"- First follow-up path rows: `{(payload.get('birth_watch_freshness') or {}).get('first_followup_path_rows', 0)}`",
+        f"- True/near-birth observed: `{(payload.get('birth_watch_freshness') or {}).get('true_near_birth_observed', 0)}`",
+        f"- First follow-up before 10k: `{(payload.get('birth_watch_freshness') or {}).get('first_followup_before_10k', 0)}`",
+        f"- First follow-up before 20k: `{(payload.get('birth_watch_freshness') or {}).get('first_followup_before_20k', 0)}`",
+        f"- First follow-up after activity: `{(payload.get('birth_watch_freshness') or {}).get('first_followup_after_activity', 0)}`",
+        f"- First follow-up already above 10k: `{(payload.get('birth_watch_freshness') or {}).get('first_followup_already_above_10k', 0)}`",
+        f"- First follow-up already above 20k: `{(payload.get('birth_watch_freshness') or {}).get('first_followup_already_above_20k', 0)}`",
+        f"- Crossed 10k: `{(payload.get('birth_watch_freshness') or {}).get('crossed_10k', 0)}`",
+        f"- Crossed 20k: `{(payload.get('birth_watch_freshness') or {}).get('crossed_20k', 0)}`",
+        f"- Trigger-qualified true/near-birth mints: `{(payload.get('birth_watch_freshness') or {}).get('trigger_qualified_true_near_birth_mints', 0)}`",
+        f"- Target trigger-qualified true/near-birth mints: `{(payload.get('birth_watch_freshness') or {}).get('target_trigger_qualified_true_near_birth_mints', 300)}`",
+        f"- Freshness repair status: `{(payload.get('birth_watch_freshness') or {}).get('freshness_repair_status')}`",
+        f"- Median create-to-first-attempt seconds: `{(payload.get('birth_watch_freshness') or {}).get('median_seconds_create_to_first_followup_attempt')}`",
+        f"- Median create-to-first-path seconds: `{(payload.get('birth_watch_freshness') or {}).get('median_seconds_create_to_first_path')}`",
         f"- Recommendation: `{payload.get('recommended_stop_review_flag') or payload.get('next_step')}`",
         "",
         "Observation only. No paper/live trading, wallet execution, order routing, validation, backtest, alerts, or strategy logic.",
@@ -1768,6 +1850,24 @@ def print_status(tally: dict[str, Any]) -> str:
             f"Event rows: {tally.get('event_rows_collected', 0)}",
             f"Path rows: {tally.get('path_rows_collected', 0)}",
             f"Drawdown rows: {tally.get('drawdown_rows_collected', 0)}",
+            "",
+            "Birth Watch Freshness:",
+            f"Birth-watch mints: {(tally.get('birth_watch_freshness') or {}).get('birth_watch_mints', 0)}",
+            f"Immediate follow-up started: {(tally.get('birth_watch_freshness') or {}).get('immediate_followup_started', 0)}",
+            f"First follow-up path rows: {(tally.get('birth_watch_freshness') or {}).get('first_followup_path_rows', 0)}",
+            f"True/near-birth observed: {(tally.get('birth_watch_freshness') or {}).get('true_near_birth_observed', 0)}",
+            f"First follow-up before 10k: {(tally.get('birth_watch_freshness') or {}).get('first_followup_before_10k', 0)}",
+            f"First follow-up before 20k: {(tally.get('birth_watch_freshness') or {}).get('first_followup_before_20k', 0)}",
+            f"First follow-up after activity: {(tally.get('birth_watch_freshness') or {}).get('first_followup_after_activity', 0)}",
+            f"First follow-up already above 10k: {(tally.get('birth_watch_freshness') or {}).get('first_followup_already_above_10k', 0)}",
+            f"First follow-up already above 20k: {(tally.get('birth_watch_freshness') or {}).get('first_followup_already_above_20k', 0)}",
+            f"Crossed 10k: {(tally.get('birth_watch_freshness') or {}).get('crossed_10k', 0)}",
+            f"Crossed 20k: {(tally.get('birth_watch_freshness') or {}).get('crossed_20k', 0)}",
+            f"Trigger-qualified true/near-birth mints: {(tally.get('birth_watch_freshness') or {}).get('trigger_qualified_true_near_birth_mints', 0)}",
+            f"Target trigger-qualified true/near-birth mints: {(tally.get('birth_watch_freshness') or {}).get('target_trigger_qualified_true_near_birth_mints', 300)}",
+            f"Freshness repair status: {(tally.get('birth_watch_freshness') or {}).get('freshness_repair_status')}",
+            f"Median create-to-first-attempt seconds: {(tally.get('birth_watch_freshness') or {}).get('median_seconds_create_to_first_followup_attempt')}",
+            f"Median create-to-first-path seconds: {(tally.get('birth_watch_freshness') or {}).get('median_seconds_create_to_first_path')}",
             f"Raw WS rows: {tally.get('raw_ws_rows_collected', 0)}",
             f"Raw RPC rows: {tally.get('raw_rpc_rows_collected', 0)}",
             f"Estimated Helius requests/credits used: {tally.get('estimated_helius_credits_used', 0)}",
