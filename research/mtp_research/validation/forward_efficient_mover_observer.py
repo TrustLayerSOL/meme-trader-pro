@@ -23,6 +23,8 @@ from urllib.parse import parse_qsl, urlparse, urlunparse
 
 from research.mtp_research.data_paths import data_lake_root
 from research.mtp_research.ingestion.helius_backfill import _load_project_dotenv_if_needed
+from research.mtp_research.ingestion.raw_transaction_store import RawTransactionRecord
+from research.mtp_research.ingestion.solana_transaction_parser import summarize_raw_transaction
 
 
 REPORT_ID = "forward_efficient_mover_observer_v0"
@@ -78,6 +80,7 @@ LIVE_EVENT_SCHEMA_FIELDS = [
     "wallet",
     "side",
     "sol_amount",
+    "sol_usd",
     "token_amount",
     "price_proxy",
     "fdv_proxy",
@@ -291,6 +294,9 @@ class HeliusLiveSourceConfig:
     source: str = "helius-all"
     timeout_sec: int = 10
     limit_per_program_poll: int = 5
+    hydrate_transactions: bool = True
+    valuation_supply_proxy: float = 1_000_000_000.0
+    sol_usd_price: float = 1.0
 
     @classmethod
     def from_observer_config(
@@ -310,6 +316,7 @@ class HeliusLiveSourceConfig:
             raw_root=config.raw_root,
             max_helius_credits=int(config.max_helius_credits or 0),
             source=config.source,
+            sol_usd_price=resolve_forward_sol_usd_price(config.root),
         )
 
 
@@ -324,10 +331,24 @@ class MockHeliusEventClient:
 
 
 class HeliusRpcPollingClient:
-    def __init__(self, rpc_url: str, *, timeout_sec: int = 10) -> None:
+    def __init__(
+        self,
+        rpc_url: str,
+        *,
+        timeout_sec: int = 10,
+        rpc_post: Any | None = None,
+        hydrate_transactions: bool = True,
+        valuation_supply_proxy: float = 1_000_000_000.0,
+        sol_usd_price: float = 1.0,
+    ) -> None:
         self.rpc_url = rpc_url
         self.timeout_sec = timeout_sec
+        self._rpc_post = rpc_post or _post_json_rpc
+        self.hydrate_transactions = hydrate_transactions
+        self.valuation_supply_proxy = valuation_supply_proxy
+        self.sol_usd_price = sol_usd_price
         self.requests_used = 0
+        self.seen_signatures: set[str] = set()
 
     def poll_program_events(self, program_configs: dict[str, ProgramSourceConfig], *, limit: int = 5) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -341,7 +362,7 @@ class HeliusRpcPollingClient:
                     "method": "getSignaturesForAddress",
                     "params": [program_id, {"limit": max(1, min(limit, 25))}],
                 }
-                response = _post_json_rpc(self.rpc_url, payload, self.timeout_sec)
+                response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
                 self.requests_used += 1
                 rows = response.get("result") if isinstance(response, dict) else None
                 if not isinstance(rows, list):
@@ -349,19 +370,53 @@ class HeliusRpcPollingClient:
                 for row in rows:
                     if not isinstance(row, dict):
                         continue
+                    signature = row.get("signature")
+                    if signature and str(signature) in self.seen_signatures:
+                        continue
+                    if signature:
+                        self.seen_signatures.add(str(signature))
+                    if self.hydrate_transactions and signature:
+                        tx = self._fetch_transaction(str(signature))
+                        if tx:
+                            events.append(
+                                normalize_pumpfun_transaction_event(
+                                    tx,
+                                    source_adapter=adapter_name,
+                                    program_id=program_id,
+                                    valuation_supply_proxy=self.valuation_supply_proxy,
+                                    sol_usd_price=self.sol_usd_price,
+                                )
+                            )
+                            continue
                     events.append(
-                        {
-                            "source_adapter": adapter_name,
-                            "event_type": program_config.event_type,
-                            "program_id": program_id,
-                            "signature": row.get("signature"),
-                            "slot": row.get("slot"),
-                            "block_time": row.get("blockTime"),
-                            "parse_confidence": "signature_only",
-                            "missing_reason": "mint_and_fdv_not_available_without_hydration_or_metadata_feed",
-                        }
+                        _signature_only_event(
+                            source_adapter=adapter_name,
+                            program_id=program_id,
+                            signature=signature,
+                            slot=row.get("slot"),
+                            block_time=row.get("blockTime"),
+                            event_type=program_config.event_type,
+                        )
                     )
         return events
+
+    def _fetch_transaction(self, signature: str) -> dict[str, Any]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "mtp-forward-observer-get-transaction",
+            "method": "getTransaction",
+            "params": [
+                signature,
+                {
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                },
+            ],
+        }
+        response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
+        self.requests_used += 1
+        result = response.get("result") if isinstance(response, dict) else None
+        return result if isinstance(result, dict) else {}
 
 
 class HeliusLiveCandidateSource:
@@ -369,7 +424,13 @@ class HeliusLiveCandidateSource:
 
     def __init__(self, config: HeliusLiveSourceConfig, client: Any | None = None) -> None:
         self.config = config
-        self.client = client or HeliusRpcPollingClient(config.rpc_url, timeout_sec=config.timeout_sec)
+        self.client = client or HeliusRpcPollingClient(
+            config.rpc_url,
+            timeout_sec=config.timeout_sec,
+            hydrate_transactions=config.hydrate_transactions,
+            valuation_supply_proxy=config.valuation_supply_proxy,
+            sol_usd_price=config.sol_usd_price,
+        )
 
     def availability(self) -> dict[str, Any]:
         if self.config.max_helius_credits <= 0:
@@ -397,9 +458,10 @@ class HeliusLiveCandidateSource:
         }
 
     def fetch_candidates(self) -> list[dict[str, Any]]:
-        events = [normalize_live_source_event(event) for event in self.client.poll_program_events(self.config.program_configs, limit=self.config.limit_per_program_poll)]
-        if events:
-            append_jsonl(self.config.raw_root / RAW_SOURCE_FILES["helius_rpc"], events)
+        raw_events = self.client.poll_program_events(self.config.program_configs, limit=self.config.limit_per_program_poll)
+        if raw_events:
+            append_jsonl(self.config.raw_root / RAW_SOURCE_FILES["helius_rpc"], raw_events)
+        events = [normalize_live_source_event(event) for event in raw_events]
         candidates = []
         for event in events:
             candidate = build_live_event_candidate(event)
@@ -445,6 +507,20 @@ def resolve_helius_ws_url(*, load_project_dotenv: bool = True) -> str:
     if not api_key:
         return ""
     return f"wss://mainnet.helius-rpc.com/?api-key={api_key}"
+
+
+def resolve_forward_sol_usd_price(root: Path | str | None = None) -> float:
+    env_value = safe_float(os.getenv("MEMETRADER_FORWARD_SOL_USD_PRICE"))
+    if env_value and env_value > 0:
+        return env_value
+    data_root = Path(root or data_lake_root()).expanduser()
+    path = data_root / "data" / "normalized" / "valuation_inputs" / "sol_usd_coingecko.jsonl"
+    rows = read_jsonl(path)
+    for row in reversed(rows):
+        value = safe_float(row.get("sol_usd"))
+        if value and value > 0:
+            return value
+    return 1.0
 
 
 def mask_helius_endpoint(endpoint: str | None) -> str:
@@ -536,6 +612,7 @@ def normalize_live_source_event(payload: dict[str, Any]) -> dict[str, Any]:
             "wallet": payload.get("wallet"),
             "side": payload.get("side"),
             "sol_amount": payload.get("sol_amount"),
+            "sol_usd": payload.get("sol_usd"),
             "token_amount": payload.get("token_amount"),
             "price_proxy": payload.get("price_proxy"),
             "fdv_proxy": payload.get("fdv_proxy"),
@@ -557,6 +634,91 @@ def normalize_live_source_event(payload: dict[str, Any]) -> dict[str, Any]:
     if event["mint"] is None and event["missing_reason"] is None:
         event["missing_reason"] = "mint_unavailable"
     return event
+
+
+def normalize_pumpfun_transaction_event(
+    tx: dict[str, Any],
+    *,
+    source_adapter: str,
+    program_id: str,
+    valuation_supply_proxy: float,
+    sol_usd_price: float = 1.0,
+) -> dict[str, Any]:
+    signature = _transaction_signature(tx)
+    event_type, side = _pumpfun_event_type_and_side(tx)
+    summary = summarize_raw_transaction(
+        RawTransactionRecord(
+            signature=signature or "",
+            slot=tx.get("slot"),
+            block_time=tx.get("blockTime"),
+            success=(tx.get("meta") or {}).get("err") is None,
+            address=program_id,
+            role="forward_efficient_mover_observer",
+            raw_json=tx,
+            source="helius_rpc",
+        )
+    )
+    token_delta = _primary_token_delta(summary.token_balance_deltas)
+    sol_delta = _primary_native_delta_sol(summary.native_balance_deltas)
+    if token_delta is None or sol_delta is None:
+        return normalize_live_source_event(
+            {
+                "source_adapter": source_adapter,
+                "program_id": program_id,
+                "signature": signature,
+                "slot": tx.get("slot"),
+                "block_time": tx.get("blockTime"),
+                "event_type": event_type,
+                "side": side,
+                "parse_confidence": "hydrated_transaction_missing_price_inputs",
+                "missing_reason": "missing_token_or_native_delta_for_fdv_proxy",
+            }
+        )
+    token_amount = abs(float(token_delta.delta or 0.0))
+    sol_amount = abs(float(sol_delta.delta_sol or 0.0))
+    if token_amount <= 0 or sol_amount <= 0:
+        return normalize_live_source_event(
+            {
+                "source_adapter": source_adapter,
+                "program_id": program_id,
+                "signature": signature,
+                "slot": tx.get("slot"),
+                "block_time": tx.get("blockTime"),
+                "event_type": event_type,
+                "side": side,
+                "parse_confidence": "hydrated_transaction_zero_delta",
+                "missing_reason": "zero_token_or_native_delta_for_fdv_proxy",
+            }
+        )
+    price_proxy = sol_amount / token_amount
+    fdv_proxy = price_proxy * float(valuation_supply_proxy) * max(float(sol_usd_price or 1.0), 1.0)
+    wallet = token_delta.owner or token_delta.account
+    return normalize_live_source_event(
+        {
+            "source_adapter": source_adapter,
+            "program_id": program_id,
+            "signature": signature,
+            "slot": tx.get("slot"),
+            "block_time": tx.get("blockTime"),
+            "event_type": event_type,
+            "mint": token_delta.mint,
+            "buyer": wallet if side == "buy" else None,
+            "seller": wallet if side == "sell" else None,
+            "wallet": wallet,
+            "side": side,
+            "sol_amount": round(sol_amount, 12),
+            "sol_usd": round(float(sol_usd_price or 1.0), 8),
+            "token_amount": round(token_amount, 12),
+            "price_proxy": round(price_proxy, 12),
+            "fdv_proxy": round(fdv_proxy, 6),
+            "event_count": 1,
+            "buy_count": 1 if side == "buy" else 0,
+            "sell_count": 1 if side == "sell" else 0,
+            "active_wallet_count": 1 if wallet else 0,
+            "parse_confidence": "hydrated_transaction_token_native_delta",
+            "missing_reason": None,
+        }
+    )
 
 
 def build_live_event_candidate(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -641,6 +803,9 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
         if total_api_calls >= config.max_api_calls:
             warnings.append("max_api_calls_reached")
             break
+        if availability.get("source") == "helius" and config.max_helius_credits is not None and total_api_calls >= config.max_helius_credits:
+            warnings.append("max_helius_credits_reached")
+            break
         before_source_requests = int(getattr(selected_source, "requests_used", 0))
         candidates = selected_source.fetch_candidates()
         after_source_requests = int(getattr(selected_source, "requests_used", before_source_requests))
@@ -669,10 +834,10 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
         "updated_at": utc_now_iso(),
         "seen_mints": sorted(seen_mints),
         "api_calls_used": total_api_calls,
-            "source": availability,
-            "warnings": warnings,
-            "helius_requests_used": total_api_calls if availability.get("source") == "helius" else 0,
-        }
+        "source": availability,
+        "warnings": warnings,
+        "helius_requests_used": total_api_calls if availability.get("source") == "helius" else 0,
+    }
     write_checkpoint(config.observation_root / OUTPUT_FILES["checkpoint"], checkpoint_payload)
     tally = calculate_status_tally(config.observation_root, target_candidates=config.target_candidates)
     tally.update(
@@ -1060,6 +1225,70 @@ def _safe_event_type(value: Any) -> str:
     if event_type in SUPPORTED_LIVE_EVENT_TYPES:
         return event_type
     return "new_launch_candidate"
+
+
+def _signature_only_event(
+    *,
+    source_adapter: str,
+    program_id: str,
+    signature: Any,
+    slot: Any,
+    block_time: Any,
+    event_type: str,
+) -> dict[str, Any]:
+    return {
+        "source_adapter": source_adapter,
+        "event_type": event_type,
+        "program_id": program_id,
+        "signature": signature,
+        "slot": slot,
+        "block_time": block_time,
+        "parse_confidence": "signature_only",
+        "missing_reason": "mint_and_fdv_not_available_without_hydration_or_metadata_feed",
+    }
+
+
+def _transaction_signature(tx: dict[str, Any]) -> str | None:
+    signatures = tx.get("transaction", {}).get("signatures", [])
+    if signatures:
+        return signatures[0]
+    return tx.get("signature")
+
+
+def _pumpfun_event_type_and_side(tx: dict[str, Any]) -> tuple[str, str | None]:
+    logs = (tx.get("meta") or {}).get("logMessages") or []
+    lowered = " ".join(str(log).lower() for log in logs)
+    if "instruction: create" in lowered:
+        return "pumpfun_create", None
+    if "instruction: migrate" in lowered:
+        return "pumpswap_migration", None
+    if "instruction: sell" in lowered:
+        return "pumpfun_trade", "sell"
+    if "instruction: buy" in lowered:
+        return "pumpfun_trade", "buy"
+    return "pumpfun_trade", None
+
+
+def _primary_token_delta(deltas: list[Any]) -> Any | None:
+    candidates = [
+        delta
+        for delta in deltas
+        if getattr(delta, "mint", None) and abs(float(getattr(delta, "delta", 0.0) or 0.0)) > 0
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda delta: abs(float(delta.delta or 0.0)))
+
+
+def _primary_native_delta_sol(deltas: list[Any]) -> Any | None:
+    candidates = [
+        delta
+        for delta in deltas
+        if getattr(delta, "delta_sol", None) is not None and abs(float(delta.delta_sol or 0.0)) > 0
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda delta: abs(float(delta.delta_sol or 0.0)))
 
 
 def _post_json_rpc(url: str, payload: dict[str, Any], timeout_sec: int) -> dict[str, Any]:

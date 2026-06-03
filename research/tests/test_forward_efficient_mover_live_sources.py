@@ -4,16 +4,21 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     ForwardObserverConfig,
     HeliusLiveCandidateSource,
     HeliusLiveSourceConfig,
+    HeliusRpcPollingClient,
     MockHeliusEventClient,
     build_live_event_candidate,
     default_program_configs,
     mask_helius_endpoint,
+    normalize_pumpfun_transaction_event,
     normalize_live_source_event,
     resolve_helius_rpc_url,
     resolve_helius_ws_url,
     run_live_source_readiness,
     run_observe,
 )
+
+
+PUMP_FUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 
 
 def test_helius_url_resolution_masks_key(monkeypatch) -> None:
@@ -152,6 +157,48 @@ def test_live_source_budget_cap_blocks_fetch(tmp_path: Path, monkeypatch) -> Non
     assert source.availability()["missing_reason"] == "max_helius_credits_zero_or_negative"
 
 
+def test_helius_rpc_polling_client_hydrates_and_extracts_pumpfun_candidate() -> None:
+    calls: list[str] = []
+
+    def fake_post(_url, payload, _timeout):
+        calls.append(payload["method"])
+        if payload["method"] == "getSignaturesForAddress":
+            return {"result": [{"signature": "sig-a", "slot": 100, "blockTime": 1_700_000_000}]}
+        assert payload["method"] == "getTransaction"
+        return {"result": _pumpfun_buy_transaction()}
+
+    client = HeliusRpcPollingClient("https://mock-helius.invalid/?api-key=test", rpc_post=fake_post)
+    events = client.poll_program_events(default_program_configs(), limit=5)
+
+    assert calls == ["getSignaturesForAddress", "getTransaction"]
+    assert client.requests_used == 2
+    assert events[0]["signature"] == "sig-a"
+    assert events[0]["event_type"] == "pumpfun_trade"
+    assert events[0]["mint"] == "mint-a"
+    assert events[0]["side"] == "buy"
+    assert events[0]["token_amount"] == 100.0
+    assert events[0]["sol_amount"] == 1.0
+    assert events[0]["price_proxy"] == 0.01
+    assert events[0]["fdv_proxy"] == 10_000_000.0
+    assert events[0]["parse_confidence"] == "hydrated_transaction_token_native_delta"
+
+
+def test_normalize_pumpfun_transaction_event_fails_closed_without_fdv() -> None:
+    tx = _pumpfun_buy_transaction()
+    tx["meta"]["postTokenBalances"] = []
+
+    event = normalize_pumpfun_transaction_event(
+        tx,
+        source_adapter="helius_program_logs_pumpfun",
+        program_id=PUMP_FUN_PROGRAM_ID,
+        valuation_supply_proxy=1_000_000_000,
+    )
+
+    assert event["mint"] is None
+    assert event["fdv_proxy"] is None
+    assert event["missing_reason"] == "missing_token_or_native_delta_for_fdv_proxy"
+
+
 def test_forward_observer_live_stack_has_no_execution_logic() -> None:
     module_paths = [
         Path("research/mtp_research/validation/forward_efficient_mover_observer.py"),
@@ -175,3 +222,48 @@ def test_forward_observer_live_stack_has_no_execution_logic() -> None:
         text = text.replace('"order_routing"', "")
         for pattern in forbidden:
             assert pattern not in text, f"{pattern} found in {path}"
+
+
+def _pumpfun_buy_transaction() -> dict:
+    return {
+        "slot": 100,
+        "blockTime": 1_700_000_000,
+        "transaction": {
+            "signatures": ["sig-a"],
+            "message": {
+                "accountKeys": [
+                    {"pubkey": "buyer-a", "signer": True, "writable": True},
+                    {"pubkey": "bonding-curve-a", "signer": False, "writable": True},
+                    {"pubkey": "token-account-a", "signer": False, "writable": True},
+                ],
+                "instructions": [
+                    {
+                        "programId": PUMP_FUN_PROGRAM_ID,
+                        "accounts": ["mint-a", "bonding-curve-a", "associated-curve-a", "buyer-a"],
+                    }
+                ],
+            },
+        },
+        "meta": {
+            "err": None,
+            "logMessages": ["Program log: Instruction: Buy"],
+            "preBalances": [2_000_000_000, 5_000_000_000, 0],
+            "postBalances": [1_000_000_000, 6_000_000_000, 0],
+            "preTokenBalances": [
+                {
+                    "accountIndex": 2,
+                    "mint": "mint-a",
+                    "owner": "buyer-a",
+                    "uiTokenAmount": {"uiAmountString": "0", "decimals": 6},
+                }
+            ],
+            "postTokenBalances": [
+                {
+                    "accountIndex": 2,
+                    "mint": "mint-a",
+                    "owner": "buyer-a",
+                    "uiTokenAmount": {"uiAmountString": "100", "decimals": 6},
+                }
+            ],
+        },
+    }

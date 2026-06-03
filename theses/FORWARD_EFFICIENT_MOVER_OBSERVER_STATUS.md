@@ -68,4 +68,19 @@ Current live source state:
 - Raydium adapter: present but marked `needs_probe_verification`.
 - DexScreener metadata: disabled by default; secondary enrichment only.
 
-The first smoke observe run used one request-equivalent Helius call, wrote raw signature rows, and observed zero efficient-mover candidates because the current live layer is still signature-only until transaction hydration/metadata extraction is added.
+The live layer now hydrates bounded Pump.fun transactions, extracts mint/side/token/SOL deltas, applies local SOL/USD valuation conversion when available, and writes efficient-mover candidate rows only after fixed trigger levels are crossed.
+
+Latest bounded smoke result:
+
+- Target: `3`
+- Candidates observed: `4`
+- Raw Helius RPC rows: `40`
+- Helius request-equivalent credits used: `43`
+- Reached 20k: `1`
+- Reached 50k: `1`
+- Reached 100k: `1`
+- Reached 500k: `1`
+- Reached 1m: `1`
+- Stop/review flag: `target_reached_review_before_continuing`
+
+Current implementation completion: Pump.fun Helius forward observation is live and writing ORICO candidate/path/event/metadata/holder/drawdown rows. PumpSwap and Raydium remain present but unverified until their source semantics are confirmed with tiny probes.
