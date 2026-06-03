@@ -215,7 +215,7 @@ class PumpFunCreateWebSocketCandidateSource:
                     if payload.get("id") == "mtp-pumpfun-create-logs-subscribe":
                         subscription_id = payload.get("result") if isinstance(payload.get("result"), int) else None
                         continue
-                    signature = _signature_from_logs_notification(payload)
+                    signature = signature_from_create_logs_notification(payload)
                     if not signature or signature in self.processed_signatures:
                         continue
                     self.processed_signatures.add(signature)
@@ -282,13 +282,17 @@ def _websocket_connect(*args: Any, **kwargs: Any) -> Any:
     return connect(*args, **kwargs)
 
 
-def _signature_from_logs_notification(payload: dict[str, Any]) -> str | None:
+def signature_from_create_logs_notification(payload: dict[str, Any]) -> str | None:
     if payload.get("method") != "logsNotification":
         return None
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     result = params.get("result") if isinstance(params.get("result"), dict) else {}
     value = result.get("value") if isinstance(result.get("value"), dict) else {}
     if value.get("err") is not None:
+        return None
+    logs = value.get("logs") if isinstance(value.get("logs"), list) else []
+    normalized_logs = [str(log).lower() for log in logs]
+    if not any("instruction: create" in log or "instruction: createv2" in log for log in normalized_logs):
         return None
     signature = value.get("signature")
     return str(signature) if signature else None

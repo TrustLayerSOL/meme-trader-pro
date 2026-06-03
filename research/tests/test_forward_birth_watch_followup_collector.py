@@ -331,6 +331,40 @@ def test_websocket_birth_candidate_source_is_dry_when_unavailable() -> None:
     assert source.requests_used == 0
 
 
+def test_signature_from_logs_notification_requires_create_log() -> None:
+    from research.mtp_research.validation.forward_birth_watch_followup_collector import (
+        signature_from_create_logs_notification,
+    )
+
+    create_payload = {
+        "method": "logsNotification",
+        "params": {
+            "result": {
+                "value": {
+                    "signature": "create-sig",
+                    "err": None,
+                    "logs": ["Program log: Instruction: CreateV2"],
+                }
+            }
+        },
+    }
+    buy_payload = {
+        "method": "logsNotification",
+        "params": {
+            "result": {
+                "value": {
+                    "signature": "buy-sig",
+                    "err": None,
+                    "logs": ["Program log: Instruction: Buy"],
+                }
+            }
+        },
+    }
+
+    assert signature_from_create_logs_notification(create_payload) == "create-sig"
+    assert signature_from_create_logs_notification(buy_payload) is None
+
+
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
