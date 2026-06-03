@@ -204,3 +204,42 @@ Current recommendation:
 - Continue live/new-signature birth collection over time instead of repeatedly rescanning an exhausted signature window.
 - Run bounded follow-up after each new birth inventory batch.
 - Do not run thesis tests or strategy analysis from this forward funnel yet; the trigger-qualified sample is still only `9/300` at `10k`.
+
+## Signature-cache Scanner Scale-up
+
+The scanner was updated to persist processed Pump.fun signatures in the forward checkpoint so future scanner runs can skip already-hydrated signatures.
+
+- Commit: `23b72f6`
+- Efficiency change: `birth_scan_processed_signatures` persisted in `/Volumes/ORICO/MemeTraderPro/data/forward_observation/efficient_movers/checkpoint.json`
+- Parallel hydration setting used: `HELIUS_TRANSACTION_WORKERS=16`
+- Final processed signature cache size: `87451`
+- Final estimated Helius requests: `118787`
+- Final scanner warnings: `[]`
+- ORICO free space after run: about `351Gi`
+
+Final current funnel after additional bounded scanner and follow-up passes:
+
+- Total forward candidates: `768`
+- Birth-watch mints: `468`
+- Birth inventory checkpoint progress: `468/500`
+- Births with deterministic FDV follow-up: `374`
+- Crossed `10k`: `53`
+- Crossed `15k`: `51`
+- Crossed `20k`: `49`
+- Crossed `30k`: `44`
+- Crossed `50k`: `37`
+- Crossed `100k`: `32`
+- Crossed `200k`: `28`
+- Crossed `500k`: `27`
+- Crossed `1m`: `25`
+- Birth-to-FDV follow-up rate: `0.799145`
+- Birth-to-10k conversion rate: `0.113248`
+- Birth-to-20k conversion rate: `0.104701`
+- 10k-to-20k conversion rate: `0.924528`
+- 20k-to-100k conversion rate: `0.653061`
+- Target trigger-qualified progress at `10k`: `53/300`
+- Target trigger-qualified progress at `20k`: `49/300`
+- Estimated births needed for `300` crossed-10k observations at the current rate: `2650`
+- Estimated births needed for `300` crossed-20k observations at the current rate: `2866`
+
+The run stopped just short of the first `500` birth inventory checkpoint. The remaining gap is `32` birth-watch mints. Next action is a small bounded scanner top-off, followed by another bounded follow-up audit.
