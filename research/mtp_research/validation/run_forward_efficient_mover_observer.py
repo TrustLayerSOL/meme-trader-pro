@@ -112,6 +112,7 @@ def main() -> int:
             max_active_birth_followups=args.max_active_birth_followups,
             max_runtime_minutes=args.max_runtime_minutes,
             max_helius_credits=args.max_helius_credits,
+            birth_candidate_source_method=args.birth_candidate_source_method,
             birth_scan_max_batches=args.birth_scan_max_batches,
             birth_scan_signatures_per_batch=args.birth_scan_signatures_per_batch,
             birth_scan_hydrate_limit_per_batch=args.birth_scan_hydrate_limit_per_batch,
@@ -192,6 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--birth-scan-min-confidence", choices=["low", "medium", "high"], default="medium")
     parser.add_argument("--birth-scan-cursor-before", default=None)
     parser.add_argument("--target-births", type=int, default=25)
+    parser.add_argument("--birth-candidate-source-method", choices=["websocket_logs", "signature_scan"], default="websocket_logs")
     parser.add_argument("--followup-duration-seconds", type=int, default=120)
     parser.add_argument("--first-pass-delay-seconds", type=float, default=0.0)
     parser.add_argument("--followup-poll-seconds", type=float, default=2.0)

@@ -19,6 +19,7 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     ForwardObserverConfig,
     PumpFunCreateScannerCandidateSource,
     append_jsonl,
+    build_birth_watch_candidate_from_create_candidate,
     build_live_event_candidate,
     build_observation_rows,
     guardrails,
@@ -29,6 +30,7 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     safe_float,
     _post_json_rpc,
 )
+from research.mtp_research.ingestion.pumpfun_create_scanner import PumpFunCreateScanner
 
 
 REPORT_ID = "forward_birth_watch_followup_collector_v0"
@@ -112,6 +114,184 @@ class MockBirthWatchCandidateSource:
     def fetch_candidates(self) -> list[dict[str, Any]]:
         self.fetch_calls += 1
         return [dict(row) for row in self.candidates]
+
+
+def rpc_url_to_websocket_url(rpc_url: str | None) -> str | None:
+    if not rpc_url:
+        return None
+    if rpc_url.startswith("https://"):
+        return "wss://" + rpc_url[len("https://") :]
+    if rpc_url.startswith("http://"):
+        return "ws://" + rpc_url[len("http://") :]
+    if rpc_url.startswith("wss://") or rpc_url.startswith("ws://"):
+        return rpc_url
+    return None
+
+
+class PumpFunCreateWebSocketCandidateSource:
+    source_name = "helius_websocket_logs"
+
+    def __init__(
+        self,
+        config: ForwardObserverConfig | None = None,
+        *,
+        rpc_url: str | None = None,
+        websocket_url: str | None = None,
+        timeout_seconds: float = 10.0,
+        rpc_post: Any | None = None,
+        ws_connect: Any | None = None,
+        scanner: PumpFunCreateScanner | None = None,
+    ) -> None:
+        self.config = config
+        self.rpc_url = rpc_url if rpc_url is not None else resolve_helius_rpc_url()
+        self.websocket_url = websocket_url or rpc_url_to_websocket_url(self.rpc_url)
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self._rpc_post = rpc_post or _post_json_rpc
+        self._ws_connect = ws_connect
+        self.scanner = scanner or PumpFunCreateScanner()
+        self._requests_used = 0
+        self.processed_signatures: set[str] = set()
+
+    @property
+    def requests_used(self) -> int:
+        return self._requests_used
+
+    def load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        self.processed_signatures = {str(signature) for signature in checkpoint.get("birth_ws_processed_signatures", []) if signature}
+
+    def checkpoint_updates(self) -> dict[str, Any]:
+        return {"birth_ws_processed_signatures": sorted(self.processed_signatures)}
+
+    def availability(self) -> dict[str, Any]:
+        if not self.websocket_url or not self.rpc_url:
+            return {
+                "source": self.source_name,
+                "available": False,
+                "read_only": True,
+                "missing_reason": "live_source_blocked_no_helius_config",
+                "source_adapter": "helius_pumpfun_create_websocket_logs",
+            }
+        return {
+            "source": self.source_name,
+            "available": True,
+            "read_only": True,
+            "source_adapter": "helius_pumpfun_create_websocket_logs",
+            "candidate_lane": "pumpfun_birth_watch",
+            "timeout_seconds": self.timeout_seconds,
+        }
+
+    def fetch_candidates(self) -> list[dict[str, Any]]:
+        if not self.websocket_url or not self.rpc_url:
+            return []
+        connect = self._ws_connect or _websocket_connect
+        deadline = time.monotonic() + self.timeout_seconds
+        candidates: list[dict[str, Any]] = []
+        subscription_id: int | None = None
+        try:
+            with connect(self.websocket_url, open_timeout=min(5.0, self.timeout_seconds), close_timeout=1.0) as websocket:
+                self._requests_used += 1
+                websocket.send(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "mtp-pumpfun-create-logs-subscribe",
+                            "method": "logsSubscribe",
+                            "params": [
+                                {"mentions": [PUMP_FUN_PROGRAM_ID]},
+                                {"commitment": "processed"},
+                            ],
+                        }
+                    )
+                )
+                while time.monotonic() < deadline:
+                    remaining = max(0.1, deadline - time.monotonic())
+                    try:
+                        message = websocket.recv(timeout=remaining)
+                    except TimeoutError:
+                        break
+                    payload = json.loads(message) if isinstance(message, str) else message
+                    if not isinstance(payload, dict):
+                        continue
+                    if payload.get("id") == "mtp-pumpfun-create-logs-subscribe":
+                        subscription_id = payload.get("result") if isinstance(payload.get("result"), int) else None
+                        continue
+                    signature = _signature_from_logs_notification(payload)
+                    if not signature or signature in self.processed_signatures:
+                        continue
+                    self.processed_signatures.add(signature)
+                    candidate = self._candidate_from_signature(signature)
+                    if candidate is not None:
+                        candidates.append(candidate)
+                        break
+                if subscription_id is not None:
+                    websocket.send(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": "mtp-pumpfun-create-logs-unsubscribe",
+                                "method": "logsUnsubscribe",
+                                "params": [subscription_id],
+                            }
+                        )
+                    )
+        except Exception:
+            return candidates
+        return candidates
+
+    def _candidate_from_signature(self, signature: str) -> dict[str, Any] | None:
+        tx = self._fetch_transaction(signature)
+        if not tx:
+            return None
+        candidates, _rejected, _unknown, _direct_count = self.scanner._extract_candidates(
+            [tx],
+            remaining_target=1,
+            include_low_confidence=False,
+            min_confidence="medium",
+        )
+        if not candidates:
+            return None
+        candidate = build_birth_watch_candidate_from_create_candidate(candidates[0])
+        candidate["observed_at"] = time.time()
+        candidate["source"] = "helius_program_logs_pumpfun_create_websocket"
+        candidate["source_adapter"] = "helius_pumpfun_create_websocket_logs"
+        return candidate
+
+    def _fetch_transaction(self, signature: str) -> dict[str, Any]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "mtp-pumpfun-create-ws-get-transaction",
+            "method": "getTransaction",
+            "params": [
+                signature,
+                {
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                    "commitment": "confirmed",
+                },
+            ],
+        }
+        response = self._rpc_post(self.rpc_url, payload, 10)
+        self._requests_used += 1
+        result = response.get("result") if isinstance(response, dict) else None
+        return result if isinstance(result, dict) else {}
+
+
+def _websocket_connect(*args: Any, **kwargs: Any) -> Any:
+    from websockets.sync.client import connect
+
+    return connect(*args, **kwargs)
+
+
+def _signature_from_logs_notification(payload: dict[str, Any]) -> str | None:
+    if payload.get("method") != "logsNotification":
+        return None
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    result = params.get("result") if isinstance(params.get("result"), dict) else {}
+    value = result.get("value") if isinstance(result.get("value"), dict) else {}
+    if value.get("err") is not None:
+        return None
+    signature = value.get("signature")
+    return str(signature) if signature else None
 
 
 class HeliusMintBirthWatchFollowupFetcher:
@@ -349,6 +529,7 @@ def run_immediate_birth_followup_observation(
     max_active_birth_followups: int = 100,
     max_runtime_minutes: int = 30,
     max_helius_credits: int = 50_000,
+    birth_candidate_source_method: str = "websocket_logs",
     birth_scan_max_batches: int = 1,
     birth_scan_signatures_per_batch: int = 10,
     birth_scan_hydrate_limit_per_batch: int = 10,
@@ -384,7 +565,12 @@ def run_immediate_birth_followup_observation(
     config.report_root.mkdir(parents=True, exist_ok=True)
     now_fn = time_fn or time.time
     sleeper = sleep_fn or time.sleep
-    source = candidate_source or PumpFunCreateScannerCandidateSource(config)
+    if candidate_source is not None:
+        source = candidate_source
+    elif birth_candidate_source_method == "websocket_logs":
+        source = PumpFunCreateWebSocketCandidateSource(config)
+    else:
+        source = PumpFunCreateScannerCandidateSource(config)
     checkpoint_path = config.observation_root / OUTPUT_FILES["checkpoint"]
     checkpoint = {}
     if checkpoint_path.exists():
@@ -408,6 +594,7 @@ def run_immediate_birth_followup_observation(
         "max_active_birth_followups": int(max_active_birth_followups),
         "max_runtime_minutes": int(max_runtime_minutes),
         "max_helius_credits": int(max_helius_credits),
+        "birth_candidate_source_method": birth_candidate_source_method,
         "birth_scan_max_batches": int(birth_scan_max_batches),
         "birth_scan_signatures_per_batch": int(birth_scan_signatures_per_batch),
         "birth_scan_hydrate_limit_per_batch": int(birth_scan_hydrate_limit_per_batch),

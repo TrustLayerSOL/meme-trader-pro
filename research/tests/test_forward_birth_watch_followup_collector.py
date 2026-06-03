@@ -4,9 +4,11 @@ from pathlib import Path
 from research.mtp_research.validation.forward_birth_watch_followup_collector import (
     MockBirthWatchCandidateSource,
     MockBirthWatchFollowupFetcher,
+    PumpFunCreateWebSocketCandidateSource,
     build_birth_watch_followup_plan,
     run_immediate_birth_followup_observation,
     run_birth_watch_followup_collection,
+    rpc_url_to_websocket_url,
 )
 
 
@@ -304,6 +306,29 @@ def test_immediate_birth_followup_requires_sub_5_second_create_to_attempt(tmp_pa
     assert status["median_seconds_create_to_first_followup_attempt"] == 6
     assert status["median_seconds_create_observed_to_first_followup_attempt"] == 0
     assert result["readiness_classification"] == "freshness_repair_needs_timing_improvement"
+
+
+def test_rpc_url_to_websocket_url_preserves_helius_api_key() -> None:
+    assert (
+        rpc_url_to_websocket_url("https://mainnet.helius-rpc.com/?api-key=test-key")
+        == "wss://mainnet.helius-rpc.com/?api-key=test-key"
+    )
+    assert (
+        rpc_url_to_websocket_url("http://localhost:8899")
+        == "ws://localhost:8899"
+    )
+
+
+def test_websocket_birth_candidate_source_is_dry_when_unavailable() -> None:
+    source = PumpFunCreateWebSocketCandidateSource(rpc_url="")
+
+    availability = source.availability()
+    candidates = source.fetch_candidates()
+
+    assert availability["available"] is False
+    assert availability["missing_reason"] == "live_source_blocked_no_helius_config"
+    assert candidates == []
+    assert source.requests_used == 0
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
