@@ -165,6 +165,38 @@ def test_observe_with_mocked_helius_live_source_writes_candidate(tmp_path: Path,
     assert (config.raw_root / "helius_rpc_raw.jsonl").exists()
 
 
+def test_observe_stops_at_target_inside_source_batch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "test-secret-key")
+    config = ForwardObserverConfig(
+        data_root=tmp_path,
+        source="helius-all",
+        target_candidates=2,
+        max_observe_iterations=1,
+        max_helius_credits=10,
+    )
+    source = HeliusLiveCandidateSource(
+        config=HeliusLiveSourceConfig.from_observer_config(config, load_project_dotenv=False),
+        client=MockHeliusEventClient(
+            [
+                {
+                    "source_adapter": "helius_program_logs_pumpfun",
+                    "event_type": "pumpfun_trade",
+                    "mint": f"mint-{index}",
+                    "fdv_proxy": 25_000 + index,
+                    "event_count": 1,
+                }
+                for index in range(3)
+            ]
+        ),
+    )
+
+    result = run_observe(config, source=source)
+    rows = (config.observation_root / "candidates.jsonl").read_text(encoding="utf-8").strip().splitlines()
+
+    assert result["total_candidates_observed"] == 2
+    assert len(rows) == 2
+
+
 def test_live_source_budget_cap_blocks_fetch(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HELIUS_API_KEY", "test-secret-key")
     config = ForwardObserverConfig(data_root=tmp_path, source="helius-all", max_helius_credits=0)

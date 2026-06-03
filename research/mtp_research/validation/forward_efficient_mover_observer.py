@@ -1051,9 +1051,12 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
     latest_mint = None
     warnings: list[str] = []
     iterations = 0
+    current_observed = len(unique_by(read_jsonl(config.observation_root / OUTPUT_FILES["candidates"]), "observation_id"))
     if not availability.get("available"):
         warnings.append("candidate_source_unavailable_no_observation_rows_written")
     while availability.get("available"):
+        if current_observed >= config.target_candidates:
+            break
         if config.max_observe_iterations is not None and iterations >= config.max_observe_iterations:
             break
         if elapsed_minutes(start_time) >= config.max_runtime_minutes:
@@ -1086,6 +1089,9 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
             append_jsonl(config.raw_root / "source_candidates.jsonl", [{**candidate, "observed_at": observed_at, "observation_id": observation_id}])
             seen_mints.add(mint)
             latest_mint = mint
+            current_observed += 1
+            if current_observed >= config.target_candidates:
+                break
         iterations += 1
         if config.max_observe_iterations is None:
             time.sleep(max(0.0, config.poll_seconds))
