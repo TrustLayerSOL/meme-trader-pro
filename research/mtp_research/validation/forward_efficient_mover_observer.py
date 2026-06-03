@@ -10,14 +10,19 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import ssl
 import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from urllib import request as urllib_request
+from urllib.parse import parse_qsl, urlparse, urlunparse
 
 from research.mtp_research.data_paths import data_lake_root
+from research.mtp_research.ingestion.helius_backfill import _load_project_dotenv_if_needed
 
 
 REPORT_ID = "forward_efficient_mover_observer_v0"
@@ -42,6 +47,64 @@ OUTPUT_FILES = {
     "drawdowns": "candidate_drawdowns.jsonl",
     "checkpoint": "checkpoint.json",
     "status": "status.json",
+}
+RAW_SOURCE_FILES = {
+    "helius_ws": "helius_ws_raw.jsonl",
+    "helius_rpc": "helius_rpc_raw.jsonl",
+    "dexscreener": "dexscreener_raw.jsonl",
+}
+LIVE_READINESS_JSON = "live_source_readiness.json"
+LIVE_READINESS_MD = "live_source_readiness.md"
+PUMP_FUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+PUMPSWAP_PROGRAM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+RAYDIUM_LAUNCHLAB_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"
+RAYDIUM_CPMM_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNuxFYvWzqMe9J1KLcXxj3xV"
+LIVE_EVENT_SCHEMA_FIELDS = [
+    "source",
+    "source_adapter",
+    "observation_time",
+    "slot",
+    "block_time",
+    "signature",
+    "program_id",
+    "event_type",
+    "mint",
+    "pool_address",
+    "bonding_curve",
+    "associated_bonding_curve",
+    "creator",
+    "buyer",
+    "seller",
+    "wallet",
+    "side",
+    "sol_amount",
+    "token_amount",
+    "price_proxy",
+    "fdv_proxy",
+    "liquidity_proxy",
+    "token_name",
+    "token_symbol",
+    "metadata_uri",
+    "event_count",
+    "buy_count",
+    "sell_count",
+    "active_wallet_count",
+    "raw_message_path",
+    "parse_confidence",
+    "missing_reason",
+]
+SUPPORTED_LIVE_EVENT_TYPES = {
+    "new_launch_candidate",
+    "pumpfun_create",
+    "pumpfun_trade",
+    "pumpswap_migration",
+    "pumpswap_trade",
+    "raydium_pool_create",
+    "raydium_trade_or_pool_update",
+    "candidate_trigger_crossed",
+    "metadata_update",
+    "holder_snapshot",
+    "drawdown_update",
 }
 METHODOLOGY_FLAGS = [
     "forward_observation_only",
@@ -83,7 +146,7 @@ class ForwardObserverConfig:
     status_interval_seconds: int = 30
     max_runtime_minutes: int = 240
     max_api_calls: int = 100_000
-    max_helius_credits: int | None = None
+    max_helius_credits: int | None = 250_000
     max_dexscreener_calls: int = 10_000
     max_active_watches: int = 50
     metadata_refresh_interval_seconds: int = 60
@@ -94,6 +157,7 @@ class ForwardObserverConfig:
     max_observe_iterations: int | None = None
     source: str = "auto"
     local_source_path: Path | str | None = None
+    perform_live_health_checks: bool = False
 
     @property
     def root(self) -> Path:
@@ -171,9 +235,364 @@ class PlaceholderReadOnlySource:
         return []
 
 
+@dataclass(frozen=True)
+class ProgramSourceConfig:
+    adapter_name: str
+    program_ids: list[str]
+    event_type: str
+    status: str
+    notes: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "adapter_name": self.adapter_name,
+            "program_ids": self.program_ids,
+            "event_type": self.event_type,
+            "status": self.status,
+            "notes": self.notes,
+        }
+
+
+def default_program_configs() -> dict[str, ProgramSourceConfig]:
+    return {
+        "helius_program_logs_pumpfun": ProgramSourceConfig(
+            adapter_name="helius_program_logs_pumpfun",
+            program_ids=[PUMP_FUN_PROGRAM_ID],
+            event_type="pumpfun_trade",
+            status="ready",
+            notes="Pump.fun program ID is repo-verified from the creation scanner.",
+        ),
+        "helius_program_logs_pumpswap": ProgramSourceConfig(
+            adapter_name="helius_program_logs_pumpswap",
+            program_ids=[PUMPSWAP_PROGRAM_ID],
+            event_type="pumpswap_trade",
+            status="needs_probe_verification",
+            notes="Program ID exists in the discovery plan but still needs tiny-probe confirmation before full reliance.",
+        ),
+        "helius_program_logs_raydium": ProgramSourceConfig(
+            adapter_name="helius_program_logs_raydium",
+            program_ids=[RAYDIUM_LAUNCHLAB_PROGRAM_ID, RAYDIUM_CPMM_PROGRAM_ID],
+            event_type="raydium_trade_or_pool_update",
+            status="needs_probe_verification",
+            notes="Raydium program IDs exist in the discovery plan but should stay source-readiness limited until probes confirm semantics.",
+        ),
+    }
+
+
+@dataclass
+class HeliusLiveSourceConfig:
+    rpc_url: str
+    ws_url: str
+    rpc_endpoint_masked: str
+    ws_endpoint_masked: str
+    program_configs: dict[str, ProgramSourceConfig]
+    raw_root: Path
+    max_helius_credits: int
+    source: str = "helius-all"
+    timeout_sec: int = 10
+    limit_per_program_poll: int = 5
+
+    @classmethod
+    def from_observer_config(
+        cls,
+        config: ForwardObserverConfig,
+        *,
+        load_project_dotenv: bool = True,
+    ) -> "HeliusLiveSourceConfig":
+        rpc_url = resolve_helius_rpc_url(load_project_dotenv=load_project_dotenv)
+        ws_url = resolve_helius_ws_url(load_project_dotenv=load_project_dotenv)
+        return cls(
+            rpc_url=rpc_url,
+            ws_url=ws_url,
+            rpc_endpoint_masked=mask_helius_endpoint(rpc_url),
+            ws_endpoint_masked=mask_helius_endpoint(ws_url),
+            program_configs=_program_configs_for_source(config.source),
+            raw_root=config.raw_root,
+            max_helius_credits=int(config.max_helius_credits or 0),
+            source=config.source,
+        )
+
+
+class MockHeliusEventClient:
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self.events = [dict(event) for event in events]
+        self.requests_used = 0
+
+    def poll_program_events(self, program_configs: dict[str, ProgramSourceConfig], *, limit: int = 5) -> list[dict[str, Any]]:
+        self.requests_used += 1
+        return [dict(event) for event in self.events[:limit]]
+
+
+class HeliusRpcPollingClient:
+    def __init__(self, rpc_url: str, *, timeout_sec: int = 10) -> None:
+        self.rpc_url = rpc_url
+        self.timeout_sec = timeout_sec
+        self.requests_used = 0
+
+    def poll_program_events(self, program_configs: dict[str, ProgramSourceConfig], *, limit: int = 5) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        for adapter_name, program_config in program_configs.items():
+            if program_config.status != "ready":
+                continue
+            for program_id in program_config.program_ids:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": "mtp-forward-observer-get-signatures",
+                    "method": "getSignaturesForAddress",
+                    "params": [program_id, {"limit": max(1, min(limit, 25))}],
+                }
+                response = _post_json_rpc(self.rpc_url, payload, self.timeout_sec)
+                self.requests_used += 1
+                rows = response.get("result") if isinstance(response, dict) else None
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    events.append(
+                        {
+                            "source_adapter": adapter_name,
+                            "event_type": program_config.event_type,
+                            "program_id": program_id,
+                            "signature": row.get("signature"),
+                            "slot": row.get("slot"),
+                            "block_time": row.get("blockTime"),
+                            "parse_confidence": "signature_only",
+                            "missing_reason": "mint_and_fdv_not_available_without_hydration_or_metadata_feed",
+                        }
+                    )
+        return events
+
+
+class HeliusLiveCandidateSource:
+    source_name = "helius"
+
+    def __init__(self, config: HeliusLiveSourceConfig, client: Any | None = None) -> None:
+        self.config = config
+        self.client = client or HeliusRpcPollingClient(config.rpc_url, timeout_sec=config.timeout_sec)
+
+    def availability(self) -> dict[str, Any]:
+        if self.config.max_helius_credits <= 0:
+            return {
+                "source": self.source_name,
+                "available": False,
+                "read_only": True,
+                "missing_reason": "max_helius_credits_zero_or_negative",
+                "rpc_endpoint_masked": self.config.rpc_endpoint_masked,
+                "ws_endpoint_masked": self.config.ws_endpoint_masked,
+                "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
+            }
+        ready = [name for name, item in self.config.program_configs.items() if item.status == "ready" and item.program_ids]
+        missing = [name for name, item in self.config.program_configs.items() if item.status != "ready" or not item.program_ids]
+        return {
+            "source": self.source_name,
+            "available": bool(ready),
+            "read_only": True,
+            "rpc_endpoint_masked": self.config.rpc_endpoint_masked,
+            "ws_endpoint_masked": self.config.ws_endpoint_masked,
+            "ready_adapters": ready,
+            "missing_or_unverified_adapters": missing,
+            "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
+            "missing_reason": None if ready else "no_verified_program_ids_for_selected_helius_source",
+        }
+
+    def fetch_candidates(self) -> list[dict[str, Any]]:
+        events = [normalize_live_source_event(event) for event in self.client.poll_program_events(self.config.program_configs, limit=self.config.limit_per_program_poll)]
+        if events:
+            append_jsonl(self.config.raw_root / RAW_SOURCE_FILES["helius_rpc"], events)
+        candidates = []
+        for event in events:
+            candidate = build_live_event_candidate(event)
+            if candidate:
+                candidates.append(candidate)
+        return candidates
+
+    @property
+    def requests_used(self) -> int:
+        return int(getattr(self.client, "requests_used", 0))
+
+
+def resolve_helius_api_key(*, load_project_dotenv: bool = True) -> str | None:
+    if load_project_dotenv:
+        _load_project_dotenv_if_needed()
+    return os.getenv("HELIUS_API_KEY")
+
+
+def resolve_helius_rpc_url(*, load_project_dotenv: bool = True) -> str:
+    if load_project_dotenv:
+        _load_project_dotenv_if_needed()
+    explicit = os.getenv("HELIUS_RPC_URL") or os.getenv("HELIUS_ENDPOINT")
+    if explicit:
+        return explicit
+    api_key = resolve_helius_api_key(load_project_dotenv=False)
+    if not api_key:
+        return ""
+    return f"https://mainnet.helius-rpc.com/?api-key={api_key}"
+
+
+def resolve_helius_ws_url(*, load_project_dotenv: bool = True) -> str:
+    if load_project_dotenv:
+        _load_project_dotenv_if_needed()
+    explicit = os.getenv("HELIUS_WS_URL")
+    if explicit:
+        return explicit
+    rpc_url = resolve_helius_rpc_url(load_project_dotenv=False)
+    if rpc_url.startswith("https://"):
+        return "wss://" + rpc_url.removeprefix("https://")
+    if rpc_url.startswith("http://"):
+        return "ws://" + rpc_url.removeprefix("http://")
+    api_key = resolve_helius_api_key(load_project_dotenv=False)
+    if not api_key:
+        return ""
+    return f"wss://mainnet.helius-rpc.com/?api-key={api_key}"
+
+
+def mask_helius_endpoint(endpoint: str | None) -> str:
+    if not endpoint:
+        return ""
+    parsed = urlparse(endpoint)
+    query = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        query.append((key, "***masked***" if key.lower() in {"api-key", "apikey", "key"} else value))
+    masked_query = "&".join(f"{key}={value}" for key, value in query)
+    return urlunparse(parsed._replace(query=masked_query))
+
+
+def run_live_source_readiness(
+    config: ForwardObserverConfig,
+    *,
+    perform_network_checks: bool = True,
+    load_project_dotenv: bool = True,
+) -> dict[str, Any]:
+    ensure_dirs(config)
+    api_key = resolve_helius_api_key(load_project_dotenv=load_project_dotenv)
+    rpc_url = resolve_helius_rpc_url(load_project_dotenv=False)
+    ws_url = resolve_helius_ws_url(load_project_dotenv=False)
+    program_configs = _program_configs_for_source(config.source if config.source.startswith("helius") else "helius-all")
+    rpc_check = _helius_rpc_health_check(rpc_url) if perform_network_checks and rpc_url else {"status": "not_checked"}
+    ws_check = _helius_ws_health_check(ws_url) if perform_network_checks and ws_url else {"status": "not_checked"}
+    output_writable = _check_output_writable(config.report_root)
+    ready_programs = [name for name, item in program_configs.items() if item.status == "ready" and item.program_ids]
+    missing_programs = [name for name, item in program_configs.items() if item.status != "ready" or not item.program_ids]
+    if not api_key and not (os.getenv("HELIUS_RPC_URL") or os.getenv("HELIUS_ENDPOINT")):
+        classification = "live_source_blocked_no_helius_config"
+    elif rpc_check.get("status") == "blocked" or ws_check.get("status") == "blocked":
+        classification = "live_source_blocked_connection_error"
+    elif missing_programs:
+        classification = "live_source_partial_missing_program_ids"
+    else:
+        classification = "live_source_ready_for_smoke_test"
+    report = {
+        "report_id": "forward_efficient_mover_live_source_readiness_v0",
+        "created_at": utc_now_iso(),
+        "readiness_classification": classification,
+        "observation_root": str(config.observation_root),
+        "raw_root": str(config.raw_root),
+        "report_root": str(config.report_root),
+        "helius": {
+            "api_key_present": bool(api_key),
+            "rpc_endpoint_masked": mask_helius_endpoint(rpc_url),
+            "ws_endpoint_masked": mask_helius_endpoint(ws_url),
+            "rpc_health": rpc_check,
+            "ws_health": ws_check,
+            "max_helius_credits": int(config.max_helius_credits or 0),
+        },
+        "source_adapters": {name: item.to_dict() for name, item in program_configs.items()},
+        "ready_adapters": ready_programs,
+        "missing_or_unverified_adapters": missing_programs,
+        "dexscreener_metadata_free": {"status": "disabled", "notes": "secondary metadata enrichment only; not primary discovery"},
+        "output_paths_writable": output_writable,
+        "budget_caps": {
+            "monthly_observation_budget_target": 5_000_000,
+            "short_live_smoke_cap": 25_000,
+            "default_observe_cap": int(config.max_helius_credits or 0),
+        },
+        "guardrails": guardrails(),
+        "network_checks_performed": perform_network_checks,
+    }
+    _write_live_readiness_report(config, report)
+    return report
+
+
+def normalize_live_source_event(payload: dict[str, Any]) -> dict[str, Any]:
+    event = {field: None for field in LIVE_EVENT_SCHEMA_FIELDS}
+    event.update(
+        {
+            "source": payload.get("source") or "helius",
+            "source_adapter": payload.get("source_adapter"),
+            "observation_time": payload.get("observation_time") or int(time.time()),
+            "slot": payload.get("slot"),
+            "block_time": payload.get("block_time", payload.get("blockTime")),
+            "signature": payload.get("signature"),
+            "program_id": payload.get("program_id"),
+            "event_type": _safe_event_type(payload.get("event_type")),
+            "mint": payload.get("mint") or payload.get("token_mint"),
+            "pool_address": payload.get("pool_address"),
+            "bonding_curve": payload.get("bonding_curve"),
+            "associated_bonding_curve": payload.get("associated_bonding_curve"),
+            "creator": payload.get("creator") or payload.get("deployer"),
+            "buyer": payload.get("buyer"),
+            "seller": payload.get("seller"),
+            "wallet": payload.get("wallet"),
+            "side": payload.get("side"),
+            "sol_amount": payload.get("sol_amount"),
+            "token_amount": payload.get("token_amount"),
+            "price_proxy": payload.get("price_proxy"),
+            "fdv_proxy": payload.get("fdv_proxy"),
+            "liquidity_proxy": payload.get("liquidity_proxy"),
+            "token_name": payload.get("token_name"),
+            "token_symbol": payload.get("token_symbol"),
+            "metadata_uri": payload.get("metadata_uri"),
+            "event_count": payload.get("event_count"),
+            "buy_count": payload.get("buy_count"),
+            "sell_count": payload.get("sell_count"),
+            "active_wallet_count": payload.get("active_wallet_count") or payload.get("active_wallets"),
+            "raw_message_path": payload.get("raw_message_path"),
+            "parse_confidence": payload.get("parse_confidence") or "event_payload",
+            "missing_reason": payload.get("missing_reason"),
+        }
+    )
+    if event["fdv_proxy"] is None and event["missing_reason"] is None:
+        event["missing_reason"] = "fdv_proxy_unavailable"
+    if event["mint"] is None and event["missing_reason"] is None:
+        event["missing_reason"] = "mint_unavailable"
+    return event
+
+
+def build_live_event_candidate(event: dict[str, Any]) -> dict[str, Any] | None:
+    mint = event.get("mint")
+    fdv = safe_float(event.get("fdv_proxy"))
+    if not mint or fdv is None:
+        return None
+    return {
+        "mint": mint,
+        "token_mint": mint,
+        "source": event.get("source_adapter") or event.get("source") or "helius",
+        "token_name": event.get("token_name"),
+        "token_symbol": event.get("token_symbol"),
+        "fdv_proxy": fdv,
+        "event_count": event.get("event_count") or 1,
+        "buy_count": event.get("buy_count") or (1 if event.get("side") == "buy" else 0),
+        "sell_count": event.get("sell_count") or (1 if event.get("side") == "sell" else 0),
+        "active_wallets": event.get("active_wallet_count") or (1 if event.get("wallet") or event.get("buyer") or event.get("seller") else 0),
+        "slot": event.get("slot"),
+        "block_time": event.get("block_time"),
+        "transaction_signature": event.get("signature"),
+        "liquidity_proxy": event.get("liquidity_proxy"),
+        "price_proxy": event.get("price_proxy"),
+        "creator": event.get("creator"),
+        "pool_address": event.get("pool_address"),
+        "metadata_uri": event.get("metadata_uri"),
+    }
+
+
 def run_dry_run(config: ForwardObserverConfig) -> dict[str, Any]:
     ensure_dirs(config)
     source_reports = source_availability_reports(config)
+    live_readiness = run_live_source_readiness(
+        config,
+        perform_network_checks=config.perform_live_health_checks,
+    )
     report = {
         "report_id": REPORT_ID,
         "mode": "dry-run",
@@ -185,6 +604,7 @@ def run_dry_run(config: ForwardObserverConfig) -> dict[str, Any]:
         "raw_root": str(config.raw_root),
         "report_root": str(config.report_root),
         "source_availability": source_reports,
+        "live_source_readiness": live_readiness,
         "target_candidates": config.target_candidates,
         "start_trigger": config.start_trigger,
         "poll_seconds": config.poll_seconds,
@@ -221,8 +641,10 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
         if total_api_calls >= config.max_api_calls:
             warnings.append("max_api_calls_reached")
             break
+        before_source_requests = int(getattr(selected_source, "requests_used", 0))
         candidates = selected_source.fetch_candidates()
-        total_api_calls += 1
+        after_source_requests = int(getattr(selected_source, "requests_used", before_source_requests))
+        total_api_calls += max(1, after_source_requests - before_source_requests)
         for candidate in candidates:
             fdv = safe_float(candidate.get("fdv_proxy"))
             mint = str(candidate.get("mint") or candidate.get("token_mint") or "")
@@ -247,9 +669,10 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
         "updated_at": utc_now_iso(),
         "seen_mints": sorted(seen_mints),
         "api_calls_used": total_api_calls,
-        "source": availability,
-        "warnings": warnings,
-    }
+            "source": availability,
+            "warnings": warnings,
+            "helius_requests_used": total_api_calls if availability.get("source") == "helius" else 0,
+        }
     write_checkpoint(config.observation_root / OUTPUT_FILES["checkpoint"], checkpoint_payload)
     tally = calculate_status_tally(config.observation_root, target_candidates=config.target_candidates)
     tally.update(
@@ -259,6 +682,8 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
             "latest_observed_candidate": latest_mint or tally.get("latest_observed_candidate"),
             "warnings": warnings,
             "output_path": str(config.observation_root),
+            "helius_requests_used": total_api_calls if availability.get("source") == "helius" else 0,
+            "estimated_helius_credits_used": total_api_calls if availability.get("source") == "helius" else 0,
             "readiness_classification": "forward_observer_ready_for_observation" if availability.get("available") else "forward_observer_needs_source_config",
         }
     )
@@ -269,12 +694,17 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
 def run_status(config: ForwardObserverConfig) -> dict[str, Any]:
     ensure_dirs(config)
     tally = calculate_status_tally(config.observation_root, target_candidates=config.target_candidates)
+    checkpoint = read_checkpoint(config.observation_root / OUTPUT_FILES["checkpoint"])
+    helius_requests_used = int(checkpoint.get("helius_requests_used") or 0)
     tally.update(
         {
             "report_id": REPORT_ID,
             "mode": "status",
             "methodology_flags": METHODOLOGY_FLAGS,
             "guardrails": guardrails(),
+            "source_readiness": source_availability_reports(config),
+            "estimated_helius_requests_used": helius_requests_used,
+            "estimated_helius_credits_used": helius_requests_used,
             "observation_root": str(config.observation_root),
             "report_root": str(config.report_root),
             "output_files": output_paths(config),
@@ -431,6 +861,13 @@ def calculate_status_tally(observation_root: Path | str, *, target_candidates: i
         "metadata_snapshots_collected": len(metadata),
         "holder_snapshots_collected": len(holders),
         "event_rows_collected": len(events),
+        "path_rows_collected": len(paths),
+        "drawdown_rows_collected": len(drawdowns),
+        "raw_ws_rows_collected": line_count(root.parent.parent / "raw" / "forward_observation" / "efficient_movers" / RAW_SOURCE_FILES["helius_ws"]),
+        "raw_rpc_rows_collected": line_count(root.parent.parent / "raw" / "forward_observation" / "efficient_movers" / RAW_SOURCE_FILES["helius_rpc"]),
+        "dexscreener_calls_used": 0,
+        "estimated_helius_requests_used": 0,
+        "estimated_helius_credits_used": 0,
         "current_target_sample_size": target_candidates,
         "remaining_until_target": max(0, target_candidates - total),
         "sample_milestones_reached": [milestone for milestone in TARGET_MILESTONES if total >= milestone],
@@ -442,10 +879,11 @@ def calculate_status_tally(observation_root: Path | str, *, target_candidates: i
 
 
 def source_availability_reports(config: ForwardObserverConfig) -> list[dict[str, Any]]:
+    helius_report = _safe_helius_availability(config)
     return [
         PlaceholderReadOnlySource("pumpfun_pumpswap_feed").availability(),
         PlaceholderReadOnlySource("dexscreener_latest_pairs").availability(),
-        PlaceholderReadOnlySource("helius_read_only_monitor").availability(),
+        helius_report,
         LocalJsonlCandidateSource(config.local_source_path).availability(),
         MockCandidateSource().availability(),
     ]
@@ -456,6 +894,11 @@ def build_source(config: ForwardObserverConfig) -> CandidateSource:
         return MockCandidateSource()
     if config.source == "local":
         return LocalJsonlCandidateSource(config.local_source_path)
+    if config.source.startswith("helius"):
+        try:
+            return HeliusLiveCandidateSource(HeliusLiveSourceConfig.from_observer_config(config))
+        except Exception as exc:
+            return PlaceholderReadOnlySource(f"{config.source}_blocked_{type(exc).__name__}")
     return PlaceholderReadOnlySource("auto_unconfigured_live_source")
 
 
@@ -544,6 +987,9 @@ def print_status(tally: dict[str, Any]) -> str:
         [
             "## Forward Efficient Mover Observation Status",
             "",
+            "Source readiness:",
+            *_format_source_readiness(tally.get("source_readiness") or []),
+            "",
             f"Observation root: {tally.get('observation_root') or tally.get('output_path')}",
             f"First observation time: {tally.get('first_observation_time')}",
             f"Latest observation time: {tally.get('latest_observation_time')}",
@@ -564,11 +1010,162 @@ def print_status(tally: dict[str, Any]) -> str:
             f"Metadata snapshots: {tally.get('metadata_snapshots_collected', 0)}",
             f"Holder snapshots: {tally.get('holder_snapshots_collected', 0)}",
             f"Event rows: {tally.get('event_rows_collected', 0)}",
+            f"Path rows: {tally.get('path_rows_collected', 0)}",
+            f"Drawdown rows: {tally.get('drawdown_rows_collected', 0)}",
+            f"Raw WS rows: {tally.get('raw_ws_rows_collected', 0)}",
+            f"Raw RPC rows: {tally.get('raw_rpc_rows_collected', 0)}",
+            f"Estimated Helius requests/credits used: {tally.get('estimated_helius_credits_used', 0)}",
+            f"DexScreener calls used: {tally.get('dexscreener_calls_used', 0)}",
             f"Target reached: {tally.get('target_reached', False)}",
             f"Remaining until target: {tally.get('remaining_until_target', 0)}",
             f"Stop/review flag: {tally.get('recommended_stop_review_flag')}",
         ]
     )
+
+
+def _program_configs_for_source(source: str) -> dict[str, ProgramSourceConfig]:
+    configs = default_program_configs()
+    if source in {"helius", "helius-all", "auto"}:
+        return configs
+    if source == "helius-pumpfun":
+        return {"helius_program_logs_pumpfun": configs["helius_program_logs_pumpfun"]}
+    if source == "helius-pumpswap":
+        return {"helius_program_logs_pumpswap": configs["helius_program_logs_pumpswap"]}
+    if source == "helius-raydium":
+        return {"helius_program_logs_raydium": configs["helius_program_logs_raydium"]}
+    return configs
+
+
+def _safe_helius_availability(config: ForwardObserverConfig) -> dict[str, Any]:
+    try:
+        live_config = HeliusLiveSourceConfig.from_observer_config(
+            ForwardObserverConfig(
+                data_root=config.data_root,
+                source="helius-all",
+                max_helius_credits=config.max_helius_credits,
+            )
+        )
+        return HeliusLiveCandidateSource(live_config).availability()
+    except Exception as exc:
+        return {
+            "source": "helius",
+            "available": False,
+            "read_only": True,
+            "missing_reason": f"helius_config_error:{type(exc).__name__}",
+        }
+
+
+def _safe_event_type(value: Any) -> str:
+    event_type = str(value or "new_launch_candidate")
+    if event_type in SUPPORTED_LIVE_EVENT_TYPES:
+        return event_type
+    return "new_launch_candidate"
+
+
+def _post_json_rpc(url: str, payload: dict[str, Any], timeout_sec: int) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib_request.urlopen(request, timeout=timeout_sec) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _helius_rpc_health_check(rpc_url: str) -> dict[str, Any]:
+    if not rpc_url:
+        return {"status": "blocked", "reason": "missing_rpc_url"}
+    try:
+        response = _post_json_rpc(
+            rpc_url,
+            {"jsonrpc": "2.0", "id": "mtp-forward-observer-health", "method": "getHealth", "params": []},
+            8,
+        )
+    except Exception as exc:
+        return {"status": "blocked", "reason": type(exc).__name__}
+    if response.get("error"):
+        return {"status": "blocked", "reason": "rpc_error", "error_code": (response.get("error") or {}).get("code")}
+    return {"status": "ready", "method": "getHealth", "result": response.get("result")}
+
+
+def _helius_ws_health_check(ws_url: str) -> dict[str, Any]:
+    if not ws_url:
+        return {"status": "blocked", "reason": "missing_ws_url"}
+    parsed = urlparse(ws_url)
+    host = parsed.hostname
+    if not host:
+        return {"status": "blocked", "reason": "missing_ws_host"}
+    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    try:
+        raw = socket.create_connection((host, port), timeout=8)
+        if parsed.scheme == "wss":
+            context = ssl.create_default_context()
+            with context.wrap_socket(raw, server_hostname=host):
+                pass
+        else:
+            raw.close()
+    except Exception as exc:
+        return {"status": "blocked", "reason": type(exc).__name__}
+    return {"status": "ready", "method": "tls_socket_connect", "host": host, "port": port}
+
+
+def _check_output_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".forward_observer_write_probe"
+        probe.write_text("ok\n", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _write_live_readiness_report(config: ForwardObserverConfig, report: dict[str, Any]) -> None:
+    config.report_root.mkdir(parents=True, exist_ok=True)
+    (config.report_root / LIVE_READINESS_JSON).write_text(json.dumps(report, indent=2, sort_keys=True, default=json_default) + "\n", encoding="utf-8")
+    (config.report_root / LIVE_READINESS_MD).write_text(_live_readiness_markdown(report), encoding="utf-8")
+
+
+def _live_readiness_markdown(report: dict[str, Any]) -> str:
+    helius = report.get("helius") or {}
+    lines = [
+        "# Forward Efficient Mover Live Source Readiness",
+        "",
+        f"- Readiness classification: `{report.get('readiness_classification')}`",
+        f"- Helius API key present: `{helius.get('api_key_present')}`",
+        f"- Helius RPC: `{(helius.get('rpc_health') or {}).get('status')}`",
+        f"- Helius WS: `{(helius.get('ws_health') or {}).get('status')}`",
+        f"- RPC endpoint: `{helius.get('rpc_endpoint_masked')}`",
+        f"- WS endpoint: `{helius.get('ws_endpoint_masked')}`",
+        f"- Ready adapters: `{report.get('ready_adapters')}`",
+        f"- Missing/unverified adapters: `{report.get('missing_or_unverified_adapters')}`",
+        f"- Output paths writable: `{report.get('output_paths_writable')}`",
+        f"- Max Helius credits: `{(report.get('budget_caps') or {}).get('default_observe_cap')}`",
+        "",
+        "This is read-only observation infrastructure. It does not contain paper trading, live trading, order routing, transaction signing, or buy/sell rules.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _format_source_readiness(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["- No source readiness rows available."]
+    output = []
+    for row in rows:
+        source = row.get("source")
+        status = "ready" if row.get("available") else "blocked"
+        reason = row.get("missing_reason")
+        output.append(f"- {source}: {status}" + (f" ({reason})" if reason else ""))
+        if source == "helius":
+            ready = row.get("ready_adapters") or []
+            missing = row.get("missing_or_unverified_adapters") or []
+            output.append(f"  ready_adapters={ready}")
+            output.append(f"  missing_or_unverified_adapters={missing}")
+    return output
+
+
+def line_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
 
 
 def guardrails() -> dict[str, Any]:

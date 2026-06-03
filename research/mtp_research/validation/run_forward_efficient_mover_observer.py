@@ -35,6 +35,7 @@ def main() -> int:
         max_observe_iterations=args.max_observe_iterations,
         source=args.source,
         local_source_path=args.local_source_path,
+        perform_live_health_checks=args.live_health_check,
     )
     if args.mode == "dry-run":
         report = run_dry_run(config)
@@ -74,7 +75,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Forward efficient-mover observation logger.")
     parser.add_argument("--mode", choices=["dry-run", "observe", "status"], default="dry-run")
     parser.add_argument("--data-root", default=None)
-    parser.add_argument("--source", choices=["auto", "mock", "local"], default="auto")
+    parser.add_argument(
+        "--source",
+        choices=["auto", "mock", "local", "helius", "helius-pumpfun", "helius-pumpswap", "helius-raydium", "helius-all"],
+        default="auto",
+    )
     parser.add_argument("--local-source-path", default=None)
     parser.add_argument("--mock-candidate-json", default=None)
     parser.add_argument("--target-candidates", type=int, default=300)
@@ -83,12 +88,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--status-interval-seconds", type=int, default=30)
     parser.add_argument("--max-runtime-minutes", type=int, default=240)
     parser.add_argument("--max-api-calls", type=int, default=100_000)
-    parser.add_argument("--max-helius-credits", type=int, default=None)
+    parser.add_argument("--max-helius-credits", type=int, default=250_000)
     parser.add_argument("--max-dexscreener-calls", type=int, default=10_000)
     parser.add_argument("--max-active-watches", type=int, default=50)
     parser.add_argument("--metadata-refresh-interval-seconds", type=int, default=60)
     parser.add_argument("--holder-refresh-interval-seconds", type=int, default=30)
     parser.add_argument("--max-observe-iterations", type=int, default=None)
+    parser.add_argument("--live-health-check", action="store_true")
+    parser.add_argument("--enable-dexscreener-metadata", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Compatibility flag; use --mode dry-run for dry-run behavior.")
     return parser.parse_args()
 
 

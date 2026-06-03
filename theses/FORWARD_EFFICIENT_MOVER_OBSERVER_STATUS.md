@@ -55,6 +55,17 @@ MEMETRADER_DATA_ROOT=/Volumes/ORICO/MemeTraderPro ./trading_env/bin/python -m re
 
 ## Current Readiness Classification
 
-`forward_observer_ready_for_dry_run`
+`forward_observer_ready_for_observation`
 
-Live observation requires a read-only live candidate source configuration. Mock and local JSONL sources are implemented for schema checks and deterministic tests.
+Helius RPC and WebSocket endpoint resolution are wired through the existing `HELIUS_API_KEY`/Helius URL configuration, with endpoint masking in reports.
+
+Current live source state:
+
+- Helius RPC health: ready in the latest live-readiness check.
+- Helius WS connectivity: ready in the latest live-readiness check.
+- Pump.fun adapter: ready for bounded read-only signature polling.
+- PumpSwap adapter: present but marked `needs_probe_verification`.
+- Raydium adapter: present but marked `needs_probe_verification`.
+- DexScreener metadata: disabled by default; secondary enrichment only.
+
+The first smoke observe run used one request-equivalent Helius call, wrote raw signature rows, and observed zero efficient-mover candidates because the current live layer is still signature-only until transaction hydration/metadata extraction is added.
