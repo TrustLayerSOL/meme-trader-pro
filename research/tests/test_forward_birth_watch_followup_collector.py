@@ -39,6 +39,44 @@ def test_birth_watch_followup_plan_is_bounded_and_dry_run(tmp_path: Path) -> Non
     assert plan["network_calls_made"] == 0
 
 
+def test_birth_watch_followup_plan_can_target_freshness_run_id(tmp_path: Path) -> None:
+    root = tmp_path / "lake"
+    obs = root / "data" / "forward_observation" / "efficient_movers"
+    obs.mkdir(parents=True)
+    _write_jsonl(
+        obs / "birth_watch_mints.jsonl",
+        [
+            {
+                "observation_id": "old-birth",
+                "mint": "old-mint",
+                "freshness_run_id": "old-run",
+                "create_observed_at": 90,
+                "create_time": 80,
+            },
+            {
+                "observation_id": "fresh-birth",
+                "mint": "fresh-mint",
+                "freshness_run_id": "fresh-run",
+                "create_observed_at": 100,
+                "create_time": 99,
+            },
+        ],
+    )
+
+    plan = build_birth_watch_followup_plan(
+        root,
+        max_mints=10,
+        signatures_per_mint=4,
+        transactions_per_mint=2,
+        request_ceiling=10,
+        freshness_run_id="fresh-run",
+    )
+
+    assert plan["selected_mint_count"] == 1
+    assert plan["selected_targets"][0]["mint"] == "fresh-mint"
+    assert plan["freshness_run_id"] == "fresh-run"
+
+
 def test_birth_watch_followup_collection_appends_path_rows_without_new_candidate(tmp_path: Path) -> None:
     root = tmp_path / "lake"
     obs = root / "data" / "forward_observation" / "efficient_movers"

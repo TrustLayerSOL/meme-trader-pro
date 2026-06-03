@@ -391,15 +391,17 @@ def build_birth_watch_followup_plan(
     signatures_per_mint: int = 10,
     transactions_per_mint: int = 10,
     request_ceiling: int = 250,
+    freshness_run_id: str | None = None,
 ) -> dict[str, Any]:
     root = Path(data_root).expanduser()
-    targets = _select_targets(root, max_mints=max_mints)
+    targets = _select_targets(root, max_mints=max_mints, freshness_run_id=freshness_run_id)
     projected_requests = len(targets) * (1 + max(0, min(int(signatures_per_mint), int(transactions_per_mint))))
     return {
         "report_id": REPORT_ID,
         "execute": False,
         "data_root": str(root),
         "observation_root": str(_observation_root(root)),
+        "freshness_run_id": freshness_run_id,
         "selected_mint_count": len(targets),
         "selected_targets": [target.to_dict() for target in targets],
         "signatures_per_mint": int(signatures_per_mint),
@@ -419,6 +421,7 @@ def run_birth_watch_followup_collection(
     signatures_per_mint: int = 10,
     transactions_per_mint: int = 10,
     request_ceiling: int = 250,
+    freshness_run_id: str | None = None,
     execute: bool = False,
     fetcher: BirthWatchFollowupFetcher | None = None,
     observed_at: int | None = None,
@@ -434,6 +437,7 @@ def run_birth_watch_followup_collection(
         signatures_per_mint=signatures_per_mint,
         transactions_per_mint=transactions_per_mint,
         request_ceiling=request_ceiling,
+        freshness_run_id=freshness_run_id,
     )
     result = {
         **plan,
@@ -802,9 +806,16 @@ def run_immediate_birth_followup_observation(
     return result
 
 
-def _select_targets(root: Path, *, max_mints: int) -> list[BirthWatchTarget]:
+def _select_targets(root: Path, *, max_mints: int, freshness_run_id: str | None = None) -> list[BirthWatchTarget]:
     obs = _observation_root(root)
-    candidates = [row for row in read_jsonl(obs / "candidates.jsonl") if _is_birth_candidate(row)]
+    if freshness_run_id:
+        candidates = [
+            row
+            for row in read_jsonl(obs / BIRTH_WATCH_MINTS_FILE)
+            if row.get("freshness_run_id") == freshness_run_id and (row.get("mint") or row.get("token_mint"))
+        ]
+    else:
+        candidates = [row for row in read_jsonl(obs / "candidates.jsonl") if _is_birth_candidate(row)]
     paths_by_mint: dict[str, list[dict[str, Any]]] = {}
     for row in read_jsonl(obs / "candidate_paths.jsonl"):
         mint = str(row.get("mint") or row.get("token_mint") or "")
@@ -819,8 +830,8 @@ def _select_targets(root: Path, *, max_mints: int) -> list[BirthWatchTarget]:
             BirthWatchTarget(
                 observation_id=str(row.get("observation_id") or ""),
                 mint=mint,
-                observed_at=safe_float(row.get("observed_at") or row.get("first_seen_time")),
-                launch_time=safe_float(row.get("launch_time")),
+                observed_at=safe_float(row.get("observed_at") or row.get("first_seen_time") or row.get("create_observed_at")),
+                launch_time=safe_float(row.get("launch_time") or row.get("create_time")),
                 creator=row.get("creator"),
             )
         )
