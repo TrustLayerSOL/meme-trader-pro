@@ -545,6 +545,7 @@ def run_immediate_birth_followup_observation(
     execute: bool = False,
     candidate_source: BirthWatchCandidateSource | None = None,
     fetcher: BirthWatchFollowupFetcher | None = None,
+    freshness_run_id: str | None = None,
     time_fn: Any | None = None,
     sleep_fn: Any | None = None,
 ) -> dict[str, Any]:
@@ -569,6 +570,7 @@ def run_immediate_birth_followup_observation(
     config.report_root.mkdir(parents=True, exist_ok=True)
     now_fn = time_fn or time.time
     sleeper = sleep_fn or time.sleep
+    run_id = freshness_run_id or f"birth-followup-{int(time.time())}"
     if candidate_source is not None:
         source = candidate_source
     elif birth_candidate_source_method == "websocket_logs":
@@ -599,6 +601,7 @@ def run_immediate_birth_followup_observation(
         "max_runtime_minutes": int(max_runtime_minutes),
         "max_helius_credits": int(max_helius_credits),
         "birth_candidate_source_method": birth_candidate_source_method,
+        "freshness_run_id": run_id,
         "birth_scan_max_batches": int(birth_scan_max_batches),
         "birth_scan_signatures_per_batch": int(birth_scan_signatures_per_batch),
         "birth_scan_hydrate_limit_per_batch": int(birth_scan_hydrate_limit_per_batch),
@@ -750,6 +753,7 @@ def run_immediate_birth_followup_observation(
                 first_attempt_time=first_attempt_time,
                 first_event=first_event,
                 pass_count=pass_count,
+                freshness_run_id=run_id,
             )
             append_jsonl(config.observation_root / BIRTH_WATCH_MINTS_FILE, [freshness_record])
             if first_event is not None:
@@ -841,6 +845,7 @@ def _build_freshness_record(
     first_attempt_time: float,
     first_event: dict[str, Any] | None,
     pass_count: int,
+    freshness_run_id: str | None = None,
 ) -> dict[str, Any]:
     create_time = safe_float(target.launch_time or candidate.get("block_time") or candidate.get("transaction_time") or candidate.get("observed_at"))
     create_observed_at = safe_float(target.observed_at or candidate.get("observed_at") or candidate.get("first_seen_time"))
@@ -853,6 +858,7 @@ def _build_freshness_record(
     freshness_class = _freshness_class(create_time=create_time, first_path_time=path_time, first_fdv=fdv)
     return {
         "observation_id": target.observation_id,
+        "freshness_run_id": freshness_run_id,
         "mint": target.mint,
         "token_mint": target.mint,
         "creator": target.creator,
@@ -908,6 +914,7 @@ def _freshness_class(*, create_time: float | None, first_path_time: float | None
 def _freshness_path_fields(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "create_signature": record.get("create_signature"),
+        "freshness_run_id": record.get("freshness_run_id"),
         "create_time": record.get("create_time"),
         "first_followup_attempt_time": record.get("first_followup_attempt_time"),
         "first_followup_path_time": record.get("first_followup_path_time"),
@@ -938,6 +945,12 @@ def _freshness_event_fields(record: dict[str, Any]) -> dict[str, Any]:
 def _update_immediate_freshness_counts(config: ForwardObserverConfig, result: dict[str, Any]) -> None:
     records = read_jsonl(config.observation_root / BIRTH_WATCH_MINTS_FILE)
     paths = read_jsonl(config.observation_root / BIRTH_FOLLOWUP_PATHS_FILE)
+    run_id = result.get("freshness_run_id") or _latest_freshness_run_id(records)
+    active_records = [row for row in records if row.get("freshness_run_id") == run_id] if run_id else records
+    active_paths = [row for row in paths if row.get("freshness_run_id") == run_id] if run_id else paths
+    records = active_records
+    paths = active_paths
+    result["freshness_run_id"] = run_id
     result["smoke_birth_count"] = len(records)
     result["immediate_followup_started_count"] = sum(1 for row in records if row.get("first_followup_attempt_time") is not None)
     result["first_followup_path_rows"] = len(paths)
@@ -1013,6 +1026,7 @@ def _write_immediate_status(config: ForwardObserverConfig, result: dict[str, Any
     status = {
         "report_id": result["report_id"],
         "mode": result["mode"],
+        "freshness_run_id": result.get("freshness_run_id"),
         "birth_watch_mints": result.get("smoke_birth_count", 0),
         "immediate_followup_started": result.get("immediate_followup_started_count", 0),
         "first_followup_path_rows": result.get("first_followup_path_rows", 0),
@@ -1064,6 +1078,14 @@ def _pct_le(values: list[float], threshold: float) -> float | None:
     if not values:
         return None
     return round(sum(1 for value in values if value <= threshold) / len(values), 6)
+
+
+def _latest_freshness_run_id(records: list[dict[str, Any]]) -> str | None:
+    for row in reversed(records):
+        run_id = row.get("freshness_run_id")
+        if run_id:
+            return str(run_id)
+    return None
 
 
 def _is_birth_candidate(row: dict[str, Any]) -> bool:

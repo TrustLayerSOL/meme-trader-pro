@@ -355,6 +355,68 @@ def test_immediate_birth_followup_no_trade_yet_can_pass_freshness_gate(tmp_path:
     assert result["readiness_classification"] == "freshness_repair_ready_for_100_birth_smoke"
 
 
+def test_immediate_birth_followup_status_uses_latest_run_id(tmp_path: Path) -> None:
+    root = tmp_path / "lake"
+    obs = root / "data" / "forward_observation" / "efficient_movers"
+    obs.mkdir(parents=True)
+    _write_jsonl(
+        obs / "birth_watch_mints.jsonl",
+        [
+            {
+                "mint": "old-mint",
+                "create_time": 100,
+                "first_followup_attempt_time": 200,
+                "seconds_create_to_first_followup_attempt": 100,
+                "first_followup_before_10k": True,
+                "freshness_class": "near_birth_observed",
+            }
+        ],
+    )
+    source = MockBirthWatchCandidateSource(
+        [
+            {
+                "observation_id": "birth-a",
+                "mint": "mint-a",
+                "token_mint": "mint-a",
+                "freshness_lane": "birth_watch",
+                "candidate_classification": "pumpfun_birth_candidate_observed",
+                "event_type": "pumpfun_create",
+                "source": "helius_program_logs_pumpfun_create_websocket",
+                "source_adapter": "helius_pumpfun_create_websocket_logs",
+                "launch_time": 100,
+                "block_time": 100,
+                "observed_at": 101,
+                "transaction_signature": "create-sig-a",
+            }
+        ]
+    )
+
+    result = run_immediate_birth_followup_observation(
+        root,
+        target_births=1,
+        followup_duration_seconds=0,
+        followup_poll_seconds=0,
+        max_followup_passes_per_mint=1,
+        max_runtime_minutes=1,
+        max_helius_credits=100,
+        execute=True,
+        candidate_source=source,
+        fetcher=MockBirthWatchFollowupFetcher({"mint-a": []}),
+        freshness_run_id="fresh-run",
+        time_fn=_time_sequence([101, 101, 101, 101]),
+        sleep_fn=lambda _: None,
+    )
+
+    status = json.loads((obs / "birth_followup_status.json").read_text(encoding="utf-8"))
+
+    assert result["freshness_run_id"] == "fresh-run"
+    assert result["smoke_birth_count"] == 1
+    assert status["freshness_run_id"] == "fresh-run"
+    assert status["birth_watch_mints"] == 1
+    assert status["median_seconds_create_to_first_followup_attempt"] == 1
+    assert status["freshness_repair_status"] == "freshness_repair_ready_for_100_birth_smoke"
+
+
 def test_rpc_url_to_websocket_url_preserves_helius_api_key() -> None:
     assert (
         rpc_url_to_websocket_url("https://mainnet.helius-rpc.com/?api-key=test-key")
