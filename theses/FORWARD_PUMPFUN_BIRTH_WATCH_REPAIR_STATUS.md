@@ -49,3 +49,30 @@ Run a tiny bounded Pump.fun birth-watch smoke collection before scaling:
 ```
 
 After the smoke run, audit whether created mints later receive FDV-trigger updates before resuming the larger forward collector.
+
+## Smoke Results
+
+Two smoke paths were checked after the source repair:
+
+1. Generic forward observer Pump.fun program polling:
+   - Result: `0` candidate rows
+   - Helius request estimate: `30`
+   - Raw normalized rows: `25`
+   - Finding: recent generic Pump.fun program traffic was mostly trades below the `10k` FDV trigger, not launch-create events.
+
+2. Pump.fun create scanner:
+   - Signatures seen: `840`
+   - Transactions hydrated: `840`
+   - Direct Pump.fun instructions: `440`
+   - Verified create candidates: `2`
+   - Viability: `maybe_viable`
+   - Helius request estimate: `860`
+   - JSON report: `/Volumes/ORICO/MemeTraderPro/smoke_runs/pumpfun_create_scanner_20260603_larger/reports/pumpfun_create_scan_60559955c855.json`
+   - Markdown report: `/Volumes/ORICO/MemeTraderPro/smoke_runs/pumpfun_create_scanner_20260603_larger/reports/pumpfun_create_scan_60559955c855.md`
+
+## Updated Interpretation
+
+- The generic forward observer is not the right primary source for birth discovery because it samples mixed program traffic.
+- The Pump.fun create scanner is the correct source path for launch birth discovery.
+- Create density in the recent Pump.fun signature stream is low enough that future birth collection should use the scanner/census path with pagination, not repeated generic observer polls.
+- The next implementation step is to bridge verified create scanner output into a forward birth-watch queue, then observe those mints for first FDV-trigger updates.
