@@ -610,6 +610,7 @@ def run_immediate_birth_followup_observation(
         "first_followup_path_rows": 0,
         "true_near_birth_observed_count": 0,
         "first_followup_before_10k_count": 0,
+        "first_followup_before_any_trade_if_known_count": 0,
         "first_followup_before_20k_count": 0,
         "first_followup_after_activity_count": 0,
         "first_followup_already_above_10k_count": 0,
@@ -855,6 +856,8 @@ def _build_freshness_record(
         "mint": target.mint,
         "token_mint": target.mint,
         "creator": target.creator,
+        "source": candidate.get("source"),
+        "source_adapter": candidate.get("source_adapter"),
         "create_signature": candidate.get("transaction_signature"),
         "create_time": create_time,
         "create_observed_at": create_observed_at,
@@ -942,6 +945,9 @@ def _update_immediate_freshness_counts(config: ForwardObserverConfig, result: di
         1 for row in records if row.get("freshness_class") in {"true_birth_observed", "near_birth_observed"}
     )
     result["first_followup_before_10k_count"] = sum(1 for row in records if row.get("first_followup_before_10k") is True)
+    result["first_followup_before_any_trade_if_known_count"] = sum(
+        1 for row in records if row.get("first_followup_before_any_trade_if_known") is True
+    )
     result["first_followup_before_20k_count"] = sum(1 for row in records if row.get("first_followup_before_20k") is True)
     result["first_followup_after_activity_count"] = sum(
         1
@@ -979,11 +985,19 @@ def _update_immediate_freshness_counts(config: ForwardObserverConfig, result: di
     result["path_within_30s_pct"] = _pct_le(path_seconds, 30)
     result["path_within_60s_pct"] = _pct_le(path_seconds, 60)
     median_attempt = safe_float(result.get("median_seconds_create_to_first_followup_attempt"))
+    has_fresh_observation = (
+        result["true_near_birth_observed_count"] > 0
+        or result["first_followup_before_any_trade_if_known_count"] > 0
+    )
+    has_pretrigger_evidence = (
+        result["first_followup_before_10k_count"] > 0
+        or result["first_followup_before_any_trade_if_known_count"] > 0
+    )
     if result["smoke_birth_count"] <= 0:
         result["readiness_classification"] = "freshness_repair_blocked"
     elif (
-        result["true_near_birth_observed_count"] > 0
-        and result["first_followup_before_10k_count"] > 0
+        has_fresh_observation
+        and has_pretrigger_evidence
         and median_attempt is not None
         and median_attempt <= 5
         and (result.get("attempt_within_5s_pct") or 0) >= 0.95
@@ -1004,6 +1018,7 @@ def _write_immediate_status(config: ForwardObserverConfig, result: dict[str, Any
         "first_followup_path_rows": result.get("first_followup_path_rows", 0),
         "true_near_birth_observed": result.get("true_near_birth_observed_count", 0),
         "first_followup_before_10k": result.get("first_followup_before_10k_count", 0),
+        "first_followup_before_any_trade_if_known": result.get("first_followup_before_any_trade_if_known_count", 0),
         "first_followup_before_20k": result.get("first_followup_before_20k_count", 0),
         "first_followup_after_activity": result.get("first_followup_after_activity_count", 0),
         "first_followup_already_above_10k": result.get("first_followup_already_above_10k_count", 0),
