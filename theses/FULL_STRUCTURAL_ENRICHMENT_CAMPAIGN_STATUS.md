@@ -3,7 +3,7 @@
 - Readiness: full_structural_enrichment_ready_with_documented_external_gaps
 - Launches enriched: 1143
 - Master rows: 1143
-- Helius credits used: 0
+- Helius credits used: 12
 - DexScreener calls used: 0
 - Scope: data enrichment only; no thesis, validation, backtest, paper/live trading, or strategy logic.
 

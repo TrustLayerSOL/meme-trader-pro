@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from research.mtp_research.data_paths import data_lake_path, data_lake_root
+from research.mtp_research.ingestion.helius_backfill import HeliusHistoricalAdapter
 
 
 REPORT_ID = "full_structural_enrichment_campaign_v0"
@@ -68,6 +70,15 @@ DEFAULT_ENTITY_PROXY_PATH = data_lake_path(
 )
 DEFAULT_EVENTS_PATH = data_lake_path("data", "normalized", "pumpfun_lifecycle_events_classified.jsonl")
 DEFAULT_SOL_USD_PATH = data_lake_path("data", "normalized", "valuation_inputs", "sol_usd_coingecko.jsonl")
+DEFAULT_CANDIDATES_PATH = data_lake_path(
+    "data", "normalized", "launch_lifecycle_collected_classified", "launch_regime_candidates.jsonl"
+)
+DEFAULT_MIGRATION_LABELS_PATH = data_lake_path(
+    "data",
+    "backtests",
+    "migration_graduation",
+    "combined_migration_graduation_labels_provenance_upgraded.jsonl",
+)
 
 METHODOLOGY_FLAGS = [
     "research_only",
@@ -101,6 +112,8 @@ def run_full_structural_enrichment_campaign(
     execute_helius: bool = False,
     execute_dexscreener: bool = False,
     max_helius_credits: int = 500_000,
+    contract_authority_adapter: Any | None = None,
+    contract_authority_workers: int = 8,
 ) -> tuple[dict[str, Any], dict[str, Path]]:
     started = time.time()
     root = Path(data_root) if data_root is not None else data_lake_root()
@@ -109,6 +122,7 @@ def run_full_structural_enrichment_campaign(
     _ensure_output_dirs(paths)
 
     base = _load_base_universe(inputs)
+    base = _attach_local_candidate_creator_metadata(base, inputs["candidates"])
     combined = _load_optional_frame(inputs["combined_repaired"])
     fdv = _build_fdv_efficiency_layer(base, combined)
     top_holder = _build_top_holder_layer(base, combined, inputs["top_holder_layers"], inputs["holder_state"])
@@ -116,9 +130,22 @@ def run_full_structural_enrichment_campaign(
     creator_funder = _build_creator_funder_layer(base, combined, inputs["creator_funder_layers"])
     cluster = _build_cluster_layer(base, inputs["entity_proxy"])
     distribution = _build_distribution_layer(base)
-    visible_flow = _build_visible_attention_and_flow_layer(base, top_holder, inputs["events"], inputs["sol_usd"])
+    visible_flow = _build_visible_attention_and_flow_layer(
+        base,
+        top_holder,
+        inputs["events"],
+        inputs["sol_usd"],
+        inputs["migration_labels"],
+    )
     visibility = _build_visibility_attention_layer(base)
-    contract = _build_contract_authority_layer(base)
+    contract_result = _build_contract_authority_layer(
+        base,
+        execute_helius=execute_helius,
+        paths=paths,
+        adapter=contract_authority_adapter,
+        workers=contract_authority_workers,
+    )
+    contract = contract_result["layer"]
     master = _build_master(
         base=base,
         fdv=fdv,
@@ -140,7 +167,7 @@ def run_full_structural_enrichment_campaign(
     )
     layer_coverage = build_layer_coverage(master)
     readiness = READINESS_READY_WITH_GAPS if len(master) else READINESS_BLOCKED
-    external_gaps = _external_gaps()
+    external_gaps = _external_gaps(layer_coverage)
 
     preflight = {
         "report_id": REPORT_ID,
@@ -179,11 +206,13 @@ def run_full_structural_enrichment_campaign(
         "expected_research_rows": int(len(master)),
         "helius": {
             "execute_requested": bool(execute_helius),
-            "execute_completed": False,
-            "requests_used": 0,
-            "credits_used": 0,
+            "execute_completed": bool(contract_result["execute_completed"]),
+            "requests_used": int(contract_result["requests_used"]),
+            "credits_used": int(contract_result["requests_used"]),
             "reason_not_executed": budget["external_collection_reason"],
             "max_credits": int(max_helius_credits),
+            "target": "contract_authority_getMultipleAccounts_batched" if execute_helius else None,
+            "provider_errors": contract_result["errors"],
         },
         "dexscreener": {
             "execute_requested": bool(execute_dexscreener),
@@ -209,7 +238,11 @@ def estimate_campaign_budget(
     execute_dexscreener: bool,
     max_helius_credits: int,
 ) -> dict[str, Any]:
-    if execute_helius or execute_dexscreener:
+    projected_helius = math.ceil(launch_count / 100) if execute_helius else 0
+    if execute_helius:
+        status = "within_budget_contract_authority_batched" if projected_helius <= max_helius_credits else "blocked_projected_helius_above_budget"
+        reason = "contract_authority_getMultipleAccounts_batched"
+    elif execute_dexscreener:
         status = "external_collection_not_executed_without_named_targets"
         reason = "no_named_bounded_external_target_set_after_local_dedupe"
     else:
@@ -219,12 +252,12 @@ def estimate_campaign_budget(
         "launch_count": int(launch_count),
         "helius_execute_requested": bool(execute_helius),
         "dexscreener_execute_requested": bool(execute_dexscreener),
-        "projected_helius_credits": 0,
+        "projected_helius_credits": int(projected_helius),
         "projected_dexscreener_calls": 0,
         "max_helius_credits": int(max_helius_credits),
         "budget_gate_status": status,
         "external_collection_reason": reason,
-        "safe_to_execute": True,
+        "safe_to_execute": bool(projected_helius <= max_helius_credits),
     }
 
 
@@ -286,6 +319,7 @@ def _resolve_paths(root: Path, overrides: dict[str, Path | str] | None) -> dict[
         "visible_attention_flow_jsonl_path": parsed_dir / "visible_attention_and_flow_features.jsonl",
         "visibility_parquet_path": parsed_dir / "visibility_attention_context.parquet",
         "contract_parquet_path": parsed_dir / "contract_authority_context.parquet",
+        "contract_authority_raw_path": raw_dir / "contract_authority_get_multiple_accounts_raw.jsonl",
         "master_parquet_path": parsed_dir / "master_enriched_runner_fingerprint.parquet",
         "master_jsonl_path": parsed_dir / "master_enriched_runner_fingerprint.jsonl",
     }
@@ -306,6 +340,8 @@ def _resolve_input_paths(input_paths: dict[str, Any] | None) -> dict[str, Any]:
         "entity_proxy": DEFAULT_ENTITY_PROXY_PATH,
         "events": DEFAULT_EVENTS_PATH,
         "sol_usd": DEFAULT_SOL_USD_PATH,
+        "candidates": DEFAULT_CANDIDATES_PATH,
+        "migration_labels": DEFAULT_MIGRATION_LABELS_PATH,
     }
     if input_paths:
         paths.update(input_paths)
@@ -343,6 +379,24 @@ def _load_base_universe(inputs: dict[str, Any]) -> pd.DataFrame:
         frame["trigger_fdv_proxy"] = frame["peak_fdv_proxy"]
     frame = frame.drop_duplicates(subset=["launch_id"], keep="first")
     return frame.sort_values("launch_id").reset_index(drop=True)
+
+
+def _attach_local_candidate_creator_metadata(base: pd.DataFrame, candidates_path: Path | str | None) -> pd.DataFrame:
+    candidates = _load_optional_frame(candidates_path)
+    if base.empty or candidates.empty:
+        return base
+    mint_column = "token_mint" if "token_mint" in candidates.columns else "mint" if "mint" in candidates.columns else None
+    if mint_column is None or "token_mint" not in base.columns:
+        return base
+    candidate_rows = candidates[[mint_column]].copy()
+    candidate_rows = candidate_rows.rename(columns={mint_column: "token_mint"})
+    candidate_rows["candidate_creator_deployer"] = candidates.apply(_candidate_creator, axis=1)
+    candidate_rows = candidate_rows.dropna(subset=["token_mint"]).drop_duplicates("token_mint", keep="first")
+    merged = base.merge(candidate_rows, on="token_mint", how="left")
+    if "creator" not in merged.columns:
+        merged["creator"] = pd.NA
+    merged["creator"] = merged["creator"].combine_first(merged["candidate_creator_deployer"])
+    return merged.drop(columns=["candidate_creator_deployer"])
 
 
 def _build_fdv_efficiency_layer(base: pd.DataFrame, combined: pd.DataFrame) -> pd.DataFrame:
@@ -637,6 +691,7 @@ def _build_visible_attention_and_flow_layer(
     top_holder: pd.DataFrame,
     events_path: Path | str | None,
     sol_usd_path: Path | str | None,
+    migration_labels_path: Path | str | None,
 ) -> pd.DataFrame:
     layer = _select_existing(
         base,
@@ -645,6 +700,7 @@ def _build_visible_attention_and_flow_layer(
             "mint",
             "token_mint",
             "launch_ts",
+            "creator",
             "trigger_age_seconds",
             "creator_prior_migration_or_graduation_count",
             "top_holder_share_at_20k",
@@ -660,8 +716,10 @@ def _build_visible_attention_and_flow_layer(
         top_holder,
         ["launch_id", "top_holder_share_proxy", "top_holder_share_at_20k"],
     )
+    prior_migration = _leakage_safe_prior_migration_features(base, migration_labels_path)
     layer = _merge_fill(layer, event_features, "launch_id")
     layer = _merge_fill(layer, holder_concentration, "launch_id")
+    layer = _merge_fill(layer, prior_migration, "launch_id")
     layer["first_minute_usd_volume"] = _ensure_column(layer, "first_minute_usd_volume")
     layer["first_60s_buy_count"] = _ensure_column(layer, "first_60s_buy_count", default=0)
     layer["first_60s_unique_buyers"] = _ensure_column(layer, "first_60s_unique_buyers", default=0)
@@ -671,7 +729,7 @@ def _build_visible_attention_and_flow_layer(
         layer, ["top_holder_share_proxy", "top_holder_share_at_20k"]
     )
     layer["deployer_prior_migration_count"] = _coalesce(
-        layer, ["creator_prior_migration_or_graduation_count"]
+        layer, ["creator_prior_migration_or_graduation_count", "leakage_safe_prior_migration_count"]
     )
     layer["topicality_flag"] = pd.NA
     layer["topicality_missing_reason"] = "topicality_source_not_available_in_local_artifacts"
@@ -695,6 +753,7 @@ def _build_visible_attention_and_flow_layer(
             "whale_buy_sequence_proxy",
             "early_holder_concentration",
             "deployer_prior_migration_count",
+            "deployer_prior_migration_count_source",
             "topicality_flag",
             "topicality_missing_reason",
             "pair_migration_liquidity_delay_proxy",
@@ -714,13 +773,150 @@ def _build_visibility_attention_layer(base: pd.DataFrame) -> pd.DataFrame:
     return layer
 
 
-def _build_contract_authority_layer(base: pd.DataFrame) -> pd.DataFrame:
+def _build_contract_authority_layer(
+    base: pd.DataFrame,
+    *,
+    execute_helius: bool,
+    paths: dict[str, Path],
+    adapter: Any | None,
+    workers: int,
+) -> dict[str, Any]:
     layer = _select_existing(base, ["launch_id", "mint", "token_mint"])
-    layer["contract_authority_context_available"] = False
-    layer["mint_authority_known"] = False
-    layer["freeze_authority_known"] = False
-    layer["contract_authority_missing_reason"] = "contract_authority_metadata_not_available_in_local_artifacts"
-    return layer
+    if "mint" not in layer.columns and "token_mint" in layer.columns:
+        layer["mint"] = layer["token_mint"]
+    if not execute_helius:
+        layer["contract_authority_context_available"] = False
+        layer["mint_authority_known"] = False
+        layer["freeze_authority_known"] = False
+        layer["contract_authority_missing_reason"] = "contract_authority_metadata_not_available_in_local_artifacts"
+        return {"layer": layer, "execute_completed": False, "requests_used": 0, "errors": []}
+
+    mints = sorted(set(layer["mint"].dropna().astype(str))) if "mint" in layer.columns else []
+    client = adapter or HeliusMintAccountBatchAdapter.from_env()
+    result = client.fetch_mint_accounts(mints, workers=workers, batch_size=100)
+    _write_jsonl(paths["contract_authority_raw_path"], result.get("raw_responses", []))
+    authority_rows = pd.DataFrame(result.get("rows") or [])
+    if authority_rows.empty:
+        layer["contract_authority_context_available"] = False
+        layer["mint_authority_known"] = False
+        layer["freeze_authority_known"] = False
+        layer["contract_authority_missing_reason"] = "contract_authority_fetch_returned_no_rows"
+    else:
+        layer = layer.merge(authority_rows.drop_duplicates("mint"), on="mint", how="left", suffixes=("", "__authority"))
+        layer["contract_authority_context_available"] = layer[
+            "contract_authority_context_available"
+        ].fillna(False)
+        layer["mint_authority_known"] = layer.get("mint_authority", pd.Series(index=layer.index)).notna()
+        layer["freeze_authority_known"] = layer.get("freeze_authority", pd.Series(index=layer.index)).notna()
+        layer["contract_authority_missing_reason"] = layer[
+            "contract_authority_missing_reason"
+        ].where(
+            ~layer["contract_authority_context_available"],
+            None,
+        )
+    return {
+        "layer": layer,
+        "execute_completed": True,
+        "requests_used": int(result.get("requests_used") or 0),
+        "errors": list(result.get("errors") or []),
+    }
+
+
+class HeliusMintAccountBatchAdapter:
+    def __init__(self, rpc: HeliusHistoricalAdapter | None = None):
+        self.rpc = rpc or HeliusHistoricalAdapter.from_env(timeout_sec=45)
+
+    @classmethod
+    def from_env(cls) -> "HeliusMintAccountBatchAdapter":
+        return cls(HeliusHistoricalAdapter.from_env(timeout_sec=45))
+
+    def fetch_mint_accounts(
+        self,
+        mints: list[str],
+        *,
+        workers: int = 8,
+        batch_size: int = 100,
+    ) -> dict[str, Any]:
+        batches = [mints[i : i + batch_size] for i in range(0, len(mints), batch_size)]
+        raw_responses: list[dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
+        errors: list[str] = []
+        requests_used = 0
+        if not batches:
+            return {"requests_used": 0, "raw_responses": [], "rows": [], "errors": []}
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            futures = {
+                executor.submit(self._fetch_batch, batch, index): (index, batch)
+                for index, batch in enumerate(batches)
+            }
+            for future in as_completed(futures):
+                index, batch = futures[future]
+                try:
+                    response = future.result()
+                except Exception as exc:
+                    errors.append(f"batch_{index}: {exc}")
+                    continue
+                requests_used += 1
+                raw_responses.append({"batch_index": index, "mints": batch, "response": response})
+                rows.extend(_parse_get_multiple_accounts_response(batch, response))
+        raw_responses.sort(key=lambda row: row["batch_index"])
+        rows.sort(key=lambda row: row["mint"])
+        return {
+            "requests_used": requests_used,
+            "raw_responses": raw_responses,
+            "rows": rows,
+            "errors": errors,
+        }
+
+    def _fetch_batch(self, batch: list[str], batch_index: int) -> dict[str, Any]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": f"mtp-contract-authority-{batch_index}",
+            "method": "getMultipleAccounts",
+            "params": [
+                batch,
+                {"encoding": "jsonParsed"},
+            ],
+        }
+        response = self.rpc._http_post(self.rpc.build_rpc_url(), payload, self.rpc.timeout_sec)
+        if "error" in response:
+            raise RuntimeError(f"Helius RPC error: {response['error']}")
+        return response
+
+
+def _parse_get_multiple_accounts_response(mints: list[str], response: dict[str, Any]) -> list[dict[str, Any]]:
+    values = ((response.get("result") or {}).get("value") or [])
+    rows: list[dict[str, Any]] = []
+    for mint, account in zip(mints, values, strict=False):
+        if not isinstance(account, dict):
+            rows.append(
+                {
+                    "mint": mint,
+                    "contract_authority_context_available": False,
+                    "mint_authority": None,
+                    "freeze_authority": None,
+                    "decimals": None,
+                    "supply": None,
+                    "contract_authority_source": "helius_getMultipleAccounts_jsonParsed",
+                    "contract_authority_missing_reason": "mint_account_missing",
+                }
+            )
+            continue
+        parsed = ((account.get("data") or {}).get("parsed") or {})
+        info = parsed.get("info") or {}
+        rows.append(
+            {
+                "mint": mint,
+                "contract_authority_context_available": True,
+                "mint_authority": info.get("mintAuthority"),
+                "freeze_authority": info.get("freezeAuthority"),
+                "decimals": info.get("decimals"),
+                "supply": info.get("supply"),
+                "contract_authority_source": "helius_getMultipleAccounts_jsonParsed",
+                "contract_authority_missing_reason": None,
+            }
+        )
+    return rows
 
 
 def _build_master(
@@ -879,17 +1075,12 @@ def _warnings(layer_coverage: dict[str, dict[str, Any]], external_gaps: list[dic
     return sorted(set(warnings))
 
 
-def _external_gaps() -> list[dict[str, str]]:
-    return [
+def _external_gaps(layer_coverage: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    gaps = [
         {
             "field_family": "visibility_attention_context",
             "status": "not_fetched",
             "reason": "DexScreener or attention-source calls require a separate bounded target plan",
-        },
-        {
-            "field_family": "contract_authority_context",
-            "status": "not_fetched",
-            "reason": "mint/freeze authority metadata was not present in local artifacts",
         },
         {
             "field_family": "confirmed_full_chain_top_holders",
@@ -897,6 +1088,15 @@ def _external_gaps() -> list[dict[str, str]]:
             "reason": "current holder values are observed replay/proxy fields, not confirmed full-chain snapshots",
         },
     ]
+    if (layer_coverage.get("contract_authority_context") or {}).get("coverage_pct", 0) < 100.0:
+        gaps.append(
+            {
+                "field_family": "contract_authority_context",
+                "status": "not_fetched",
+                "reason": "mint/freeze authority metadata was not present in local artifacts",
+            }
+        )
+    return gaps
 
 
 def _first_minute_event_features(
@@ -1079,6 +1279,90 @@ def _visible_flow_missing_reason(row: pd.Series) -> str | None:
     return ";".join(sorted(set(missing))) if missing else None
 
 
+def _candidate_creator(row: pd.Series) -> str | None:
+    metadata = row.get("metadata_json") if "metadata_json" in row else None
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    for key in ("creator", "creator_deployer", "creator_wallet"):
+        value = row.get(key) if key in row else None
+        if _present_text(value):
+            return str(value)
+        metadata_value = metadata.get(key)
+        if _present_text(metadata_value):
+            return str(metadata_value)
+    return None
+
+
+def _leakage_safe_prior_migration_features(
+    base: pd.DataFrame,
+    migration_labels_path: Path | str | None,
+) -> pd.DataFrame:
+    result = _select_existing(base, ["launch_id", "creator", "launch_ts"])
+    if result.empty:
+        return result
+    result["leakage_safe_prior_migration_count"] = pd.NA
+    result["deployer_prior_migration_count_source"] = pd.NA
+    labels = _load_optional_frame(migration_labels_path)
+    if labels.empty or "creator" not in labels.columns or "migration_time" not in labels.columns:
+        result["deployer_prior_migration_count_source"] = "migration_label_source_unavailable"
+        return result
+    migrations = labels[["creator", "migration_time"]].copy()
+    migrations["creator"] = migrations["creator"].astype(str)
+    migrations["migration_ts"] = migrations["migration_time"].apply(_timestamp_to_seconds)
+    migrations = migrations.dropna(subset=["creator", "migration_ts"])
+    by_creator = {
+        creator: sorted(group["migration_ts"].astype(int).tolist())
+        for creator, group in migrations.groupby("creator")
+    }
+    counts = []
+    sources = []
+    for _, row in result.iterrows():
+        creator = row.get("creator")
+        launch_ts = _int_or_none(row.get("launch_ts"))
+        if not _present_text(creator):
+            counts.append(pd.NA)
+            sources.append("creator_missing")
+            continue
+        if launch_ts is None:
+            counts.append(pd.NA)
+            sources.append("launch_time_missing")
+            continue
+        prior = [ts for ts in by_creator.get(str(creator), []) if ts < launch_ts]
+        counts.append(len(prior))
+        sources.append("local_migration_labels_leakage_safe")
+    result["leakage_safe_prior_migration_count"] = counts
+    result["deployer_prior_migration_count_source"] = sources
+    return result
+
+
+def _timestamp_to_seconds(value: Any) -> int | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, (int, float)) and not math.isnan(float(value)):
+        return int(value)
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return int(parsed.timestamp())
+
+
+def _present_text(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return bool(text) and text.lower() not in {"nan", "none", "null"}
+
+
 def _derive_fdv_fields(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     result["fdv_per_event_at_20k"] = _coalesce(
@@ -1180,6 +1464,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=_json_default), encoding="utf-8")
 
 
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=True, default=_json_default))
+            f.write("\n")
+
+
 def _write_csv(rows: list[dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(path, index=False)
@@ -1195,6 +1487,15 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, float) and math.isnan(value):
         return None
     return str(value)
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _preflight_markdown(preflight: dict[str, Any]) -> str:
