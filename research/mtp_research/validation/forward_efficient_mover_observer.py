@@ -63,6 +63,7 @@ PUMP_FUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 PUMPSWAP_PROGRAM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 RAYDIUM_LAUNCHLAB_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"
 RAYDIUM_CPMM_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNuxFYvWzqMe9J1KLcXxj3xV"
+PUMPFUN_CREATE_V2_DISCRIMINATOR_HEX = "d6904cec5f8b31b4"
 SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4FJTPri1BLRGKkzFTFHL"
@@ -169,6 +170,7 @@ class ForwardObserverConfig:
     local_source_path: Path | str | None = None
     perform_live_health_checks: bool = False
     enable_probed_adapters: bool = False
+    enable_birth_watch_candidates: bool = False
 
     @property
     def root(self) -> Path:
@@ -306,6 +308,7 @@ class HeliusLiveSourceConfig:
     hydrate_transactions: bool = True
     valuation_supply_proxy: float = 1_000_000_000.0
     sol_usd_price: float = 1.0
+    include_birth_watch_candidates: bool = False
 
     @classmethod
     def from_observer_config(
@@ -327,6 +330,7 @@ class HeliusLiveSourceConfig:
             source=config.source,
             adapter_enable_gate="explicit_probed_adapter_enable" if config.enable_probed_adapters else "verified_only",
             sol_usd_price=resolve_forward_sol_usd_price(config.root),
+            include_birth_watch_candidates=config.enable_birth_watch_candidates,
         )
 
 
@@ -599,9 +603,10 @@ class HeliusLiveCandidateSource:
                 "missing_reason": "max_helius_credits_zero_or_negative",
                 "rpc_endpoint_masked": self.config.rpc_endpoint_masked,
                 "ws_endpoint_masked": self.config.ws_endpoint_masked,
-            "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
-            "adapter_enable_gate": self.config.adapter_enable_gate,
-        }
+                "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
+                "adapter_enable_gate": self.config.adapter_enable_gate,
+                "include_birth_watch_candidates": self.config.include_birth_watch_candidates,
+            }
         ready = [name for name, item in self.config.program_configs.items() if item.status == "ready" and item.program_ids]
         missing = [name for name, item in self.config.program_configs.items() if item.status != "ready" or not item.program_ids]
         return {
@@ -614,6 +619,7 @@ class HeliusLiveCandidateSource:
             "missing_or_unverified_adapters": missing,
             "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
             "adapter_enable_gate": self.config.adapter_enable_gate,
+            "include_birth_watch_candidates": self.config.include_birth_watch_candidates,
             "missing_reason": None if ready else "no_verified_program_ids_for_selected_helius_source",
         }
 
@@ -624,7 +630,10 @@ class HeliusLiveCandidateSource:
         events = [normalize_live_source_event(event) for event in raw_events]
         candidates = []
         for event in events:
-            candidate = build_live_event_candidate(event)
+            candidate = build_live_event_candidate(
+                event,
+                include_birth_watch_candidates=self.config.include_birth_watch_candidates,
+            )
             if candidate:
                 candidates.append(candidate)
         return candidates
@@ -736,6 +745,7 @@ def run_live_source_readiness(
             "ws_health": ws_check,
             "max_helius_credits": int(config.max_helius_credits or 0),
             "adapter_enable_gate": "explicit_probed_adapter_enable" if config.enable_probed_adapters else "verified_only",
+            "include_birth_watch_candidates": config.enable_birth_watch_candidates,
         },
         "source_adapters": {name: item.to_dict() for name, item in program_configs.items()},
         "ready_adapters": ready_programs,
@@ -810,6 +820,44 @@ def normalize_pumpfun_transaction_event(
 ) -> dict[str, Any]:
     signature = _transaction_signature(tx)
     event_type, side = _pumpfun_event_type_and_side(tx)
+    if event_type == "pumpfun_create":
+        create_fields = _pumpfun_create_fields(tx, program_id)
+        if create_fields is None:
+            return normalize_live_source_event(
+                {
+                    "source_adapter": source_adapter,
+                    "program_id": program_id,
+                    "signature": signature,
+                    "slot": tx.get("slot"),
+                    "block_time": tx.get("blockTime"),
+                    "event_type": event_type,
+                    "side": side,
+                    "parse_confidence": "hydrated_pumpfun_create_layout_rejected",
+                    "missing_reason": "invalid_pumpfun_create_account_layout",
+                }
+            )
+        return normalize_live_source_event(
+            {
+                "source_adapter": source_adapter,
+                "program_id": program_id,
+                "signature": signature,
+                "slot": tx.get("slot"),
+                "block_time": tx.get("blockTime"),
+                "event_type": event_type,
+                "mint": create_fields["mint"],
+                "pool_address": create_fields["bonding_curve"],
+                "bonding_curve": create_fields["bonding_curve"],
+                "associated_bonding_curve": create_fields["associated_bonding_curve"],
+                "creator": create_fields["creator"],
+                "side": side,
+                "event_count": 1,
+                "buy_count": 0,
+                "sell_count": 0,
+                "active_wallet_count": 1 if create_fields.get("creator") else 0,
+                "parse_confidence": "hydrated_pumpfun_create_layout",
+                "missing_reason": "pre_trigger_birth_candidate_fdv_pending",
+            }
+        )
     summary = summarize_raw_transaction(
         RawTransactionRecord(
             signature=signature or "",
@@ -978,13 +1026,23 @@ def normalize_amm_transaction_event(
     )
 
 
-def build_live_event_candidate(event: dict[str, Any]) -> dict[str, Any] | None:
+def build_live_event_candidate(event: dict[str, Any], *, include_birth_watch_candidates: bool = False) -> dict[str, Any] | None:
     mint = event.get("mint")
     fdv = safe_float(event.get("fdv_proxy"))
-    if not mint or fdv is None:
+    event_type = event.get("event_type")
+    if not mint:
         return None
     if is_quote_mint(mint):
         return None
+    is_birth_watch_candidate = event_type == "pumpfun_create" and fdv is None
+    if fdv is None and not (include_birth_watch_candidates and is_birth_watch_candidate):
+        return None
+    classification = (
+        "pumpfun_birth_candidate_observed"
+        if is_birth_watch_candidate
+        else "efficient_mover_candidate_observed"
+    )
+    status = "watching_pre_trigger" if is_birth_watch_candidate else "active"
     return {
         "mint": mint,
         "token_mint": mint,
@@ -992,6 +1050,7 @@ def build_live_event_candidate(event: dict[str, Any]) -> dict[str, Any] | None:
         "token_name": event.get("token_name"),
         "token_symbol": event.get("token_symbol"),
         "fdv_proxy": fdv,
+        "event_type": event_type,
         "event_count": event.get("event_count") or 1,
         "buy_count": event.get("buy_count") or (1 if event.get("side") == "buy" else 0),
         "sell_count": event.get("sell_count") or (1 if event.get("side") == "sell" else 0),
@@ -1003,7 +1062,14 @@ def build_live_event_candidate(event: dict[str, Any]) -> dict[str, Any] | None:
         "price_proxy": event.get("price_proxy"),
         "creator": event.get("creator"),
         "pool_address": event.get("pool_address"),
+        "bonding_curve": event.get("bonding_curve"),
+        "associated_bonding_curve": event.get("associated_bonding_curve"),
         "metadata_uri": event.get("metadata_uri"),
+        "freshness_lane": "birth_watch" if is_birth_watch_candidate else "fdv_trigger",
+        "candidate_classification": classification,
+        "status": status,
+        "missing_reason": event.get("missing_reason"),
+        "parse_confidence": event.get("parse_confidence"),
     }
 
 
@@ -1075,7 +1141,12 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
         for candidate in candidates:
             fdv = safe_float(candidate.get("fdv_proxy"))
             mint = str(candidate.get("mint") or candidate.get("token_mint") or "")
-            if not mint or is_quote_mint(mint) or fdv is None or fdv < config.start_trigger or mint in seen_mints:
+            is_birth_watch_candidate = _candidate_is_birth_watch(candidate)
+            if not mint or is_quote_mint(mint) or mint in seen_mints:
+                continue
+            if not is_birth_watch_candidate and (fdv is None or fdv < config.start_trigger):
+                continue
+            if is_birth_watch_candidate and not config.enable_birth_watch_candidates:
                 continue
             observation_id = make_observation_id(mint)
             observed_at = int(time.time())
@@ -1222,12 +1293,15 @@ def run_live_program_probe(
 
 def build_observation_rows(candidate: dict[str, Any], *, start_trigger: float, observation_id: str, observed_at: int) -> dict[str, Any]:
     mint = str(candidate.get("mint") or candidate.get("token_mint"))
-    fdv = safe_float(candidate.get("fdv_proxy")) or 0.0
+    fdv_value = safe_float(candidate.get("fdv_proxy"))
+    fdv_for_ratios = fdv_value or 0.0
     events = safe_float(candidate.get("event_count")) or 0.0
     buys = safe_float(candidate.get("buy_count")) or 0.0
     sells = safe_float(candidate.get("sell_count")) or 0.0
     active_wallets = safe_float(candidate.get("active_wallets")) or 0.0
-    trigger_level = trigger_label(fdv)
+    is_birth_watch_candidate = _candidate_is_birth_watch(candidate)
+    trigger_level = None if fdv_value is None else trigger_label(fdv_value)
+    trigger_timestamp = None if is_birth_watch_candidate else observed_at
     base = {
         "observation_id": observation_id,
         "mint": mint,
@@ -1245,16 +1319,18 @@ def build_observation_rows(candidate: dict[str, Any], *, start_trigger: float, o
         "token_symbol": candidate.get("token_symbol"),
         "start_trigger": start_trigger,
         "trigger_level": trigger_level,
-        "trigger_timestamp": observed_at,
-        "status": "active",
-        "candidate_classification": "efficient_mover_candidate_observed",
+        "trigger_timestamp": trigger_timestamp,
+        "status": candidate.get("status") or ("watching_pre_trigger" if is_birth_watch_candidate else "active"),
+        "candidate_classification": candidate.get("candidate_classification") or "efficient_mover_candidate_observed",
+        "freshness_lane": candidate.get("freshness_lane") or ("birth_watch" if is_birth_watch_candidate else "fdv_trigger"),
+        "event_type": candidate.get("event_type"),
     }
     path_row = {
         **base,
         "timestamp": observed_at,
         "slot": candidate.get("slot"),
         "block_time": candidate.get("block_time"),
-        "fdv_proxy": fdv,
+        "fdv_proxy": fdv_value,
         "price_proxy": candidate.get("price_proxy"),
         "liquidity_proxy": candidate.get("liquidity_proxy"),
         "event_count": events,
@@ -1262,17 +1338,22 @@ def build_observation_rows(candidate: dict[str, Any], *, start_trigger: float, o
         "sell_count": sells,
         "active_wallets": active_wallets,
         "holder_count": candidate.get("holder_count"),
-        "fdv_per_event": ratio(fdv, events),
-        "fdv_per_buy": ratio(fdv, buys),
-        "fdv_per_active_wallet": ratio(fdv, active_wallets),
+        "fdv_per_event": ratio(fdv_for_ratios, events) if fdv_value is not None else None,
+        "fdv_per_buy": ratio(fdv_for_ratios, buys) if fdv_value is not None else None,
+        "fdv_per_active_wallet": ratio(fdv_for_ratios, active_wallets) if fdv_value is not None else None,
         "buy_sell_ratio": ratio(buys, sells),
-        **crossed_fields(fdv),
+        **crossed_fields(fdv_for_ratios),
     }
     metadata_row = {
         **base,
         "token_name": candidate.get("token_name"),
         "token_symbol": candidate.get("token_symbol"),
         "metadata_uri": candidate.get("metadata_uri"),
+        "parse_confidence": candidate.get("parse_confidence"),
+        "missing_reason": candidate.get("missing_reason"),
+        "freshness_lane": candidate.get("freshness_lane"),
+        "bonding_curve": candidate.get("bonding_curve"),
+        "associated_bonding_curve": candidate.get("associated_bonding_curve"),
         "image_uri": candidate.get("image_uri"),
         "description": candidate.get("description"),
         "website_url": candidate.get("website_url"),
@@ -1297,7 +1378,7 @@ def build_observation_rows(candidate: dict[str, Any], *, start_trigger: float, o
     drawdown_row = {
         **base,
         "timestamp": observed_at,
-        "current_local_high_fdv": fdv,
+        "current_local_high_fdv": fdv_value,
         "current_drawdown_pct_from_local_high": 0.0,
         "first_20pct_drawdown_time": None,
         "first_30pct_drawdown_time": None,
@@ -1624,6 +1705,62 @@ def _pumpfun_event_type_and_side(tx: dict[str, Any]) -> tuple[str, str | None]:
     if "instruction: buy" in lowered:
         return "pumpfun_trade", "buy"
     return "pumpfun_trade", None
+
+
+def _pumpfun_create_fields(tx: dict[str, Any], program_id: str) -> dict[str, Any] | None:
+    message = (tx.get("transaction") or {}).get("message") or {}
+    for instruction in message.get("instructions") or []:
+        if not isinstance(instruction, dict):
+            continue
+        if (instruction.get("programId") or instruction.get("program_id")) != program_id:
+            continue
+        accounts = instruction.get("accounts") or []
+        if not isinstance(accounts, list) or len(accounts) < 6:
+            continue
+        data_bytes = _instruction_data_bytes(instruction.get("data"))
+        if data_bytes and len(data_bytes) >= 8 and data_bytes[:8].hex() != PUMPFUN_CREATE_V2_DISCRIMINATOR_HEX:
+            continue
+        mint = _account_string(accounts, 0)
+        bonding_curve = _account_string(accounts, 2)
+        associated_bonding_curve = _account_string(accounts, 3)
+        creator = _account_string(accounts, 5) or _first_signer_pubkey(tx)
+        if not mint or not bonding_curve or is_quote_mint(mint) or mint == program_id:
+            continue
+        return {
+            "mint": mint,
+            "bonding_curve": bonding_curve,
+            "associated_bonding_curve": associated_bonding_curve,
+            "creator": creator,
+        }
+    return None
+
+
+def _account_string(accounts: list[Any], index: int) -> str | None:
+    if index >= len(accounts):
+        return None
+    value = accounts[index]
+    if isinstance(value, dict):
+        value = value.get("pubkey") or value.get("account") or value.get("address")
+    value = str(value or "")
+    return value or None
+
+
+def _first_signer_pubkey(tx: dict[str, Any]) -> str | None:
+    message = (tx.get("transaction") or {}).get("message") or {}
+    for account in message.get("accountKeys") or []:
+        if isinstance(account, dict) and account.get("signer"):
+            pubkey = str(account.get("pubkey") or "")
+            if pubkey:
+                return pubkey
+    return None
+
+
+def _candidate_is_birth_watch(candidate: dict[str, Any]) -> bool:
+    return (
+        candidate.get("freshness_lane") == "birth_watch"
+        or candidate.get("candidate_classification") == "pumpfun_birth_candidate_observed"
+        or (candidate.get("event_type") == "pumpfun_create" and safe_float(candidate.get("fdv_proxy")) is None)
+    )
 
 
 def _primary_token_delta(deltas: list[Any]) -> Any | None:

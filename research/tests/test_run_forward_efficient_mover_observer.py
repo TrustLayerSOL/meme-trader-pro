@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from research.mtp_research.validation.run_forward_efficient_mover_observer import main
@@ -21,6 +22,36 @@ def test_cli_dry_run_prints_status_and_paths(tmp_path: Path, monkeypatch, capsys
     assert "Forward Efficient Mover Observer Dry Run" in output
     assert "readiness_classification=forward_observer_ready_for_dry_run" in output
     assert str(tmp_path) in output
+
+
+def test_cli_dry_run_accepts_birth_watch_flag(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_forward_efficient_mover_observer",
+            "--mode",
+            "dry-run",
+            "--data-root",
+            str(tmp_path),
+            "--enable-birth-watch-candidates",
+        ],
+    )
+
+    assert main() == 0
+
+    capsys.readouterr()
+    report_path = (
+        tmp_path
+        / "data"
+        / "backtests"
+        / "diagnostics"
+        / "reports"
+        / "forward_observation"
+        / "efficient_movers"
+        / "live_source_readiness.json"
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["helius"]["include_birth_watch_candidates"] is True
 
 
 def test_cli_status_reads_existing_files(tmp_path: Path, monkeypatch, capsys) -> None:

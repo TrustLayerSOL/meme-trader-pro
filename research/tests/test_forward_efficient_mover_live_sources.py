@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from research.mtp_research.validation.forward_efficient_mover_observer import (
@@ -126,6 +127,86 @@ def test_build_live_event_candidate_rejects_quote_mints() -> None:
         )
 
         assert build_live_event_candidate(event) is None
+
+
+def test_normalize_pumpfun_create_event_extracts_birth_fields_without_fdv() -> None:
+    event = normalize_pumpfun_transaction_event(
+        _pumpfun_create_transaction(),
+        source_adapter="helius_program_logs_pumpfun",
+        program_id=PUMP_FUN_PROGRAM_ID,
+        valuation_supply_proxy=1_000_000_000,
+    )
+
+    assert event["event_type"] == "pumpfun_create"
+    assert event["mint"] == "mint-create-a"
+    assert event["bonding_curve"] == "bonding-create-a"
+    assert event["associated_bonding_curve"] == "associated-bonding-create-a"
+    assert event["pool_address"] == "bonding-create-a"
+    assert event["creator"] == "creator-create-a"
+    assert event["fdv_proxy"] is None
+    assert event["parse_confidence"] == "hydrated_pumpfun_create_layout"
+    assert event["missing_reason"] == "pre_trigger_birth_candidate_fdv_pending"
+
+
+def test_birth_watch_candidate_requires_explicit_enable() -> None:
+    event = normalize_live_source_event(
+        {
+            "source_adapter": "helius_program_logs_pumpfun",
+            "event_type": "pumpfun_create",
+            "mint": "mint-create-a",
+            "bonding_curve": "bonding-create-a",
+            "creator": "creator-create-a",
+        }
+    )
+
+    assert build_live_event_candidate(event) is None
+    candidate = build_live_event_candidate(event, include_birth_watch_candidates=True)
+
+    assert candidate["mint"] == "mint-create-a"
+    assert candidate["fdv_proxy"] is None
+    assert candidate["freshness_lane"] == "birth_watch"
+    assert candidate["candidate_classification"] == "pumpfun_birth_candidate_observed"
+    assert candidate["status"] == "watching_pre_trigger"
+
+
+def test_observe_birth_watch_candidate_writes_pre_trigger_rows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "test-secret-key")
+    config = ForwardObserverConfig(
+        data_root=tmp_path,
+        source="helius-pumpfun",
+        target_candidates=1,
+        max_observe_iterations=1,
+        max_helius_credits=10,
+        enable_birth_watch_candidates=True,
+    )
+
+    def fake_post(_url, payload, _timeout):
+        if payload["method"] == "getSignaturesForAddress":
+            return {"result": [{"signature": "sig-create", "slot": 100, "blockTime": 1_700_000_000}]}
+        return {"result": _pumpfun_create_transaction()}
+
+    live_config = HeliusLiveSourceConfig.from_observer_config(config, load_project_dotenv=False)
+    source = HeliusLiveCandidateSource(
+        config=live_config,
+        client=HeliusRpcPollingClient(
+            live_config.rpc_url,
+            rpc_post=fake_post,
+            sol_usd_price=100.0,
+        ),
+    )
+
+    result = run_observe(config, source=source)
+    candidate = json.loads((config.observation_root / "candidates.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    path = json.loads((config.observation_root / "candidate_paths.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+    assert result["total_candidates_observed"] == 1
+    assert candidate["mint"] == "mint-create-a"
+    assert candidate["candidate_classification"] == "pumpfun_birth_candidate_observed"
+    assert candidate["status"] == "watching_pre_trigger"
+    assert candidate["trigger_timestamp"] is None
+    assert candidate["trigger_level"] is None
+    assert path["fdv_proxy"] is None
+    assert path["crossed_10k"] is False
 
 
 def test_observe_with_mocked_helius_live_source_writes_candidate(tmp_path: Path, monkeypatch) -> None:
@@ -681,6 +762,47 @@ def _pumpfun_buy_transaction() -> dict:
                     "uiTokenAmount": {"uiAmountString": "100", "decimals": 6},
                 }
             ],
+        },
+    }
+
+
+def _pumpfun_create_transaction() -> dict:
+    return {
+        "slot": 100,
+        "blockTime": 1_700_000_000,
+        "transaction": {
+            "signatures": ["sig-create"],
+            "message": {
+                "accountKeys": [{"pubkey": "creator-create-a", "signer": True, "writable": True}],
+                "instructions": [
+                    {
+                        "programId": PUMP_FUN_PROGRAM_ID,
+                        "accounts": [
+                            "mint-create-a",
+                            "mint-authority",
+                            "bonding-create-a",
+                            "associated-bonding-create-a",
+                            "global",
+                            "creator-create-a",
+                            "system-program",
+                            "token-program",
+                            "associated-token-program",
+                            "rent",
+                            "event-authority",
+                            PUMP_FUN_PROGRAM_ID,
+                        ],
+                    }
+                ],
+            },
+        },
+        "meta": {
+            "err": None,
+            "logMessages": ["Program log: Instruction: Create"],
+            "innerInstructions": [],
+            "preBalances": [2_000_000_000],
+            "postBalances": [1_900_000_000],
+            "preTokenBalances": [],
+            "postTokenBalances": [],
         },
     }
 
