@@ -122,11 +122,11 @@ Latest explicit-gate forward collector result:
 - Explicit probed-adapter gate: `--enable-probed-adapters`
 - Ready Helius adapters under gate: `helius_program_logs_pumpfun`, `helius_program_logs_pumpswap`, `helius_program_logs_raydium`
 - Missing/unverified adapters under gate: none
-- Total candidates observed: `6`
-- Candidate sources: `helius_program_logs_pumpfun=4`, `helius_program_logs_pumpswap=2`
-- Raydium observe pass: completed with no warnings; no above-trigger candidate added in the latest tiny sample
-- Raw Helius RPC rows: `50`
-- Estimated Helius request-equivalent credits used: `56`
-- Latest stop/review flag: `continue_collecting_until_50_candidate_sanity_check`
+- Total candidates observed: `50 / 50`
+- Candidate sources: `helius_program_logs_pumpfun=19`, `helius_program_logs_pumpswap=30`, `helius_program_logs_raydium=1`
+- Trigger levels: `10k=11`, `15k=7`, `20k=5`, `30k=4`, `50k=6`, `100k=7`, `200k=3`, `500k=1`, `1m=6`
+- Raw Helius RPC rows: `260`
+- Estimated Helius request-equivalent credits used: `342`
+- Latest stop/review flag: `target_reached_review_before_continuing`
 
-Current forward collector completion: Pump.fun, PumpSwap, and Raydium are wired through the read-only collector with an explicit gate for probed adapters. PumpSwap has written real above-trigger candidate rows. Raydium has deterministic parsing and probe evidence, but the latest tiny observe sample did not produce a new above-trigger candidate.
+Current forward collector completion: Pump.fun, PumpSwap, and Raydium are wired through the read-only collector with an explicit gate for probed adapters. The 50-candidate sanity checkpoint is complete and should be reviewed before scaling beyond this sample.
