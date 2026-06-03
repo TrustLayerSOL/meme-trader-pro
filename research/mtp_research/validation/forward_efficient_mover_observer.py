@@ -1462,6 +1462,8 @@ def build_observation_rows(candidate: dict[str, Any], *, start_trigger: float, o
         "token_mint": mint,
         "source": candidate.get("source", "unknown"),
         "observed_at": observed_at,
+        "freshness_lane": candidate.get("freshness_lane") or ("birth_watch" if is_birth_watch_candidate else "fdv_trigger"),
+        "event_type": candidate.get("event_type"),
     }
     candidate_row = {
         **base,
@@ -1476,8 +1478,6 @@ def build_observation_rows(candidate: dict[str, Any], *, start_trigger: float, o
         "trigger_timestamp": trigger_timestamp,
         "status": candidate.get("status") or ("watching_pre_trigger" if is_birth_watch_candidate else "active"),
         "candidate_classification": candidate.get("candidate_classification") or "efficient_mover_candidate_observed",
-        "freshness_lane": candidate.get("freshness_lane") or ("birth_watch" if is_birth_watch_candidate else "fdv_trigger"),
-        "event_type": candidate.get("event_type"),
     }
     path_row = {
         **base,

@@ -142,6 +142,8 @@ def test_run_observe_writes_create_scanner_birth_watch_rows(tmp_path: Path) -> N
     assert candidates[0]["candidate_classification"] == "pumpfun_birth_candidate_observed"
     assert candidates[0]["trigger_timestamp"] is None
     assert paths[0]["fdv_proxy"] is None
+    assert paths[0]["freshness_lane"] == "birth_watch"
+    assert paths[0]["event_type"] == "pumpfun_create"
 
 
 def test_run_observe_requires_birth_watch_enable_for_scanner_birth_rows(tmp_path: Path) -> None:
