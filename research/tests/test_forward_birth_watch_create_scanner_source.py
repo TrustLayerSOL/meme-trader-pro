@@ -146,6 +146,35 @@ def test_run_observe_writes_create_scanner_birth_watch_rows(tmp_path: Path) -> N
     assert paths[0]["event_type"] == "pumpfun_create"
 
 
+def test_run_observe_persists_birth_scan_processed_signatures(tmp_path: Path) -> None:
+    config = ForwardObserverConfig(
+        data_root=tmp_path,
+        source="helius-pumpfun-create-scanner",
+        target_candidates=1,
+        max_observe_iterations=1,
+        max_helius_credits=10,
+        enable_birth_watch_candidates=True,
+        birth_scan_max_batches=1,
+        birth_scan_signatures_per_batch=2,
+        birth_scan_hydrate_limit_per_batch=2,
+        birth_scan_target_create_candidates=1,
+        birth_scan_max_signatures_total=2,
+    )
+    config.observation_root.mkdir(parents=True)
+    (config.observation_root / "checkpoint.json").write_text(
+        json.dumps({"birth_scan_processed_signatures": ["sig-old"]}),
+        encoding="utf-8",
+    )
+    scanner = FakeCreateScanner([_scan_report([_create_candidate("mint-a")], processed_signatures=["sig-old", "sig-mint-a"])])
+    source = PumpFunCreateScannerCandidateSource(config=config, scanner=scanner)
+
+    run_observe(config, source=source)
+    checkpoint = json.loads((config.observation_root / "checkpoint.json").read_text(encoding="utf-8"))
+
+    assert scanner.calls[0]["skip_signatures"] == {"sig-old"}
+    assert checkpoint["birth_scan_processed_signatures"] == ["sig-mint-a", "sig-old"]
+
+
 def test_run_observe_requires_birth_watch_enable_for_scanner_birth_rows(tmp_path: Path) -> None:
     config = ForwardObserverConfig(
         data_root=tmp_path,
@@ -186,7 +215,12 @@ def _create_candidate(mint: str) -> PumpFunCreateCandidate:
     )
 
 
-def _scan_report(candidates: list[PumpFunCreateCandidate], *, cursor: str = "cursor-next") -> PumpFunCreateScanReport:
+def _scan_report(
+    candidates: list[PumpFunCreateCandidate],
+    *,
+    cursor: str = "cursor-next",
+    processed_signatures: list[str] | None = None,
+) -> PumpFunCreateScanReport:
     report = PumpFunCreateScanReport(
         report_id=f"scan-{len(candidates)}-{cursor}",
         created_at="2026-06-03T00:00:00+00:00",
@@ -213,6 +247,6 @@ def _scan_report(candidates: list[PumpFunCreateCandidate], *, cursor: str = "cur
         ],
         viability="maybe_viable",
         recommended_next_action="bridge_verified_creates_to_birth_watch",
-        metadata_json={"network_calls_estimate": 3},
+        metadata_json={"network_calls_estimate": 3, "processed_signatures": processed_signatures or [candidate.signature for candidate in candidates]},
     )
     return report

@@ -59,6 +59,7 @@ class PumpFunCreateScanner:
         target_create_candidates: int = 5,
         max_signatures_total: int = 250,
         cursor_before: str | None = None,
+        skip_signatures: set[str] | None = None,
         include_low_confidence: bool = False,
         emit_rejected_examples: bool = False,
         min_confidence: str = "medium",
@@ -77,6 +78,9 @@ class PumpFunCreateScanner:
                 "emit_rejected_examples": emit_rejected_examples,
                 "min_confidence": min_confidence,
                 "pumpfun_create_discriminator": "unknown_pending_fixture",
+                "skip_signature_count": len(skip_signatures or set()),
+                "skipped_signatures": [],
+                "processed_signatures": [],
             },
         )
         if not execute:
@@ -87,6 +91,9 @@ class PumpFunCreateScanner:
 
         adapter = self.adapter or HeliusHistoricalAdapter.from_env()
         before = cursor_before
+        skip_signature_set = set(skip_signatures or set())
+        processed_signatures: list[str] = []
+        skipped_signatures: list[str] = []
         seen = 0
         for batch_index in range(max_batches):
             if seen >= max_signatures_total or report.create_candidate_count >= target_create_candidates:
@@ -112,8 +119,14 @@ class PumpFunCreateScanner:
                 )
                 break
 
-            hydrate_signatures = signatures[:hydrate_limit_per_batch]
+            hydrate_signatures = []
+            for signature in signatures[:hydrate_limit_per_batch]:
+                if signature in skip_signature_set:
+                    skipped_signatures.append(signature)
+                    continue
+                hydrate_signatures.append(signature)
             transactions = adapter.fetch_transactions(hydrate_signatures)
+            processed_signatures.extend(hydrate_signatures)
             candidates, rejected, unknown, direct_count = self._extract_candidates(
                 transactions,
                 target_create_candidates - report.create_candidate_count,
@@ -155,6 +168,9 @@ class PumpFunCreateScanner:
             report.unknown_pumpfun_instructions = report.unknown_pumpfun_instructions[:25]
         report.candidates = _dedupe_candidates(report.candidates)
         report.metadata_json["network_calls_estimate"] = len(report.batches) + report.transactions_hydrated_total
+        report.metadata_json["processed_signatures"] = sorted(set(processed_signatures))
+        report.metadata_json["skipped_signatures"] = sorted(set(skipped_signatures))
+        report.metadata_json["skipped_signature_count"] = len(set(skipped_signatures))
         report.metadata_json["unknown_instruction_summary"] = summarize_unknown_instructions(
             report.unknown_pumpfun_instructions
         )

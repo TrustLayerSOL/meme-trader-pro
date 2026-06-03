@@ -665,6 +665,13 @@ class PumpFunCreateScannerCandidateSource:
         self.scanner = scanner or PumpFunCreateScanner()
         self.cursor_before = config.birth_scan_cursor_before
         self._requests_used = 0
+        self.processed_signatures: set[str] = set()
+
+    def load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        self.processed_signatures = {str(signature) for signature in checkpoint.get("birth_scan_processed_signatures", []) if signature}
+
+    def checkpoint_updates(self) -> dict[str, Any]:
+        return {"birth_scan_processed_signatures": sorted(self.processed_signatures)}
 
     def availability(self) -> dict[str, Any]:
         rpc_url = resolve_helius_rpc_url()
@@ -732,11 +739,13 @@ class PumpFunCreateScannerCandidateSource:
             target_create_candidates=self.config.birth_scan_target_create_candidates,
             max_signatures_total=self.config.birth_scan_max_signatures_total,
             cursor_before=self.cursor_before,
+            skip_signatures=set(self.processed_signatures),
             min_confidence=self.config.birth_scan_min_confidence,
             emit_rejected_examples=False,
         )
         write_pumpfun_create_scan_report(report, self.config.report_root / "birth_watch_create_scanner")
         self._requests_used += int(report.metadata_json.get("network_calls_estimate") or 0)
+        self.processed_signatures.update(str(signature) for signature in report.metadata_json.get("processed_signatures", []) if signature)
         if report.batches:
             self.cursor_before = report.batches[-1].next_cursor_before
         return [
@@ -1265,6 +1274,8 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
     selected_source = source or build_source(config)
     availability = selected_source.availability()
     checkpoint = read_checkpoint(config.observation_root / OUTPUT_FILES["checkpoint"])
+    if hasattr(selected_source, "load_checkpoint"):
+        selected_source.load_checkpoint(checkpoint)
     seen_mints = set(checkpoint.get("seen_mints", []))
     start_time = time.monotonic()
     total_api_calls = int(checkpoint.get("api_calls_used", 0))
@@ -1328,6 +1339,8 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
         "warnings": warnings,
         "helius_requests_used": total_api_calls if availability.get("source") == "helius" else 0,
     }
+    if hasattr(selected_source, "checkpoint_updates"):
+        checkpoint_payload.update(selected_source.checkpoint_updates())
     write_checkpoint(config.observation_root / OUTPUT_FILES["checkpoint"], checkpoint_payload)
     tally = calculate_status_tally(config.observation_root, target_candidates=config.target_candidates)
     tally.update(
