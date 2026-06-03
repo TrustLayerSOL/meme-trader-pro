@@ -113,17 +113,21 @@ Most recent scanner reports:
 - The active data root now contains a mixed forward set: `300` original FDV-trigger candidates plus `10` Pump.fun scanner birth-watch candidates.
 - Next step is to monitor whether the 10 birth-watch mints later receive FDV-trigger/path updates, then decide whether to continue beyond `310`.
 
-## Birth-to-Trigger Follow-up Audit
+## Birth-to-Trigger Follow-up Audit and Collector
 
-A read-only follow-up audit was added and run against the ORICO forward observation root.
+A read-only follow-up audit and bounded follow-up collector were added and run against the ORICO forward observation root.
 
 - Data root: `/Volumes/ORICO/MemeTraderPro`
 - Birth-watch candidates audited: `10`
 - Unique birth-watch mints: `10`
-- Birth-watch mints with later FDV evidence: `0`
+- Follow-up collector execute pass: `true`
+- Follow-up collector network calls: `92`
+- Follow-up collector rows written: `290`
+- Follow-up collector warnings: `[]`
+- Birth-watch mints with later FDV evidence: `8`
 - Birth-watch mints with any trigger crossing: `0`
-- Follow-up status counts: `{'needs_followup_collection': 10}`
-- Readiness classification: `birth_to_trigger_needs_followup_collection`
+- Follow-up status counts: `{'fdv_followup_below_trigger': 8, 'needs_followup_collection': 2}`
+- Readiness classification: `birth_to_trigger_fdv_followup_below_trigger`
 - Network/Helius calls made by audit: `0`
 
 Reports:
@@ -131,9 +135,12 @@ Reports:
 - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/birth_to_trigger_followup_audit.json`
 - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/birth_to_trigger_followup_audit.md`
 - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/birth_to_trigger_followup_audit.csv`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/birth_watch_followup_collector/birth_watch_followup_collection_summary.json`
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/birth_watch_followup_collector/birth_watch_followup_collection_summary.md`
 
 Interpretation:
 
 - The create-scanner bridge is producing birth-watch rows correctly.
-- The current 10 birth-watch mints only have initial create rows in the forward observation set.
-- The next required step is bounded birth-watch follow-up collection for these mints, not broader candidate scaling or thesis work.
+- The bounded follow-up collector can recheck current birth-watch mints and append FDV/path rows without adding duplicate candidate rows.
+- The first follow-up pass found deterministic FDV evidence for `8` of `10` birth-watch mints, but all observed FDV values remain below the `10k` trigger.
+- The next required step is another bounded follow-up pass after more time has elapsed, not broader candidate scaling or thesis work.

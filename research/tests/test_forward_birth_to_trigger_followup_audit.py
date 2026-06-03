@@ -124,6 +124,53 @@ def test_birth_to_trigger_audit_does_not_count_create_rows_as_followup(tmp_path:
     assert summary["per_mint"][0]["followup_status"] == "needs_followup_collection"
 
 
+def test_birth_to_trigger_audit_counts_same_observation_followup_if_not_create(tmp_path: Path) -> None:
+    root = tmp_path / "lake"
+    obs = root / "data" / "forward_observation" / "efficient_movers"
+    obs.mkdir(parents=True)
+    _write_jsonl(
+        obs / "candidates.jsonl",
+        [
+            {
+                "observation_id": "birth-a",
+                "mint": "mint-a",
+                "freshness_lane": "birth_watch",
+                "candidate_classification": "pumpfun_birth_candidate_observed",
+                "event_type": "pumpfun_create",
+                "observed_at": 100,
+            }
+        ],
+    )
+    _write_jsonl(
+        obs / "candidate_paths.jsonl",
+        [
+            {
+                "observation_id": "birth-a",
+                "mint": "mint-a",
+                "freshness_lane": "birth_watch",
+                "event_type": "pumpfun_create",
+                "timestamp": 100,
+                "fdv_proxy": None,
+            },
+            {
+                "observation_id": "birth-a",
+                "mint": "mint-a",
+                "freshness_lane": "birth_watch",
+                "event_type": "pumpfun_trade",
+                "timestamp": 130,
+                "fdv_proxy": 9_000,
+            },
+        ],
+    )
+
+    summary, _ = build_birth_to_trigger_followup_audit(root, write_outputs=False)
+
+    assert summary["birth_mints_with_followup_fdv"] == 1
+    assert summary["birth_mints_with_any_trigger_cross"] == 0
+    assert summary["per_mint"][0]["first_fdv_proxy"] == 9_000
+    assert summary["per_mint"][0]["followup_status"] == "fdv_followup_below_trigger"
+
+
 def test_birth_to_trigger_audit_guardrails_are_read_only() -> None:
     joined = " ".join(GUARDRAILS)
 

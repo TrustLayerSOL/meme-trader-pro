@@ -177,8 +177,6 @@ def _is_birth_watch_candidate(row: dict[str, Any]) -> bool:
 def _is_followup_path(row: dict[str, Any], birth_observation_id: str) -> bool:
     if _is_create_event(row):
         return False
-    if str(row.get("observation_id") or "") == birth_observation_id:
-        return False
     return True
 
 
