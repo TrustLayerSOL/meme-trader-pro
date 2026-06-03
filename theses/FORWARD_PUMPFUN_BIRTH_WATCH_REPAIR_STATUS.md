@@ -242,4 +242,37 @@ Final current funnel after additional bounded scanner and follow-up passes:
 - Estimated births needed for `300` crossed-10k observations at the current rate: `2650`
 - Estimated births needed for `300` crossed-20k observations at the current rate: `2866`
 
-The run stopped just short of the first `500` birth inventory checkpoint. The remaining gap is `32` birth-watch mints. Next action is a small bounded scanner top-off, followed by another bounded follow-up audit.
+The run stopped just short of the first `500` birth inventory checkpoint. The remaining gap was `32` birth-watch mints.
+
+## First 500-Birth Checkpoint
+
+A final bounded scanner top-off and follow-up pass reached the first birth inventory checkpoint.
+
+- Total forward candidates: `800`
+- Birth-watch mints: `500`
+- Birth inventory checkpoint progress: `500/500`
+- Births with deterministic FDV follow-up: `404`
+- Births still needing follow-up: `96`
+- Crossed `10k`: `53`
+- Crossed `15k`: `51`
+- Crossed `20k`: `49`
+- Crossed `30k`: `44`
+- Crossed `50k`: `37`
+- Crossed `100k`: `32`
+- Crossed `200k`: `28`
+- Crossed `500k`: `27`
+- Crossed `1m`: `25`
+- Birth-to-FDV follow-up rate: `0.808`
+- Birth-to-10k conversion rate: `0.106`
+- Birth-to-20k conversion rate: `0.098`
+- 10k-to-20k conversion rate: `0.924528`
+- 20k-to-100k conversion rate: `0.653061`
+- Target trigger-qualified progress at `10k`: `53/300`
+- Target trigger-qualified progress at `20k`: `49/300`
+- Estimated births needed for `300` crossed-10k observations at the current rate: `2831`
+- Estimated births needed for `300` crossed-20k observations at the current rate: `3062`
+- Final estimated Helius requests: `126726`
+- Final processed signature cache size: `94932`
+- Final warnings: `[]`
+
+The birth observation infrastructure is working and the first inventory checkpoint is complete. The trigger-qualified sample remains too small for thesis testing or strategy conclusions.
