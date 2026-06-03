@@ -65,7 +65,7 @@ RAYDIUM_LAUNCHLAB_PROGRAM_ID = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"
 RAYDIUM_CPMM_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNuxFYvWzqMe9J1KLcXxj3xV"
 SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4bT8oQrEed7mVRV3S3qj"
+USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4FJTPri1BLRGKkzFTFHL"
 USD1_MINT = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB"
 QUOTE_MINTS = {SOL_MINT, USDC_MINT, USDT_MINT, USD1_MINT}
 LIVE_EVENT_SCHEMA_FIELDS = [
@@ -983,6 +983,8 @@ def build_live_event_candidate(event: dict[str, Any]) -> dict[str, Any] | None:
     fdv = safe_float(event.get("fdv_proxy"))
     if not mint or fdv is None:
         return None
+    if is_quote_mint(mint):
+        return None
     return {
         "mint": mint,
         "token_mint": mint,
@@ -1070,7 +1072,7 @@ def run_observe(config: ForwardObserverConfig, *, source: CandidateSource | None
         for candidate in candidates:
             fdv = safe_float(candidate.get("fdv_proxy"))
             mint = str(candidate.get("mint") or candidate.get("token_mint") or "")
-            if not mint or fdv is None or fdv < config.start_trigger or mint in seen_mints:
+            if not mint or is_quote_mint(mint) or fdv is None or fdv < config.start_trigger or mint in seen_mints:
                 continue
             observation_id = make_observation_id(mint)
             observed_at = int(time.time())
@@ -1622,11 +1624,17 @@ def _primary_token_delta(deltas: list[Any]) -> Any | None:
     candidates = [
         delta
         for delta in deltas
-        if getattr(delta, "mint", None) and abs(float(getattr(delta, "delta", 0.0) or 0.0)) > 0
+        if getattr(delta, "mint", None)
+        and not is_quote_mint(str(getattr(delta, "mint", "")))
+        and abs(float(getattr(delta, "delta", 0.0) or 0.0)) > 0
     ]
     if not candidates:
         return None
     return max(candidates, key=lambda delta: abs(float(delta.delta or 0.0)))
+
+
+def is_quote_mint(mint: str | None) -> bool:
+    return str(mint or "") in QUOTE_MINTS
 
 
 def _primary_native_delta_sol(deltas: list[Any]) -> Any | None:

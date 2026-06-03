@@ -7,6 +7,8 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     HeliusRpcPollingClient,
     HeliusProgramProbeClient,
     MockHeliusEventClient,
+    SOL_MINT,
+    USDC_MINT,
     build_live_event_candidate,
     default_program_configs,
     mask_helius_endpoint,
@@ -109,6 +111,21 @@ def test_build_live_event_candidate_for_trigger_crossing() -> None:
     assert candidate["buy_count"] == 3
     assert candidate["sell_count"] == 1
     assert candidate["active_wallets"] == 3
+
+
+def test_build_live_event_candidate_rejects_quote_mints() -> None:
+    for mint in (SOL_MINT, USDC_MINT):
+        event = normalize_live_source_event(
+            {
+                "source_adapter": "helius_program_logs_pumpfun",
+                "event_type": "pumpfun_trade",
+                "mint": mint,
+                "fdv_proxy": 1_000_000,
+                "event_count": 1,
+            }
+        )
+
+        assert build_live_event_candidate(event) is None
 
 
 def test_observe_with_mocked_helius_live_source_writes_candidate(tmp_path: Path, monkeypatch) -> None:
@@ -421,6 +438,23 @@ def test_run_live_program_probe_writes_reports_and_keeps_observer_rows_empty(tmp
 def test_normalize_pumpfun_transaction_event_fails_closed_without_fdv() -> None:
     tx = _pumpfun_buy_transaction()
     tx["meta"]["postTokenBalances"] = []
+
+    event = normalize_pumpfun_transaction_event(
+        tx,
+        source_adapter="helius_program_logs_pumpfun",
+        program_id=PUMP_FUN_PROGRAM_ID,
+        valuation_supply_proxy=1_000_000_000,
+    )
+
+    assert event["mint"] is None
+    assert event["fdv_proxy"] is None
+    assert event["missing_reason"] == "missing_token_or_native_delta_for_fdv_proxy"
+
+
+def test_normalize_pumpfun_transaction_event_rejects_quote_token_delta() -> None:
+    tx = _pumpfun_buy_transaction()
+    tx["meta"]["preTokenBalances"][0]["mint"] = USDC_MINT
+    tx["meta"]["postTokenBalances"][0]["mint"] = USDC_MINT
 
     event = normalize_pumpfun_transaction_event(
         tx,

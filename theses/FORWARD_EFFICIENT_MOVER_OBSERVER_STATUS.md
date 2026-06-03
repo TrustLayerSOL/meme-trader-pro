@@ -130,3 +130,28 @@ Latest explicit-gate forward collector result:
 - Latest stop/review flag: `target_reached_review_before_continuing`
 
 Current forward collector completion: Pump.fun, PumpSwap, and Raydium are wired through the read-only collector with an explicit gate for probed adapters. The 50-candidate sanity checkpoint is complete and should be reviewed before scaling beyond this sample.
+
+50-candidate quality review:
+
+- Review report JSON: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/forward_collector_50_candidate_quality_review.json`
+- Review report Markdown: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/forward_collector_50_candidate_quality_review.md`
+- Readiness classification: `forward_collector_50_candidate_sample_quality_ready_to_scale`
+- Known quote/base false positives in candidate rows after guardrail + refill: `0`
+- Quarantined normalized quote/base false positives: `2`
+  - USDC: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+  - wrapped SOL: `So11111111111111111111111111111111111111112`
+- Quarantine path: `/Volumes/ORICO/MemeTraderPro/data/forward_observation/efficient_movers/quarantine/20260603T125146Z_quote_mint_false_positives`
+- Duplicate observation IDs: `0`
+- Duplicate mints: `0`
+- Raw Helius RPC rows reviewed: `275`
+- Estimated Helius request-equivalent credits used: `361`
+- Final clean source mix: `helius_program_logs_pumpfun=17`, `helius_program_logs_pumpswap=32`, `helius_program_logs_raydium=1`
+- AppleDouble sidecar files observed on ORICO: `18`
+
+Code guardrail added after review:
+
+- Known quote/base mints are now excluded before live event candidate creation.
+- Pump.fun hydrated transaction parsing now ignores quote/base token deltas when selecting the candidate mint.
+- The USDT quote mint constant was corrected so quote-mint filtering is accurate.
+
+Next required action: scale only to the next bounded forward checkpoint, preserve raw evidence, and rerun the same quality audit before any thesis or strategy interpretation.
