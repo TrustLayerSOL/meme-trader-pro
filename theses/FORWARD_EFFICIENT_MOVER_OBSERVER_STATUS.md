@@ -155,3 +155,20 @@ Code guardrail added after review:
 - The USDT quote mint constant was corrected so quote-mint filtering is accurate.
 
 Next required action: scale only to the next bounded forward checkpoint, preserve raw evidence, and rerun the same quality audit before any thesis or strategy interpretation.
+
+100-candidate bounded scale checkpoint:
+
+- Exact-target cap commit: `35301a5`
+- Review report JSON: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/forward_collector_100_candidate_quality_review.json`
+- Review report Markdown: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/forward_collector_100_candidate_quality_review.md`
+- Readiness classification: `forward_collector_100_candidate_sample_quality_ready_to_review`
+- Final candidates observed: `100 / 100`
+- Known quote/base false positives: `0`
+- Duplicate observation IDs: `0`
+- Duplicate mints: `0`
+- Source mix: `helius_program_logs_pumpfun=27`, `helius_program_logs_pumpswap=72`, `helius_program_logs_raydium=1`
+- Trigger levels: `10k=21`, `15k=12`, `20k=8`, `30k=8`, `50k=14`, `100k=14`, `200k=8`, `500k=4`, `1m=11`
+- Raw Helius RPC rows: `815`
+- Collector warnings: none
+
+Next required action: review source imbalance and Raydium thinness before scaling again. Keep the next expansion bounded and rerun the same quality audit after the next checkpoint.
