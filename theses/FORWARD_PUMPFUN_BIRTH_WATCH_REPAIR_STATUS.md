@@ -76,3 +76,39 @@ Two smoke paths were checked after the source repair:
 - The Pump.fun create scanner is the correct source path for launch birth discovery.
 - Create density in the recent Pump.fun signature stream is low enough that future birth collection should use the scanner/census path with pagination, not repeated generic observer polls.
 - The next implementation step is to bridge verified create scanner output into a forward birth-watch queue, then observe those mints for first FDV-trigger updates.
+
+## Live Collection Start
+
+The create-scanner bridge was implemented and started against the main ORICO forward observation root.
+
+- Data root: `/Volumes/ORICO/MemeTraderPro`
+- Observation root: `/Volumes/ORICO/MemeTraderPro/data/forward_observation/efficient_movers`
+- Source mode: `helius-pumpfun-create-scanner`
+- Birth-watch enabled: `true`
+- Setup audit: passed
+- Projected scanner requests per iteration: `1020`
+- Helius cap used for the live-start command: `8000`, covering the existing checkpoint count plus the bounded scanner run
+- Target candidates: `310`
+- Total candidates observed: `310`
+- Existing FDV-trigger candidates: `300`
+- Pump.fun birth-watch candidates added: `10`
+- Candidate/source row-family coverage: `10/10` birth-watch rows in candidates, paths, events, metadata, holders, and drawdowns
+- Checkpoint Helius request estimate after run: `7479`
+- Checkpoint warnings: `[]`
+- Latest birth-watch mint: `334oqN1C3SsfNoWwZBf3TPT8482MhA8a5oG3uUYcpump`
+
+Scanner reports saved under:
+
+- `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/birth_watch_create_scanner/`
+
+Most recent scanner reports:
+
+- `pumpfun_create_scan_3c8e7971c001.json`: `7` verified creates, `947` signatures, `947` hydrated transactions, `967` estimated requests, viability `viable`
+- `pumpfun_create_scan_df42b84571c0.json`: `6` verified creates, `905` signatures, `905` hydrated transactions, `925` estimated requests, viability `viable`
+
+## Current State
+
+- The birth-watch source bridge is working.
+- Live collection has started and reached the first scanner-backed checkpoint.
+- The active data root now contains a mixed forward set: `300` original FDV-trigger candidates plus `10` Pump.fun scanner birth-watch candidates.
+- Next step is to monitor whether the 10 birth-watch mints later receive FDV-trigger/path updates, then decide whether to continue beyond `310`.
