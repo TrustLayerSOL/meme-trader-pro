@@ -24,6 +24,9 @@ from urllib.parse import parse_qsl, urlparse, urlunparse
 
 from research.mtp_research.data_paths import data_lake_root
 from research.mtp_research.ingestion.helius_backfill import _load_project_dotenv_if_needed
+from research.mtp_research.ingestion.pumpfun_create_scan_report import write_pumpfun_create_scan_report
+from research.mtp_research.ingestion.pumpfun_create_scanner import PumpFunCreateScanner
+from research.mtp_research.ingestion.pumpfun_create_scanner_models import PumpFunCreateCandidate
 from research.mtp_research.ingestion.raw_transaction_store import RawTransactionRecord
 from research.mtp_research.ingestion.solana_transaction_parser import summarize_raw_transaction
 
@@ -171,6 +174,13 @@ class ForwardObserverConfig:
     perform_live_health_checks: bool = False
     enable_probed_adapters: bool = False
     enable_birth_watch_candidates: bool = False
+    birth_scan_max_batches: int = 20
+    birth_scan_signatures_per_batch: int = 50
+    birth_scan_hydrate_limit_per_batch: int = 50
+    birth_scan_target_create_candidates: int = 10
+    birth_scan_max_signatures_total: int = 1_000
+    birth_scan_min_confidence: str = "medium"
+    birth_scan_cursor_before: str | None = None
 
     @property
     def root(self) -> Path:
@@ -641,6 +651,150 @@ class HeliusLiveCandidateSource:
     @property
     def requests_used(self) -> int:
         return int(getattr(self.client, "requests_used", 0))
+
+
+class PumpFunCreateScannerCandidateSource:
+    source_name = "helius"
+
+    def __init__(
+        self,
+        config: ForwardObserverConfig,
+        scanner: Any | None = None,
+    ) -> None:
+        self.config = config
+        self.scanner = scanner or PumpFunCreateScanner()
+        self.cursor_before = config.birth_scan_cursor_before
+        self._requests_used = 0
+
+    def availability(self) -> dict[str, Any]:
+        rpc_url = resolve_helius_rpc_url()
+        key_present = bool(resolve_helius_api_key(load_project_dotenv=False))
+        projected_requests = _projected_birth_scan_requests(self.config)
+        if int(self.config.max_helius_credits or 0) <= 0:
+            return {
+                "source": self.source_name,
+                "available": False,
+                "read_only": True,
+                "missing_reason": "max_helius_credits_zero_or_negative",
+                "source_adapter": "helius_pumpfun_create_scanner",
+                "projected_requests": projected_requests,
+            }
+        if projected_requests > int(self.config.max_helius_credits or 0):
+            return {
+                "source": self.source_name,
+                "available": False,
+                "read_only": True,
+                "missing_reason": "projected_birth_scan_requests_exceed_helius_credit_cap",
+                "source_adapter": "helius_pumpfun_create_scanner",
+                "projected_requests": projected_requests,
+                "max_helius_credits": int(self.config.max_helius_credits or 0),
+            }
+        if not self.config.enable_birth_watch_candidates:
+            return {
+                "source": self.source_name,
+                "available": False,
+                "read_only": True,
+                "missing_reason": "birth_watch_candidates_not_enabled",
+                "source_adapter": "helius_pumpfun_create_scanner",
+                "projected_requests": projected_requests,
+            }
+        if not rpc_url and not key_present:
+            return {
+                "source": self.source_name,
+                "available": False,
+                "read_only": True,
+                "missing_reason": "live_source_blocked_no_helius_config",
+                "source_adapter": "helius_pumpfun_create_scanner",
+                "projected_requests": projected_requests,
+            }
+        return {
+            "source": self.source_name,
+            "available": True,
+            "read_only": True,
+            "source_adapter": "helius_pumpfun_create_scanner",
+            "candidate_lane": "pumpfun_birth_watch",
+            "include_birth_watch_candidates": self.config.enable_birth_watch_candidates,
+            "projected_requests": projected_requests,
+            "max_batches": self.config.birth_scan_max_batches,
+            "signatures_per_batch": self.config.birth_scan_signatures_per_batch,
+            "hydrate_limit_per_batch": self.config.birth_scan_hydrate_limit_per_batch,
+            "target_create_candidates": self.config.birth_scan_target_create_candidates,
+            "max_signatures_total": self.config.birth_scan_max_signatures_total,
+            "min_confidence": self.config.birth_scan_min_confidence,
+        }
+
+    def fetch_candidates(self) -> list[dict[str, Any]]:
+        report = self.scanner.scan(
+            execute=True,
+            max_batches=self.config.birth_scan_max_batches,
+            signatures_per_batch=self.config.birth_scan_signatures_per_batch,
+            hydrate_limit_per_batch=self.config.birth_scan_hydrate_limit_per_batch,
+            target_create_candidates=self.config.birth_scan_target_create_candidates,
+            max_signatures_total=self.config.birth_scan_max_signatures_total,
+            cursor_before=self.cursor_before,
+            min_confidence=self.config.birth_scan_min_confidence,
+            emit_rejected_examples=False,
+        )
+        write_pumpfun_create_scan_report(report, self.config.report_root / "birth_watch_create_scanner")
+        self._requests_used += int(report.metadata_json.get("network_calls_estimate") or 0)
+        if report.batches:
+            self.cursor_before = report.batches[-1].next_cursor_before
+        return [
+            build_birth_watch_candidate_from_create_candidate(candidate)
+            for candidate in report.verified_create_candidates
+            if candidate.token_mint
+        ]
+
+    @property
+    def requests_used(self) -> int:
+        return self._requests_used
+
+
+def build_birth_watch_candidate_from_create_candidate(candidate: PumpFunCreateCandidate) -> dict[str, Any]:
+    return {
+        "mint": candidate.token_mint,
+        "token_mint": candidate.token_mint,
+        "source": "helius_program_logs_pumpfun_create_scanner",
+        "event_type": "pumpfun_create",
+        "fdv_proxy": None,
+        "event_count": 1,
+        "buy_count": 0,
+        "sell_count": 0,
+        "active_wallets": 1 if candidate.creator_wallet else 0,
+        "slot": candidate.slot,
+        "block_time": candidate.block_time,
+        "transaction_signature": candidate.signature,
+        "creator": candidate.creator_wallet,
+        "pool_address": candidate.bonding_curve,
+        "bonding_curve": candidate.bonding_curve,
+        "associated_bonding_curve": candidate.associated_bonding_curve,
+        "launch_time": candidate.block_time,
+        "freshness_lane": "birth_watch",
+        "candidate_classification": "pumpfun_birth_candidate_observed",
+        "status": "watching_pre_trigger",
+        "missing_reason": "pre_trigger_birth_candidate_fdv_pending",
+        "parse_confidence": candidate.extraction_confidence,
+        "instruction_index": candidate.instruction_index,
+        "instruction_discriminator": candidate.instruction_discriminator,
+        "instruction_type": candidate.metadata_json.get("instruction_type"),
+        "warning_flags": candidate.warning_flags,
+    }
+
+
+def _projected_birth_scan_requests(config: ForwardObserverConfig) -> int:
+    max_batches = max(0, int(config.birth_scan_max_batches or 0))
+    hydrate_per_batch = max(
+        0,
+        min(
+            int(config.birth_scan_signatures_per_batch or 0),
+            int(config.birth_scan_hydrate_limit_per_batch or 0),
+        ),
+    )
+    max_hydrated = min(
+        max(0, int(config.birth_scan_max_signatures_total or 0)),
+        max_batches * hydrate_per_batch,
+    )
+    return max_batches + max_hydrated
 
 
 def resolve_helius_api_key(*, load_project_dotenv: bool = True) -> str | None:
@@ -1481,6 +1635,8 @@ def build_source(config: ForwardObserverConfig) -> CandidateSource:
         return MockCandidateSource()
     if config.source == "local":
         return LocalJsonlCandidateSource(config.local_source_path)
+    if config.source == "helius-pumpfun-create-scanner":
+        return PumpFunCreateScannerCandidateSource(config)
     if config.source.startswith("helius"):
         try:
             return HeliusLiveCandidateSource(HeliusLiveSourceConfig.from_observer_config(config))
@@ -1640,6 +1796,8 @@ def _program_configs_for_source(source: str, *, enable_probed_adapters: bool = F
 
 def _safe_helius_availability(config: ForwardObserverConfig) -> dict[str, Any]:
     try:
+        if config.source == "helius-pumpfun-create-scanner":
+            return PumpFunCreateScannerCandidateSource(config).availability()
         live_config = HeliusLiveSourceConfig.from_observer_config(
             ForwardObserverConfig(
                 data_root=config.data_root,

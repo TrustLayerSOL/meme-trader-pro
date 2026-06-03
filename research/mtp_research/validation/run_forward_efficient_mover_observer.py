@@ -39,6 +39,13 @@ def main() -> int:
         perform_live_health_checks=args.live_health_check,
         enable_probed_adapters=args.enable_probed_adapters,
         enable_birth_watch_candidates=args.enable_birth_watch_candidates,
+        birth_scan_max_batches=args.birth_scan_max_batches,
+        birth_scan_signatures_per_batch=args.birth_scan_signatures_per_batch,
+        birth_scan_hydrate_limit_per_batch=args.birth_scan_hydrate_limit_per_batch,
+        birth_scan_target_create_candidates=args.birth_scan_target_create_candidates,
+        birth_scan_max_signatures_total=args.birth_scan_max_signatures_total,
+        birth_scan_min_confidence=args.birth_scan_min_confidence,
+        birth_scan_cursor_before=args.birth_scan_cursor_before,
     )
     if args.mode == "dry-run":
         report = run_dry_run(config)
@@ -99,7 +106,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--source",
-        choices=["auto", "mock", "local", "helius", "helius-pumpfun", "helius-pumpswap", "helius-raydium", "helius-all"],
+        choices=[
+            "auto",
+            "mock",
+            "local",
+            "helius",
+            "helius-pumpfun",
+            "helius-pumpfun-create-scanner",
+            "helius-pumpswap",
+            "helius-raydium",
+            "helius-all",
+        ],
         default="auto",
     )
     parser.add_argument("--local-source-path", default=None)
@@ -120,6 +137,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hydrate-sample", action="store_true")
     parser.add_argument("--enable-probed-adapters", action="store_true")
     parser.add_argument("--enable-birth-watch-candidates", action="store_true")
+    parser.add_argument("--birth-scan-max-batches", type=int, default=20)
+    parser.add_argument("--birth-scan-signatures-per-batch", type=int, default=50)
+    parser.add_argument("--birth-scan-hydrate-limit-per-batch", type=int, default=50)
+    parser.add_argument("--birth-scan-target-create-candidates", type=int, default=10)
+    parser.add_argument("--birth-scan-max-signatures-total", type=int, default=1_000)
+    parser.add_argument("--birth-scan-min-confidence", choices=["low", "medium", "high"], default="medium")
+    parser.add_argument("--birth-scan-cursor-before", default=None)
     parser.add_argument("--live-health-check", action="store_true")
     parser.add_argument("--enable-dexscreener-metadata", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Compatibility flag; use --mode dry-run for dry-run behavior.")
