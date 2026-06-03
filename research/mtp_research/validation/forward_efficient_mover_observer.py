@@ -1695,16 +1695,27 @@ def _transaction_signature(tx: dict[str, Any]) -> str | None:
 
 def _pumpfun_event_type_and_side(tx: dict[str, Any]) -> tuple[str, str | None]:
     logs = (tx.get("meta") or {}).get("logMessages") or []
-    lowered = " ".join(str(log).lower() for log in logs)
-    if "instruction: create" in lowered:
+    instruction_names = _program_log_instruction_names(logs)
+    if any(name in {"create", "createv2"} for name in instruction_names):
         return "pumpfun_create", None
-    if "instruction: migrate" in lowered:
+    if any(name.startswith("migrate") for name in instruction_names):
         return "pumpswap_migration", None
-    if "instruction: sell" in lowered:
+    if any(name.startswith("sell") for name in instruction_names):
         return "pumpfun_trade", "sell"
-    if "instruction: buy" in lowered:
+    if any(name.startswith("buy") for name in instruction_names):
         return "pumpfun_trade", "buy"
     return "pumpfun_trade", None
+
+
+def _program_log_instruction_names(logs: list[Any]) -> list[str]:
+    names: list[str] = []
+    for log in logs:
+        text = str(log).strip().lower()
+        marker = "instruction:"
+        if marker not in text:
+            continue
+        names.append(text.split(marker, 1)[1].strip())
+    return names
 
 
 def _pumpfun_create_fields(tx: dict[str, Any], program_id: str) -> dict[str, Any] | None:

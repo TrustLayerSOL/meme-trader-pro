@@ -148,6 +148,26 @@ def test_normalize_pumpfun_create_event_extracts_birth_fields_without_fdv() -> N
     assert event["missing_reason"] == "pre_trigger_birth_candidate_fdv_pending"
 
 
+def test_pumpfun_create_token_account_log_does_not_count_as_birth_create() -> None:
+    tx = _pumpfun_buy_transaction()
+    tx["meta"]["logMessages"] = [
+        "Program log: Instruction: CreateTokenAccount",
+        "Program log: Instruction: RouteV2",
+        "Program log: Instruction: SellV2",
+    ]
+
+    event = normalize_pumpfun_transaction_event(
+        tx,
+        source_adapter="helius_program_logs_pumpfun",
+        program_id=PUMP_FUN_PROGRAM_ID,
+        valuation_supply_proxy=1_000_000_000,
+    )
+
+    assert event["event_type"] == "pumpfun_trade"
+    assert event["side"] == "sell"
+    assert event["parse_confidence"] == "hydrated_transaction_token_native_delta"
+
+
 def test_birth_watch_candidate_requires_explicit_enable() -> None:
     event = normalize_live_source_event(
         {
