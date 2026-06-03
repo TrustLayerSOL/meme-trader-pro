@@ -240,6 +240,72 @@ def test_immediate_birth_followup_loads_and_writes_source_checkpoint(tmp_path: P
     assert checkpoint["birth_scan_processed_signatures"] == ["new-sig"]
 
 
+def test_immediate_birth_followup_requires_sub_5_second_create_to_attempt(tmp_path: Path) -> None:
+    root = tmp_path / "lake"
+    source = MockBirthWatchCandidateSource(
+        [
+            {
+                "observation_id": "birth-a",
+                "mint": "mint-a",
+                "token_mint": "mint-a",
+                "freshness_lane": "birth_watch",
+                "candidate_classification": "pumpfun_birth_candidate_observed",
+                "event_type": "pumpfun_create",
+                "source": "helius_program_logs_pumpfun_create_scanner",
+                "launch_time": 100,
+                "block_time": 100,
+                "observed_at": 106,
+                "transaction_signature": "create-sig-a",
+            }
+        ]
+    )
+    fetcher = MockBirthWatchFollowupFetcher(
+        {
+            "mint-a": [
+                {
+                    "mint": "mint-a",
+                    "source": "helius_birth_watch_immediate_followup",
+                    "event_type": "pumpfun_trade",
+                    "fdv_proxy": 9_500,
+                    "price_proxy": 0.0000095,
+                    "event_count": 1,
+                    "buy_count": 1,
+                    "sell_count": 0,
+                    "active_wallets": 1,
+                    "transaction_signature": "trade-sig-a",
+                    "slot": 123,
+                    "block_time": 108,
+                }
+            ]
+        }
+    )
+
+    result = run_immediate_birth_followup_observation(
+        root,
+        target_births=1,
+        followup_duration_seconds=0,
+        followup_poll_seconds=0,
+        max_followup_passes_per_mint=1,
+        max_runtime_minutes=1,
+        max_helius_credits=100,
+        execute=True,
+        candidate_source=source,
+        fetcher=fetcher,
+        time_fn=_time_sequence([106, 106, 106, 106]),
+        sleep_fn=lambda _: None,
+    )
+
+    obs = root / "data" / "forward_observation" / "efficient_movers"
+    status = json.loads((obs / "birth_followup_status.json").read_text(encoding="utf-8"))
+    mints = _read_jsonl(obs / "birth_watch_mints.jsonl")
+
+    assert mints[0]["seconds_create_to_first_followup_attempt"] == 6
+    assert mints[0]["seconds_create_observed_to_first_followup_attempt"] == 0
+    assert status["median_seconds_create_to_first_followup_attempt"] == 6
+    assert status["median_seconds_create_observed_to_first_followup_attempt"] == 0
+    assert result["readiness_classification"] == "freshness_repair_needs_timing_improvement"
+
+
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")

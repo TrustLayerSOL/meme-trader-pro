@@ -349,6 +349,12 @@ def run_immediate_birth_followup_observation(
     max_active_birth_followups: int = 100,
     max_runtime_minutes: int = 30,
     max_helius_credits: int = 50_000,
+    birth_scan_max_batches: int = 1,
+    birth_scan_signatures_per_batch: int = 10,
+    birth_scan_hydrate_limit_per_batch: int = 10,
+    birth_scan_max_signatures_total: int = 10,
+    birth_scan_min_confidence: str = "medium",
+    birth_scan_cursor_before: str | None = None,
     signatures_per_mint: int = 10,
     transactions_per_mint: int = 10,
     execute: bool = False,
@@ -365,7 +371,13 @@ def run_immediate_birth_followup_observation(
         max_runtime_minutes=max_runtime_minutes,
         max_helius_credits=max_helius_credits,
         enable_birth_watch_candidates=True,
+        birth_scan_max_batches=birth_scan_max_batches,
+        birth_scan_signatures_per_batch=birth_scan_signatures_per_batch,
+        birth_scan_hydrate_limit_per_batch=birth_scan_hydrate_limit_per_batch,
         birth_scan_target_create_candidates=target_births,
+        birth_scan_max_signatures_total=birth_scan_max_signatures_total,
+        birth_scan_min_confidence=birth_scan_min_confidence,
+        birth_scan_cursor_before=birth_scan_cursor_before,
     )
     config.observation_root.mkdir(parents=True, exist_ok=True)
     config.raw_root.mkdir(parents=True, exist_ok=True)
@@ -396,6 +408,11 @@ def run_immediate_birth_followup_observation(
         "max_active_birth_followups": int(max_active_birth_followups),
         "max_runtime_minutes": int(max_runtime_minutes),
         "max_helius_credits": int(max_helius_credits),
+        "birth_scan_max_batches": int(birth_scan_max_batches),
+        "birth_scan_signatures_per_batch": int(birth_scan_signatures_per_batch),
+        "birth_scan_hydrate_limit_per_batch": int(birth_scan_hydrate_limit_per_batch),
+        "birth_scan_max_signatures_total": int(birth_scan_max_signatures_total),
+        "birth_scan_min_confidence": birth_scan_min_confidence,
         "source_availability": source_availability,
         "smoke_birth_count": 0,
         "immediate_followup_started_count": 0,
@@ -434,12 +451,8 @@ def run_immediate_birth_followup_observation(
         return result
 
     selected_fetcher = fetcher or HeliusMintBirthWatchFollowupFetcher(data_root=root)
-    start_source_requests = int(getattr(source, "requests_used", 0))
-    start_fetch_requests = int(getattr(selected_fetcher, "requests_used", 0))
     start_monotonic = time.monotonic()
     overall_deadline = start_monotonic + max(0, int(max_runtime_minutes)) * 60
-    birth_candidates = [row for row in source.fetch_candidates() if _is_birth_candidate(row)]
-    result["network_calls_made"] += max(0, int(getattr(source, "requests_used", 0)) - start_source_requests)
     seen_mints = {
         str(row.get("mint") or row.get("token_mint") or "")
         for row in read_jsonl(config.observation_root / BIRTH_WATCH_MINTS_FILE)
@@ -450,99 +463,129 @@ def run_immediate_birth_followup_observation(
         for row in read_jsonl(config.observation_root / OUTPUT_FILES["candidates"])
         if row.get("mint") or row.get("token_mint")
     )
-    birth_candidates = [
-        row
-        for row in birth_candidates
-        if str(row.get("mint") or row.get("token_mint") or "") and str(row.get("mint") or row.get("token_mint") or "") not in seen_mints
-    ][: max(0, min(int(target_births), int(max_active_birth_followups)))]
-    for candidate in birth_candidates:
+    while result["smoke_birth_count"] < int(target_births):
         if time.monotonic() >= overall_deadline:
             result["warnings"].append("max_runtime_minutes_reached")
             break
-        mint = str(candidate.get("mint") or candidate.get("token_mint") or "")
-        if not mint:
-            continue
-        observation_id = str(candidate.get("observation_id") or f"birth-{mint[:12]}-{int(now_fn())}")
-        create_time = safe_float(candidate.get("launch_time") or candidate.get("block_time") or candidate.get("transaction_time"))
-        create_observed_at = safe_float(candidate.get("observed_at") or candidate.get("first_seen_time") or now_fn())
-        birth_observed_at = int(create_observed_at or now_fn())
-        birth_rows = build_observation_rows(candidate, start_trigger=10_000.0, observation_id=observation_id, observed_at=birth_observed_at)
-        append_jsonl(config.observation_root / OUTPUT_FILES["candidates"], [birth_rows["candidate"]])
-        append_jsonl(config.observation_root / OUTPUT_FILES["paths"], [birth_rows["path"]])
-        append_jsonl(config.observation_root / OUTPUT_FILES["events"], birth_rows["events"])
-        append_jsonl(config.observation_root / OUTPUT_FILES["metadata"], [birth_rows["metadata"]])
-        append_jsonl(config.observation_root / OUTPUT_FILES["holders"], [birth_rows["holders"]])
-        append_jsonl(config.observation_root / OUTPUT_FILES["drawdowns"], [birth_rows["drawdown"]])
-        append_jsonl(config.raw_root / "source_candidates.jsonl", [{**candidate, "observed_at": birth_observed_at, "observation_id": observation_id}])
-
-        first_attempt_time = float(now_fn())
-        if first_pass_delay_seconds > 0:
-            sleeper(first_pass_delay_seconds)
-        result["smoke_birth_count"] += 1
-        result["immediate_followup_started_count"] += 1
-        target = BirthWatchTarget(
-            observation_id=observation_id,
-            mint=mint,
-            observed_at=create_observed_at,
-            launch_time=create_time,
-            creator=candidate.get("creator"),
-        )
-        first_event: dict[str, Any] | None = None
-        pass_count = 0
-        followup_deadline = first_attempt_time + max(0, int(followup_duration_seconds))
-        while pass_count < max(1, int(max_followup_passes_per_mint)):
-            if time.monotonic() >= overall_deadline:
-                result["warnings"].append("max_runtime_minutes_reached")
+        if result["network_calls_made"] >= int(max_helius_credits):
+            result["warnings"].append("max_helius_credits_reached")
+            break
+        before_source_requests = int(getattr(source, "requests_used", 0))
+        candidate_rows = [row for row in source.fetch_candidates() if _is_birth_candidate(row)]
+        result["network_calls_made"] += max(0, int(getattr(source, "requests_used", 0)) - before_source_requests)
+        if result["network_calls_made"] >= int(max_helius_credits):
+            result["warnings"].append("max_helius_credits_reached")
+            break
+        birth_candidates = []
+        for row in candidate_rows:
+            mint = str(row.get("mint") or row.get("token_mint") or "")
+            if not mint or mint in seen_mints:
+                continue
+            birth_candidates.append(row)
+            seen_mints.add(mint)
+            if len(birth_candidates) >= max(0, min(int(target_births) - result["smoke_birth_count"], int(max_active_birth_followups))):
                 break
-            pass_count += 1
-            events = selected_fetcher.fetch_for_mint(
-                mint,
-                signatures_per_mint=signatures_per_mint,
-                transactions_per_mint=transactions_per_mint,
-            )
-            first_event = _first_fdv_event(events, mint)
-            if first_event is not None:
-                break
-            if float(now_fn()) >= followup_deadline:
-                break
+        if not birth_candidates:
             if followup_poll_seconds > 0:
                 if time.monotonic() + followup_poll_seconds > overall_deadline:
                     result["warnings"].append("max_runtime_minutes_reached")
                     break
                 sleeper(followup_poll_seconds)
-        freshness_record = _build_freshness_record(
-            candidate=candidate,
-            target=target,
-            first_attempt_time=first_attempt_time,
-            first_event=first_event,
-            pass_count=pass_count,
-        )
-        append_jsonl(config.observation_root / BIRTH_WATCH_MINTS_FILE, [freshness_record])
-        if first_event is not None:
-            event = {
-                **first_event,
-                "mint": mint,
-                "token_mint": mint,
-                "freshness_lane": "birth_watch",
-                "source": first_event.get("source") or "helius_birth_watch_immediate_followup",
-                "event_type": first_event.get("event_type") or "pumpfun_trade",
-            }
-            observed_at = int(safe_float(event.get("block_time") or event.get("timestamp") or event.get("observed_at")) or now_fn())
-            rows = build_observation_rows(event, start_trigger=10_000.0, observation_id=observation_id, observed_at=observed_at)
-            rows["path"].update(_freshness_path_fields(freshness_record))
-            rows["events"][0].update(_freshness_event_fields(freshness_record))
-            append_jsonl(config.observation_root / OUTPUT_FILES["paths"], [rows["path"]])
-            append_jsonl(config.observation_root / OUTPUT_FILES["events"], rows["events"])
-            append_jsonl(config.observation_root / OUTPUT_FILES["metadata"], [rows["metadata"]])
-            append_jsonl(config.observation_root / OUTPUT_FILES["holders"], [rows["holders"]])
-            append_jsonl(config.observation_root / OUTPUT_FILES["drawdowns"], [rows["drawdown"]])
-            append_jsonl(config.observation_root / BIRTH_FOLLOWUP_PATHS_FILE, [rows["path"]])
-            append_jsonl(config.observation_root / BIRTH_FOLLOWUP_EVENTS_FILE, rows["events"])
-            result["first_followup_path_rows"] += 1
+            continue
+        for candidate in birth_candidates:
+            if time.monotonic() >= overall_deadline:
+                result["warnings"].append("max_runtime_minutes_reached")
+                break
+            mint = str(candidate.get("mint") or candidate.get("token_mint") or "")
+            if not mint:
+                continue
+            observation_id = str(candidate.get("observation_id") or f"birth-{mint[:12]}-{int(now_fn())}")
+            create_time = safe_float(candidate.get("launch_time") or candidate.get("block_time") or candidate.get("transaction_time"))
+            create_observed_at = safe_float(candidate.get("observed_at") or candidate.get("first_seen_time") or now_fn())
+            birth_observed_at = int(create_observed_at or now_fn())
+            birth_rows = build_observation_rows(candidate, start_trigger=10_000.0, observation_id=observation_id, observed_at=birth_observed_at)
+            append_jsonl(config.observation_root / OUTPUT_FILES["candidates"], [birth_rows["candidate"]])
+            append_jsonl(config.observation_root / OUTPUT_FILES["paths"], [birth_rows["path"]])
+            append_jsonl(config.observation_root / OUTPUT_FILES["events"], birth_rows["events"])
+            append_jsonl(config.observation_root / OUTPUT_FILES["metadata"], [birth_rows["metadata"]])
+            append_jsonl(config.observation_root / OUTPUT_FILES["holders"], [birth_rows["holders"]])
+            append_jsonl(config.observation_root / OUTPUT_FILES["drawdowns"], [birth_rows["drawdown"]])
+            append_jsonl(config.raw_root / "source_candidates.jsonl", [{**candidate, "observed_at": birth_observed_at, "observation_id": observation_id}])
+
+            if first_pass_delay_seconds > 0:
+                sleeper(first_pass_delay_seconds)
+            first_attempt_time = float(now_fn())
+            result["smoke_birth_count"] += 1
+            result["immediate_followup_started_count"] += 1
+            target = BirthWatchTarget(
+                observation_id=observation_id,
+                mint=mint,
+                observed_at=create_observed_at,
+                launch_time=create_time,
+                creator=candidate.get("creator"),
+            )
+            first_event: dict[str, Any] | None = None
+            pass_count = 0
+            followup_deadline = first_attempt_time + max(0, int(followup_duration_seconds))
+            while pass_count < max(1, int(max_followup_passes_per_mint)):
+                if time.monotonic() >= overall_deadline:
+                    result["warnings"].append("max_runtime_minutes_reached")
+                    break
+                if result["network_calls_made"] >= int(max_helius_credits):
+                    result["warnings"].append("max_helius_credits_reached")
+                    break
+                pass_count += 1
+                before_fetch_requests = int(getattr(selected_fetcher, "requests_used", 0))
+                events = selected_fetcher.fetch_for_mint(
+                    mint,
+                    signatures_per_mint=signatures_per_mint,
+                    transactions_per_mint=transactions_per_mint,
+                )
+                result["network_calls_made"] += max(0, int(getattr(selected_fetcher, "requests_used", 0)) - before_fetch_requests)
+                first_event = _first_fdv_event(events, mint)
+                if first_event is not None:
+                    break
+                if float(now_fn()) >= followup_deadline:
+                    break
+                if followup_poll_seconds > 0:
+                    if time.monotonic() + followup_poll_seconds > overall_deadline:
+                        result["warnings"].append("max_runtime_minutes_reached")
+                        break
+                    sleeper(followup_poll_seconds)
+            freshness_record = _build_freshness_record(
+                candidate=candidate,
+                target=target,
+                first_attempt_time=first_attempt_time,
+                first_event=first_event,
+                pass_count=pass_count,
+            )
+            append_jsonl(config.observation_root / BIRTH_WATCH_MINTS_FILE, [freshness_record])
+            if first_event is not None:
+                event = {
+                    **first_event,
+                    "mint": mint,
+                    "token_mint": mint,
+                    "freshness_lane": "birth_watch",
+                    "source": first_event.get("source") or "helius_birth_watch_immediate_followup",
+                    "event_type": first_event.get("event_type") or "pumpfun_trade",
+                }
+                observed_at = int(safe_float(event.get("block_time") or event.get("timestamp") or event.get("observed_at")) or now_fn())
+                rows = build_observation_rows(event, start_trigger=10_000.0, observation_id=observation_id, observed_at=observed_at)
+                rows["path"].update(_freshness_path_fields(freshness_record))
+                rows["events"][0].update(_freshness_event_fields(freshness_record))
+                append_jsonl(config.observation_root / OUTPUT_FILES["paths"], [rows["path"]])
+                append_jsonl(config.observation_root / OUTPUT_FILES["events"], rows["events"])
+                append_jsonl(config.observation_root / OUTPUT_FILES["metadata"], [rows["metadata"]])
+                append_jsonl(config.observation_root / OUTPUT_FILES["holders"], [rows["holders"]])
+                append_jsonl(config.observation_root / OUTPUT_FILES["drawdowns"], [rows["drawdown"]])
+                append_jsonl(config.observation_root / BIRTH_FOLLOWUP_PATHS_FILE, [rows["path"]])
+                append_jsonl(config.observation_root / BIRTH_FOLLOWUP_EVENTS_FILE, rows["events"])
+                result["first_followup_path_rows"] += 1
+            if result["smoke_birth_count"] >= int(target_births):
+                break
     raw_transactions = list(getattr(selected_fetcher, "raw_transactions", []))
     if raw_transactions:
         append_jsonl(config.raw_root / RAW_FOLLOWUP_FILE, raw_transactions)
-    result["network_calls_made"] += max(0, int(getattr(selected_fetcher, "requests_used", 0)) - start_fetch_requests)
     result["estimated_helius_credits_used"] = result["network_calls_made"]
     if result["estimated_helius_credits_used"] > int(max_helius_credits):
         result["warnings"].append("max_helius_credits_exceeded")
@@ -631,7 +674,9 @@ def _build_freshness_record(
         "first_followup_buy_count": buys,
         "first_followup_sell_count": sells,
         "first_followup_active_wallets": active_wallets,
+        "seconds_create_to_create_observed": _delta(create_time, create_observed_at),
         "seconds_create_to_first_followup_attempt": _delta(create_time, first_attempt_time),
+        "seconds_create_observed_to_first_followup_attempt": _delta(create_observed_at, first_attempt_time),
         "seconds_create_to_first_followup_path": _delta(create_time, path_time),
         "followup_started_immediately": _delta(create_time, first_attempt_time) is not None
         and (_delta(create_time, first_attempt_time) or 0) <= 5,
@@ -672,7 +717,9 @@ def _freshness_path_fields(record: dict[str, Any]) -> dict[str, Any]:
         "create_time": record.get("create_time"),
         "first_followup_attempt_time": record.get("first_followup_attempt_time"),
         "first_followup_path_time": record.get("first_followup_path_time"),
+        "seconds_create_to_create_observed": record.get("seconds_create_to_create_observed"),
         "seconds_create_to_first_followup_attempt": record.get("seconds_create_to_first_followup_attempt"),
+        "seconds_create_observed_to_first_followup_attempt": record.get("seconds_create_observed_to_first_followup_attempt"),
         "seconds_create_to_first_followup_path": record.get("seconds_create_to_first_followup_path"),
         "followup_started_immediately": record.get("followup_started_immediately"),
         "first_followup_before_any_trade_if_known": record.get("first_followup_before_any_trade_if_known"),
@@ -723,12 +770,16 @@ def _update_immediate_freshness_counts(config: ForwardObserverConfig, result: di
         }
     )
     attempt_seconds = [safe_float(row.get("seconds_create_to_first_followup_attempt")) for row in records]
+    observed_to_attempt_seconds = [safe_float(row.get("seconds_create_observed_to_first_followup_attempt")) for row in records]
     path_seconds = [safe_float(row.get("seconds_create_to_first_followup_path")) for row in records]
     attempt_seconds = [value for value in attempt_seconds if value is not None]
+    observed_to_attempt_seconds = [value for value in observed_to_attempt_seconds if value is not None]
     path_seconds = [value for value in path_seconds if value is not None]
     result["median_seconds_create_to_first_followup_attempt"] = _median(attempt_seconds)
+    result["median_seconds_create_observed_to_first_followup_attempt"] = _median(observed_to_attempt_seconds)
     result["median_seconds_create_to_first_path"] = _median(path_seconds)
     result["attempt_within_5s_pct"] = _pct_le(attempt_seconds, 5)
+    result["observed_to_attempt_within_5s_pct"] = _pct_le(observed_to_attempt_seconds, 5)
     result["attempt_within_15s_pct"] = _pct_le(attempt_seconds, 15)
     result["attempt_within_30s_pct"] = _pct_le(attempt_seconds, 30)
     result["attempt_within_60s_pct"] = _pct_le(attempt_seconds, 60)
@@ -743,7 +794,8 @@ def _update_immediate_freshness_counts(config: ForwardObserverConfig, result: di
         result["true_near_birth_observed_count"] > 0
         and result["first_followup_before_10k_count"] > 0
         and median_attempt is not None
-        and median_attempt <= 30
+        and median_attempt <= 5
+        and (result.get("attempt_within_5s_pct") or 0) >= 0.95
     ):
         result["readiness_classification"] = "freshness_repair_ready_for_100_birth_smoke"
     else:
@@ -771,8 +823,12 @@ def _write_immediate_status(config: ForwardObserverConfig, result: dict[str, Any
         "target_trigger_qualified_true_near_birth_mints": result.get("target_trigger_qualified_true_near_birth_mints", 300),
         "freshness_repair_status": result.get("readiness_classification"),
         "median_seconds_create_to_first_followup_attempt": result.get("median_seconds_create_to_first_followup_attempt"),
+        "median_seconds_create_observed_to_first_followup_attempt": result.get(
+            "median_seconds_create_observed_to_first_followup_attempt"
+        ),
         "median_seconds_create_to_first_path": result.get("median_seconds_create_to_first_path"),
         "attempt_within_5s_pct": result.get("attempt_within_5s_pct"),
+        "observed_to_attempt_within_5s_pct": result.get("observed_to_attempt_within_5s_pct"),
         "attempt_within_15s_pct": result.get("attempt_within_15s_pct"),
         "attempt_within_30s_pct": result.get("attempt_within_30s_pct"),
         "attempt_within_60s_pct": result.get("attempt_within_60s_pct"),
