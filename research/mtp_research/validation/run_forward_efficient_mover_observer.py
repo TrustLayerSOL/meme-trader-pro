@@ -37,6 +37,7 @@ def main() -> int:
         source=args.source,
         local_source_path=args.local_source_path,
         perform_live_health_checks=args.live_health_check,
+        enable_probed_adapters=args.enable_probed_adapters,
     )
     if args.mode == "dry-run":
         report = run_dry_run(config)
@@ -116,6 +117,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-observe-iterations", type=int, default=None)
     parser.add_argument("--probe-limit", type=int, default=10)
     parser.add_argument("--hydrate-sample", action="store_true")
+    parser.add_argument("--enable-probed-adapters", action="store_true")
     parser.add_argument("--live-health-check", action="store_true")
     parser.add_argument("--enable-dexscreener-metadata", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Compatibility flag; use --mode dry-run for dry-run behavior.")

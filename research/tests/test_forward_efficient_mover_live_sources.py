@@ -160,6 +160,35 @@ def test_live_source_budget_cap_blocks_fetch(tmp_path: Path, monkeypatch) -> Non
     assert source.availability()["missing_reason"] == "max_helius_credits_zero_or_negative"
 
 
+def test_unverified_adapters_require_explicit_enable_gate(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "test-secret-key")
+
+    blocked_config = ForwardObserverConfig(data_root=tmp_path, source="helius-pumpswap", max_helius_credits=10)
+    blocked_source = HeliusLiveCandidateSource(
+        config=HeliusLiveSourceConfig.from_observer_config(blocked_config, load_project_dotenv=False),
+        client=MockHeliusEventClient([]),
+    )
+
+    assert blocked_source.availability()["available"] is False
+    assert blocked_source.availability()["missing_reason"] == "no_verified_program_ids_for_selected_helius_source"
+
+    enabled_config = ForwardObserverConfig(
+        data_root=tmp_path,
+        source="helius-pumpswap",
+        max_helius_credits=10,
+        enable_probed_adapters=True,
+    )
+    enabled_source = HeliusLiveCandidateSource(
+        config=HeliusLiveSourceConfig.from_observer_config(enabled_config, load_project_dotenv=False),
+        client=MockHeliusEventClient([]),
+    )
+
+    availability = enabled_source.availability()
+    assert availability["available"] is True
+    assert availability["ready_adapters"] == ["helius_program_logs_pumpswap"]
+    assert availability["adapter_enable_gate"] == "explicit_probed_adapter_enable"
+
+
 def test_helius_rpc_polling_client_hydrates_and_extracts_pumpfun_candidate() -> None:
     calls: list[str] = []
 
@@ -184,6 +213,95 @@ def test_helius_rpc_polling_client_hydrates_and_extracts_pumpfun_candidate() -> 
     assert events[0]["price_proxy"] == 0.01
     assert events[0]["fdv_proxy"] == 10_000_000.0
     assert events[0]["parse_confidence"] == "hydrated_transaction_token_native_delta"
+
+
+def test_helius_rpc_polling_client_routes_pumpswap_parser_and_filters_unparseable() -> None:
+    calls: list[str] = []
+
+    def fake_post(_url, payload, _timeout):
+        calls.append(payload["method"])
+        if payload["method"] == "getSignaturesForAddress":
+            return {
+                "result": [
+                    {"signature": "sig-parseable", "slot": 102, "blockTime": 1_700_000_200},
+                    {"signature": "sig-unparseable", "slot": 103, "blockTime": 1_700_000_300},
+                ]
+            }
+        assert payload["method"] == "getTransaction"
+        if payload["params"][0] == "sig-parseable":
+            return {"result": _amm_buy_transaction(program_id="pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA")}
+        tx = _amm_buy_transaction(program_id="pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA")
+        tx["meta"]["postTokenBalances"] = []
+        return {"result": tx}
+
+    config = default_program_configs()["helius_program_logs_pumpswap"]
+    enabled_config = config.__class__(
+        adapter_name=config.adapter_name,
+        program_ids=config.program_ids,
+        event_type=config.event_type,
+        status="ready",
+        notes=config.notes,
+    )
+    client = HeliusRpcPollingClient("https://mock-helius.invalid/?api-key=test", rpc_post=fake_post, sol_usd_price=100.0)
+    events = client.poll_program_events({"helius_program_logs_pumpswap": enabled_config}, limit=5)
+    candidates = [build_live_event_candidate(normalize_live_source_event(event)) for event in events]
+    candidates = [candidate for candidate in candidates if candidate]
+
+    assert calls == ["getSignaturesForAddress", "getTransaction", "getTransaction"]
+    assert len(events) == 2
+    assert events[0]["event_type"] == "pumpswap_trade"
+    assert events[0]["mint"] == "mint-a"
+    assert events[0]["parse_confidence"] == "hydrated_amm_token_quote_delta"
+    assert events[1]["mint"] is None
+    assert events[1]["missing_reason"] in {"ambiguous_amm_token_or_quote_delta", "zero_token_or_quote_delta_for_fdv_proxy"}
+    assert len(candidates) == 1
+    assert candidates[0]["source"] == "helius_program_logs_pumpswap"
+
+
+def test_observe_enabled_pumpswap_writes_only_parseable_amm_candidate(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HELIUS_API_KEY", "test-secret-key")
+
+    def fake_post(_url, payload, _timeout):
+        if payload["method"] == "getSignaturesForAddress":
+            return {
+                "result": [
+                    {"signature": "sig-parseable", "slot": 102, "blockTime": 1_700_000_200},
+                    {"signature": "sig-unparseable", "slot": 103, "blockTime": 1_700_000_300},
+                ]
+            }
+        if payload["params"][0] == "sig-parseable":
+            return {"result": _amm_buy_transaction(program_id="pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA")}
+        tx = _amm_buy_transaction(program_id="pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA")
+        tx["meta"]["postTokenBalances"] = []
+        return {"result": tx}
+
+    config = ForwardObserverConfig(
+        data_root=tmp_path,
+        source="helius-pumpswap",
+        target_candidates=1,
+        max_observe_iterations=1,
+        max_helius_credits=10,
+        enable_probed_adapters=True,
+    )
+    live_config = HeliusLiveSourceConfig.from_observer_config(config, load_project_dotenv=False)
+    source = HeliusLiveCandidateSource(
+        config=live_config,
+        client=HeliusRpcPollingClient(
+            live_config.rpc_url,
+            rpc_post=fake_post,
+            sol_usd_price=100.0,
+        ),
+    )
+
+    result = run_observe(config, source=source)
+
+    assert result["total_candidates_observed"] == 1
+    assert result["helius_requests_used"] == 3
+    assert result["warnings"] == []
+    raw_rows = (config.raw_root / "helius_rpc_raw.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(raw_rows) == 2
+    candidate_rows = (config.observation_root / "candidates.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(candidate_rows) == 1
 
 
 def test_program_probe_client_hydrates_unverified_program_without_candidate_rows() -> None:

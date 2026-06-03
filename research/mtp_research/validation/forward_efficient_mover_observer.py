@@ -168,6 +168,7 @@ class ForwardObserverConfig:
     source: str = "auto"
     local_source_path: Path | str | None = None
     perform_live_health_checks: bool = False
+    enable_probed_adapters: bool = False
 
     @property
     def root(self) -> Path:
@@ -299,6 +300,7 @@ class HeliusLiveSourceConfig:
     raw_root: Path
     max_helius_credits: int
     source: str = "helius-all"
+    adapter_enable_gate: str = "verified_only"
     timeout_sec: int = 10
     limit_per_program_poll: int = 5
     hydrate_transactions: bool = True
@@ -319,10 +321,11 @@ class HeliusLiveSourceConfig:
             ws_url=ws_url,
             rpc_endpoint_masked=mask_helius_endpoint(rpc_url),
             ws_endpoint_masked=mask_helius_endpoint(ws_url),
-            program_configs=_program_configs_for_source(config.source),
+            program_configs=_program_configs_for_source(config.source, enable_probed_adapters=config.enable_probed_adapters),
             raw_root=config.raw_root,
             max_helius_credits=int(config.max_helius_credits or 0),
             source=config.source,
+            adapter_enable_gate="explicit_probed_adapter_enable" if config.enable_probed_adapters else "verified_only",
             sol_usd_price=resolve_forward_sol_usd_price(config.root),
         )
 
@@ -385,15 +388,7 @@ class HeliusRpcPollingClient:
                     if self.hydrate_transactions and signature:
                         tx = self._fetch_transaction(str(signature))
                         if tx:
-                            events.append(
-                                normalize_pumpfun_transaction_event(
-                                    tx,
-                                    source_adapter=adapter_name,
-                                    program_id=program_id,
-                                    valuation_supply_proxy=self.valuation_supply_proxy,
-                                    sol_usd_price=self.sol_usd_price,
-                                )
-                            )
+                            events.append(self._normalize_hydrated_event(tx, adapter_name, program_config, program_id))
                             continue
                     events.append(
                         _signature_only_event(
@@ -424,6 +419,39 @@ class HeliusRpcPollingClient:
         self.requests_used += 1
         result = response.get("result") if isinstance(response, dict) else None
         return result if isinstance(result, dict) else {}
+
+    def _normalize_hydrated_event(
+        self,
+        tx: dict[str, Any],
+        adapter_name: str,
+        program_config: ProgramSourceConfig,
+        program_id: str,
+    ) -> dict[str, Any]:
+        if adapter_name == "helius_program_logs_pumpfun":
+            return normalize_pumpfun_transaction_event(
+                tx,
+                source_adapter=adapter_name,
+                program_id=program_id,
+                valuation_supply_proxy=self.valuation_supply_proxy,
+                sol_usd_price=self.sol_usd_price,
+            )
+        if adapter_name in {"helius_program_logs_pumpswap", "helius_program_logs_raydium"}:
+            return normalize_amm_transaction_event(
+                tx,
+                source_adapter=adapter_name,
+                program_id=program_id,
+                event_type=program_config.event_type,
+                valuation_supply_proxy=self.valuation_supply_proxy,
+                sol_usd_price=self.sol_usd_price,
+            )
+        return _signature_only_event(
+            source_adapter=adapter_name,
+            program_id=program_id,
+            signature=_transaction_signature(tx),
+            slot=tx.get("slot"),
+            block_time=tx.get("blockTime"),
+            event_type=program_config.event_type,
+        )
 
 
 class HeliusProgramProbeClient:
@@ -571,8 +599,9 @@ class HeliusLiveCandidateSource:
                 "missing_reason": "max_helius_credits_zero_or_negative",
                 "rpc_endpoint_masked": self.config.rpc_endpoint_masked,
                 "ws_endpoint_masked": self.config.ws_endpoint_masked,
-                "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
-            }
+            "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
+            "adapter_enable_gate": self.config.adapter_enable_gate,
+        }
         ready = [name for name, item in self.config.program_configs.items() if item.status == "ready" and item.program_ids]
         missing = [name for name, item in self.config.program_configs.items() if item.status != "ready" or not item.program_ids]
         return {
@@ -584,6 +613,7 @@ class HeliusLiveCandidateSource:
             "ready_adapters": ready,
             "missing_or_unverified_adapters": missing,
             "program_adapters": {name: item.to_dict() for name, item in self.config.program_configs.items()},
+            "adapter_enable_gate": self.config.adapter_enable_gate,
             "missing_reason": None if ready else "no_verified_program_ids_for_selected_helius_source",
         }
 
@@ -674,7 +704,10 @@ def run_live_source_readiness(
     api_key = resolve_helius_api_key(load_project_dotenv=load_project_dotenv)
     rpc_url = resolve_helius_rpc_url(load_project_dotenv=False)
     ws_url = resolve_helius_ws_url(load_project_dotenv=False)
-    program_configs = _program_configs_for_source(config.source if config.source.startswith("helius") else "helius-all")
+    program_configs = _program_configs_for_source(
+        config.source if config.source.startswith("helius") else "helius-all",
+        enable_probed_adapters=config.enable_probed_adapters,
+    )
     rpc_check = _helius_rpc_health_check(rpc_url) if perform_network_checks and rpc_url else {"status": "not_checked"}
     ws_check = _helius_ws_health_check(ws_url) if perform_network_checks and ws_url else {"status": "not_checked"}
     output_writable = _check_output_writable(config.report_root)
@@ -702,6 +735,7 @@ def run_live_source_readiness(
             "rpc_health": rpc_check,
             "ws_health": ws_check,
             "max_helius_credits": int(config.max_helius_credits or 0),
+            "adapter_enable_gate": "explicit_probed_adapter_enable" if config.enable_probed_adapters else "verified_only",
         },
         "source_adapters": {name: item.to_dict() for name, item in program_configs.items()},
         "ready_adapters": ready_programs,
@@ -1110,7 +1144,7 @@ def run_live_program_probe(
     hydrate_sample: bool = False,
     rpc_post: Any | None = None,
     load_project_dotenv: bool = True,
-) -> dict[str, Any]:
+    ) -> dict[str, Any]:
     ensure_dirs(config)
     selected_source = source or config.source
     live_config = HeliusLiveSourceConfig.from_observer_config(
@@ -1118,6 +1152,7 @@ def run_live_program_probe(
             data_root=config.data_root,
             source=selected_source,
             max_helius_credits=config.max_helius_credits,
+            enable_probed_adapters=config.enable_probed_adapters,
         ),
         load_project_dotenv=load_project_dotenv,
     )
@@ -1486,8 +1521,23 @@ def print_status(tally: dict[str, Any]) -> str:
     )
 
 
-def _program_configs_for_source(source: str) -> dict[str, ProgramSourceConfig]:
+def _program_configs_for_source(source: str, *, enable_probed_adapters: bool = False) -> dict[str, ProgramSourceConfig]:
     configs = default_program_configs()
+    if enable_probed_adapters:
+        configs = {
+            name: (
+                ProgramSourceConfig(
+                    adapter_name=config.adapter_name,
+                    program_ids=config.program_ids,
+                    event_type=config.event_type,
+                    status="ready" if config.status == "needs_probe_verification" else config.status,
+                    notes=f"{config.notes} Explicit probed-adapter enable gate is active.",
+                )
+                if config.status == "needs_probe_verification"
+                else config
+            )
+            for name, config in configs.items()
+        }
     if source in {"helius", "helius-all", "auto"}:
         return configs
     if source == "helius-pumpfun":
@@ -1506,6 +1556,7 @@ def _safe_helius_availability(config: ForwardObserverConfig) -> dict[str, Any]:
                 data_root=config.data_root,
                 source="helius-all",
                 max_helius_credits=config.max_helius_credits,
+                enable_probed_adapters=config.enable_probed_adapters,
             )
         )
         return HeliusLiveCandidateSource(live_config).availability()

@@ -40,6 +40,13 @@ Observe with a configured source:
 MEMETRADER_DATA_ROOT=/Volumes/ORICO/MemeTraderPro ./trading_env/bin/python -m research.mtp_research.validation.run_forward_efficient_mover_observer --mode observe --target-candidates 300 --poll-seconds 2 --max-runtime-minutes 240
 ```
 
+Observe with explicitly enabled probed adapters:
+
+```bash
+MEMETRADER_DATA_ROOT=/Volumes/ORICO/MemeTraderPro ./trading_env/bin/python -m research.mtp_research.validation.run_forward_efficient_mover_observer --mode observe --source helius-pumpswap --enable-probed-adapters --target-candidates 5 --max-observe-iterations 1 --max-runtime-minutes 2 --max-helius-credits 50
+MEMETRADER_DATA_ROOT=/Volumes/ORICO/MemeTraderPro ./trading_env/bin/python -m research.mtp_research.validation.run_forward_efficient_mover_observer --mode observe --source helius-raydium --enable-probed-adapters --target-candidates 5 --max-observe-iterations 1 --max-runtime-minutes 2 --max-helius-credits 50
+```
+
 Status:
 
 ```bash
@@ -109,3 +116,17 @@ Latest PumpSwap/Raydium tiny probe result:
   - `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/efficient_movers/live_program_probe_helius-raydium.json`
 
 Current implementation completion: Pump.fun Helius forward observation is live and writing ORICO candidate/path/event/metadata/holder/drawdown rows. PumpSwap and Raydium have bounded probe evidence with direct program instruction clusters and deterministic candidate-field extraction. They remain review-limited until an explicit adapter enable gate is added and a tiny observe run confirms no low-confidence rows enter the candidate stream.
+
+Latest explicit-gate forward collector result:
+
+- Explicit probed-adapter gate: `--enable-probed-adapters`
+- Ready Helius adapters under gate: `helius_program_logs_pumpfun`, `helius_program_logs_pumpswap`, `helius_program_logs_raydium`
+- Missing/unverified adapters under gate: none
+- Total candidates observed: `6`
+- Candidate sources: `helius_program_logs_pumpfun=4`, `helius_program_logs_pumpswap=2`
+- Raydium observe pass: completed with no warnings; no above-trigger candidate added in the latest tiny sample
+- Raw Helius RPC rows: `50`
+- Estimated Helius request-equivalent credits used: `56`
+- Latest stop/review flag: `continue_collecting_until_50_candidate_sanity_check`
+
+Current forward collector completion: Pump.fun, PumpSwap, and Raydium are wired through the read-only collector with an explicit gate for probed adapters. PumpSwap has written real above-trigger candidate rows. Raydium has deterministic parsing and probe evidence, but the latest tiny observe sample did not produce a new above-trigger candidate.
