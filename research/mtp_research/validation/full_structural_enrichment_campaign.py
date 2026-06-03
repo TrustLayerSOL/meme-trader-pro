@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ from typing import Any
 import pandas as pd
 
 from research.mtp_research.data_paths import data_lake_path, data_lake_root
+from research.mtp_research.ingestion.dexscreener_real_ingest import DexScreenerRealIngestor, KNOWN_QUOTE_MINTS
 from research.mtp_research.ingestion.helius_backfill import HeliusHistoricalAdapter
 
 
@@ -79,6 +82,12 @@ DEFAULT_MIGRATION_LABELS_PATH = data_lake_path(
     "migration_graduation",
     "combined_migration_graduation_labels_provenance_upgraded.jsonl",
 )
+DEFAULT_DEXSCREENER_PAIR_LABELS_PATH = data_lake_path(
+    "data",
+    "backtests",
+    "migration_graduation",
+    "dexscreener_pair_graduation_labels.parquet",
+)
 
 METHODOLOGY_FLAGS = [
     "research_only",
@@ -114,6 +123,8 @@ def run_full_structural_enrichment_campaign(
     max_helius_credits: int = 500_000,
     contract_authority_adapter: Any | None = None,
     contract_authority_workers: int = 8,
+    dexscreener_token_adapter: Any | None = None,
+    dexscreener_workers: int = 8,
 ) -> tuple[dict[str, Any], dict[str, Path]]:
     started = time.time()
     root = Path(data_root) if data_root is not None else data_lake_root()
@@ -137,7 +148,18 @@ def run_full_structural_enrichment_campaign(
         inputs["sol_usd"],
         inputs["migration_labels"],
     )
-    visibility = _build_visibility_attention_layer(base)
+    attention_layers = _build_attention_visibility_layers(
+        base,
+        candidates_path=inputs["candidates"],
+        dexscreener_pairs_path=inputs["dexscreener_pairs"],
+        execute_dexscreener=execute_dexscreener,
+        paths=paths,
+        adapter=dexscreener_token_adapter,
+        workers=dexscreener_workers,
+    )
+    topicality = attention_layers["topicality"]
+    visibility = attention_layers["visibility"]
+    metadata_quality = attention_layers["metadata_quality"]
     contract_result = _build_contract_authority_layer(
         base,
         execute_helius=execute_helius,
@@ -155,7 +177,9 @@ def run_full_structural_enrichment_campaign(
         cluster=cluster,
         distribution=distribution,
         visible_flow=visible_flow,
+        topicality=topicality,
         visibility=visibility,
+        metadata_quality=metadata_quality,
         contract=contract,
     )
     target_registry = _build_target_registry(master)
@@ -191,7 +215,9 @@ def run_full_structural_enrichment_campaign(
         cluster=cluster,
         distribution=distribution,
         visible_flow=visible_flow,
+        topicality=topicality,
         visibility=visibility,
+        metadata_quality=metadata_quality,
         contract=contract,
         master=master,
     )
@@ -216,12 +242,16 @@ def run_full_structural_enrichment_campaign(
         },
         "dexscreener": {
             "execute_requested": bool(execute_dexscreener),
-            "execute_completed": False,
-            "calls_used": 0,
+            "execute_completed": bool(attention_layers["dexscreener_execute_completed"]),
+            "calls_used": int(attention_layers["dexscreener_calls_used"]),
             "reason_not_executed": budget["external_collection_reason"],
+            "target": "dexscreener_tokens_batch_visibility_context" if execute_dexscreener else None,
+            "provider_errors": attention_layers["dexscreener_errors"],
         },
         "budget": budget,
         "layer_coverage": layer_coverage,
+        "attention_visibility": attention_layers["summary"],
+        "visibility_source_audit": attention_layers["source_audit"],
         "external_gaps": external_gaps,
         "warnings": _warnings(layer_coverage, external_gaps),
         "runtime_seconds": round(time.time() - started, 3),
@@ -239,12 +269,13 @@ def estimate_campaign_budget(
     max_helius_credits: int,
 ) -> dict[str, Any]:
     projected_helius = math.ceil(launch_count / 100) if execute_helius else 0
+    projected_dexscreener = math.ceil(launch_count / 30) if execute_dexscreener else 0
     if execute_helius:
         status = "within_budget_contract_authority_batched" if projected_helius <= max_helius_credits else "blocked_projected_helius_above_budget"
         reason = "contract_authority_getMultipleAccounts_batched"
     elif execute_dexscreener:
-        status = "external_collection_not_executed_without_named_targets"
-        reason = "no_named_bounded_external_target_set_after_local_dedupe"
+        status = "within_budget_dexscreener_visibility_batched"
+        reason = "dexscreener_tokens_batch_visibility_context"
     else:
         status = "within_budget_local_only"
         reason = "local_structural_artifacts_available_for_current_campaign"
@@ -253,7 +284,7 @@ def estimate_campaign_budget(
         "helius_execute_requested": bool(execute_helius),
         "dexscreener_execute_requested": bool(execute_dexscreener),
         "projected_helius_credits": int(projected_helius),
-        "projected_dexscreener_calls": 0,
+        "projected_dexscreener_calls": int(projected_dexscreener),
         "max_helius_credits": int(max_helius_credits),
         "budget_gate_status": status,
         "external_collection_reason": reason,
@@ -270,7 +301,9 @@ def build_layer_coverage(master: pd.DataFrame) -> dict[str, dict[str, Any]]:
         "cluster_coordination": "has_cluster_proxy_layer",
         "distribution_exit_behavior": "has_distribution_layer",
         "visible_attention_and_flow": "has_visible_attention_and_flow_layer",
+        "topicality_context": "has_topicality_layer",
         "visibility_attention_context": "has_visibility_layer",
+        "metadata_quality_context": "has_metadata_quality_layer",
         "contract_authority_context": "has_contract_layer",
     }
     total = int(len(master))
@@ -289,6 +322,7 @@ def build_layer_coverage(master: pd.DataFrame) -> dict[str, dict[str, Any]]:
 def _resolve_paths(root: Path, overrides: dict[str, Path | str] | None) -> dict[str, Path]:
     parsed_dir = root / "data" / "backtests" / "structural_enrichment" / "full_campaign"
     report_dir = root / "data" / "backtests" / "diagnostics" / "reports" / "full_structural_enrichment_campaign"
+    attention_report_dir = root / "data" / "backtests" / "diagnostics" / "reports" / "attention_visibility_enrichment"
     raw_dir = root / "data" / "raw" / "structural_enrichment" / "full_campaign"
     manifest_dir = root / "manifests"
     checkpoint_dir = parsed_dir / "checkpoints"
@@ -296,6 +330,7 @@ def _resolve_paths(root: Path, overrides: dict[str, Path | str] | None) -> dict[
         "raw_dir": raw_dir,
         "parsed_dir": parsed_dir,
         "report_dir": report_dir,
+        "attention_report_dir": attention_report_dir,
         "manifest_dir": manifest_dir,
         "checkpoint_dir": checkpoint_dir,
         "preflight_json_path": report_dir / "full_structural_enrichment_preflight.json",
@@ -318,8 +353,16 @@ def _resolve_paths(root: Path, overrides: dict[str, Path | str] | None) -> dict[
         "visible_attention_flow_parquet_path": parsed_dir / "visible_attention_and_flow_features.parquet",
         "visible_attention_flow_jsonl_path": parsed_dir / "visible_attention_and_flow_features.jsonl",
         "visibility_parquet_path": parsed_dir / "visibility_attention_context.parquet",
+        "topicality_context_parquet_path": parsed_dir / "topicality_context.parquet",
+        "visibility_context_parquet_path": parsed_dir / "visibility_context.parquet",
+        "metadata_quality_context_parquet_path": parsed_dir / "metadata_quality_context.parquet",
+        "visibility_source_audit_json_path": attention_report_dir / "visibility_source_audit.json",
+        "visibility_source_audit_markdown_path": attention_report_dir / "visibility_source_audit.md",
+        "attention_visibility_summary_json_path": attention_report_dir / "attention_visibility_coverage_summary.json",
+        "attention_visibility_summary_markdown_path": attention_report_dir / "attention_visibility_coverage_summary.md",
         "contract_parquet_path": parsed_dir / "contract_authority_context.parquet",
         "contract_authority_raw_path": raw_dir / "contract_authority_get_multiple_accounts_raw.jsonl",
+        "dexscreener_token_raw_path": raw_dir / "dexscreener_tokens_visibility_raw.jsonl",
         "master_parquet_path": parsed_dir / "master_enriched_runner_fingerprint.parquet",
         "master_jsonl_path": parsed_dir / "master_enriched_runner_fingerprint.jsonl",
     }
@@ -342,6 +385,7 @@ def _resolve_input_paths(input_paths: dict[str, Any] | None) -> dict[str, Any]:
         "sol_usd": DEFAULT_SOL_USD_PATH,
         "candidates": DEFAULT_CANDIDATES_PATH,
         "migration_labels": DEFAULT_MIGRATION_LABELS_PATH,
+        "dexscreener_pairs": DEFAULT_DEXSCREENER_PAIR_LABELS_PATH,
     }
     if input_paths:
         paths.update(input_paths)
@@ -764,13 +808,665 @@ def _build_visible_attention_and_flow_layer(
     )
 
 
-def _build_visibility_attention_layer(base: pd.DataFrame) -> pd.DataFrame:
-    layer = _select_existing(base, ["launch_id", "mint", "token_mint"])
-    layer["dexscreener_first_seen_available"] = False
-    layer["dexscreener_calls_used"] = 0
-    layer["visibility_attention_context_available"] = False
-    layer["visibility_attention_missing_reason"] = "external_visibility_context_not_fetched_in_this_campaign"
-    return layer
+def _build_attention_visibility_layers(
+    base: pd.DataFrame,
+    *,
+    candidates_path: Path | str | None,
+    dexscreener_pairs_path: Path | str | None,
+    execute_dexscreener: bool,
+    paths: dict[str, Path],
+    adapter: Any | None,
+    workers: int,
+) -> dict[str, Any]:
+    context = _select_existing(base, ["launch_id", "mint", "token_mint", "launch_ts", "milestone_tier"])
+    if "mint" not in context.columns and "token_mint" in context.columns:
+        context["mint"] = context["token_mint"]
+    if "token_mint" not in context.columns and "mint" in context.columns:
+        context["token_mint"] = context["mint"]
+
+    candidate_context = _candidate_attention_context(candidates_path)
+    pair_context = _dexscreener_pair_label_context(dexscreener_pairs_path)
+    context = _merge_fill(context, candidate_context, "mint")
+    context = _merge_fill(context, pair_context, "mint")
+
+    dex_result = {"rows": [], "raw_responses": [], "requests_used": 0, "errors": [], "execute_completed": False}
+    if execute_dexscreener:
+        mints = sorted(set(context["mint"].dropna().astype(str))) if "mint" in context.columns else []
+        dex_client = adapter or DexScreenerTokenBatchAdapter.from_env()
+        dex_result = dex_client.fetch_tokens_for_mints(mints, workers=workers, batch_size=30)
+        dex_result["execute_completed"] = True
+        dex_context = _dexscreener_token_context(context, dex_result.get("rows") or [])
+        context = _merge_fill(context, dex_context, "launch_id")
+        _write_jsonl(paths["dexscreener_token_raw_path"], dex_result.get("raw_responses", []))
+
+    topicality = _topicality_layer(context)
+    visibility = _visibility_context_layer(context)
+    metadata_quality = _metadata_quality_layer(context)
+    source_audit = _visibility_source_audit(
+        base=context,
+        candidate_context=candidate_context,
+        pair_context=pair_context,
+        execute_dexscreener=execute_dexscreener,
+        dex_result=dex_result,
+    )
+    summary = _attention_visibility_summary(
+        base=context,
+        topicality=topicality,
+        visibility=visibility,
+        metadata_quality=metadata_quality,
+        source_audit=source_audit,
+    )
+    return {
+        "topicality": topicality,
+        "visibility": visibility,
+        "metadata_quality": metadata_quality,
+        "source_audit": source_audit,
+        "summary": summary,
+        "dexscreener_execute_completed": bool(dex_result.get("execute_completed")),
+        "dexscreener_calls_used": int(dex_result.get("requests_used") or 0),
+        "dexscreener_errors": list(dex_result.get("errors") or []),
+    }
+
+
+class DexScreenerTokenBatchAdapter:
+    def __init__(self, ingestor: DexScreenerRealIngestor | None = None):
+        self.ingestor = ingestor or DexScreenerRealIngestor()
+
+    @classmethod
+    def from_env(cls) -> "DexScreenerTokenBatchAdapter":
+        return cls(DexScreenerRealIngestor())
+
+    def fetch_tokens_for_mints(
+        self,
+        mints: list[str],
+        *,
+        workers: int = 8,
+        batch_size: int = 30,
+    ) -> dict[str, Any]:
+        batches = [mints[i : i + batch_size] for i in range(0, len(mints), batch_size)]
+        raw_responses: list[dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
+        errors: list[str] = []
+        requests_used = 0
+        if not batches:
+            return {
+                "execute_completed": True,
+                "requests_used": 0,
+                "raw_responses": [],
+                "rows": [],
+                "errors": [],
+            }
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            futures = {
+                executor.submit(self.ingestor.fetch_tokens, batch): (index, batch)
+                for index, batch in enumerate(batches)
+            }
+            for future in as_completed(futures):
+                index, batch = futures[future]
+                try:
+                    response_rows = list(future.result())
+                except Exception as exc:
+                    errors.append(f"batch_{index}: {exc}")
+                    continue
+                requests_used += 1
+                rows.extend(response_rows)
+                raw_responses.append({"batch_index": index, "mints": batch, "response_rows": response_rows})
+        raw_responses.sort(key=lambda row: row["batch_index"])
+        return {
+            "execute_completed": True,
+            "requests_used": requests_used,
+            "raw_responses": raw_responses,
+            "rows": rows,
+            "errors": errors,
+        }
+
+
+def _candidate_attention_context(path: Path | str | None) -> pd.DataFrame:
+    candidates = _load_optional_frame(path)
+    if candidates.empty:
+        return pd.DataFrame(columns=["mint"])
+    mint_column = "token_mint" if "token_mint" in candidates.columns else "mint" if "mint" in candidates.columns else None
+    if mint_column is None:
+        return pd.DataFrame(columns=["mint"])
+    rows: list[dict[str, Any]] = []
+    for _, row in candidates.iterrows():
+        metadata = _metadata_dict(row.get("metadata_json"))
+        rows.append(
+            {
+                "mint": row.get(mint_column),
+                "token_name": _first_present(row, metadata, ["token_name", "name", "base_token_name"]),
+                "token_symbol": _first_present(row, metadata, ["token_symbol", "symbol", "base_token_symbol"]),
+                "metadata_uri": _first_present(row, metadata, ["metadata_uri", "uri"]),
+                "image_uri": _first_present(row, metadata, ["image_uri", "image", "image_url", "logo_uri"]),
+                "website_url": _first_present(row, metadata, ["website", "website_url", "url"]),
+                "twitter_url": _first_present(row, metadata, ["twitter", "twitter_url", "x_url"]),
+                "telegram_url": _first_present(row, metadata, ["telegram", "telegram_url"]),
+                "discord_url": _first_present(row, metadata, ["discord", "discord_url"]),
+                "metadata_source": "local_candidate_metadata",
+                "visibility_source": "local_candidate_metadata",
+            }
+        )
+    result = pd.DataFrame(rows)
+    return result.dropna(subset=["mint"]).drop_duplicates("mint", keep="first")
+
+
+def _dexscreener_pair_label_context(path: Path | str | None) -> pd.DataFrame:
+    pairs = _load_optional_frame(path)
+    if pairs.empty or "mint" not in pairs.columns:
+        return pd.DataFrame(columns=["mint"])
+    result = _select_existing(
+        pairs,
+        [
+            "mint",
+            "dex_pair_detected",
+            "dexscreener_url",
+            "pair_created_at",
+            "dex_id",
+            "liquidity_usd",
+        ],
+    ).drop_duplicates("mint", keep="first")
+    if result.empty:
+        return result
+    result["pair_visible_on_dexscreener"] = result.get("dex_pair_detected", pd.Series(False, index=result.index)).fillna(False)
+    result["dexscreener_profile_present"] = result["pair_visible_on_dexscreener"]
+    result["visibility_source"] = "local_dexscreener_pair_labels"
+    return result
+
+
+def _dexscreener_token_context(base: pd.DataFrame, pair_rows: list[dict[str, Any]]) -> pd.DataFrame:
+    if not pair_rows or base.empty:
+        return pd.DataFrame(columns=["launch_id"])
+    pairs_by_mint: dict[str, list[dict[str, Any]]] = {}
+    for pair in pair_rows:
+        mint = _dexscreener_pair_token_mint(pair)
+        if mint:
+            pairs_by_mint.setdefault(str(mint), []).append(pair)
+    rows = []
+    for _, launch in base.iterrows():
+        mint = launch.get("mint") or launch.get("token_mint")
+        pair = _best_visibility_pair(launch, pairs_by_mint.get(str(mint), []))
+        if not pair:
+            continue
+        base_token = pair.get("baseToken") if isinstance(pair.get("baseToken"), dict) else {}
+        info = pair.get("info") if isinstance(pair.get("info"), dict) else {}
+        links = _dexscreener_links(info)
+        rows.append(
+            {
+                "launch_id": launch.get("launch_id"),
+                "mint": mint,
+                "token_name": base_token.get("name"),
+                "token_symbol": base_token.get("symbol"),
+                "image_uri": info.get("imageUrl") or info.get("openGraph"),
+                "website_url": links.get("website_url"),
+                "twitter_url": links.get("twitter_url"),
+                "telegram_url": links.get("telegram_url"),
+                "discord_url": links.get("discord_url"),
+                "dexscreener_url": pair.get("url"),
+                "pair_created_at": pair.get("pairCreatedAt"),
+                "dex_id": pair.get("dexId"),
+                "pair_visible_on_dexscreener": True,
+                "dexscreener_profile_present": True,
+                "dexscreener_boost_present": _has_active_boost(pair.get("boosts")),
+                "dexscreener_paid_order_present": _has_paid_order(pair),
+                "profile_image_present": _present_text(info.get("imageUrl") or info.get("openGraph")),
+                "metadata_source": "dexscreener_tokens_batch",
+                "visibility_source": "dexscreener_tokens_batch",
+            }
+        )
+    return pd.DataFrame(rows).drop_duplicates("launch_id", keep="first") if rows else pd.DataFrame(columns=["launch_id"])
+
+
+def _topicality_layer(context: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, row in context.iterrows():
+        name = _clean_text(row.get("token_name"))
+        symbol = _clean_text(row.get("token_symbol"))
+        category, confidence = _categorize_topicality(name, symbol)
+        rows.append(
+            {
+                "launch_id": row.get("launch_id"),
+                "token_name": name,
+                "token_symbol": symbol,
+                "token_name_length": len(name) if name else pd.NA,
+                "token_symbol_length": len(symbol) if symbol else pd.NA,
+                "has_number_in_name": bool(re.search(r"\d", name)) if name else False,
+                "has_number_in_symbol": bool(re.search(r"\d", symbol)) if symbol else False,
+                "has_emoji_like_text": _has_emoji_like_text(f"{name} {symbol}"),
+                "meme_category": category if category in {"animal", "generic meme", "internet culture"} else "unknown",
+                "topicality_category": category,
+                "narrative_bucket": category,
+                "narrative_confidence": confidence,
+                "topicality_flag": category not in {"unknown", "generic meme"},
+                "metadata_available": _row_metadata_available(row),
+                "metadata_source": _metadata_source(row),
+                "topicality_missing_reason": None if category != "unknown" else "token_name_symbol_unavailable_or_uncategorized",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _visibility_context_layer(context: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, row in context.iterrows():
+        website = _present_text(row.get("website_url"))
+        twitter = _present_text(row.get("twitter_url"))
+        telegram = _present_text(row.get("telegram_url"))
+        discord = _present_text(row.get("discord_url"))
+        image = _truthy(row.get("profile_image_present")) or _present_text(row.get("image_uri"))
+        pair_visible = _truthy(row.get("pair_visible_on_dexscreener"))
+        social_count = sum([website, twitter, telegram, discord])
+        pair_ts = _pair_created_seconds(row.get("pair_created_at"))
+        launch_ts = _int_or_none(row.get("launch_ts"))
+        lag = pair_ts - launch_ts if pair_ts is not None and launch_ts is not None else pd.NA
+        complete = bool(pair_visible and image and (social_count > 0 or website))
+        visible = bool(pair_visible or image or social_count > 0)
+        rows.append(
+            {
+                "launch_id": row.get("launch_id"),
+                "website_present": website,
+                "twitter_present": twitter,
+                "telegram_present": telegram,
+                "discord_present": discord,
+                "social_link_count": social_count,
+                "profile_image_present": image,
+                "profile_complete_flag": complete,
+                "dexscreener_profile_present": _truthy(row.get("dexscreener_profile_present")),
+                "dexscreener_boost_present": _truthy(row.get("dexscreener_boost_present")),
+                "dexscreener_paid_order_present": _truthy(row.get("dexscreener_paid_order_present")),
+                "pair_visible_on_dexscreener": pair_visible,
+                "visibility_source": row.get("visibility_source") if _present_text(row.get("visibility_source")) else None,
+                "visibility_confidence": _visibility_confidence(pair_visible, social_count, image),
+                "missing_reason": None if visible else "visibility_context_unavailable",
+                "dexscreener_first_seen_available": pair_ts is not None,
+                "time_to_dexscreener_visibility": lag,
+                "visibility_lag_from_launch": lag,
+                "dexscreener_calls_used": 0,
+                "visibility_attention_context_available": visible,
+                "visibility_attention_missing_reason": None if visible else "visibility_context_unavailable",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _metadata_quality_layer(context: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, row in context.iterrows():
+        name = _present_text(row.get("token_name"))
+        symbol = _present_text(row.get("token_symbol"))
+        metadata_uri = _present_text(row.get("metadata_uri"))
+        image = _present_text(row.get("image_uri")) or _truthy(row.get("profile_image_present"))
+        website = _present_text(row.get("website_url"))
+        twitter = _present_text(row.get("twitter_url"))
+        telegram = _present_text(row.get("telegram_url"))
+        score = sum([name, symbol, metadata_uri, image, website, twitter or telegram]) / 6
+        available = score > 0
+        rows.append(
+            {
+                "launch_id": row.get("launch_id"),
+                "metadata_available": available,
+                "metadata_uri_present": metadata_uri,
+                "image_present": image,
+                "website_present": website,
+                "twitter_present": twitter,
+                "telegram_present": telegram,
+                "metadata_completeness_score": round(float(score), 4),
+                "metadata_quality_bucket": _metadata_quality_bucket(score),
+                "metadata_missing_reason": None if available else "metadata_context_unavailable",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _visibility_source_audit(
+    *,
+    base: pd.DataFrame,
+    candidate_context: pd.DataFrame,
+    pair_context: pd.DataFrame,
+    execute_dexscreener: bool,
+    dex_result: dict[str, Any],
+) -> dict[str, Any]:
+    total = int(len(base))
+    base_mints = set(base["mint"].dropna().astype(str)) if "mint" in base else set()
+    candidate_mints = set(candidate_context["mint"].dropna().astype(str)) if "mint" in candidate_context else set()
+    candidate_covered = len(base_mints & candidate_mints)
+    if not pair_context.empty and "mint" in pair_context:
+        visible_pairs = pair_context[pair_context.get("pair_visible_on_dexscreener", pd.Series(False, index=pair_context.index)).fillna(False)]
+        pair_covered = len(base_mints & set(visible_pairs["mint"].dropna().astype(str)))
+    else:
+        pair_covered = 0
+    dex_mints = {
+        str(_dexscreener_pair_token_mint(row))
+        for row in dex_result.get("rows", [])
+        if _dexscreener_pair_token_mint(row)
+    }
+    dex_covered = len(base_mints & dex_mints)
+    return {
+        "report_id": "attention_visibility_source_audit_v0",
+        "sources": [
+            _source_row("launch_metadata", "partial" if total else "unavailable", "local", 0, total, total, "launch id, mint, launch timestamp, milestone tier"),
+            _source_row("token_metadata", "partial" if candidate_covered else "unavailable", "local", 0, candidate_covered, total, "candidate metadata only when name/symbol/link fields were captured"),
+            _source_row("dexscreener_pair_labels", "partial" if pair_covered else "unavailable", "local", 0, pair_covered, total, "pair visibility, pair creation timestamp, dex URL when previously cached"),
+            _source_row(
+                "dexscreener_tokens_batch",
+                "partial" if dex_result.get("rows") else ("available" if execute_dexscreener else "external_not_requested"),
+                "external" if execute_dexscreener else "external",
+                int(dex_result.get("requests_used") or math.ceil(total / 30) if total else 0),
+                dex_covered,
+                total,
+                "base token name/symbol, pair metadata, image, websites, socials, boosts when returned",
+            ),
+            _source_row("dexscreener_token_profiles", "unavailable", "external", 1, 0, total, "latest-profile endpoint is not historical for this launch cohort"),
+            _source_row("dexscreener_boosts_paid_orders", "partial" if any(_has_active_boost(row.get("boosts")) for row in dex_result.get("rows", [])) else "unavailable", "external", 0, 0, total, "boost indicators are parsed when present in token batch rows"),
+        ],
+        "external_requests_used": int(dex_result.get("requests_used") or 0),
+        "provider_errors": list(dex_result.get("errors") or []),
+    }
+
+
+def _attention_visibility_summary(
+    *,
+    base: pd.DataFrame,
+    topicality: pd.DataFrame,
+    visibility: pd.DataFrame,
+    metadata_quality: pd.DataFrame,
+    source_audit: dict[str, Any],
+) -> dict[str, Any]:
+    total = int(len(base))
+    topicality_covered = int((topicality["topicality_category"] != "unknown").sum()) if not topicality.empty else 0
+    visibility_covered = int(visibility["visibility_attention_context_available"].fillna(False).sum()) if not visibility.empty else 0
+    metadata_covered = int(metadata_quality["metadata_available"].fillna(False).sum()) if not metadata_quality.empty else 0
+    readiness = _attention_visibility_readiness(total, topicality_covered, visibility_covered, metadata_covered)
+    return {
+        "report_id": "attention_visibility_coverage_summary_v0",
+        "readiness_classification": readiness,
+        "total_launches": total,
+        "topicality_coverage": _coverage_counts(total, topicality_covered),
+        "visibility_coverage": _coverage_counts(total, visibility_covered),
+        "metadata_quality_coverage": _coverage_counts(total, metadata_covered),
+        "coverage_by_milestone_tier": _attention_coverage_by_tier(base, topicality, visibility, metadata_quality),
+        "missing_reason_counts": {
+            "topicality": _counter_dict(topicality.get("topicality_missing_reason") if not topicality.empty else pd.Series(dtype=object)),
+            "visibility": _counter_dict(visibility.get("visibility_attention_missing_reason") if not visibility.empty else pd.Series(dtype=object)),
+            "metadata_quality": _counter_dict(metadata_quality.get("metadata_missing_reason") if not metadata_quality.empty else pd.Series(dtype=object)),
+        },
+        "source_coverage": source_audit["sources"],
+        "external_requests_used": source_audit["external_requests_used"],
+        "estimated_cost": {
+            "helius_credits": 0,
+            "dexscreener_requests_used": source_audit["external_requests_used"],
+        },
+        "guardrails": {
+            "thesis_runs": 0,
+            "backtests_run": 0,
+            "validation_runs": 0,
+            "paper_trading_runs": 0,
+            "live_trading_runs": 0,
+            "trading_logic_added": False,
+            "threshold_optimization": False,
+            "grid_search": False,
+            "ml": False,
+        },
+    }
+
+
+def _source_row(
+    name: str,
+    status: str,
+    source_type: str,
+    estimated_cost: int,
+    covered_rows: int,
+    total_rows: int,
+    expected_coverage: str,
+) -> dict[str, Any]:
+    return {
+        "source": name,
+        "status": status,
+        "source_type": source_type,
+        "estimated_cost": estimated_cost,
+        "covered_rows": int(covered_rows),
+        "total_rows": int(total_rows),
+        "coverage_pct": round((covered_rows / total_rows) * 100, 4) if total_rows else 0.0,
+        "expected_coverage": expected_coverage,
+    }
+
+
+def _truthy(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    return bool(value)
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            loaded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
+
+
+def _first_present(row: pd.Series, metadata: dict[str, Any], keys: list[str]) -> Any:
+    for key in keys:
+        if key in row and _present_text(row.get(key)):
+            return row.get(key)
+        value = metadata.get(key)
+        if _present_text(value):
+            return value
+    return None
+
+
+def _dexscreener_pair_token_mint(pair: dict[str, Any]) -> str | None:
+    base = pair.get("baseToken") if isinstance(pair.get("baseToken"), dict) else {}
+    quote = pair.get("quoteToken") if isinstance(pair.get("quoteToken"), dict) else {}
+    base_address = base.get("address")
+    quote_address = quote.get("address")
+    if base_address in KNOWN_QUOTE_MINTS:
+        return quote_address
+    return base_address or quote_address
+
+
+def _best_visibility_pair(launch: pd.Series, pairs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    solana_pairs = [pair for pair in pairs if pair.get("chainId") == "solana"]
+    if not solana_pairs:
+        return None
+    launch_ts = _int_or_none(launch.get("launch_ts"))
+    after_launch = [
+        pair for pair in solana_pairs
+        if launch_ts is not None and _pair_created_seconds(pair.get("pairCreatedAt")) is not None and _pair_created_seconds(pair.get("pairCreatedAt")) >= launch_ts
+    ]
+    pool = after_launch or solana_pairs
+    return sorted(
+        pool,
+        key=lambda pair: (
+            _pair_created_seconds(pair.get("pairCreatedAt")) is None,
+            _pair_created_seconds(pair.get("pairCreatedAt")) or 0,
+        ),
+    )[0]
+
+
+def _dexscreener_links(info: dict[str, Any]) -> dict[str, str | None]:
+    result = {"website_url": None, "twitter_url": None, "telegram_url": None, "discord_url": None}
+    websites = info.get("websites") if isinstance(info.get("websites"), list) else []
+    for website in websites:
+        if isinstance(website, dict) and _present_text(website.get("url")) and result["website_url"] is None:
+            result["website_url"] = str(website.get("url"))
+    socials = info.get("socials") if isinstance(info.get("socials"), list) else []
+    for social in socials:
+        if not isinstance(social, dict):
+            continue
+        kind = str(social.get("type") or social.get("label") or "").lower()
+        url = social.get("url")
+        if not _present_text(url):
+            continue
+        if ("twitter" in kind or kind == "x") and result["twitter_url"] is None:
+            result["twitter_url"] = str(url)
+        elif "telegram" in kind and result["telegram_url"] is None:
+            result["telegram_url"] = str(url)
+        elif "discord" in kind and result["discord_url"] is None:
+            result["discord_url"] = str(url)
+    return result
+
+
+def _has_active_boost(value: Any) -> bool:
+    if isinstance(value, dict):
+        return bool(_int_or_none(value.get("active")) or _int_or_none(value.get("amount")))
+    return bool(value)
+
+
+def _has_paid_order(pair: dict[str, Any]) -> bool:
+    for key in ("paidOrder", "paidOrders", "orders"):
+        value = pair.get(key)
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+        if isinstance(value, bool):
+            return value
+    return False
+
+
+def _clean_text(value: Any) -> str | None:
+    if not _present_text(value):
+        return None
+    return str(value).strip()
+
+
+def _categorize_topicality(name: str | None, symbol: str | None) -> tuple[str, str]:
+    text = f" {name or ''} {symbol or ''} ".lower()
+    categories = [
+        ("animal", ["dog", "doge", "cat", "shib", "frog", "pepe", "goat", "monkey", "ape", "bird", "fish"]),
+        ("AI", [" ai ", "gpt", "robot", "agent", "neural", "compute"]),
+        ("politics", ["trump", "biden", "maga", "vote", "president", "senate", "governor"]),
+        ("celebrity", ["elon", "taylor", "kanye", "ye ", "drake", "celebrity"]),
+        ("crypto", ["btc", "bitcoin", "eth", "ethereum", "sol ", "solana", "crypto", "pump"]),
+        ("sports", ["sports", "nba", "nfl", "mlb", "soccer", "football", "ufc"]),
+        ("internet culture", ["meme", "viral", "based", "chad", "wojak", "troll"]),
+        ("event driven", ["2026", "2025", "launch", "event", "news"]),
+    ]
+    for category, keywords in categories:
+        if any(keyword in text for keyword in keywords):
+            return category, "medium"
+    if _present_text(name) or _present_text(symbol):
+        return "generic meme", "low"
+    return "unknown", "none"
+
+
+def _has_emoji_like_text(text: str) -> bool:
+    if not text:
+        return False
+    return any(ord(char) > 127 for char in text) or bool(re.search(r":[a-z0-9_+-]+:", text.lower()))
+
+
+def _row_metadata_available(row: pd.Series) -> bool:
+    fields = [
+        "token_name",
+        "token_symbol",
+        "metadata_uri",
+        "image_uri",
+        "website_url",
+        "twitter_url",
+        "telegram_url",
+        "discord_url",
+    ]
+    return any(_present_text(row.get(field)) for field in fields)
+
+
+def _metadata_source(row: pd.Series) -> str | None:
+    for field in ("metadata_source", "visibility_source"):
+        if _present_text(row.get(field)):
+            return str(row.get(field))
+    return None
+
+
+def _visibility_confidence(pair_visible: bool, social_count: int, image: bool) -> str:
+    if pair_visible and social_count and image:
+        return "high"
+    if pair_visible or social_count or image:
+        return "medium"
+    return "none"
+
+
+def _metadata_quality_bucket(score: float) -> str:
+    if score >= 0.75:
+        return "complete"
+    if score >= 0.33:
+        return "partial"
+    if score > 0:
+        return "minimal"
+    return "missing"
+
+
+def _pair_created_seconds(value: Any) -> int | None:
+    raw = _int_or_none(value)
+    if raw is None:
+        return None
+    return raw // 1000 if raw > 10_000_000_000 else raw
+
+
+def _attention_visibility_readiness(
+    total: int,
+    topicality_covered: int,
+    visibility_covered: int,
+    metadata_covered: int,
+) -> str:
+    if not total or (topicality_covered == 0 and visibility_covered == 0 and metadata_covered == 0):
+        return "attention_visibility_layer_blocked"
+    minimum_meaningful_rows = max(25, math.ceil(total * 0.05))
+    if (
+        topicality_covered >= minimum_meaningful_rows
+        and visibility_covered >= minimum_meaningful_rows
+        and metadata_covered >= minimum_meaningful_rows
+    ):
+        return "attention_visibility_layer_ready"
+    return "attention_visibility_layer_partial"
+
+
+def _coverage_counts(total: int, covered: int) -> dict[str, Any]:
+    return {
+        "covered_rows": int(covered),
+        "total_rows": int(total),
+        "missing_rows": int(total - covered),
+        "coverage_pct": round((covered / total) * 100, 4) if total else 0.0,
+    }
+
+
+def _attention_coverage_by_tier(
+    base: pd.DataFrame,
+    topicality: pd.DataFrame,
+    visibility: pd.DataFrame,
+    metadata_quality: pd.DataFrame,
+) -> dict[str, Any]:
+    if base.empty or "milestone_tier" not in base.columns:
+        return {}
+    merged = _select_existing(base, ["launch_id", "milestone_tier"])
+    merged = _merge_fill(merged, topicality[["launch_id", "topicality_category"]], "launch_id")
+    merged = _merge_fill(merged, visibility[["launch_id", "visibility_attention_context_available"]], "launch_id")
+    merged = _merge_fill(merged, metadata_quality[["launch_id", "metadata_available"]], "launch_id")
+    result = {}
+    for tier, group in merged.groupby("milestone_tier", dropna=False):
+        total = len(group)
+        result[str(tier)] = {
+            "total_rows": int(total),
+            "topicality_covered": int((group["topicality_category"] != "unknown").sum()) if "topicality_category" in group else 0,
+            "visibility_covered": int(group.get("visibility_attention_context_available", pd.Series(False, index=group.index)).fillna(False).sum()),
+            "metadata_quality_covered": int(group.get("metadata_available", pd.Series(False, index=group.index)).fillna(False).sum()),
+        }
+    return result
+
+
+def _counter_dict(values: pd.Series) -> dict[str, int]:
+    cleaned = [str(value) if _present_text(value) else "none" for value in values.tolist()]
+    return dict(Counter(cleaned))
 
 
 def _build_contract_authority_layer(
@@ -929,7 +1625,9 @@ def _build_master(
     cluster: pd.DataFrame,
     distribution: pd.DataFrame,
     visible_flow: pd.DataFrame,
+    topicality: pd.DataFrame,
     visibility: pd.DataFrame,
+    metadata_quality: pd.DataFrame,
     contract: pd.DataFrame,
 ) -> pd.DataFrame:
     master = _select_existing(
@@ -947,7 +1645,19 @@ def _build_master(
             "peak_fdv_proxy",
         ],
     )
-    for layer in [fdv, top_holder, early_buyer, creator_funder, cluster, distribution, visible_flow, visibility, contract]:
+    for layer in [
+        fdv,
+        top_holder,
+        early_buyer,
+        creator_funder,
+        cluster,
+        distribution,
+        visible_flow,
+        topicality,
+        visibility,
+        metadata_quality,
+        contract,
+    ]:
         master = _merge_fill(master, layer, "launch_id")
 
     master["has_fdv_efficiency_layer"] = master.get("fdv_per_event_at_20k", pd.Series(index=master.index)).notna()
@@ -961,7 +1671,11 @@ def _build_master(
         | master.get("pair_migration_liquidity_delay_proxy", pd.Series(index=master.index)).notna()
         | master.get("early_holder_concentration", pd.Series(index=master.index)).notna()
     )
+    master["has_topicality_layer"] = (
+        master.get("topicality_category", pd.Series("unknown", index=master.index)).fillna("unknown") != "unknown"
+    )
     master["has_visibility_layer"] = master.get("visibility_attention_context_available", pd.Series(False, index=master.index)).fillna(False)
+    master["has_metadata_quality_layer"] = master.get("metadata_available", pd.Series(False, index=master.index)).fillna(False)
     master["has_contract_layer"] = master.get("contract_authority_context_available", pd.Series(False, index=master.index)).fillna(False)
     master["has_core_entry_side_layers"] = (
         master["has_fdv_efficiency_layer"] & master["has_cluster_proxy_layer"] & master["has_distribution_layer"]
@@ -1008,7 +1722,9 @@ def _write_layers(
     cluster: pd.DataFrame,
     distribution: pd.DataFrame,
     visible_flow: pd.DataFrame,
+    topicality: pd.DataFrame,
     visibility: pd.DataFrame,
+    metadata_quality: pd.DataFrame,
     contract: pd.DataFrame,
     master: pd.DataFrame,
 ) -> None:
@@ -1019,7 +1735,10 @@ def _write_layers(
     _write_parquet(cluster, paths["cluster_parquet_path"])
     _write_parquet(distribution, paths["distribution_parquet_path"])
     _write_parquet_jsonl(visible_flow, paths["visible_attention_flow_parquet_path"], paths["visible_attention_flow_jsonl_path"])
+    _write_parquet(topicality, paths["topicality_context_parquet_path"])
     _write_parquet(visibility, paths["visibility_parquet_path"])
+    _write_parquet(visibility, paths["visibility_context_parquet_path"])
+    _write_parquet(metadata_quality, paths["metadata_quality_context_parquet_path"])
     _write_parquet(contract, paths["contract_parquet_path"])
     _write_parquet_jsonl(master, paths["master_parquet_path"], paths["master_jsonl_path"])
 
@@ -1027,6 +1746,16 @@ def _write_layers(
 def _write_reports(report: dict[str, Any], paths: dict[str, Path], master: pd.DataFrame) -> None:
     _write_json(paths["coverage_json_path"], report)
     paths["coverage_markdown_path"].write_text(_coverage_markdown(report), encoding="utf-8")
+    _write_json(paths["visibility_source_audit_json_path"], report["visibility_source_audit"])
+    paths["visibility_source_audit_markdown_path"].write_text(
+        _visibility_source_audit_markdown(report["visibility_source_audit"]),
+        encoding="utf-8",
+    )
+    _write_json(paths["attention_visibility_summary_json_path"], report["attention_visibility"])
+    paths["attention_visibility_summary_markdown_path"].write_text(
+        _attention_visibility_summary_markdown(report["attention_visibility"]),
+        encoding="utf-8",
+    )
     _write_csv(
         [
             {"layer": layer, **values}
@@ -1078,16 +1807,19 @@ def _warnings(layer_coverage: dict[str, dict[str, Any]], external_gaps: list[dic
 def _external_gaps(layer_coverage: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
     gaps = [
         {
-            "field_family": "visibility_attention_context",
-            "status": "not_fetched",
-            "reason": "DexScreener or attention-source calls require a separate bounded target plan",
-        },
-        {
             "field_family": "confirmed_full_chain_top_holders",
             "status": "not_fetched",
             "reason": "current holder values are observed replay/proxy fields, not confirmed full-chain snapshots",
         },
     ]
+    if (layer_coverage.get("visibility_attention_context") or {}).get("coverage_pct", 0) < 100.0:
+        gaps.append(
+            {
+                "field_family": "visibility_attention_context",
+                "status": "partial",
+                "reason": "visibility/profile/social context is only available for rows with local or DexScreener evidence",
+            }
+        )
     if (layer_coverage.get("contract_authority_context") or {}).get("coverage_pct", 0) < 100.0:
         gaps.append(
             {
@@ -1542,8 +2274,56 @@ def _coverage_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _visibility_source_audit_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Visibility Source Audit",
+        "",
+        f"- Report id: `{report.get('report_id')}`",
+        f"- External requests used: `{report.get('external_requests_used', 0)}`",
+        f"- Provider errors: `{report.get('provider_errors', [])}`",
+        "",
+        "## Sources",
+    ]
+    for source in report.get("sources", []):
+        lines.append(
+            f"- {source['source']}: `{source['status']}` / `{source['source_type']}` / "
+            f"{source['covered_rows']} of {source['total_rows']} rows / estimated cost `{source['estimated_cost']}`. "
+            f"{source['expected_coverage']}"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _attention_visibility_summary_markdown(report: dict[str, Any]) -> str:
+    topicality = report.get("topicality_coverage", {})
+    visibility = report.get("visibility_coverage", {})
+    metadata = report.get("metadata_quality_coverage", {})
+    lines = [
+        "# Attention Visibility Coverage Summary",
+        "",
+        f"- Readiness classification: `{report.get('readiness_classification')}`",
+        f"- Total launches: `{report.get('total_launches', 0)}`",
+        f"- Topicality coverage: `{topicality.get('covered_rows', 0)} / {topicality.get('total_rows', 0)}`",
+        f"- Visibility coverage: `{visibility.get('covered_rows', 0)} / {visibility.get('total_rows', 0)}`",
+        f"- Metadata quality coverage: `{metadata.get('covered_rows', 0)} / {metadata.get('total_rows', 0)}`",
+        f"- External requests used: `{report.get('external_requests_used', 0)}`",
+        "",
+        "This is data enrichment only. It does not run a thesis, validation, backtest, paper/live trading, optimization, or strategy workflow.",
+        "",
+        "## Missing Reasons",
+    ]
+    for family, counts in report.get("missing_reason_counts", {}).items():
+        lines.append(f"- {family}: `{counts}`")
+    lines.extend(["", "## Source Coverage"])
+    for source in report.get("source_coverage", []):
+        lines.append(f"- {source['source']}: `{source['status']}` ({source['coverage_pct']}%)")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _status_markdown(report: dict[str, Any]) -> str:
     visible = report["layer_coverage"].get("visible_attention_and_flow", {})
+    attention = report["attention_visibility"]
     return "\n".join(
         [
             "# Full Structural Enrichment Campaign Status",
@@ -1559,7 +2339,10 @@ def _status_markdown(report: dict[str, Any]) -> str:
             "",
             f"- Layer coverage: {visible.get('covered_rows', 0)} / {visible.get('total_rows', 0)}",
             "- Added: first_minute_usd_volume, first_60s_buy_count, first_60s_unique_buyers, first_60s_transfer_spike_zscore, whale_buy_sequence_proxy, early_holder_concentration, deployer_prior_migration_count, topicality_flag, pair_migration_liquidity_delay_proxy.",
-            "- Topicality remains unavailable unless a separate attention/source feed is added.",
+            f"- Attention/visibility readiness: {attention.get('readiness_classification')}",
+            f"- Topicality coverage: {attention.get('topicality_coverage', {}).get('covered_rows', 0)} / {attention.get('topicality_coverage', {}).get('total_rows', 0)}",
+            f"- Visibility coverage: {attention.get('visibility_coverage', {}).get('covered_rows', 0)} / {attention.get('visibility_coverage', {}).get('total_rows', 0)}",
+            f"- Metadata quality coverage: {attention.get('metadata_quality_coverage', {}).get('covered_rows', 0)} / {attention.get('metadata_quality_coverage', {}).get('total_rows', 0)}",
             "",
             "## Next Action",
             "",

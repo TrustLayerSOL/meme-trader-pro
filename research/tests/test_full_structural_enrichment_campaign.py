@@ -40,7 +40,7 @@ def test_budget_estimate_allows_local_only_campaign_under_cap() -> None:
     assert estimate["safe_to_execute"] is True
 
 
-def test_budget_estimate_fails_closed_for_unnamed_external_collection() -> None:
+def test_budget_estimate_plans_batched_dexscreener_visibility_calls() -> None:
     estimate = estimate_campaign_budget(
         launch_count=1_143,
         execute_helius=False,
@@ -50,7 +50,9 @@ def test_budget_estimate_fails_closed_for_unnamed_external_collection() -> None:
 
     assert estimate["dexscreener_execute_requested"] is True
     assert estimate["projected_helius_credits"] == 0
-    assert estimate["budget_gate_status"] == "external_collection_not_executed_without_named_targets"
+    assert estimate["projected_dexscreener_calls"] == 39
+    assert estimate["budget_gate_status"] == "within_budget_dexscreener_visibility_batched"
+    assert estimate["external_collection_reason"] == "dexscreener_tokens_batch_visibility_context"
     assert estimate["safe_to_execute"] is True
 
 
@@ -87,6 +89,40 @@ class FakeContractAuthorityAdapter:
                     "contract_authority_context_available": True,
                     "contract_authority_source": "helius_getMultipleAccounts_jsonParsed",
                     "contract_authority_missing_reason": None,
+                }
+                for mint in mints
+            ],
+            "errors": [],
+        }
+
+
+class FakeDexScreenerTokenAdapter:
+    def __init__(self):
+        self.calls = []
+
+    def fetch_tokens_for_mints(self, mints, *, workers=1, batch_size=30):
+        self.calls.append({"mints": list(mints), "workers": workers, "batch_size": batch_size})
+        return {
+            "requests_used": 1,
+            "raw_responses": [{"batch_index": 0, "mint_count": len(mints)}],
+            "rows": [
+                {
+                    "chainId": "solana",
+                    "dexId": "pumpswap",
+                    "pairAddress": f"pair-{mint}",
+                    "pairCreatedAt": 1_700_000_030_000,
+                    "url": f"https://dexscreener.com/solana/pair-{mint}",
+                    "baseToken": {"address": mint, "name": "AI Agent 2026", "symbol": "AIA"},
+                    "quoteToken": {"address": "So11111111111111111111111111111111111111112", "symbol": "SOL"},
+                    "info": {
+                        "imageUrl": "https://example.com/logo.png",
+                        "websites": [{"label": "Website", "url": "https://example.com"}],
+                        "socials": [
+                            {"type": "twitter", "url": "https://x.com/example"},
+                            {"type": "telegram", "url": "https://t.me/example"},
+                        ],
+                    },
+                    "boosts": {"active": 1},
                 }
                 for mint in mints
             ],
@@ -157,6 +193,84 @@ def test_full_campaign_can_execute_batched_contract_authority_enrichment(tmp_pat
     assert bool(master["has_contract_layer"].iloc[0]) is True
     assert master["mint_authority"].iloc[0] == "authority-Mint1"
     assert paths["contract_authority_raw_path"].exists()
+
+
+def test_full_campaign_can_execute_batched_dexscreener_visibility_enrichment(tmp_path: Path) -> None:
+    trigger_path = tmp_path / "trigger_rows.csv"
+    combined_path = tmp_path / "combined.parquet"
+    output_root = tmp_path / "orico"
+    adapter = FakeDexScreenerTokenAdapter()
+
+    _write_csv(
+        trigger_path,
+        [
+            {
+                "launch_id": "L1",
+                "token_mint": "Mint1",
+                "launch_ts": 1_700_000_000,
+                "trigger_fdv_proxy": 20_000,
+                "event_count_at_20k": 2,
+                "buy_count_at_20k": 1,
+                "active_wallets_at_20k": 1,
+            }
+        ],
+    )
+    _write_parquet(
+        combined_path,
+        [
+            {
+                "launch_id": "L1",
+                "mint": "Mint1",
+                "fdv_per_event_at_20k": 10000.0,
+                "fdv_per_buy_at_20k": 20000.0,
+                "fdv_per_active_wallet_at_20k": 20000.0,
+            }
+        ],
+    )
+
+    report, paths = run_full_structural_enrichment_campaign(
+        data_root=output_root,
+        input_paths={
+            "trigger_rows": trigger_path,
+            "combined_repaired": combined_path,
+            "top_holder_layers": [],
+            "early_buyer_layers": [],
+            "creator_funder_layers": [],
+            "holder_state": None,
+            "entity_proxy": None,
+            "events": None,
+            "sol_usd": None,
+            "candidates": None,
+            "migration_labels": None,
+            "dexscreener_pairs": None,
+        },
+        output_paths={"status_path": tmp_path / "FULL_STRUCTURAL_ENRICHMENT_CAMPAIGN_STATUS.md"},
+        execute_helius=False,
+        execute_dexscreener=True,
+        dexscreener_token_adapter=adapter,
+    )
+
+    master = pd.read_parquet(paths["master_parquet_path"])
+    row = master.iloc[0]
+
+    assert report["dexscreener"]["execute_completed"] is True
+    assert report["dexscreener"]["calls_used"] == 1
+    assert adapter.calls[0]["workers"] >= 1
+    assert row["token_name"] == "AI Agent 2026"
+    assert row["token_symbol"] == "AIA"
+    assert row["topicality_category"] == "AI"
+    assert bool(row["twitter_present"]) is True
+    assert bool(row["telegram_present"]) is True
+    assert bool(row["dexscreener_boost_present"]) is True
+    assert bool(row["has_topicality_layer"]) is True
+    assert bool(row["has_visibility_layer"]) is True
+    assert bool(row["has_metadata_quality_layer"]) is True
+    assert "external_gap_visibility_attention_context" not in report["warnings"]
+    assert paths["dexscreener_token_raw_path"].exists()
+    assert paths["topicality_context_parquet_path"].exists()
+    assert paths["visibility_context_parquet_path"].exists()
+    assert paths["metadata_quality_context_parquet_path"].exists()
+    assert paths["attention_visibility_summary_json_path"].exists()
 
 
 def test_full_campaign_builds_master_and_reports_from_local_sources(tmp_path: Path) -> None:
@@ -312,6 +426,7 @@ def test_full_campaign_adds_visible_attention_and_flow_features(tmp_path: Path) 
     sol_usd_path = tmp_path / "sol_usd.jsonl"
     candidates_path = tmp_path / "candidates.jsonl"
     migration_labels_path = tmp_path / "migration_labels.jsonl"
+    dexscreener_pairs_path = tmp_path / "dexscreener_pairs.parquet"
     output_root = tmp_path / "orico"
 
     _write_csv(
@@ -429,7 +544,29 @@ def test_full_campaign_adds_visible_attention_and_flow_features(tmp_path: Path) 
                 "token_mint": "Mint2",
                 "launch_id": "different-launch-id-from-census",
                 "launch_ts": 1_700_000_000,
-                "metadata_json": {"creator_deployer": "Creator2"},
+                "metadata_json": {
+                    "creator_deployer": "Creator2",
+                    "token_name": "Dog Sports 99",
+                    "token_symbol": "DOG99",
+                    "metadata_uri": "ipfs://metadata",
+                    "image_uri": "https://example.com/dog.png",
+                    "website": "https://example.com",
+                    "twitter": "https://x.com/dog",
+                    "telegram": "https://t.me/dog",
+                },
+            }
+        ],
+    )
+    _write_parquet(
+        dexscreener_pairs_path,
+        [
+            {
+                "launch_id": "different-launch-id-from-census",
+                "mint": "Mint2",
+                "dex_pair_detected": True,
+                "dexscreener_url": "https://dexscreener.com/solana/pair-mint2",
+                "pair_created_at": 1_700_000_045_000,
+                "liquidity_usd": 25_000,
             }
         ],
     )
@@ -465,6 +602,7 @@ def test_full_campaign_adds_visible_attention_and_flow_features(tmp_path: Path) 
             "sol_usd": sol_usd_path,
             "candidates": candidates_path,
             "migration_labels": migration_labels_path,
+            "dexscreener_pairs": dexscreener_pairs_path,
         },
         output_paths={"status_path": tmp_path / "FULL_STRUCTURAL_ENRICHMENT_CAMPAIGN_STATUS.md"},
         execute_helius=False,
@@ -484,14 +622,37 @@ def test_full_campaign_adds_visible_attention_and_flow_features(tmp_path: Path) 
     assert l1["deployer_prior_migration_count"] == 5
     assert l2["creator"] == "Creator2"
     assert l2["deployer_prior_migration_count"] == 1
+    assert l2["token_name"] == "Dog Sports 99"
+    assert l2["token_symbol"] == "DOG99"
+    assert bool(l2["has_number_in_name"]) is True
+    assert bool(l2["has_number_in_symbol"]) is True
+    assert l2["topicality_category"] == "animal"
+    assert bool(l2["website_present"]) is True
+    assert bool(l2["twitter_present"]) is True
+    assert bool(l2["telegram_present"]) is True
+    assert bool(l2["pair_visible_on_dexscreener"]) is True
+    assert l2["visibility_lag_from_launch"] == 45
+    assert l2["metadata_quality_bucket"] == "complete"
+    assert bool(l2["has_topicality_layer"]) is True
+    assert bool(l2["has_visibility_layer"]) is True
+    assert bool(l2["has_metadata_quality_layer"]) is True
     assert pd.isna(l3["creator"])
     assert pd.isna(l3["deployer_prior_migration_count"])
     assert l3["deployer_prior_migration_count_source"] == "creator_missing"
+    assert bool(l3["has_topicality_layer"]) is False
+    assert bool(l3["has_visibility_layer"]) is False
+    assert bool(l3["has_metadata_quality_layer"]) is False
     assert l1["pair_migration_liquidity_delay_proxy"] == 90
-    assert pd.isna(l1["topicality_flag"])
+    assert bool(l1["topicality_flag"]) is False
+    assert l1["topicality_category"] == "unknown"
     assert bool(l1["has_visible_attention_and_flow_layer"]) is True
     assert l2["first_60s_buy_count"] == 0
     assert report["layer_coverage"]["visible_attention_and_flow"]["covered_rows"] == 3
+    assert report["layer_coverage"]["topicality_context"]["covered_rows"] == 1
+    assert report["layer_coverage"]["visibility_attention_context"]["covered_rows"] == 1
+    assert report["layer_coverage"]["metadata_quality_context"]["covered_rows"] == 1
+    assert paths["visibility_source_audit_json_path"].exists()
+    assert paths["attention_visibility_summary_markdown_path"].exists()
 
 
 def test_layer_coverage_is_deterministic() -> None:

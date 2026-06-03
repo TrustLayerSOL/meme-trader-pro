@@ -30,6 +30,7 @@ def main() -> int:
         execute_dexscreener=args.execute_dexscreener,
         max_helius_credits=args.max_helius_credits,
         contract_authority_workers=args.contract_authority_workers,
+        dexscreener_workers=args.dexscreener_workers,
     )
     print(f"report_id={report['report_id']}")
     print(f"readiness_classification={report['readiness_classification']}")
@@ -60,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--execute-helius", action="store_true")
     parser.add_argument("--execute-dexscreener", action="store_true")
     parser.add_argument("--contract-authority-workers", type=int, default=8)
+    parser.add_argument("--dexscreener-workers", type=int, default=8)
     return parser.parse_args()
 
 
