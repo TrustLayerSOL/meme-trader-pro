@@ -158,8 +158,20 @@ class OfficialLifecycleConfig:
         return self.observation_root / "metadata.jsonl"
 
     @property
+    def holder_snapshots_path(self) -> Path:
+        return self.observation_root / "holder_snapshots.jsonl"
+
+    @property
     def stale_births_path(self) -> Path:
         return self.observation_root / "stale_births.jsonl"
+
+    @property
+    def provisional_births_path(self) -> Path:
+        return self.observation_root / "provisional_births.jsonl"
+
+    @property
+    def hydration_results_path(self) -> Path:
+        return self.observation_root / "hydration_results.jsonl"
 
     @property
     def drawdowns_path(self) -> Path:
@@ -178,6 +190,10 @@ class OfficialLifecycleConfig:
         return self.raw_root / "helius_ws_raw.jsonl"
 
     @property
+    def pumpfun_create_logs_raw_path(self) -> Path:
+        return self.raw_root / "pumpfun_create_logs_raw.jsonl"
+
+    @property
     def helius_rpc_raw_path(self) -> Path:
         return self.raw_root / "helius_rpc_raw.jsonl"
 
@@ -192,11 +208,15 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
             config.followup_paths_path,
             config.events_path,
             config.metadata_path,
+            config.holder_snapshots_path,
             config.stale_births_path,
+            config.provisional_births_path,
+            config.hydration_results_path,
             config.drawdowns_path,
             config.transitions_path,
             config.status_path,
             config.helius_ws_raw_path,
+            config.pumpfun_create_logs_raw_path,
             config.helius_rpc_raw_path,
         ]:
             if path.exists():
@@ -208,10 +228,14 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
         config.followup_paths_path,
         config.events_path,
         config.metadata_path,
+        config.holder_snapshots_path,
         config.stale_births_path,
+        config.provisional_births_path,
+        config.hydration_results_path,
         config.drawdowns_path,
         config.transitions_path,
         config.helius_ws_raw_path,
+        config.pumpfun_create_logs_raw_path,
         config.helius_rpc_raw_path,
     ]:
         path.touch(exist_ok=True)
@@ -298,9 +322,25 @@ class OfficialLifecycleStateMachine:
             "observed_time": now,
             "first_followup_attempt_time": first_attempt,
             "create_to_first_followup_seconds": _delta(create_time, first_attempt),
+            "chain_create_to_first_followup_seconds": birth.get("chain_create_to_first_followup_seconds")
+            if birth.get("chain_create_to_first_followup_seconds") is not None
+            else _delta(create_time, first_attempt),
+            "observed_to_first_followup_seconds": birth.get("observed_to_first_followup_seconds")
+            if birth.get("observed_to_first_followup_seconds") is not None
+            else _delta(now, first_attempt),
+            "official_freshness_accepted": birth.get("official_freshness_accepted"),
+            "first_followup_scheduled_at": birth.get("first_followup_scheduled_at"),
+            "first_followup_blocked_by_missing_mint": birth.get("first_followup_blocked_by_missing_mint"),
             "first_followup_before_any_trade_if_known": birth.get("first_followup_before_any_trade_if_known"),
             "first_followup_before_10k": birth.get("first_followup_before_10k"),
             "first_followup_before_20k": birth.get("first_followup_before_20k"),
+            "account_watch_started_at": birth.get("account_watch_started_at"),
+            "account_watch_source": birth.get("account_watch_source"),
+            "last_account_update_at": birth.get("last_account_update_at"),
+            "last_signature_seen": birth.get("last_signature_seen"),
+            "followup_path_rows": birth.get("followup_path_rows"),
+            "fdv_path_available": birth.get("fdv_path_available"),
+            "active_watch_state": birth.get("active_watch_state"),
             "freshness_class": _freshness_class(birth, create_time=create_time, first_attempt=first_attempt),
             "source_provenance": birth.get("source_provenance") or birth.get("source") or "mock_verified_pumpfun_create",
             "crossed_levels": [],
@@ -786,7 +826,7 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
     status_payload = _read_json(config.status_path)
     mints = state.get("mints", {})
     state_counts = Counter(row.get("state") for row in mints.values())
-    fresh_under_5 = sum(1 for row in births if (_num(row.get("create_to_first_followup_seconds")) is not None and _num(row.get("create_to_first_followup_seconds")) <= 5))
+    fresh_under_5 = sum(1 for row in births if _official_latency_seconds(row) is not None and _official_latency_seconds(row) <= 5)
     first_before_10k = sum(1 for row in births if row.get("first_followup_before_10k") is True)
     first_before_20k = sum(1 for row in births if row.get("first_followup_before_20k") is True)
     crossed_counts = {level: len({row.get("mint") for row in paths if row.get(f"crossed_{level}") is True}) for level in TARGET_LEVELS}
@@ -861,6 +901,9 @@ def build_official_lifecycle_quality_audit(
     initialize_official_lifecycle_namespace(config)
     births = _read_jsonl(config.births_path)
     paths = _read_jsonl(config.followup_paths_path)
+    stale_births = _read_jsonl(config.stale_births_path)
+    provisional_births = _read_jsonl(config.provisional_births_path)
+    hydration_results = _read_jsonl(config.hydration_results_path)
     state = _read_state(config)
     mints = state.get("mints", {})
     birth_mints = {row.get("mint") for row in births if row.get("mint")}
@@ -888,6 +931,26 @@ def build_official_lifecycle_quality_audit(
         warnings.append("high_conversion_ratio_warning")
     if any(not _milestone_order_ok(row) for row in paths):
         warnings.append("milestone_ordering_violation")
+    late_stale_birth_signatures = {
+        row.get("signature")
+        for row in stale_births
+        if row.get("signature")
+        and (
+            row.get("is_late_confirmed_create") is True
+            or (
+                row.get("hydration_status") == "hydrated_create_confirmed"
+                and row.get("stale_reason") == "observed_to_first_followup_exceeded_5s_freshness_gate"
+            )
+        )
+    }
+    confirmed_create_signatures = {
+        row.get("signature")
+        for row in hydration_results
+        if row.get("signature") and str(row.get("hydration_status")) in {"hydrated_create_confirmed", "official_accepted", "stale_rejected"}
+    }
+    stale_rate = len(late_stale_birth_signatures) / len(confirmed_create_signatures) if confirmed_create_signatures else 0
+    if provisional_births and stale_rate > 0.25:
+        warnings.append("stale_rate_warning")
     source_counts = dict(Counter(str(row.get("source_provenance") or "unknown") for row in paths))
     density = Counter(row.get("mint") for row in paths if row.get("mint"))
     quality_status = "official_lifecycle_watch_needs_repair" if warnings else "official_lifecycle_watch_ready_for_100_birth_smoke"
@@ -899,9 +962,36 @@ def build_official_lifecycle_quality_audit(
         "path_rows": len(paths),
         "events_rows": _row_count(config.events_path),
         "metadata_rows": _row_count(config.metadata_path),
+        "provisional_birth_logs": len(provisional_births),
+        "hydration_results": len(hydration_results),
+        "hydrated_confirmed_creates": len(
+            {
+                row.get("signature")
+                for row in hydration_results
+                if row.get("signature")
+                and str(row.get("hydration_status")) in {"hydrated_create_confirmed", "official_accepted"}
+            }
+        ),
+        "stale_births": len(stale_births),
+        "late_confirmed_create_stale_births": len(late_stale_birth_signatures),
+        "stale_rate": stale_rate,
+        "holder_snapshot_rows": _row_count(config.holder_snapshots_path),
         "drawdown_rows": _row_count(config.drawdowns_path),
         "state_counts": dict(Counter(row.get("state") for row in mints.values())),
         "funnel": {
+            "all_provisional_birth_logs": len(provisional_births),
+            "hydrated_confirmed_creates": len(
+                {
+                    row.get("signature")
+                    for row in hydration_results
+                    if row.get("signature")
+                    and str(row.get("hydration_status")) in {"hydrated_create_confirmed", "official_accepted"}
+                }
+            ),
+            "official_under_5_accepted_births": sum(
+                1 for row in births if _official_latency_seconds(row) is not None and _official_latency_seconds(row) <= 5
+            ),
+            "stale_quarantined_births": len(stale_births),
             "all_fresh_births": len(birth_mints),
             "births_with_fdv_path_evidence": len(path_mints),
             "fresh_births_first_path_before_10k": sum(1 for row in births if row.get("first_followup_before_10k") is True),
@@ -1064,7 +1154,9 @@ def _next_state(
 def _freshness_class(birth: dict[str, Any], *, create_time: float | None, first_attempt: float | None) -> str:
     if birth.get("freshness_class"):
         return str(birth["freshness_class"])
-    delta = _delta(create_time, first_attempt)
+    delta = _num(birth.get("observed_to_first_followup_seconds"))
+    if delta is None:
+        delta = _delta(create_time, first_attempt)
     if delta is None:
         return "unknown_freshness"
     if delta <= 5 and birth.get("first_followup_before_any_trade_if_known") is True:
@@ -1078,6 +1170,13 @@ def _freshness_class(birth: dict[str, Any], *, create_time: float | None, first_
     if delta <= 60:
         return "near_birth_observed"
     return "first_followup_after_activity"
+
+
+def _official_latency_seconds(row: dict[str, Any]) -> float | None:
+    observed_delta = _num(row.get("observed_to_first_followup_seconds"))
+    if observed_delta is not None:
+        return observed_delta
+    return _num(row.get("create_to_first_followup_seconds"))
 
 
 def _mock_births(count: int) -> list[dict[str, Any]]:

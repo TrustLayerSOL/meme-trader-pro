@@ -18,11 +18,15 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
 from research.mtp_research.validation.official_lifecycle_watch import (
     OFFICIAL_SAMPLE_LABEL,
     OfficialLifecycleConfig,
-    format_official_lifecycle_status,
     initialize_official_lifecycle_namespace,
     official_lifecycle_status,
     run_official_lifecycle_live_smoke,
     run_official_lifecycle_smoke,
+)
+from research.mtp_research.validation.no_laserstream_lifecycle_collector import (
+    extended_no_laserstream_status,
+    format_no_laserstream_status,
+    run_no_laserstream_lifecycle_smoke,
 )
 
 
@@ -70,8 +74,18 @@ def main() -> int:
         if args.sample == OFFICIAL_SAMPLE_LABEL:
             lifecycle_config = _official_config(args)
             initialize_official_lifecycle_namespace(lifecycle_config)
-            status = official_lifecycle_status(lifecycle_config, target_crossed_20k=args.target_crossed_20k)
-            print(format_official_lifecycle_status(status))
+            has_no_laserstream_rows = (
+                lifecycle_config.provisional_births_path.exists()
+                and lifecycle_config.provisional_births_path.read_text(encoding="utf-8").strip() != ""
+            )
+            if args.source == "helius-pumpfun-no-laserstream" or has_no_laserstream_rows:
+                status = extended_no_laserstream_status(lifecycle_config, target_crossed_20k=args.target_crossed_20k)
+                print(format_no_laserstream_status(status))
+            else:
+                from research.mtp_research.validation.official_lifecycle_watch import format_official_lifecycle_status
+
+                status = official_lifecycle_status(lifecycle_config, target_crossed_20k=args.target_crossed_20k)
+                print(format_official_lifecycle_status(status))
             return 0
         tally = run_status(config)
         print(print_status(tally))
@@ -116,7 +130,17 @@ def main() -> int:
         if args.sample != OFFICIAL_SAMPLE_LABEL:
             raise ValueError("observe-lifecycle requires --sample official_lifecycle_watch_v1")
         lifecycle_config = _official_config(args)
-        if args.source != "mock":
+        if args.source == "helius-pumpfun-no-laserstream":
+            result = run_no_laserstream_lifecycle_smoke(
+                lifecycle_config,
+                target_births=args.target_births,
+                target_crossed_20k=args.target_crossed_20k,
+                max_runtime_minutes=args.max_runtime_minutes,
+                signatures_per_mint=args.signatures_per_mint,
+                transactions_per_mint=args.transactions_per_mint,
+                execute=args.execute,
+            )
+        elif args.source != "mock":
             result = run_official_lifecycle_live_smoke(
                 lifecycle_config,
                 target_births=args.target_births,
@@ -211,6 +235,7 @@ def parse_args() -> argparse.Namespace:
             "local",
             "helius",
             "helius-pumpfun",
+            "helius-pumpfun-no-laserstream",
             "helius-pumpfun-create-scanner",
             "helius-pumpswap",
             "helius-raydium",

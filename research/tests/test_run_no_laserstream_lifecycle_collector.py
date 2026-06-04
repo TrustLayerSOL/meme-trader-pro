@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from research.mtp_research.validation.official_lifecycle_watch import OfficialLifecycleConfig, initialize_official_lifecycle_namespace
+from research.mtp_research.validation.run_forward_efficient_mover_observer import main
+
+
+def test_cli_status_prints_no_laserstream_header(tmp_path: Path, monkeypatch, capsys) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    config.provisional_births_path.write_text(
+        '{"signature":"sig-a","log_observed_at":100,"hydration_status":"pending_hydration"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_forward_efficient_mover_observer",
+            "--mode",
+            "status",
+            "--sample",
+            "official_lifecycle_watch_v1",
+            "--source",
+            "helius-pumpfun-no-laserstream",
+            "--data-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert main() == 0
+    output = capsys.readouterr().out
+    assert "## No-LaserStream Official Lifecycle Watch v1" in output
+    assert "Provisional birth logs: 1" in output
+
+
+def test_cli_observe_lifecycle_no_laserstream_dry_run(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_forward_efficient_mover_observer",
+            "--mode",
+            "observe-lifecycle",
+            "--sample",
+            "official_lifecycle_watch_v1",
+            "--source",
+            "helius-pumpfun-no-laserstream",
+            "--target-births",
+            "50",
+            "--data-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert main() == 0
+    output = capsys.readouterr().out
+    assert "## Official Lifecycle Watch v1 Smoke" in output
+    assert "execute=False" in output
+    assert "readiness_classification=no_laserstream_collector_ready_for_100_birth_run" in output
+    assert (
+        tmp_path
+        / "data"
+        / "backtests"
+        / "diagnostics"
+        / "reports"
+        / "forward_observation"
+        / "official_lifecycle_watch_v1"
+        / "no_laserstream_bottleneck_audit.json"
+    ).exists()
