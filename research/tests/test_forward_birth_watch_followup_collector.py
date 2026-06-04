@@ -206,6 +206,29 @@ def test_helius_followup_queries_curve_addresses_when_mint_history_is_empty(tmp_
     assert fetcher.requests_used == 4
 
 
+def test_helius_followup_tolerates_single_rpc_timeout(tmp_path: Path) -> None:
+    def fake_post(_url: str, payload: dict, _timeout: int) -> dict:
+        if payload["method"] == "getSignaturesForAddress":
+            raise TimeoutError("read operation timed out")
+        raise AssertionError(f"unexpected RPC method: {payload['method']}")
+
+    fetcher = HeliusMintBirthWatchFollowupFetcher(
+        rpc_url="https://mock-helius.invalid",
+        rpc_post=fake_post,
+        data_root=tmp_path,
+    )
+
+    events = fetcher.fetch_for_mint(
+        "mint-a",
+        signatures_per_mint=4,
+        transactions_per_mint=2,
+        followup_addresses=["curve-a"],
+    )
+
+    assert events == []
+    assert fetcher.requests_used == 2
+
+
 def test_immediate_birth_followup_writes_freshness_sidecar_files(tmp_path: Path) -> None:
     root = tmp_path / "lake"
     source = MockBirthWatchCandidateSource(

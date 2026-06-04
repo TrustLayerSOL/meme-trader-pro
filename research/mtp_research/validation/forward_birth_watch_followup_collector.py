@@ -376,8 +376,11 @@ class HeliusMintBirthWatchFollowupFetcher:
             "method": "getSignaturesForAddress",
             "params": [mint, {"limit": max(1, min(int(limit), 100))}],
         }
-        response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
         self.requests_used += 1
+        try:
+            response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
+        except TimeoutError:
+            return []
         rows = response.get("result") if isinstance(response, dict) else None
         if not isinstance(rows, list):
             return []
@@ -396,8 +399,11 @@ class HeliusMintBirthWatchFollowupFetcher:
                 },
             ],
         }
-        response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
         self.requests_used += 1
+        try:
+            response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
+        except TimeoutError:
+            return {}
         result = response.get("result") if isinstance(response, dict) else None
         return result if isinstance(result, dict) else {}
 
