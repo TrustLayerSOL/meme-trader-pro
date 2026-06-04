@@ -6,7 +6,9 @@ It does not trade, validate, backtest, optimize, or generate strategy logic.
 
 from __future__ import annotations
 
+from collections import deque
 import json
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -140,6 +142,7 @@ class PumpFunCreateWebSocketCandidateSource:
         rpc_url: str | None = None,
         websocket_url: str | None = None,
         timeout_seconds: float = 10.0,
+        max_signatures_per_fetch: int = 50,
         rpc_post: Any | None = None,
         ws_connect: Any | None = None,
         scanner: PumpFunCreateScanner | None = None,
@@ -148,21 +151,38 @@ class PumpFunCreateWebSocketCandidateSource:
         self.rpc_url = rpc_url if rpc_url is not None else resolve_helius_rpc_url()
         self.websocket_url = websocket_url or rpc_url_to_websocket_url(self.rpc_url)
         self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.max_signatures_per_fetch = max(1, int(max_signatures_per_fetch))
         self._rpc_post = rpc_post or _post_json_rpc
         self._ws_connect = ws_connect
         self.scanner = scanner or PumpFunCreateScanner()
         self._requests_used = 0
         self.processed_signatures: set[str] = set()
+        self._lock = threading.Lock()
+        self._signature_queue: deque[str] = deque()
+        self._listener_thread: threading.Thread | None = None
+        self._listener_stop = threading.Event()
+        self._listener_errors = 0
 
     @property
     def requests_used(self) -> int:
-        return self._requests_used
+        with self._lock:
+            return self._requests_used
 
     def load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        self.processed_signatures = {str(signature) for signature in checkpoint.get("birth_ws_processed_signatures", []) if signature}
+        with self._lock:
+            self.processed_signatures = {
+                str(signature) for signature in checkpoint.get("birth_ws_processed_signatures", []) if signature
+            }
 
     def checkpoint_updates(self) -> dict[str, Any]:
-        return {"birth_ws_processed_signatures": sorted(self.processed_signatures)}
+        with self._lock:
+            return {"birth_ws_processed_signatures": sorted(self.processed_signatures)}
+
+    def close(self) -> None:
+        self._listener_stop.set()
+        thread = self._listener_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
 
     def availability(self) -> dict[str, Any]:
         if not self.websocket_url or not self.rpc_url:
@@ -180,9 +200,117 @@ class PumpFunCreateWebSocketCandidateSource:
             "source_adapter": "helius_pumpfun_create_websocket_logs",
             "candidate_lane": "pumpfun_birth_watch",
             "timeout_seconds": self.timeout_seconds,
+            "listener_mode": "persistent_signature_queue",
         }
 
     def fetch_candidates(self) -> list[dict[str, Any]]:
+        if not self.websocket_url or not self.rpc_url:
+            return []
+        self._ensure_listener_started()
+        deadline = time.monotonic() + self.timeout_seconds
+        while not self._has_queued_signatures() and time.monotonic() < deadline:
+            time.sleep(min(0.05, max(0.01, self.timeout_seconds)))
+        if self._has_queued_signatures():
+            # Allow same-burst create notifications to land before hydrating.
+            settle_deadline = time.monotonic() + min(0.2, self.timeout_seconds)
+            while time.monotonic() < settle_deadline and self._queued_signature_count() < self.max_signatures_per_fetch:
+                time.sleep(0.01)
+        create_signatures = self._drain_signatures()
+        candidates: list[dict[str, Any]] = []
+        for signature in create_signatures:
+            candidate = self._candidate_from_signature(signature)
+            if candidate is not None:
+                candidates.append(candidate)
+        return candidates
+
+    def _ensure_listener_started(self) -> None:
+        with self._lock:
+            if self._listener_thread is not None and self._listener_thread.is_alive():
+                return
+            self._listener_stop.clear()
+            self._listener_thread = threading.Thread(
+                target=self._listen_for_create_signatures,
+                name="mtp-pumpfun-create-listener",
+                daemon=True,
+            )
+            self._listener_thread.start()
+
+    def _listen_for_create_signatures(self) -> None:
+        connect = self._ws_connect or _websocket_connect
+        while not self._listener_stop.is_set():
+            subscription_id: int | None = None
+            try:
+                with connect(self.websocket_url, open_timeout=min(5.0, self.timeout_seconds), close_timeout=1.0) as websocket:
+                    self._increment_requests()
+                    websocket.send(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": "mtp-pumpfun-create-logs-subscribe",
+                                "method": "logsSubscribe",
+                                "params": [
+                                    {"mentions": [PUMP_FUN_PROGRAM_ID]},
+                                    {"commitment": "processed"},
+                                ],
+                            }
+                        )
+                    )
+                    while not self._listener_stop.is_set():
+                        try:
+                            message = websocket.recv(timeout=min(1.0, max(0.1, self.timeout_seconds)))
+                        except TimeoutError:
+                            time.sleep(0.01)
+                            continue
+                        payload = json.loads(message) if isinstance(message, str) else message
+                        if not isinstance(payload, dict):
+                            continue
+                        if payload.get("id") == "mtp-pumpfun-create-logs-subscribe":
+                            subscription_id = payload.get("result") if isinstance(payload.get("result"), int) else None
+                            continue
+                        signature = signature_from_create_logs_notification(payload)
+                        if not signature:
+                            continue
+                        with self._lock:
+                            if signature in self.processed_signatures:
+                                continue
+                            self.processed_signatures.add(signature)
+                            self._signature_queue.append(signature)
+                    if subscription_id is not None:
+                        websocket.send(
+                            json.dumps(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": "mtp-pumpfun-create-logs-unsubscribe",
+                                    "method": "logsUnsubscribe",
+                                    "params": [subscription_id],
+                                }
+                            )
+                        )
+            except Exception:
+                with self._lock:
+                    self._listener_errors += 1
+                time.sleep(min(1.0, self.timeout_seconds))
+
+    def _increment_requests(self, count: int = 1) -> None:
+        with self._lock:
+            self._requests_used += int(count)
+
+    def _has_queued_signatures(self) -> bool:
+        with self._lock:
+            return bool(self._signature_queue)
+
+    def _queued_signature_count(self) -> int:
+        with self._lock:
+            return len(self._signature_queue)
+
+    def _drain_signatures(self) -> list[str]:
+        signatures: list[str] = []
+        with self._lock:
+            while self._signature_queue and len(signatures) < self.max_signatures_per_fetch:
+                signatures.append(self._signature_queue.popleft())
+        return signatures
+
+    def _legacy_fetch_candidates(self) -> list[dict[str, Any]]:
         if not self.websocket_url or not self.rpc_url:
             return []
         connect = self._ws_connect or _websocket_connect
@@ -192,7 +320,7 @@ class PumpFunCreateWebSocketCandidateSource:
         subscription_id: int | None = None
         try:
             with connect(self.websocket_url, open_timeout=min(5.0, self.timeout_seconds), close_timeout=1.0) as websocket:
-                self._requests_used += 1
+                self._increment_requests()
                 websocket.send(
                     json.dumps(
                         {
@@ -275,7 +403,7 @@ class PumpFunCreateWebSocketCandidateSource:
             ],
         }
         response = self._rpc_post(self.rpc_url, payload, 10)
-        self._requests_used += 1
+        self._increment_requests()
         result = response.get("result") if isinstance(response, dict) else None
         return result if isinstance(result, dict) else {}
 

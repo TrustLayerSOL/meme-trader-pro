@@ -613,7 +613,10 @@ def test_websocket_birth_candidate_source_drains_multiple_create_notifications()
     )
     source._candidate_from_signature = lambda signature: {"mint": f"mint-{signature}", "signature": signature}  # type: ignore[method-assign]
 
-    candidates = source.fetch_candidates()
+    try:
+        candidates = source.fetch_candidates()
+    finally:
+        source.close()
 
     assert [row["signature"] for row in candidates] == ["create-sig-1", "create-sig-2"]
     assert source.processed_signatures == {"create-sig-1", "create-sig-2"}
