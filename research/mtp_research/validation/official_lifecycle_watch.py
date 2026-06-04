@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -439,6 +440,48 @@ def run_active_lifecycle_followup_cycle(
     }
 
 
+def collect_initial_birth_followups(
+    candidates: list[dict[str, Any]],
+    fetcher: Any,
+    *,
+    signatures_per_mint: int,
+    transactions_per_mint: int,
+    max_workers: int = 8,
+) -> list[dict[str, Any]]:
+    if not candidates:
+        return []
+    workers = max(1, min(int(max_workers), len(candidates)))
+
+    def _fetch(index_and_candidate: tuple[int, dict[str, Any]]) -> dict[str, Any]:
+        index, candidate = index_and_candidate
+        mint = _mint(candidate)
+        first_attempt = time.time()
+        events = []
+        if mint:
+            events = fetcher.fetch_for_mint(
+                mint,
+                signatures_per_mint=signatures_per_mint,
+                transactions_per_mint=transactions_per_mint,
+                followup_addresses=_followup_addresses(candidate),
+            )
+        first_fdv = next((_num(event.get("fdv_proxy")) for event in events if _num(event.get("fdv_proxy")) is not None), None)
+        return {
+            "index": index,
+            "mint": mint,
+            "candidate": candidate,
+            "first_attempt": first_attempt,
+            "events": events,
+            "first_fdv": first_fdv,
+        }
+
+    results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(_fetch, item) for item in enumerate(candidates)]
+        for future in as_completed(futures):
+            results.append(future.result())
+    return sorted(results, key=lambda row: row["index"])
+
+
 def run_official_lifecycle_smoke(
     config: OfficialLifecycleConfig,
     *,
@@ -567,20 +610,24 @@ def run_official_lifecycle_live_smoke(
                 transactions_per_mint=transactions_per_mint,
             )
             continue
-        for candidate in candidates:
+        remaining_births = max(0, int(target_births) - births_seen)
+        followup_results = collect_initial_birth_followups(
+            candidates[:remaining_births],
+            fetcher,
+            signatures_per_mint=signatures_per_mint,
+            transactions_per_mint=transactions_per_mint,
+            max_workers=8,
+        )
+        for followup in followup_results:
             if births_seen >= int(target_births):
                 break
-            mint = _mint(candidate)
+            candidate = followup["candidate"]
+            mint = followup["mint"]
             if not mint:
                 continue
-            first_attempt = time.time()
-            events = fetcher.fetch_for_mint(
-                mint,
-                signatures_per_mint=signatures_per_mint,
-                transactions_per_mint=transactions_per_mint,
-                followup_addresses=_followup_addresses(candidate),
-            )
-            first_fdv = next((_num(event.get("fdv_proxy")) for event in events if _num(event.get("fdv_proxy")) is not None), None)
+            first_attempt = followup["first_attempt"]
+            events = followup["events"]
+            first_fdv = followup["first_fdv"]
             birth_row = {
                 "observation_id": candidate.get("observation_id") or f"official-birth-{mint[:12]}-{int(first_attempt)}",
                 "mint": mint,

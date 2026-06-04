@@ -184,6 +184,33 @@ def test_active_lifecycle_followup_cycle_revisits_birth_watch_until_trigger(tmp_
     assert len(_read_jsonl(config.events_path)) == 1
 
 
+def test_initial_birth_followups_are_collected_with_curve_addresses() -> None:
+    from research.mtp_research.validation.official_lifecycle_watch import collect_initial_birth_followups
+
+    fetcher = _SequentialFetcher(
+        {
+            "mint-a": [{"mint": "mint-a", "fdv_proxy": 12_000, "block_time": 110}],
+            "mint-b": [{"mint": "mint-b", "fdv_proxy": 8_000, "block_time": 111}],
+        }
+    )
+
+    results = collect_initial_birth_followups(
+        [
+            {"mint": "mint-a", "bonding_curve": "curve-a", "associated_bonding_curve": "assoc-a"},
+            {"mint": "mint-b", "pool_address": "curve-b"},
+        ],
+        fetcher,
+        signatures_per_mint=4,
+        transactions_per_mint=2,
+        max_workers=2,
+    )
+
+    assert [row["mint"] for row in results] == ["mint-a", "mint-b"]
+    assert [row["first_fdv"] for row in results] == [12_000, 8_000]
+    assert fetcher.calls[0]["followup_addresses"] == ["curve-a", "assoc-a"]
+    assert fetcher.calls[1]["followup_addresses"] == ["curve-b"]
+
+
 def test_quality_audit_flags_dropped_trigger_watch_and_milestone_ordering(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     initialize_official_lifecycle_namespace(config)

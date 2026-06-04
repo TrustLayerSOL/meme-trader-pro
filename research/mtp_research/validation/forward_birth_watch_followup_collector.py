@@ -447,6 +447,7 @@ class HeliusMintBirthWatchFollowupFetcher:
         self.requests_used = 0
         self.raw_transactions: list[dict[str, Any]] = []
         self.seen_signatures: set[str] = set()
+        self._fetch_lock = threading.Lock()
 
     def fetch_for_mint(
         self,
@@ -461,9 +462,10 @@ class HeliusMintBirthWatchFollowupFetcher:
         signatures = self._fetch_signatures_for_addresses(mint, followup_addresses or [], signatures_per_mint)
         events: list[dict[str, Any]] = []
         for signature in signatures[: max(0, int(transactions_per_mint))]:
-            if signature in self.seen_signatures:
-                continue
-            self.seen_signatures.add(signature)
+            with self._fetch_lock:
+                if signature in self.seen_signatures:
+                    continue
+                self.seen_signatures.add(signature)
             tx = self._fetch_transaction(signature)
             if not tx:
                 continue
@@ -506,7 +508,8 @@ class HeliusMintBirthWatchFollowupFetcher:
             "method": "getSignaturesForAddress",
             "params": [mint, {"limit": max(1, min(int(limit), 100))}],
         }
-        self.requests_used += 1
+        with self._fetch_lock:
+            self.requests_used += 1
         try:
             response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
         except TimeoutError:
@@ -529,7 +532,8 @@ class HeliusMintBirthWatchFollowupFetcher:
                 },
             ],
         }
-        self.requests_used += 1
+        with self._fetch_lock:
+            self.requests_used += 1
         try:
             response = self._rpc_post(self.rpc_url, payload, self.timeout_sec)
         except TimeoutError:
