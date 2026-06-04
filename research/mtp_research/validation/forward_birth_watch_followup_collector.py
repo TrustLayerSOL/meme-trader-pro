@@ -188,6 +188,7 @@ class PumpFunCreateWebSocketCandidateSource:
         connect = self._ws_connect or _websocket_connect
         deadline = time.monotonic() + self.timeout_seconds
         candidates: list[dict[str, Any]] = []
+        create_signatures: list[str] = []
         subscription_id: int | None = None
         try:
             with connect(self.websocket_url, open_timeout=min(5.0, self.timeout_seconds), close_timeout=1.0) as websocket:
@@ -221,10 +222,7 @@ class PumpFunCreateWebSocketCandidateSource:
                     if not signature or signature in self.processed_signatures:
                         continue
                     self.processed_signatures.add(signature)
-                    candidate = self._candidate_from_signature(signature)
-                    if candidate is not None:
-                        candidates.append(candidate)
-                        break
+                    create_signatures.append(signature)
                 if subscription_id is not None:
                     websocket.send(
                         json.dumps(
@@ -238,6 +236,10 @@ class PumpFunCreateWebSocketCandidateSource:
                     )
         except Exception:
             return candidates
+        for signature in create_signatures:
+            candidate = self._candidate_from_signature(signature)
+            if candidate is not None:
+                candidates.append(candidate)
         return candidates
 
     def _candidate_from_signature(self, signature: str) -> dict[str, Any] | None:

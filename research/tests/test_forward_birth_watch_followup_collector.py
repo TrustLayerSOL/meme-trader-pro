@@ -548,6 +548,77 @@ def test_websocket_birth_candidate_source_is_dry_when_unavailable() -> None:
     assert source.requests_used == 0
 
 
+def test_websocket_birth_candidate_source_drains_multiple_create_notifications() -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages = iter(
+                [
+                    json.dumps({"id": "mtp-pumpfun-create-logs-subscribe", "result": 1}),
+                    json.dumps(
+                        {
+                            "method": "logsNotification",
+                            "params": {
+                                "result": {
+                                    "value": {
+                                        "signature": "create-sig-1",
+                                        "err": None,
+                                        "logs": ["Program log: Instruction: CreateV2"],
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "method": "logsNotification",
+                            "params": {
+                                "result": {
+                                    "value": {
+                                        "signature": "create-sig-2",
+                                        "err": None,
+                                        "logs": ["Program log: Instruction: CreateV2"],
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                ]
+            )
+            self.sent: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def send(self, payload: str) -> None:
+            self.sent.append(payload)
+
+        def recv(self, *, timeout: float) -> str:
+            try:
+                return next(self.messages)
+            except StopIteration:
+                raise TimeoutError
+
+    fake_ws = FakeWebSocket()
+
+    def connect(*_args, **_kwargs):
+        return fake_ws
+
+    source = PumpFunCreateWebSocketCandidateSource(
+        rpc_url="https://mainnet.helius-rpc.com/?api-key=test",
+        ws_connect=connect,
+        timeout_seconds=1.0,
+    )
+    source._candidate_from_signature = lambda signature: {"mint": f"mint-{signature}", "signature": signature}  # type: ignore[method-assign]
+
+    candidates = source.fetch_candidates()
+
+    assert [row["signature"] for row in candidates] == ["create-sig-1", "create-sig-2"]
+    assert source.processed_signatures == {"create-sig-1", "create-sig-2"}
+
+
 def test_signature_from_logs_notification_requires_create_log() -> None:
     from research.mtp_research.validation.forward_birth_watch_followup_collector import (
         signature_from_create_logs_notification,
