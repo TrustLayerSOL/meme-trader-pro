@@ -644,7 +644,7 @@ def test_websocket_birth_candidate_source_hydrates_candidates_concurrently() -> 
     assert elapsed < 0.25
 
 
-def test_websocket_create_transaction_hydration_uses_processed_commitment() -> None:
+def test_websocket_create_transaction_hydration_uses_confirmed_commitment() -> None:
     captured_payloads: list[dict] = []
 
     def fake_post(_url: str, payload: dict, _timeout: int) -> dict:
@@ -660,7 +660,7 @@ def test_websocket_create_transaction_hydration_uses_processed_commitment() -> N
 
     assert tx["signature"] == "create-sig"
     assert captured_payloads[0]["method"] == "getTransaction"
-    assert captured_payloads[0]["params"][1]["commitment"] == "processed"
+    assert captured_payloads[0]["params"][1]["commitment"] == "confirmed"
 
 
 def test_signature_from_logs_notification_requires_create_log() -> None:

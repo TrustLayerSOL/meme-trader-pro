@@ -220,6 +220,28 @@ def test_official_fresh_birth_gate_rejects_over_5_second_followup() -> None:
     assert is_official_fresh_birth(candidate, 105.1, max_delay_seconds=5.0) is False
 
 
+def test_stale_births_are_filtered_before_initial_followup_fetch() -> None:
+    from research.mtp_research.validation.official_lifecycle_watch import (
+        split_fresh_candidates_for_initial_followup,
+    )
+
+    candidates = [
+        {"mint": "mint-a", "block_time": 100.0},
+        {"mint": "mint-b", "block_time": 100.0},
+    ]
+
+    fresh, stale = split_fresh_candidates_for_initial_followup(
+        candidates,
+        first_attempt_time_by_mint={"mint-a": 104.0, "mint-b": 106.0},
+        max_delay_seconds=5.0,
+    )
+
+    assert [row["mint"] for row in fresh] == ["mint-a"]
+    assert fresh[0]["_official_first_followup_attempt_time"] == 104.0
+    assert [row["mint"] for row in stale] == ["mint-b"]
+    assert stale[0]["rejection_reason"] == "first_followup_exceeded_5s_freshness_gate"
+
+
 def test_quality_audit_flags_dropped_trigger_watch_and_milestone_ordering(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     initialize_official_lifecycle_namespace(config)

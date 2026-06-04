@@ -409,7 +409,7 @@ class PumpFunCreateWebSocketCandidateSource:
                 {
                     "encoding": "jsonParsed",
                     "maxSupportedTransactionVersion": 0,
-                    "commitment": "processed",
+                    "commitment": "confirmed",
                 },
             ],
         }

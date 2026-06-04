@@ -463,7 +463,7 @@ def collect_initial_birth_followups(
     def _fetch(index_and_candidate: tuple[int, dict[str, Any]]) -> dict[str, Any]:
         index, candidate = index_and_candidate
         mint = _mint(candidate)
-        first_attempt = time.time()
+        first_attempt = _num(candidate.get("_official_first_followup_attempt_time")) or time.time()
         events = []
         if mint:
             events = fetcher.fetch_for_mint(
@@ -488,6 +488,27 @@ def collect_initial_birth_followups(
         for future in as_completed(futures):
             results.append(future.result())
     return sorted(results, key=lambda row: row["index"])
+
+
+def split_fresh_candidates_for_initial_followup(
+    candidates: list[dict[str, Any]],
+    *,
+    first_attempt_time_by_mint: dict[str, float] | None = None,
+    max_delay_seconds: float = 5.0,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    fresh: list[dict[str, Any]] = []
+    stale: list[dict[str, Any]] = []
+    attempt_times = first_attempt_time_by_mint or {}
+    for candidate in candidates:
+        mint = _mint(candidate)
+        first_attempt = _num(attempt_times.get(mint or "")) or time.time()
+        if not mint:
+            continue
+        if is_official_fresh_birth(candidate, first_attempt, max_delay_seconds=max_delay_seconds):
+            fresh.append({**candidate, "_official_first_followup_attempt_time": first_attempt})
+        else:
+            stale.append(_stale_birth_row(candidate, first_attempt, max_delay_seconds=max_delay_seconds))
+    return fresh, stale
 
 
 def is_official_fresh_birth(candidate: dict[str, Any], first_attempt: float, *, max_delay_seconds: float = 5.0) -> bool:
@@ -647,8 +668,25 @@ def run_official_lifecycle_live_smoke(
             )
             continue
         remaining_births = max(0, int(target_births) - births_seen)
+        selected_candidates = candidates[:remaining_births]
+        first_attempt_times = {_mint(candidate) or "": time.time() for candidate in selected_candidates}
+        fresh_candidates, stale_births = split_fresh_candidates_for_initial_followup(
+            selected_candidates,
+            first_attempt_time_by_mint=first_attempt_times,
+            max_delay_seconds=config.max_birth_to_first_followup_seconds,
+        )
+        if stale_births:
+            _append_jsonl(config.stale_births_path, stale_births)
+        if not fresh_candidates:
+            run_active_lifecycle_followup_cycle(
+                machine,
+                fetcher,
+                signatures_per_mint=signatures_per_mint,
+                transactions_per_mint=transactions_per_mint,
+            )
+            continue
         followup_results = collect_initial_birth_followups(
-            candidates[:remaining_births],
+            fresh_candidates,
             fetcher,
             signatures_per_mint=signatures_per_mint,
             transactions_per_mint=transactions_per_mint,
@@ -662,22 +700,6 @@ def run_official_lifecycle_live_smoke(
             if not mint:
                 continue
             first_attempt = followup["first_attempt"]
-            if not is_official_fresh_birth(
-                candidate,
-                first_attempt,
-                max_delay_seconds=config.max_birth_to_first_followup_seconds,
-            ):
-                _append_jsonl(
-                    config.stale_births_path,
-                    [
-                        _stale_birth_row(
-                            candidate,
-                            first_attempt,
-                            max_delay_seconds=config.max_birth_to_first_followup_seconds,
-                        )
-                    ],
-                )
-                continue
             events = followup["events"]
             first_fdv = followup["first_fdv"]
             birth_row = {
