@@ -36,6 +36,26 @@ PUMPFUN_CREATE_LAYOUTS: dict[str, dict[str, Any]] = {
         "associated_bonding_curve_index": 3,
         "creator_wallet_index": 5,
         "min_account_count": 16,
+    },
+    # Live-confirmed 2026-06-04 Pump.fun create layouts. These are accepted
+    # only with complete mint/curve/creator fields and signer sanity checks.
+    "33e685a4017f83ad": {
+        "confidence": "high",
+        "instruction_type": "create_live_v3",
+        "token_mint_index": 2,
+        "bonding_curve_index": 3,
+        "associated_bonding_curve_index": 4,
+        "creator_wallet_index": 6,
+        "min_account_count": 16,
+    },
+    "66063d1201daebea": {
+        "confidence": "high",
+        "instruction_type": "create_live_v4",
+        "token_mint_index": 2,
+        "bonding_curve_index": 3,
+        "associated_bonding_curve_index": 4,
+        "creator_wallet_index": 6,
+        "min_account_count": 18,
     }
 }
 

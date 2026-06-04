@@ -179,6 +179,86 @@ def test_create_v2_fixture_extracts_fixture_confirmed_layout() -> None:
     assert candidate.metadata_json["instruction_type"] == "create_v2"
 
 
+def test_recent_pumpfun_create_layout_extracts_live_confirmed_fields() -> None:
+    tx = _create_tx("sig-1", account_count=14)
+    accounts = [
+        "global",
+        "mint_authority",
+        "recent-mint-pump",
+        "recent-bonding-curve",
+        "recent-associated-bonding-curve",
+        "metadata-account",
+        "recent-creator",
+        "11111111111111111111111111111111",
+        "token-2022-program",
+        "metadata-program",
+        "event-authority",
+        PUMP_FUN_PROGRAM_ID,
+        "fee-config",
+        "fee-program",
+        "extra-a",
+        "extra-b",
+    ]
+    tx["transaction"]["message"]["instructions"][0]["accounts"] = accounts
+    tx["transaction"]["message"]["instructions"][0]["data"] = _base58_encode(bytes.fromhex("33e685a4017f83ad") + b"fixture")
+    tx["transaction"]["message"]["accountKeys"] = [{"pubkey": "recent-creator", "signer": True}]
+    adapter = FakeAdapter(batches=[["sig-1"]], transactions_by_signature={"sig-1": tx})
+    scanner = PumpFunCreateScanner(adapter=adapter)
+
+    report = scanner.scan(execute=True, max_batches=1, signatures_per_batch=1, min_confidence="high")
+
+    assert report.create_candidate_count == 1
+    candidate = report.verified_create_candidates[0]
+    assert candidate.instruction_discriminator == "33e685a4017f83ad"
+    assert candidate.extraction_confidence == "high"
+    assert candidate.token_mint == "recent-mint-pump"
+    assert candidate.bonding_curve == "recent-bonding-curve"
+    assert candidate.associated_bonding_curve == "recent-associated-bonding-curve"
+    assert candidate.creator_wallet == "recent-creator"
+    assert candidate.metadata_json["instruction_type"] == "create_live_v3"
+
+
+def test_recent_pumpfun_create_v4_layout_extracts_live_confirmed_fields() -> None:
+    tx = _create_tx("sig-1", account_count=14)
+    accounts = [
+        "global",
+        "mint_authority",
+        "recent-mint-pump",
+        "recent-bonding-curve",
+        "recent-associated-bonding-curve",
+        "metadata-account",
+        "recent-creator",
+        "11111111111111111111111111111111",
+        "token-2022-program",
+        "metadata-program",
+        "event-authority",
+        PUMP_FUN_PROGRAM_ID,
+        "extra-a",
+        "extra-b",
+        "fee-config",
+        "fee-program",
+        "extra-c",
+        "extra-d",
+    ]
+    tx["transaction"]["message"]["instructions"][0]["accounts"] = accounts
+    tx["transaction"]["message"]["instructions"][0]["data"] = _base58_encode(bytes.fromhex("66063d1201daebea") + b"fixture")
+    tx["transaction"]["message"]["accountKeys"] = [{"pubkey": "recent-creator", "signer": True}]
+    adapter = FakeAdapter(batches=[["sig-1"]], transactions_by_signature={"sig-1": tx})
+    scanner = PumpFunCreateScanner(adapter=adapter)
+
+    report = scanner.scan(execute=True, max_batches=1, signatures_per_batch=1, min_confidence="high")
+
+    assert report.create_candidate_count == 1
+    candidate = report.verified_create_candidates[0]
+    assert candidate.instruction_discriminator == "66063d1201daebea"
+    assert candidate.extraction_confidence == "high"
+    assert candidate.token_mint == "recent-mint-pump"
+    assert candidate.bonding_curve == "recent-bonding-curve"
+    assert candidate.associated_bonding_curve == "recent-associated-bonding-curve"
+    assert candidate.creator_wallet == "recent-creator"
+    assert candidate.metadata_json["instruction_type"] == "create_live_v4"
+
+
 def test_include_low_confidence_keeps_diagnostics_out_of_verified_count() -> None:
     tx = _create_tx("sig-1", account_count=12)
     adapter = FakeAdapter(batches=[["sig-1"]], transactions_by_signature={"sig-1": tx})
