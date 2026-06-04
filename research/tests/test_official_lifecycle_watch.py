@@ -105,6 +105,37 @@ def test_lifecycle_state_transitions_and_active_watch_retention(tmp_path: Path) 
     assert machine.active_watch_mints() == []
 
 
+def test_lifecycle_state_save_merges_concurrent_machine_instances(tmp_path: Path) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    machine_a = OfficialLifecycleStateMachine(config)
+    machine_b = OfficialLifecycleStateMachine(config)
+
+    machine_a.record_birth(
+        {
+            "mint": "mint-a",
+            "creator": "creator-a",
+            "create_signature": "sig-a",
+            "create_time": 100,
+            "observed_time": 101,
+            "first_followup_attempt_time": 102,
+        }
+    )
+    machine_b.record_birth(
+        {
+            "mint": "mint-b",
+            "creator": "creator-b",
+            "create_signature": "sig-b",
+            "create_time": 100,
+            "observed_time": 101,
+            "first_followup_attempt_time": 102,
+        }
+    )
+
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    assert sorted(state["mints"]) == ["mint-a", "mint-b"]
+
+
 def test_record_birth_preserves_pumpfun_curve_followup_addresses(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     initialize_official_lifecycle_namespace(config)

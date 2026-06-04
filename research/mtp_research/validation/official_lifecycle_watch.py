@@ -297,6 +297,22 @@ class OfficialLifecycleStateMachine:
         self.state = _read_state(config)
 
     def save(self) -> None:
+        disk_state = _read_state(self.config)
+        if disk_state is not self.state:
+            merged_mints = dict(disk_state.get("mints") or {})
+            merged_mints.update(self.state.get("mints") or {})
+            merged_counters = dict(disk_state.get("counters") or {})
+            for key, value in (self.state.get("counters") or {}).items():
+                if isinstance(value, (int, float)) and isinstance(merged_counters.get(key), (int, float)):
+                    merged_counters[key] = max(merged_counters[key], value)
+                else:
+                    merged_counters[key] = value
+            self.state = {
+                **disk_state,
+                **self.state,
+                "mints": merged_mints,
+                "counters": merged_counters,
+            }
         _write_json(self.config.state_path, self.state)
 
     def record_birth(self, birth: dict[str, Any]) -> dict[str, Any]:
