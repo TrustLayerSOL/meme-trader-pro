@@ -133,6 +133,57 @@ def test_record_birth_preserves_pumpfun_curve_followup_addresses(tmp_path: Path)
     assert state_row["associated_bonding_curve"] == "assoc-curve-a"
 
 
+def test_active_lifecycle_followup_cycle_revisits_birth_watch_until_trigger(tmp_path: Path) -> None:
+    from research.mtp_research.validation.official_lifecycle_watch import run_active_lifecycle_followup_cycle
+
+    config = OfficialLifecycleConfig(data_root=tmp_path, followup_poll_seconds=0)
+    initialize_official_lifecycle_namespace(config)
+    machine = OfficialLifecycleStateMachine(config)
+    machine.record_birth(
+        {
+            "mint": "mint-a",
+            "creator": "creator-a",
+            "create_signature": "sig-a",
+            "create_time": 100,
+            "observed_time": 101,
+            "first_followup_attempt_time": 102,
+            "bonding_curve": "curve-a",
+            "associated_bonding_curve": "assoc-curve-a",
+        }
+    )
+    fetcher = _SequentialFetcher(
+        {
+            "mint-a": [
+                {
+                    "mint": "mint-a",
+                    "fdv_proxy": 22_000,
+                    "event_type": "pumpfun_trade",
+                    "transaction_signature": "trade-sig-a",
+                    "block_time": 110,
+                }
+            ]
+        }
+    )
+
+    result = run_active_lifecycle_followup_cycle(
+        machine,
+        fetcher,
+        signatures_per_mint=4,
+        transactions_per_mint=2,
+        now=110,
+    )
+
+    assert result["active_mints_checked"] == 1
+    assert result["path_rows_written"] == 1
+    assert result["mints_with_fdv_followup"] == 1
+    assert fetcher.calls[0]["mint"] == "mint-a"
+    assert fetcher.calls[0]["followup_addresses"] == ["curve-a", "assoc-curve-a"]
+    assert machine.state["mints"]["mint-a"]["state"] == "trigger_qualified_active_watch"
+    assert machine.state["counters"]["official_crossed_20k_count"] == 1
+    assert len(_read_jsonl(config.followup_paths_path)) == 1
+    assert len(_read_jsonl(config.events_path)) == 1
+
+
 def test_quality_audit_flags_dropped_trigger_watch_and_milestone_ordering(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     initialize_official_lifecycle_namespace(config)
@@ -215,3 +266,30 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def _read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+class _SequentialFetcher:
+    def __init__(self, events_by_mint: dict[str, list[dict]]) -> None:
+        self.events_by_mint = events_by_mint
+        self.requests_used = 0
+        self.raw_transactions: list[dict] = []
+        self.calls: list[dict] = []
+
+    def fetch_for_mint(
+        self,
+        mint: str,
+        *,
+        signatures_per_mint: int,
+        transactions_per_mint: int,
+        followup_addresses: list[str] | None = None,
+    ) -> list[dict]:
+        self.calls.append(
+            {
+                "mint": mint,
+                "signatures_per_mint": signatures_per_mint,
+                "transactions_per_mint": transactions_per_mint,
+                "followup_addresses": list(followup_addresses or []),
+            }
+        )
+        self.requests_used += 1
+        return list(self.events_by_mint.get(mint, []))

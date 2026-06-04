@@ -377,6 +377,68 @@ class OfficialLifecycleStateMachine:
         )
 
 
+def run_active_lifecycle_followup_cycle(
+    machine: OfficialLifecycleStateMachine,
+    fetcher: Any,
+    *,
+    signatures_per_mint: int,
+    transactions_per_mint: int,
+    now: float | None = None,
+) -> dict[str, Any]:
+    timestamp = now if now is not None else time.time()
+    checked = 0
+    path_rows = 0
+    event_rows = 0
+    fdv_mints: set[str] = set()
+    for mint in machine.active_watch_mints()[: machine.config.max_active_birth_followups]:
+        state_row = machine.state.get("mints", {}).get(mint, {})
+        last_attempt = _num(state_row.get("last_followup_attempt_time"))
+        if (
+            last_attempt is not None
+            and timestamp - last_attempt < max(0.0, float(machine.config.followup_poll_seconds))
+        ):
+            continue
+        state_row["last_followup_attempt_time"] = timestamp
+        state_row["followup_attempt_count"] = int(state_row.get("followup_attempt_count") or 0) + 1
+        machine.save()
+        checked += 1
+        events = fetcher.fetch_for_mint(
+            mint,
+            signatures_per_mint=signatures_per_mint,
+            transactions_per_mint=transactions_per_mint,
+            followup_addresses=_followup_addresses(state_row),
+        )
+        if events:
+            _append_jsonl(
+                machine.config.events_path,
+                [{**event, "sample_label": OFFICIAL_SAMPLE_LABEL, "mint": mint} for event in events],
+            )
+            event_rows += len(events)
+        for event in events:
+            if _num(event.get("fdv_proxy")) is None:
+                continue
+            fdv_mints.add(mint)
+            machine.record_path(
+                {
+                    "mint": mint,
+                    "timestamp": event.get("timestamp") or event.get("observed_at") or event.get("block_time") or timestamp,
+                    "fdv_proxy": event.get("fdv_proxy"),
+                    "event_count": event.get("event_count") or 1,
+                    "buy_count": event.get("buy_count") or (1 if str(event.get("side") or "").lower() == "buy" else 0),
+                    "sell_count": event.get("sell_count") or (1 if str(event.get("side") or "").lower() == "sell" else 0),
+                    "active_wallet_count": event.get("active_wallet_count") or event.get("active_wallets") or 1,
+                    "source_provenance": event.get("source") or "helius_mint_followup_observed_path",
+                }
+            )
+            path_rows += 1
+    return {
+        "active_mints_checked": checked,
+        "path_rows_written": path_rows,
+        "event_rows_written": event_rows,
+        "mints_with_fdv_followup": len(fdv_mints),
+    }
+
+
 def run_official_lifecycle_smoke(
     config: OfficialLifecycleConfig,
     *,
@@ -498,6 +560,12 @@ def run_official_lifecycle_live_smoke(
             break
         candidates = source.fetch_candidates()
         if not candidates:
+            run_active_lifecycle_followup_cycle(
+                machine,
+                fetcher,
+                signatures_per_mint=signatures_per_mint,
+                transactions_per_mint=transactions_per_mint,
+            )
             continue
         for candidate in candidates:
             if births_seen >= int(target_births):
@@ -549,6 +617,12 @@ def run_official_lifecycle_live_smoke(
                     }
                 )
             births_seen += 1
+        run_active_lifecycle_followup_cycle(
+            machine,
+            fetcher,
+            signatures_per_mint=signatures_per_mint,
+            transactions_per_mint=transactions_per_mint,
+        )
     if time.monotonic() >= deadline and births_seen < int(target_births):
         warnings.append("max_runtime_minutes_reached")
     raw_transactions = list(getattr(fetcher, "raw_transactions", []))
