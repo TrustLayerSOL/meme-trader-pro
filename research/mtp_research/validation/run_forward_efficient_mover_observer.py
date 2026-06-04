@@ -15,6 +15,15 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     run_observe,
     run_status,
 )
+from research.mtp_research.validation.official_lifecycle_watch import (
+    OFFICIAL_SAMPLE_LABEL,
+    OfficialLifecycleConfig,
+    format_official_lifecycle_status,
+    initialize_official_lifecycle_namespace,
+    official_lifecycle_status,
+    run_official_lifecycle_live_smoke,
+    run_official_lifecycle_smoke,
+)
 
 
 def main() -> int:
@@ -58,6 +67,12 @@ def main() -> int:
         print(f"source_availability={report['source_availability']}")
         return 0
     if args.mode == "status":
+        if args.sample == OFFICIAL_SAMPLE_LABEL:
+            lifecycle_config = _official_config(args)
+            initialize_official_lifecycle_namespace(lifecycle_config)
+            status = official_lifecycle_status(lifecycle_config, target_crossed_20k=args.target_crossed_20k)
+            print(format_official_lifecycle_status(status))
+            return 0
         tally = run_status(config)
         print(print_status(tally))
         return 0
@@ -96,6 +111,41 @@ def main() -> int:
         print(f"drawdown_recovery_count={result.get('candidates_with_recoveries_after_30pct_drawdown', 0)}")
         print(f"warnings={result.get('warnings', [])}")
         print(f"output_path={result.get('output_path')}")
+        return 0
+    if args.mode == "observe-lifecycle":
+        if args.sample != OFFICIAL_SAMPLE_LABEL:
+            raise ValueError("observe-lifecycle requires --sample official_lifecycle_watch_v1")
+        lifecycle_config = _official_config(args)
+        if args.source != "mock":
+            result = run_official_lifecycle_live_smoke(
+                lifecycle_config,
+                target_births=args.target_births,
+                target_crossed_20k=args.target_crossed_20k,
+                max_runtime_minutes=args.max_runtime_minutes,
+                signatures_per_mint=args.signatures_per_mint,
+                transactions_per_mint=args.transactions_per_mint,
+                execute=args.execute,
+            )
+        else:
+            result = run_official_lifecycle_smoke(
+                lifecycle_config,
+                target_births=args.target_births,
+                target_crossed_20k=args.target_crossed_20k,
+                execute=args.execute,
+            )
+        print("## Official Lifecycle Watch v1 Smoke")
+        print(f"execute={result.get('execute')}")
+        print(f"smoke_births_observed={result.get('smoke_births_observed', 0)}")
+        print(f"under_5s_followup_count={result.get('under_5s_followup_count', 0)}")
+        print(f"active_watches_created={result.get('active_watches_created', 0)}")
+        print(f"matured_counts={result.get('matured_counts', {})}")
+        print(f"estimated_helius_credits_used={result.get('estimated_helius_credits_used', 0)}")
+        print(f"network_calls_made={result.get('network_calls_made', 0)}")
+        print(f"quality_status={result.get('quality_audit_result', {}).get('quality_status')}")
+        print(f"readiness_classification={result.get('readiness_classification')}")
+        print(f"warnings={result.get('warnings', [])}")
+        print(f"lifecycle_state_file={result.get('lifecycle_state_file', lifecycle_config.state_path)}")
+        print(f"report_root={lifecycle_config.report_root}")
         return 0
     if args.mode == "observe-births-with-immediate-followup":
         from research.mtp_research.validation.forward_birth_watch_followup_collector import (
@@ -148,9 +198,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Forward efficient-mover observation logger.")
     parser.add_argument(
         "--mode",
-        choices=["dry-run", "observe", "status", "probe", "observe-births-with-immediate-followup"],
+        choices=["dry-run", "observe", "status", "probe", "observe-births-with-immediate-followup", "observe-lifecycle"],
         default="dry-run",
     )
+    parser.add_argument("--sample", choices=["efficient_movers", OFFICIAL_SAMPLE_LABEL], default="efficient_movers")
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--source",
@@ -170,6 +221,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local-source-path", default=None)
     parser.add_argument("--mock-candidate-json", default=None)
     parser.add_argument("--target-candidates", type=int, default=300)
+    parser.add_argument("--target-crossed-20k", type=int, default=300)
     parser.add_argument("--start-trigger", type=float, default=10_000)
     parser.add_argument("--poll-seconds", type=float, default=2)
     parser.add_argument("--status-interval-seconds", type=int, default=30)
@@ -206,6 +258,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-dexscreener-metadata", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Compatibility flag; use --mode dry-run for dry-run behavior.")
     return parser.parse_args()
+
+
+def _official_config(args: argparse.Namespace) -> OfficialLifecycleConfig:
+    return OfficialLifecycleConfig(
+        data_root=Path(args.data_root).expanduser() if args.data_root else None,
+        followup_poll_seconds=float(args.followup_poll_seconds),
+        trigger_qualified_followup_poll_seconds=float(args.followup_poll_seconds),
+        max_active_birth_followups=args.max_active_birth_followups,
+        max_active_trigger_watches=args.target_crossed_20k,
+        max_observation_age_minutes=args.max_runtime_minutes,
+        max_helius_credits_per_run=args.max_helius_credits,
+        global_observation_credit_cap=args.max_helius_credits,
+        target_crossed_20k=args.target_crossed_20k,
+    )
 
 
 if __name__ == "__main__":
