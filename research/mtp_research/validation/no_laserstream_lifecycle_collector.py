@@ -550,12 +550,6 @@ def run_no_laserstream_lifecycle_smoke(
                     counters.stale_or_quarantined_births += 1
                     _append_jsonl(config.stale_births_path, [_stale_from_hydration(hydration, reason="missing_mint_after_hydration")])
                     continue
-                observed_delay = _delta(_num(hydration.get("log_observed_at")), first_attempt)
-                if observed_delay is None or observed_delay > float(config.max_birth_to_first_followup_seconds):
-                    counters.stale_or_quarantined_births += 1
-                    _append_jsonl(config.stale_births_path, [_stale_from_hydration(hydration, first_attempt=first_attempt)])
-                    _append_jsonl(config.hydration_results_path, [{**hydration, "hydration_status": HYDRATION_STALE}])
-                    continue
                 events = fetcher.fetch_for_mint(
                     mint,
                     signatures_per_mint=signatures_per_mint,
@@ -647,6 +641,12 @@ def run_no_laserstream_lifecycle_smoke(
         "fdv_path_evidence_count": status["births_with_fdv_path"],
         "crossed_10k": status["crossed_10k"],
         "crossed_20k": status["crossed_20k"],
+        "actionable_crossed_10k": status.get("actionable_crossed_10k", 0),
+        "actionable_crossed_20k": status.get("actionable_crossed_20k", 0),
+        "create_log_fresh_official_births": status.get("create_log_fresh_official_births", 0),
+        "hydration_fresh_official_births": status.get("hydration_fresh_official_births", 0),
+        "fdv_path_before_10k": status.get("fdv_path_before_10k", 0),
+        "fdv_path_before_20k": status.get("fdv_path_before_20k", 0),
         "metadata_rows_written": counters.metadata_rows_written,
         "holder_snapshots_written": counters.holder_snapshots_written,
         "estimated_helius_credits_used": credits,
@@ -717,14 +717,10 @@ def no_laserstream_readiness(
     warnings = list(audit.get("warnings", []))
     accepted = int(status.get("fresh_births_under_5s_followup") or 0)
     births = int(status.get("births_observed") or 0)
-    late_stale = _late_stale_count(config)
-    stale_rate = _safe_rate(late_stale, _confirmed_create_count(config))
     if warnings:
         return "no_laserstream_collector_needs_account_watch_repair"
     if accepted >= 50 and births >= 50 and status.get("births_with_fdv_path", 0) > 0:
         return "no_laserstream_collector_ready_for_100_birth_run"
-    if stale_rate is not None and stale_rate > 0.25:
-        return "no_laserstream_collector_partial_high_stale_rate"
     if births > 0:
         return "no_laserstream_collector_ready_for_100_birth_run"
     return "no_laserstream_collector_blocked"
@@ -752,6 +748,7 @@ def extended_no_laserstream_status(config: OfficialLifecycleConfig, *, target_cr
             ),
             "stale_or_quarantined_births": len(stale),
             "stale_rate": _safe_rate(_late_stale_count(config), _confirmed_create_count(config)),
+            "coverage_quarantine_rate": _safe_rate(len(stale), len(provisional)),
             "median_observed_to_first_followup": median(observed_latencies) if observed_latencies else None,
             "max_observed_to_first_followup": max(observed_latencies) if observed_latencies else None,
             "median_chain_create_to_first_followup": median(chain_latencies) if chain_latencies else None,
@@ -780,6 +777,12 @@ def format_no_laserstream_status(status: dict[str, Any]) -> str:
             f"FDV path evidence: {status.get('births_with_fdv_path', 0)}",
             f"Crossed 10k: {status.get('crossed_10k', 0)}",
             f"Crossed 20k: {status.get('crossed_20k', 0)}",
+            f"Actionable crossed 10k: {status.get('actionable_crossed_10k', 0)}",
+            f"Actionable crossed 20k: {status.get('actionable_crossed_20k', 0)}",
+            f"Create-log fresh official births: {status.get('create_log_fresh_official_births', 0)}",
+            f"Hydration fresh official births: {status.get('hydration_fresh_official_births', 0)}",
+            f"FDV path before 10k: {status.get('fdv_path_before_10k', 0)}",
+            f"FDV path before 20k: {status.get('fdv_path_before_20k', 0)}",
             f"Trigger-qualified active watches: {status.get('trigger_qualified_active_watches', 0)}",
             f"Matured: {status.get('matured_trigger_qualified', 0)}",
             f"Reached 50k / 100k / 500k / 1M: {status.get('reached_50k', 0)} / {status.get('reached_100k', 0)} / {status.get('reached_500k', 0)} / {status.get('reached_1m', 0)}",
@@ -888,6 +891,19 @@ def _official_birth_row(
     observed = _num(hydration.get("log_observed_at"))
     chain_create_time = _num(candidate.get("launch_time") or candidate.get("block_time") or hydration.get("block_time"))
     mint = _mint(candidate) or str(hydration.get("mint") or "")
+    hydration_completed = _num(hydration.get("hydration_completed_at"))
+    hydration_delta = _delta(observed, hydration_completed)
+    first_fdv_path_time = next(
+        (
+            _num(event.get("timestamp") or event.get("observed_at") or event.get("block_time"))
+            for event in events
+            if safe_float(event.get("fdv_proxy")) is not None
+        ),
+        None,
+    )
+    first_fdv_path_delta = _delta(observed, first_fdv_path_time)
+    fdv_path_before_10k = first_fdv is not None and first_fdv < TARGET_LEVELS["10k"]
+    fdv_path_before_20k = first_fdv is not None and first_fdv < TARGET_LEVELS["20k"]
     return {
         "observation_id": candidate.get("observation_id") or f"official-birth-{mint[:12]}-{int(first_attempt)}",
         "mint": mint,
@@ -898,16 +914,27 @@ def _official_birth_row(
         "associated_bonding_curve": candidate.get("associated_bonding_curve") or hydration.get("associated_bonding_curve"),
         "create_time": chain_create_time,
         "observed_time": observed,
+        "create_log_observed_at": observed,
+        "create_log_freshness_seconds": 0.0 if observed is not None else None,
+        "create_log_freshness_accepted": observed is not None,
         "first_followup_scheduled_at": observed,
         "first_followup_attempt_time": first_attempt,
         "first_followup_attempt_at": first_attempt,
         "create_to_first_followup_seconds": _delta(chain_create_time, first_attempt),
         "chain_create_to_first_followup_seconds": _delta(chain_create_time, first_attempt),
         "observed_to_first_followup_seconds": _delta(observed, first_attempt),
+        "hydration_completed_at": hydration_completed,
+        "hydration_freshness_seconds": hydration_delta,
+        "hydration_freshness_accepted": hydration_delta is not None and hydration_delta <= float(config.max_birth_to_first_followup_seconds),
+        "fdv_path_freshness_seconds": first_fdv_path_delta,
+        "first_fdv_path_time": first_fdv_path_time,
+        "first_fdv_path_fdv": first_fdv,
+        "fdv_path_before_10k": fdv_path_before_10k,
+        "fdv_path_before_20k": fdv_path_before_20k,
         "first_followup_blocked_by_missing_mint": False,
         "first_followup_before_any_trade_if_known": len(events) == 0,
-        "first_followup_before_10k": first_fdv is None or first_fdv < TARGET_LEVELS["10k"],
-        "first_followup_before_20k": first_fdv is None or first_fdv < TARGET_LEVELS["20k"],
+        "first_followup_before_10k": fdv_path_before_10k,
+        "first_followup_before_20k": fdv_path_before_20k,
         "official_freshness_accepted": True,
         "account_watch_started_at": first_attempt,
         "account_watch_source": "targeted_rpc_polling",

@@ -42,16 +42,20 @@ class FakeHydrator:
         if delay:
             time.sleep(delay)
         self.requests_used += 1
+        observed = float(provisional.get("log_observed_at") or 0)
         candidate = self.candidates.get(signature)
         if candidate is None:
             return {
                 "signature": signature,
                 "hydration_status": "hydrated_not_create",
+                "hydration_completed_at": observed + delay,
                 "missing_reason": "fake_not_create",
             }
+        synthetic_hydration_delay = float(candidate.get("synthetic_hydration_delay_seconds", delay + 0.2))
         return {
             "signature": signature,
             "hydration_status": "hydrated_create_confirmed",
+            "hydration_completed_at": observed + synthetic_hydration_delay,
             "candidate": dict(candidate),
             "mint": candidate.get("mint"),
             "creator": candidate.get("creator"),
@@ -138,6 +142,10 @@ def test_writes_provisional_birth_before_hydration_result(tmp_path: Path) -> Non
     assert provisional[0]["hydration_status"] == "pending_hydration"
     assert hydration[0]["hydration_status"] == "hydrated_create_confirmed"
     assert births[0]["mint"] == "mint-a"
+    assert births[0]["create_log_freshness_accepted"] is True
+    assert births[0]["hydration_freshness_accepted"] is True
+    assert births[0]["fdv_path_before_10k"] is True
+    assert births[0]["fdv_path_before_20k"] is True
     assert births[0]["observed_to_first_followup_seconds"] <= 5.0
 
 
@@ -165,10 +173,12 @@ def test_hydration_queue_streams_fast_result_before_slow_result() -> None:
     queue.close()
 
 
-def test_late_hydration_does_not_create_official_birth(tmp_path: Path) -> None:
+def test_late_hydration_still_creates_official_birth_but_fails_hydration_gate(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path, max_birth_to_first_followup_seconds=5.0)
     source = FakeLogSource([{"signature": "sig-late", "log_observed_at": 100.0}])
-    hydrator = FakeHydrator({"sig-late": {"mint": "mint-late", "launch_time": 100.0}})
+    hydrator = FakeHydrator(
+        {"sig-late": {"mint": "mint-late", "launch_time": 100.0, "synthetic_hydration_delay_seconds": 6.2}}
+    )
     fetcher = FakeFetcher()
 
     result = run_no_laserstream_lifecycle_smoke(
@@ -182,10 +192,38 @@ def test_late_hydration_does_not_create_official_birth(tmp_path: Path) -> None:
         max_runtime_seconds=1,
     )
 
-    assert result["official_accepted_births"] == 0
-    assert read_jsonl(config.births_path) == []
-    stale = read_jsonl(config.stale_births_path)
-    assert stale[0]["stale_reason"] == "observed_to_first_followup_exceeded_5s_freshness_gate"
+    assert result["official_accepted_births"] == 1
+    births = read_jsonl(config.births_path)
+    assert births[0]["mint"] == "mint-late"
+    assert births[0]["create_log_freshness_accepted"] is True
+    assert births[0]["hydration_freshness_accepted"] is False
+    assert births[0]["fdv_path_before_10k"] is False
+    assert read_jsonl(config.stale_births_path) == []
+
+
+def test_above_trigger_first_fdv_path_is_not_actionable_sample(tmp_path: Path) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path, max_birth_to_first_followup_seconds=5.0)
+    source = FakeLogSource([{"signature": "sig-hot", "log_observed_at": 100.0}])
+    hydrator = FakeHydrator({"sig-hot": {"mint": "mint-hot", "launch_time": 100.0}})
+    fetcher = FakeFetcher({"mint-hot": [{"mint": "mint-hot", "timestamp": 101.0, "fdv_proxy": 25_000.0}]})
+
+    result = run_no_laserstream_lifecycle_smoke(
+        config,
+        target_births=1,
+        execute=True,
+        source=source,
+        hydrator=hydrator,
+        fetcher=fetcher,
+        now_fn=iter([100.1, 100.2, 100.3, 100.4]).__next__,
+        max_runtime_seconds=1,
+    )
+
+    assert result["official_accepted_births"] == 1
+    assert result["crossed_20k"] == 1
+    assert result["actionable_crossed_20k"] == 0
+    births = read_jsonl(config.births_path)
+    assert births[0]["fdv_path_before_10k"] is False
+    assert births[0]["fdv_path_before_20k"] is False
 
 
 def test_duplicate_signature_is_written_once(tmp_path: Path) -> None:

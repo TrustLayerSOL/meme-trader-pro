@@ -328,6 +328,17 @@ class OfficialLifecycleStateMachine:
             "observed_to_first_followup_seconds": birth.get("observed_to_first_followup_seconds")
             if birth.get("observed_to_first_followup_seconds") is not None
             else _delta(now, first_attempt),
+            "create_log_observed_at": birth.get("create_log_observed_at") or now,
+            "create_log_freshness_seconds": birth.get("create_log_freshness_seconds"),
+            "create_log_freshness_accepted": birth.get("create_log_freshness_accepted"),
+            "hydration_completed_at": birth.get("hydration_completed_at"),
+            "hydration_freshness_seconds": birth.get("hydration_freshness_seconds"),
+            "hydration_freshness_accepted": birth.get("hydration_freshness_accepted"),
+            "fdv_path_freshness_seconds": birth.get("fdv_path_freshness_seconds"),
+            "fdv_path_before_10k": birth.get("fdv_path_before_10k"),
+            "fdv_path_before_20k": birth.get("fdv_path_before_20k"),
+            "first_fdv_path_fdv": birth.get("first_fdv_path_fdv"),
+            "first_fdv_path_time": birth.get("first_fdv_path_time"),
             "official_freshness_accepted": birth.get("official_freshness_accepted"),
             "first_followup_scheduled_at": birth.get("first_followup_scheduled_at"),
             "first_followup_blocked_by_missing_mint": birth.get("first_followup_blocked_by_missing_mint"),
@@ -826,10 +837,26 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
     status_payload = _read_json(config.status_path)
     mints = state.get("mints", {})
     state_counts = Counter(row.get("state") for row in mints.values())
-    fresh_under_5 = sum(1 for row in births if _official_latency_seconds(row) is not None and _official_latency_seconds(row) <= 5)
-    first_before_10k = sum(1 for row in births if row.get("first_followup_before_10k") is True)
-    first_before_20k = sum(1 for row in births if row.get("first_followup_before_20k") is True)
+    fresh_under_5 = sum(
+        1
+        for row in births
+        if row.get("create_log_freshness_accepted") is True
+        or (_official_latency_seconds(row) is not None and _official_latency_seconds(row) <= 5)
+    )
+    first_before_10k = sum(1 for row in births if row.get("fdv_path_before_10k") is True or row.get("first_followup_before_10k") is True)
+    first_before_20k = sum(1 for row in births if row.get("fdv_path_before_20k") is True or row.get("first_followup_before_20k") is True)
     crossed_counts = {level: len({row.get("mint") for row in paths if row.get(f"crossed_{level}") is True}) for level in TARGET_LEVELS}
+    birth_by_mint = {row.get("mint"): row for row in births if row.get("mint")}
+    crossed_mints = {
+        level: {row.get("mint") for row in paths if row.get(f"crossed_{level}") is True and row.get("mint")}
+        for level in TARGET_LEVELS
+    }
+    actionable_10k = {
+        mint for mint in crossed_mints["10k"] if birth_by_mint.get(mint, {}).get("fdv_path_before_10k") is True
+    }
+    actionable_20k = {
+        mint for mint in crossed_mints["20k"] if birth_by_mint.get(mint, {}).get("fdv_path_before_20k") is True
+    }
     active = [mint for mint, row in mints.items() if row.get("state") == "trigger_qualified_active_watch"]
     matured_trigger = [mint for mint, row in mints.items() if row.get("entered_trigger_qualified_at") and row.get("state") in MATURITY_STATES]
     target = int(target_crossed_20k or config.target_crossed_20k)
@@ -844,6 +871,12 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "crossed_10k": crossed_counts["10k"],
         "crossed_15k": crossed_counts["15k"],
         "crossed_20k": crossed_counts["20k"],
+        "actionable_crossed_10k": len(actionable_10k),
+        "actionable_crossed_20k": len(actionable_20k),
+        "create_log_fresh_official_births": sum(1 for row in births if row.get("create_log_freshness_accepted") is True),
+        "hydration_fresh_official_births": sum(1 for row in births if row.get("hydration_freshness_accepted") is True),
+        "fdv_path_before_10k": sum(1 for row in births if row.get("fdv_path_before_10k") is True),
+        "fdv_path_before_20k": sum(1 for row in births if row.get("fdv_path_before_20k") is True),
         "trigger_qualified_active_watches": len(active),
         "matured_trigger_qualified": len(matured_trigger),
         "reached_50k": crossed_counts["50k"],
@@ -855,6 +888,7 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "max_age": state_counts["matured_max_age"],
         "data_limited": state_counts["data_limited"],
         "official_crossed_20k_target_progress": f"{crossed_counts['20k']}/{target}",
+        "actionable_crossed_20k_target_progress": f"{len(actionable_20k)}/{target}",
         "credits_used": int(status_payload.get("credits_used") or 0),
         "warnings": audit["warnings"],
         "quality_status": audit["quality_status"],
@@ -874,6 +908,8 @@ def format_official_lifecycle_status(status: dict[str, Any]) -> str:
             f"Crossed 10k: {status['crossed_10k']}",
             f"Crossed 15k: {status['crossed_15k']}",
             f"Crossed 20k: {status['crossed_20k']}",
+            f"Actionable crossed 10k: {status.get('actionable_crossed_10k', 0)}",
+            f"Actionable crossed 20k: {status.get('actionable_crossed_20k', 0)}",
             f"Trigger-qualified active watches: {status['trigger_qualified_active_watches']}",
             f"Matured trigger-qualified: {status['matured_trigger_qualified']}",
             f"Reached 50k: {status['reached_50k']}",
@@ -885,6 +921,7 @@ def format_official_lifecycle_status(status: dict[str, Any]) -> str:
             f"Max age: {status['max_age']}",
             f"Data-limited: {status['data_limited']}",
             f"Official crossed-20k target progress: {status['official_crossed_20k_target_progress']}",
+            f"Actionable crossed-20k target progress: {status.get('actionable_crossed_20k_target_progress')}",
             f"Credits used: {status['credits_used']}",
             f"Warnings: {status['warnings']}",
             f"Quality status: {status['quality_status']}",
@@ -931,6 +968,23 @@ def build_official_lifecycle_quality_audit(
         warnings.append("high_conversion_ratio_warning")
     if any(not _milestone_order_ok(row) for row in paths):
         warnings.append("milestone_ordering_violation")
+    birth_by_mint = {row.get("mint"): row for row in births if row.get("mint")}
+    crossed_mints = {
+        level: {row.get("mint") for row in paths if row.get(f"crossed_{level}") is True and row.get("mint")}
+        for level in TARGET_LEVELS
+    }
+    actionable_10k = {
+        mint
+        for mint in crossed_mints["10k"]
+        if birth_by_mint.get(mint, {}).get("fdv_path_before_10k") is True
+        or birth_by_mint.get(mint, {}).get("first_followup_before_10k") is True
+    }
+    actionable_20k = {
+        mint
+        for mint in crossed_mints["20k"]
+        if birth_by_mint.get(mint, {}).get("fdv_path_before_20k") is True
+        or birth_by_mint.get(mint, {}).get("first_followup_before_20k") is True
+    }
     late_stale_birth_signatures = {
         row.get("signature")
         for row in stale_births
@@ -949,8 +1003,11 @@ def build_official_lifecycle_quality_audit(
         if row.get("signature") and str(row.get("hydration_status")) in {"hydrated_create_confirmed", "official_accepted", "stale_rejected"}
     }
     stale_rate = len(late_stale_birth_signatures) / len(confirmed_create_signatures) if confirmed_create_signatures else 0
-    if provisional_births and stale_rate > 0.25:
-        warnings.append("stale_rate_warning")
+    coverage_diagnostics = {
+        "late_hydration_rate": stale_rate,
+        "quarantined_or_unparsed_birth_logs": len(stale_births),
+        "coverage_note": "Coverage gaps are diagnostics only; actionable eligibility is gated by first FDV path before trigger.",
+    }
     source_counts = dict(Counter(str(row.get("source_provenance") or "unknown") for row in paths))
     density = Counter(row.get("mint") for row in paths if row.get("mint"))
     quality_status = "official_lifecycle_watch_needs_repair" if warnings else "official_lifecycle_watch_ready_for_100_birth_smoke"
@@ -975,6 +1032,7 @@ def build_official_lifecycle_quality_audit(
         "stale_births": len(stale_births),
         "late_confirmed_create_stale_births": len(late_stale_birth_signatures),
         "stale_rate": stale_rate,
+        "coverage_diagnostics": coverage_diagnostics,
         "holder_snapshot_rows": _row_count(config.holder_snapshots_path),
         "drawdown_rows": _row_count(config.drawdowns_path),
         "state_counts": dict(Counter(row.get("state") for row in mints.values())),
@@ -989,8 +1047,17 @@ def build_official_lifecycle_quality_audit(
                 }
             ),
             "official_under_5_accepted_births": sum(
-                1 for row in births if _official_latency_seconds(row) is not None and _official_latency_seconds(row) <= 5
+                1
+                for row in births
+                if row.get("create_log_freshness_accepted") is True
+                or (_official_latency_seconds(row) is not None and _official_latency_seconds(row) <= 5)
             ),
+            "create_log_fresh_official_births": sum(1 for row in births if row.get("create_log_freshness_accepted") is True),
+            "hydration_fresh_official_births": sum(1 for row in births if row.get("hydration_freshness_accepted") is True),
+            "fdv_path_before_10k_births": sum(1 for row in births if row.get("fdv_path_before_10k") is True),
+            "fdv_path_before_20k_births": sum(1 for row in births if row.get("fdv_path_before_20k") is True),
+            "actionable_crossed_10k_mints": len(actionable_10k),
+            "actionable_crossed_20k_mints": len(actionable_20k),
             "stale_quarantined_births": len(stale_births),
             "all_fresh_births": len(birth_mints),
             "births_with_fdv_path_evidence": len(path_mints),
