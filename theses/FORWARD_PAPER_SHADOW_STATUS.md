@@ -1,10 +1,17 @@
 # Forward Paper/Shadow Status
 
-Readiness: `paper_shadow_scaffold_ready_disabled`
+Readiness: `paper_bankroll_tracker_ready`
 
-The scaffold is disabled by default. It only stores candidate rule designs and a future decision-log schema.
+Paper simulation is explicitly enabled for research tracking only.
 
-Config: `/private/var/folders/x9/dq8sv7hj50j3j38_n6tmdv180000gn/T/pytest-of-dianeposs/pytest-571/test_forward_paper_shadow_cli_0/data/forward_observation/official_lifecycle_watch_v1/paper_shadow_rule_candidates.json`
-Decision log: `/private/var/folders/x9/dq8sv7hj50j3j38_n6tmdv180000gn/T/pytest-of-dianeposs/pytest-571/test_forward_paper_shadow_cli_0/data/forward_observation/official_lifecycle_watch_v1/paper_shadow_decisions.jsonl`
+Starting paper bankroll: `$100.0`
+Current paper bankroll: `$100.0`
+Max paper allocation per buy: `10.00%` of current bankroll
+Next max paper position: `$10.0`
 
-No live trades, paper trades, wallet actions, orders, swaps, alerts, PnL, or profitability claims are enabled.
+Config: `/Volumes/ORICO/MemeTraderPro/data/forward_observation/official_lifecycle_watch_v1/paper_shadow_rule_candidates.json`
+State: `/Volumes/ORICO/MemeTraderPro/data/forward_observation/official_lifecycle_watch_v1/paper_bankroll_state.json`
+Ledger: `/Volumes/ORICO/MemeTraderPro/data/forward_observation/official_lifecycle_watch_v1/paper_bankroll_ledger.jsonl`
+Rule performance: `/Volumes/ORICO/MemeTraderPro/data/forward_observation/official_lifecycle_watch_v1/paper_rule_performance.json`
+
+This is paper-only accounting. No live trades, wallet actions, orders, swaps, alerts, private keys, or execution logic are enabled.
