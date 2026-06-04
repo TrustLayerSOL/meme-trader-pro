@@ -580,7 +580,12 @@ def run_official_lifecycle_live_smoke(
         max_runtime_minutes=max_runtime_minutes,
         enable_birth_watch_candidates=True,
     )
-    source = PumpFunCreateWebSocketCandidateSource(config=forward_config, timeout_seconds=2.0)
+    source = PumpFunCreateWebSocketCandidateSource(
+        config=forward_config,
+        timeout_seconds=0.25,
+        max_signatures_per_fetch=32,
+        candidate_hydration_workers=32,
+    )
     fetcher = HeliusMintBirthWatchFollowupFetcher(data_root=config.root)
     availability = source.availability()
     if not availability.get("available"):
@@ -616,7 +621,7 @@ def run_official_lifecycle_live_smoke(
             fetcher,
             signatures_per_mint=signatures_per_mint,
             transactions_per_mint=transactions_per_mint,
-            max_workers=8,
+            max_workers=32,
         )
         for followup in followup_results:
             if births_seen >= int(target_births):

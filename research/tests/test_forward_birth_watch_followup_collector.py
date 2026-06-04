@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 from research.mtp_research.validation.forward_birth_watch_followup_collector import (
@@ -620,6 +621,27 @@ def test_websocket_birth_candidate_source_drains_multiple_create_notifications()
 
     assert [row["signature"] for row in candidates] == ["create-sig-1", "create-sig-2"]
     assert source.processed_signatures == {"create-sig-1", "create-sig-2"}
+
+
+def test_websocket_birth_candidate_source_hydrates_candidates_concurrently() -> None:
+    source = PumpFunCreateWebSocketCandidateSource(
+        rpc_url="https://mainnet.helius-rpc.com/?api-key=test",
+        timeout_seconds=0.1,
+        candidate_hydration_workers=2,
+    )
+
+    def slow_candidate(signature: str) -> dict:
+        time.sleep(0.15)
+        return {"mint": f"mint-{signature}", "signature": signature}
+
+    source._candidate_from_signature = slow_candidate  # type: ignore[method-assign]
+    start = time.monotonic()
+
+    candidates = source._candidates_from_signatures(["create-sig-1", "create-sig-2"])
+
+    elapsed = time.monotonic() - start
+    assert [row["signature"] for row in candidates] == ["create-sig-1", "create-sig-2"]
+    assert elapsed < 0.25
 
 
 def test_signature_from_logs_notification_requires_create_log() -> None:

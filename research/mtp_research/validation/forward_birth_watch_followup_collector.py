@@ -7,6 +7,7 @@ It does not trade, validate, backtest, optimize, or generate strategy logic.
 from __future__ import annotations
 
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import threading
 import time
@@ -143,6 +144,7 @@ class PumpFunCreateWebSocketCandidateSource:
         websocket_url: str | None = None,
         timeout_seconds: float = 10.0,
         max_signatures_per_fetch: int = 50,
+        candidate_hydration_workers: int = 16,
         rpc_post: Any | None = None,
         ws_connect: Any | None = None,
         scanner: PumpFunCreateScanner | None = None,
@@ -152,6 +154,7 @@ class PumpFunCreateWebSocketCandidateSource:
         self.websocket_url = websocket_url or rpc_url_to_websocket_url(self.rpc_url)
         self.timeout_seconds = max(0.1, float(timeout_seconds))
         self.max_signatures_per_fetch = max(1, int(max_signatures_per_fetch))
+        self.candidate_hydration_workers = max(1, int(candidate_hydration_workers))
         self._rpc_post = rpc_post or _post_json_rpc
         self._ws_connect = ws_connect
         self.scanner = scanner or PumpFunCreateScanner()
@@ -212,16 +215,24 @@ class PumpFunCreateWebSocketCandidateSource:
             time.sleep(min(0.05, max(0.01, self.timeout_seconds)))
         if self._has_queued_signatures():
             # Allow same-burst create notifications to land before hydrating.
-            settle_deadline = time.monotonic() + min(0.2, self.timeout_seconds)
+            settle_deadline = time.monotonic() + min(0.05, self.timeout_seconds)
             while time.monotonic() < settle_deadline and self._queued_signature_count() < self.max_signatures_per_fetch:
                 time.sleep(0.01)
         create_signatures = self._drain_signatures()
-        candidates: list[dict[str, Any]] = []
-        for signature in create_signatures:
-            candidate = self._candidate_from_signature(signature)
-            if candidate is not None:
-                candidates.append(candidate)
-        return candidates
+        return self._candidates_from_signatures(create_signatures)
+
+    def _candidates_from_signatures(self, signatures: list[str]) -> list[dict[str, Any]]:
+        if not signatures:
+            return []
+        workers = max(1, min(self.candidate_hydration_workers, len(signatures)))
+        indexed: list[tuple[int, dict[str, Any]]] = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self._candidate_from_signature, signature): index for index, signature in enumerate(signatures)}
+            for future in as_completed(futures):
+                candidate = future.result()
+                if candidate is not None:
+                    indexed.append((futures[future], candidate))
+        return [candidate for _index, candidate in sorted(indexed, key=lambda item: item[0])]
 
     def _ensure_listener_started(self) -> None:
         with self._lock:
