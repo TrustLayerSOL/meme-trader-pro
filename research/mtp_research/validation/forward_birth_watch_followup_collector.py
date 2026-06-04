@@ -62,6 +62,7 @@ class BirthWatchFollowupFetcher(Protocol):
         *,
         signatures_per_mint: int,
         transactions_per_mint: int,
+        followup_addresses: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         ...
 
@@ -97,6 +98,7 @@ class MockBirthWatchFollowupFetcher:
         *,
         signatures_per_mint: int,
         transactions_per_mint: int,
+        followup_addresses: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         self.fetch_calls += 1
         return [dict(row) for row in self.events_by_mint.get(mint, [])[:transactions_per_mint]]
@@ -322,10 +324,11 @@ class HeliusMintBirthWatchFollowupFetcher:
         *,
         signatures_per_mint: int,
         transactions_per_mint: int,
+        followup_addresses: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if not self.rpc_url:
             return []
-        signatures = self._fetch_signatures(mint, signatures_per_mint)
+        signatures = self._fetch_signatures_for_addresses(mint, followup_addresses or [], signatures_per_mint)
         events: list[dict[str, Any]] = []
         for signature in signatures[: max(0, int(transactions_per_mint))]:
             if signature in self.seen_signatures:
@@ -350,6 +353,21 @@ class HeliusMintBirthWatchFollowupFetcher:
                 candidate["status"] = "active"
                 events.append(candidate)
         return events
+
+    def _fetch_signatures_for_addresses(self, mint: str, followup_addresses: list[str], limit: int) -> list[str]:
+        signatures: list[str] = []
+        seen_addresses: set[str] = set()
+        seen_signatures: set[str] = set()
+        for address in [mint, *followup_addresses]:
+            if not address or address in seen_addresses:
+                continue
+            seen_addresses.add(address)
+            for signature in self._fetch_signatures(address, limit):
+                if signature in seen_signatures:
+                    continue
+                seen_signatures.add(signature)
+                signatures.append(signature)
+        return signatures
 
     def _fetch_signatures(self, mint: str, limit: int) -> list[str]:
         payload = {

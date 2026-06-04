@@ -105,6 +105,34 @@ def test_lifecycle_state_transitions_and_active_watch_retention(tmp_path: Path) 
     assert machine.active_watch_mints() == []
 
 
+def test_record_birth_preserves_pumpfun_curve_followup_addresses(tmp_path: Path) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    machine = OfficialLifecycleStateMachine(config)
+
+    machine.record_birth(
+        {
+            "mint": "mint-a",
+            "creator": "creator-a",
+            "create_signature": "sig-a",
+            "create_time": 100,
+            "observed_time": 101,
+            "first_followup_attempt_time": 102,
+            "pool_address": "curve-a",
+            "bonding_curve": "curve-a",
+            "associated_bonding_curve": "assoc-curve-a",
+        }
+    )
+
+    birth = _read_jsonl(config.births_path)[0]
+    state_row = machine.state["mints"]["mint-a"]
+    assert birth["bonding_curve"] == "curve-a"
+    assert birth["associated_bonding_curve"] == "assoc-curve-a"
+    assert birth["pool_address"] == "curve-a"
+    assert state_row["bonding_curve"] == "curve-a"
+    assert state_row["associated_bonding_curve"] == "assoc-curve-a"
+
+
 def test_quality_audit_flags_dropped_trigger_watch_and_milestone_ordering(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     initialize_official_lifecycle_namespace(config)
@@ -183,3 +211,7 @@ def test_guardrail_text_has_no_execution_or_trading_logic(tmp_path: Path) -> Non
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

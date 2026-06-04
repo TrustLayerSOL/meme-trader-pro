@@ -280,6 +280,9 @@ class OfficialLifecycleStateMachine:
             "observation_id": birth.get("observation_id") or f"official-birth-{mint[:12]}-{int(now)}",
             "mint": mint,
             "creator": birth.get("creator"),
+            "pool_address": birth.get("pool_address") or birth.get("bonding_curve"),
+            "bonding_curve": birth.get("bonding_curve") or birth.get("pool_address"),
+            "associated_bonding_curve": birth.get("associated_bonding_curve"),
             "state": "birth_watch",
             "create_signature": birth.get("create_signature") or birth.get("transaction_signature") or birth.get("signature"),
             "create_time": create_time,
@@ -507,6 +510,7 @@ def run_official_lifecycle_live_smoke(
                 mint,
                 signatures_per_mint=signatures_per_mint,
                 transactions_per_mint=transactions_per_mint,
+                followup_addresses=_followup_addresses(candidate),
             )
             first_fdv = next((_num(event.get("fdv_proxy")) for event in events if _num(event.get("fdv_proxy")) is not None), None)
             birth_row = {
@@ -514,6 +518,9 @@ def run_official_lifecycle_live_smoke(
                 "mint": mint,
                 "creator": candidate.get("creator"),
                 "create_signature": candidate.get("transaction_signature") or candidate.get("signature") or candidate.get("create_signature"),
+                "pool_address": candidate.get("pool_address") or candidate.get("bonding_curve"),
+                "bonding_curve": candidate.get("bonding_curve") or candidate.get("pool_address"),
+                "associated_bonding_curve": candidate.get("associated_bonding_curve"),
                 "create_time": _num(candidate.get("launch_time") or candidate.get("block_time") or candidate.get("create_time")),
                 "observed_time": _num(candidate.get("observed_at")) or first_attempt,
                 "first_followup_attempt_time": first_attempt,
@@ -969,6 +976,21 @@ def _row_count(path: Path) -> int:
 
 def _mint(row: dict[str, Any]) -> str:
     return str(row.get("mint") or row.get("token_mint") or "")
+
+
+def _followup_addresses(row: dict[str, Any]) -> list[str]:
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for key in ["pool_address", "bonding_curve", "associated_bonding_curve"]:
+        address = row.get(key)
+        if not address:
+            continue
+        address = str(address)
+        if address in seen:
+            continue
+        seen.add(address)
+        addresses.append(address)
+    return addresses
 
 
 def _num(value: Any) -> float | None:

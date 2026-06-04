@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from research.mtp_research.validation.forward_birth_watch_followup_collector import (
+    HeliusMintBirthWatchFollowupFetcher,
     MockBirthWatchCandidateSource,
     MockBirthWatchFollowupFetcher,
     PumpFunCreateWebSocketCandidateSource,
@@ -10,6 +11,7 @@ from research.mtp_research.validation.forward_birth_watch_followup_collector imp
     run_birth_watch_followup_collection,
     rpc_url_to_websocket_url,
 )
+from research.mtp_research.validation import forward_birth_watch_followup_collector as followup_collector
 
 
 def test_birth_watch_followup_plan_is_bounded_and_dry_run(tmp_path: Path) -> None:
@@ -157,6 +159,51 @@ def test_birth_watch_followup_collection_requires_execute(tmp_path: Path) -> Non
     assert result["execute"] is False
     assert result["network_calls_made"] == 0
     assert fetcher.fetch_calls == 0
+
+
+def test_helius_followup_queries_curve_addresses_when_mint_history_is_empty(tmp_path: Path, monkeypatch) -> None:
+    signature_addresses: list[str] = []
+
+    def fake_post(_url: str, payload: dict, _timeout: int) -> dict:
+        method = payload["method"]
+        if method == "getSignaturesForAddress":
+            address = payload["params"][0]
+            signature_addresses.append(address)
+            if address == "curve-a":
+                return {"result": [{"signature": "trade-sig-a"}]}
+            return {"result": []}
+        if method == "getTransaction":
+            return {"result": {"signature": "trade-sig-a"}}
+        raise AssertionError(f"unexpected RPC method: {method}")
+
+    def fake_normalize(*_args, **_kwargs) -> dict:
+        return {
+            "mint": "mint-a",
+            "event_type": "pumpfun_trade",
+            "fdv_proxy": 25_000,
+            "transaction_signature": "trade-sig-a",
+        }
+
+    monkeypatch.setattr(followup_collector, "normalize_pumpfun_transaction_event", fake_normalize)
+    monkeypatch.setattr(followup_collector, "build_live_event_candidate", lambda event, **_kwargs: dict(event))
+
+    fetcher = HeliusMintBirthWatchFollowupFetcher(
+        rpc_url="https://mock-helius.invalid",
+        rpc_post=fake_post,
+        data_root=tmp_path,
+    )
+
+    events = fetcher.fetch_for_mint(
+        "mint-a",
+        signatures_per_mint=4,
+        transactions_per_mint=2,
+        followup_addresses=["curve-a", "assoc-curve-a"],
+    )
+
+    assert signature_addresses == ["mint-a", "curve-a", "assoc-curve-a"]
+    assert events[0]["mint"] == "mint-a"
+    assert events[0]["fdv_proxy"] == 25_000
+    assert fetcher.requests_used == 4
 
 
 def test_immediate_birth_followup_writes_freshness_sidecar_files(tmp_path: Path) -> None:
