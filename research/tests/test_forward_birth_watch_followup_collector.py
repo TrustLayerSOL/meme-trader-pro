@@ -644,6 +644,25 @@ def test_websocket_birth_candidate_source_hydrates_candidates_concurrently() -> 
     assert elapsed < 0.25
 
 
+def test_websocket_create_transaction_hydration_uses_processed_commitment() -> None:
+    captured_payloads: list[dict] = []
+
+    def fake_post(_url: str, payload: dict, _timeout: int) -> dict:
+        captured_payloads.append(payload)
+        return {"result": {"signature": "create-sig"}}
+
+    source = PumpFunCreateWebSocketCandidateSource(
+        rpc_url="https://mainnet.helius-rpc.com/?api-key=test",
+        rpc_post=fake_post,
+    )
+
+    tx = source._fetch_transaction("create-sig")
+
+    assert tx["signature"] == "create-sig"
+    assert captured_payloads[0]["method"] == "getTransaction"
+    assert captured_payloads[0]["params"][1]["commitment"] == "processed"
+
+
 def test_signature_from_logs_notification_requires_create_log() -> None:
     from research.mtp_research.validation.forward_birth_watch_followup_collector import (
         signature_from_create_logs_notification,
