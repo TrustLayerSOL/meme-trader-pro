@@ -165,6 +165,8 @@ class PumpFunCreateWebSocketCandidateSource:
         self._listener_thread: threading.Thread | None = None
         self._listener_stop = threading.Event()
         self._listener_errors = 0
+        self._hydration_executor = ThreadPoolExecutor(max_workers=self.candidate_hydration_workers)
+        self._hydration_futures: dict[Any, str] = {}
 
     @property
     def requests_used(self) -> int:
@@ -186,6 +188,7 @@ class PumpFunCreateWebSocketCandidateSource:
         thread = self._listener_thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.0)
+        self._hydration_executor.shutdown(wait=False, cancel_futures=True)
 
     def availability(self) -> dict[str, Any]:
         if not self.websocket_url or not self.rpc_url:
@@ -204,6 +207,7 @@ class PumpFunCreateWebSocketCandidateSource:
             "candidate_lane": "pumpfun_birth_watch",
             "timeout_seconds": self.timeout_seconds,
             "listener_mode": "persistent_signature_queue",
+            "hydration_mode": "background_completed_candidate_queue",
         }
 
     def fetch_candidates(self) -> list[dict[str, Any]]:
@@ -211,15 +215,23 @@ class PumpFunCreateWebSocketCandidateSource:
             return []
         self._ensure_listener_started()
         deadline = time.monotonic() + self.timeout_seconds
-        while not self._has_queued_signatures() and time.monotonic() < deadline:
-            time.sleep(min(0.05, max(0.01, self.timeout_seconds)))
-        if self._has_queued_signatures():
-            # Allow same-burst create notifications to land before hydrating.
-            settle_deadline = time.monotonic() + min(0.05, self.timeout_seconds)
-            while time.monotonic() < settle_deadline and self._queued_signature_count() < self.max_signatures_per_fetch:
-                time.sleep(0.01)
-        create_signatures = self._drain_signatures()
-        return self._candidates_from_signatures(create_signatures)
+        while time.monotonic() < deadline:
+            self._submit_queued_signature_hydrations()
+            candidates = self._drain_completed_hydrations(limit=self.max_signatures_per_fetch)
+            if candidates:
+                settle_deadline = time.monotonic() + min(0.02, self.timeout_seconds)
+                while len(candidates) < self.max_signatures_per_fetch and time.monotonic() < settle_deadline:
+                    self._submit_queued_signature_hydrations()
+                    candidates.extend(
+                        self._drain_completed_hydrations(limit=self.max_signatures_per_fetch - len(candidates))
+                    )
+                    if len(candidates) >= self.max_signatures_per_fetch:
+                        break
+                    time.sleep(0.005)
+                return candidates
+            time.sleep(0.01)
+        self._submit_queued_signature_hydrations()
+        return self._drain_completed_hydrations(limit=self.max_signatures_per_fetch)
 
     def _candidates_from_signatures(self, signatures: list[str]) -> list[dict[str, Any]]:
         if not signatures:
@@ -320,6 +332,27 @@ class PumpFunCreateWebSocketCandidateSource:
             while self._signature_queue and len(signatures) < self.max_signatures_per_fetch:
                 signatures.append(self._signature_queue.popleft())
         return signatures
+
+    def _submit_queued_signature_hydrations(self) -> None:
+        for signature in self._drain_signatures():
+            future = self._hydration_executor.submit(self._candidate_from_signature, signature)
+            self._hydration_futures[future] = signature
+
+    def _drain_completed_hydrations(self, *, limit: int) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for future in list(self._hydration_futures):
+            if len(candidates) >= max(1, int(limit)):
+                break
+            if not future.done():
+                continue
+            self._hydration_futures.pop(future, None)
+            try:
+                candidate = future.result()
+            except Exception:
+                candidate = None
+            if candidate is not None:
+                candidates.append(candidate)
+        return candidates
 
     def _legacy_fetch_candidates(self) -> list[dict[str, Any]]:
         if not self.websocket_url or not self.rpc_url:

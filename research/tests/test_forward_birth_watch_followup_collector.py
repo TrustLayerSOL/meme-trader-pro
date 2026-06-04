@@ -644,6 +644,86 @@ def test_websocket_birth_candidate_source_hydrates_candidates_concurrently() -> 
     assert elapsed < 0.25
 
 
+def test_websocket_fetch_candidates_returns_fast_hydrations_before_slow_batch_member() -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages = iter(
+                [
+                    json.dumps({"id": "mtp-pumpfun-create-logs-subscribe", "result": 1}),
+                    json.dumps(
+                        {
+                            "method": "logsNotification",
+                            "params": {
+                                "result": {
+                                    "value": {
+                                        "signature": "fast-sig",
+                                        "err": None,
+                                        "logs": ["Program log: Instruction: CreateV2"],
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "method": "logsNotification",
+                            "params": {
+                                "result": {
+                                    "value": {
+                                        "signature": "slow-sig",
+                                        "err": None,
+                                        "logs": ["Program log: Instruction: CreateV2"],
+                                    }
+                                }
+                            },
+                        }
+                    ),
+                ]
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def send(self, _message):
+            return None
+
+        def recv(self, timeout=None):
+            try:
+                return next(self.messages)
+            except StopIteration:
+                raise TimeoutError
+
+    def connect(*_args, **_kwargs):
+        return FakeWebSocket()
+
+    source = PumpFunCreateWebSocketCandidateSource(
+        rpc_url="https://mainnet.helius-rpc.com/?api-key=test",
+        ws_connect=connect,
+        timeout_seconds=0.1,
+        candidate_hydration_workers=2,
+    )
+
+    def candidate_from_signature(signature: str) -> dict:
+        if signature == "slow-sig":
+            time.sleep(0.4)
+        return {"mint": f"mint-{signature}", "signature": signature}
+
+    source._candidate_from_signature = candidate_from_signature  # type: ignore[method-assign]
+
+    try:
+        start = time.monotonic()
+        candidates = source.fetch_candidates()
+        elapsed = time.monotonic() - start
+    finally:
+        source.close()
+
+    assert [row["signature"] for row in candidates] == ["fast-sig"]
+    assert elapsed < 0.25
+
+
 def test_websocket_create_transaction_hydration_uses_confirmed_commitment() -> None:
     captured_payloads: list[dict] = []
 
