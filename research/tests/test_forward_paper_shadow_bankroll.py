@@ -185,6 +185,74 @@ def test_lifecycle_paper_rule_processor_records_entry_and_maturity_exit(tmp_path
     assert final_state["rule_performance"]["PBCL_ENTRY_20K_CONFIRMATION_EFFICIENCY"]["realized_pnl_usd"] > 0
 
 
+def test_lifecycle_paper_rule_processor_skips_far_above_trigger_chase(tmp_path: Path) -> None:
+    initialized = initialize_forward_paper_shadow(
+        data_root=tmp_path,
+        execute=True,
+        enable_paper_simulation=True,
+        starting_bankroll_usd=100,
+        max_position_fraction=0.10,
+    )
+    observation_root = Path(initialized["bankroll_state_path"]).parent
+
+    result = process_lifecycle_path_for_paper_rules(
+        observation_root,
+        {
+            "mint": "mint-a",
+            "timestamp": 1,
+            "fdv_proxy": 69_954_418_736,
+            "crossed_20k": True,
+            "crossed_50k": True,
+            "crossed_100k": True,
+            "crossed_500k": True,
+            "crossed_1m": True,
+            "state": "matured_reached_1m",
+        },
+        {"first_followup_before_20k": True},
+    )
+
+    assert result["decisions_written"] == 0
+    assert _read_jsonl(Path(initialized["bankroll_ledger_path"])) == []
+
+
+def test_lifecycle_paper_rule_processor_does_not_exit_before_entry_timestamp(tmp_path: Path) -> None:
+    initialized = initialize_forward_paper_shadow(
+        data_root=tmp_path,
+        execute=True,
+        enable_paper_simulation=True,
+        starting_bankroll_usd=100,
+        max_position_fraction=0.10,
+    )
+    observation_root = Path(initialized["bankroll_state_path"]).parent
+    process_lifecycle_path_for_paper_rules(
+        observation_root,
+        {
+            "mint": "mint-a",
+            "timestamp": 100,
+            "fdv_proxy": 22_000,
+            "crossed_20k": True,
+            "state": "trigger_qualified_active_watch",
+        },
+        {"first_followup_before_20k": True},
+    )
+    result = process_lifecycle_path_for_paper_rules(
+        observation_root,
+        {
+            "mint": "mint-a",
+            "timestamp": 90,
+            "fdv_proxy": 1_100,
+            "state": "matured_terminal_collapse",
+            "drawdown_pct": 95,
+        },
+        {"first_followup_before_20k": True},
+    )
+
+    ledger_rows = _read_jsonl(Path(initialized["bankroll_ledger_path"]))
+    assert result["decisions_written"] == 0
+    assert len(ledger_rows) == 1
+    assert ledger_rows[0]["side"] == "paper_buy"
+
+
 def test_paper_bankroll_status_reports_rule_performance(tmp_path: Path) -> None:
     initialized = initialize_forward_paper_shadow(
         data_root=tmp_path,

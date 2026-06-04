@@ -19,6 +19,11 @@ READINESS = "paper_shadow_scaffold_ready_disabled"
 PAPER_READINESS = "paper_bankroll_tracker_ready"
 DEFAULT_STARTING_BANKROLL_USD = 100.0
 DEFAULT_MAX_POSITION_FRACTION = 0.10
+ENTRY_CHASE_GUARD_MAX_FDV = {
+    "10k": 20_000.0,
+    "15k": 30_000.0,
+    "20k": 50_000.0,
+}
 PAPER_STATE_FILE = "paper_bankroll_state.json"
 PAPER_LEDGER_FILE = "paper_bankroll_ledger.jsonl"
 PAPER_RULE_PERFORMANCE_FILE = "paper_rule_performance.json"
@@ -310,7 +315,7 @@ def _paper_decisions_for_path(state: dict[str, Any], path_row: dict[str, Any], s
         if entry:
             decisions.append(entry)
     if mint in open_positions:
-        exit_decision = _exit_decision_for_path(mint, fdv, timestamp, path_row)
+        exit_decision = _exit_decision_for_path(mint, fdv, timestamp, path_row, open_positions[mint])
         if exit_decision:
             decisions.append(exit_decision)
     return decisions
@@ -334,6 +339,8 @@ def _entry_decision_for_path(
         trigger = "10k"
     else:
         return None
+    if fdv > ENTRY_CHASE_GUARD_MAX_FDV[trigger]:
+        return None
     return {
         "paper_decision_id": f"entry:{mint}:{rule_id}",
         "timestamp": timestamp,
@@ -346,7 +353,15 @@ def _entry_decision_for_path(
     }
 
 
-def _exit_decision_for_path(mint: str, fdv: float, timestamp: Any, path_row: dict[str, Any]) -> dict[str, Any] | None:
+def _exit_decision_for_path(
+    mint: str,
+    fdv: float,
+    timestamp: Any,
+    path_row: dict[str, Any],
+    position: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not _exit_timestamp_is_after_entry(timestamp, position):
+        return None
     state = str(path_row.get("state") or "")
     drawdown = _num(path_row.get("drawdown_pct"))
     if state in {"matured_reached_1m", "matured_inactive_timeout", "matured_max_age", "matured_manual_stop"}:
@@ -366,6 +381,14 @@ def _exit_decision_for_path(mint: str, fdv: float, timestamp: Any, path_row: dic
         "paper_price_usd": fdv,
         "reason": reason,
     }
+
+
+def _exit_timestamp_is_after_entry(timestamp: Any, position: dict[str, Any]) -> bool:
+    exit_time = _num(timestamp)
+    entry_time = _num(position.get("opened_at"))
+    if exit_time is None or entry_time is None:
+        return True
+    return exit_time > entry_time
 
 
 def _fresh_before(state_row: dict[str, Any], level: str) -> bool:
