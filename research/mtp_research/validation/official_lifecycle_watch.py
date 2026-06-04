@@ -537,7 +537,7 @@ def run_official_lifecycle_live_smoke(
         max_runtime_minutes=max_runtime_minutes,
         enable_birth_watch_candidates=True,
     )
-    source = PumpFunCreateWebSocketCandidateSource(config=forward_config, timeout_seconds=10.0)
+    source = PumpFunCreateWebSocketCandidateSource(config=forward_config, timeout_seconds=2.0)
     fetcher = HeliusMintBirthWatchFollowupFetcher(data_root=config.root)
     availability = source.availability()
     if not availability.get("available"):
