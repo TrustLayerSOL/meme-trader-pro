@@ -19,6 +19,11 @@ READINESS = "paper_shadow_scaffold_ready_disabled"
 PAPER_READINESS = "paper_bankroll_tracker_ready"
 DEFAULT_STARTING_BANKROLL_USD = 100.0
 DEFAULT_MAX_POSITION_FRACTION = 0.10
+PAPER_STATE_FILE = "paper_bankroll_state.json"
+PAPER_LEDGER_FILE = "paper_bankroll_ledger.jsonl"
+PAPER_RULE_PERFORMANCE_FILE = "paper_rule_performance.json"
+PAPER_DECISIONS_FILE = "paper_shadow_decisions.jsonl"
+PAPER_CONFIG_FILE = "paper_shadow_rule_candidates.json"
 
 
 def initialize_forward_paper_shadow(
@@ -31,11 +36,11 @@ def initialize_forward_paper_shadow(
 ) -> dict[str, Any]:
     root = Path(data_root or data_lake_root()).expanduser()
     observation_root = root / "data" / "forward_observation" / "official_lifecycle_watch_v1"
-    config_path = observation_root / "paper_shadow_rule_candidates.json"
-    decisions_path = observation_root / "paper_shadow_decisions.jsonl"
-    bankroll_state_path = observation_root / "paper_bankroll_state.json"
-    bankroll_ledger_path = observation_root / "paper_bankroll_ledger.jsonl"
-    rule_performance_path = observation_root / "paper_rule_performance.json"
+    config_path = observation_root / PAPER_CONFIG_FILE
+    decisions_path = observation_root / PAPER_DECISIONS_FILE
+    bankroll_state_path = observation_root / PAPER_STATE_FILE
+    bankroll_ledger_path = observation_root / PAPER_LEDGER_FILE
+    rule_performance_path = observation_root / PAPER_RULE_PERFORMANCE_FILE
     status_path = Path("theses") / "FORWARD_PAPER_SHADOW_STATUS.md"
     if not execute:
         return {
@@ -51,10 +56,11 @@ def initialize_forward_paper_shadow(
         }
     observation_root.mkdir(parents=True, exist_ok=True)
     if enable_paper_simulation:
-        state = build_paper_bankroll_state(
+        state = _load_enabled_state(bankroll_state_path) or build_paper_bankroll_state(
             starting_bankroll_usd=starting_bankroll_usd,
             max_position_fraction=max_position_fraction,
         )
+        _ensure_state_defaults(state)
         config = build_paper_bankroll_config(state)
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         decisions_path.touch(exist_ok=True)
@@ -123,6 +129,7 @@ def build_paper_bankroll_state(
         "next_max_position_usd": _round_money(total * max_position_fraction),
         "open_positions": {},
         "rule_performance": {},
+        "recorded_decision_ids": [],
         "guardrails": [
             "paper_simulation_only",
             "no_wallet_execution",
@@ -175,6 +182,7 @@ def build_paper_bankroll_config(state: dict[str, Any]) -> dict[str, Any]:
 
 def apply_paper_decision(state: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
     updated = json.loads(json.dumps(state))
+    _ensure_state_defaults(updated)
     side = decision.get("side")
     if side == "paper_buy":
         ledger_row = _apply_paper_buy(updated, decision)
@@ -186,6 +194,86 @@ def apply_paper_decision(state: dict[str, Any], decision: dict[str, Any]) -> dic
         raise ValueError("side must be paper_buy, paper_sell, or paper_skip")
     _refresh_next_position_size(updated)
     return {"state": updated, "ledger_row": ledger_row}
+
+
+def process_lifecycle_path_for_paper_rules(
+    observation_root: Path | str,
+    path_row: dict[str, Any],
+    state_row: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    root = Path(observation_root)
+    state_path = root / PAPER_STATE_FILE
+    ledger_path = root / PAPER_LEDGER_FILE
+    decisions_path = root / PAPER_DECISIONS_FILE
+    performance_path = root / PAPER_RULE_PERFORMANCE_FILE
+    state = _load_enabled_state(state_path)
+    if not state:
+        return {"enabled": False, "decisions_written": 0, "ledger_rows_written": 0}
+    _ensure_state_defaults(state)
+    decisions = _paper_decisions_for_path(state, path_row, state_row or {})
+    ledger_rows = []
+    written_decisions = []
+    recorded = set(state.get("recorded_decision_ids") or [])
+    for decision in decisions:
+        decision_id = str(decision["paper_decision_id"])
+        if decision_id in recorded:
+            continue
+        result = apply_paper_decision(state, decision)
+        state = result["state"]
+        ledger_row = {**result["ledger_row"], "paper_decision_id": decision_id, "reason": decision.get("reason")}
+        ledger_rows.append(ledger_row)
+        written_decisions.append(_decision_log_row(decision, ledger_row))
+        recorded.add(decision_id)
+    state["recorded_decision_ids"] = sorted(recorded)
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    performance_path.write_text(json.dumps(state["rule_performance"], indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if ledger_rows:
+        _append_jsonl(ledger_path, ledger_rows)
+        _append_jsonl(decisions_path, written_decisions)
+    return {
+        "enabled": True,
+        "decisions_written": len(written_decisions),
+        "ledger_rows_written": len(ledger_rows),
+        "current_bankroll_usd": state["total_bankroll_usd"],
+        "next_max_position_usd": state["next_max_position_usd"],
+    }
+
+
+def paper_bankroll_status(*, data_root: Path | str | None = None) -> dict[str, Any]:
+    root = Path(data_root or data_lake_root()).expanduser()
+    observation_root = root / "data" / "forward_observation" / "official_lifecycle_watch_v1"
+    state_path = observation_root / PAPER_STATE_FILE
+    ledger_path = observation_root / PAPER_LEDGER_FILE
+    performance_path = observation_root / PAPER_RULE_PERFORMANCE_FILE
+    state = _load_enabled_state(state_path)
+    if not state:
+        return {
+            "enabled": False,
+            "readiness": READINESS,
+            "current_bankroll_usd": None,
+            "next_max_position_usd": None,
+            "ledger_rows": _row_count(ledger_path),
+            "open_position_count": 0,
+            "rule_performance": {},
+            "state_path": str(state_path),
+            "ledger_path": str(ledger_path),
+            "rule_performance_path": str(performance_path),
+        }
+    _ensure_state_defaults(state)
+    return {
+        "enabled": True,
+        "readiness": PAPER_READINESS,
+        "current_bankroll_usd": state["total_bankroll_usd"],
+        "cash_bankroll_usd": state["cash_bankroll_usd"],
+        "next_max_position_usd": state["next_max_position_usd"],
+        "ledger_rows": _row_count(ledger_path),
+        "open_position_count": len(state.get("open_positions") or {}),
+        "open_positions": state.get("open_positions") or {},
+        "rule_performance": state.get("rule_performance") or {},
+        "state_path": str(state_path),
+        "ledger_path": str(ledger_path),
+        "rule_performance_path": str(performance_path),
+    }
 
 
 def summarize_rule_performance(ledger_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -207,6 +295,101 @@ def summarize_rule_performance(ledger_rows: list[dict[str, Any]]) -> dict[str, d
         else:
             stats["skips"] += 1
     return performance
+
+
+def _paper_decisions_for_path(state: dict[str, Any], path_row: dict[str, Any], state_row: dict[str, Any]) -> list[dict[str, Any]]:
+    mint = str(path_row.get("mint") or state_row.get("mint") or "")
+    fdv = _num(path_row.get("fdv_proxy"))
+    timestamp = path_row.get("timestamp")
+    if not mint or fdv is None or fdv <= 0:
+        return []
+    decisions: list[dict[str, Any]] = []
+    open_positions = state.get("open_positions") or {}
+    if mint not in open_positions and not _has_recorded_entry(state, mint):
+        entry = _entry_decision_for_path(mint, fdv, timestamp, path_row, state_row)
+        if entry:
+            decisions.append(entry)
+    if mint in open_positions:
+        exit_decision = _exit_decision_for_path(mint, fdv, timestamp, path_row)
+        if exit_decision:
+            decisions.append(exit_decision)
+    return decisions
+
+
+def _entry_decision_for_path(
+    mint: str,
+    fdv: float,
+    timestamp: Any,
+    path_row: dict[str, Any],
+    state_row: dict[str, Any],
+) -> dict[str, Any] | None:
+    if bool(path_row.get("crossed_20k")) and _fresh_before(state_row, "20k"):
+        rule_id = "PBCL_ENTRY_20K_CONFIRMATION_EFFICIENCY"
+        trigger = "20k"
+    elif bool(path_row.get("crossed_15k")) and _fresh_before(state_row, "20k"):
+        rule_id = "PBCL_ENTRY_15K_SPEED_FLOW_BALANCED"
+        trigger = "15k"
+    elif bool(path_row.get("crossed_10k")) and _fresh_before(state_row, "10k"):
+        rule_id = "PBCL_ENTRY_10K_EFFICIENCY_HIGH_BUCKET"
+        trigger = "10k"
+    else:
+        return None
+    return {
+        "paper_decision_id": f"entry:{mint}:{rule_id}",
+        "timestamp": timestamp,
+        "mint": mint,
+        "rule_id": rule_id,
+        "side": "paper_buy",
+        "paper_price_usd": fdv,
+        "trigger_level": trigger,
+        "reason": f"actionable_fdv_path_crossed_{trigger}",
+    }
+
+
+def _exit_decision_for_path(mint: str, fdv: float, timestamp: Any, path_row: dict[str, Any]) -> dict[str, Any] | None:
+    state = str(path_row.get("state") or "")
+    drawdown = _num(path_row.get("drawdown_pct"))
+    if state in {"matured_reached_1m", "matured_inactive_timeout", "matured_max_age", "matured_manual_stop"}:
+        rule_id = "PBCL_EXIT_MAX_AGE_OR_INACTIVE"
+        reason = state
+    elif state == "matured_terminal_collapse" or (drawdown is not None and drawdown >= 70):
+        rule_id = "PBCL_EXIT_TRAILING_DRAWDOWN_WITH_GRACE"
+        reason = "terminal_or_large_drawdown"
+    else:
+        return None
+    return {
+        "paper_decision_id": f"exit:{mint}:{rule_id}",
+        "timestamp": timestamp,
+        "mint": mint,
+        "rule_id": rule_id,
+        "side": "paper_sell",
+        "paper_price_usd": fdv,
+        "reason": reason,
+    }
+
+
+def _fresh_before(state_row: dict[str, Any], level: str) -> bool:
+    key = f"first_followup_before_{level}"
+    fdv_key = f"fdv_path_before_{level}"
+    return state_row.get(key) is True or state_row.get(fdv_key) is True
+
+
+def _has_recorded_entry(state: dict[str, Any], mint: str) -> bool:
+    return any(str(item).startswith(f"entry:{mint}:") for item in state.get("recorded_decision_ids") or [])
+
+
+def _decision_log_row(decision: dict[str, Any], ledger_row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "paper_decision_id": decision.get("paper_decision_id"),
+        "timestamp": decision.get("timestamp"),
+        "mint": decision.get("mint"),
+        "rule_id": decision.get("rule_id"),
+        "side": decision.get("side"),
+        "observed_fdv_proxy": decision.get("paper_price_usd"),
+        "reason": decision.get("reason"),
+        "ledger_bankroll_after_usd": ledger_row.get("bankroll_after_usd"),
+        "no_live_trade_flag": True,
+    }
 
 
 def build_disabled_rule_config() -> dict[str, Any]:
@@ -362,6 +545,35 @@ def _empty_rule_stats() -> dict[str, Any]:
     }
 
 
+def _load_enabled_state(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("enabled") is not True:
+        return None
+    return payload
+
+
+def _ensure_state_defaults(state: dict[str, Any]) -> None:
+    state.setdefault("open_positions", {})
+    state.setdefault("rule_performance", {})
+    state.setdefault("recorded_decision_ids", [])
+    state.setdefault("no_live_trade_flag", True)
+    state.setdefault("mode", "paper_simulation_only")
+    state.setdefault("enabled", True)
+    state.setdefault("guardrails", [])
+    if "max_position_fraction" not in state:
+        state["max_position_fraction"] = DEFAULT_MAX_POSITION_FRACTION
+    if "total_bankroll_usd" not in state:
+        state["total_bankroll_usd"] = state.get("cash_bankroll_usd", DEFAULT_STARTING_BANKROLL_USD)
+    if "cash_bankroll_usd" not in state:
+        state["cash_bankroll_usd"] = state["total_bankroll_usd"]
+    _refresh_next_position_size(state)
+
+
 def _refresh_next_position_size(state: dict[str, Any]) -> None:
     state["next_max_position_usd"] = _round_money(float(state["total_bankroll_usd"]) * float(state["max_position_fraction"]))
 
@@ -377,6 +589,15 @@ def _positive_price(decision: dict[str, Any]) -> float:
     return price
 
 
+def _num(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _required_str(decision: dict[str, Any], key: str) -> str:
     value = decision.get(key)
     if not value:
@@ -390,6 +611,19 @@ def _round_money(value: float) -> float:
 
 def _round_units(value: float) -> float:
     return round(float(value), 12)
+
+
+def _append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _row_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
 
 
 def _status_markdown(config_path: Path, decisions_path: Path) -> str:

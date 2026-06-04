@@ -407,6 +407,7 @@ class OfficialLifecycleStateMachine:
         enriched = _path_row(path, state_row, timestamp=timestamp, fdv=fdv, local_high=local_high, drawdown_pct=drawdown_pct)
         _append_jsonl(self.config.followup_paths_path, [enriched])
         _append_jsonl(self.config.drawdowns_path, [_drawdown_row(enriched)])
+        _process_optional_paper_shadow(self.config.observation_root, enriched, state_row)
         if previous_state != new_state:
             self._transition(mint, previous_state, new_state, timestamp, "observed_fdv_path_transition")
         self.save()
@@ -1192,6 +1193,12 @@ def _drawdown_row(path: dict[str, Any]) -> dict[str, Any]:
         "no_reclaim_after_10m": False,
         "source_provenance": path.get("source_provenance"),
     }
+
+
+def _process_optional_paper_shadow(observation_root: Path, path_row: dict[str, Any], state_row: dict[str, Any]) -> None:
+    from research.mtp_research.validation.forward_paper_shadow import process_lifecycle_path_for_paper_rules
+
+    process_lifecycle_path_for_paper_rules(observation_root, path_row, state_row)
 
 
 def _next_state(
