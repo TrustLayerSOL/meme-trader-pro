@@ -107,6 +107,7 @@ class OfficialLifecycleConfig:
     max_observation_age_minutes: int = 240
     inactive_timeout_minutes: int = 30
     maturity_followup_after_20k_minutes: int = 120
+    max_birth_to_first_followup_seconds: float = 5.0
     max_helius_credits_per_run: int = 50_000
     global_observation_credit_cap: int = 500_000
     target_crossed_20k: int = 300
@@ -157,6 +158,10 @@ class OfficialLifecycleConfig:
         return self.observation_root / "metadata.jsonl"
 
     @property
+    def stale_births_path(self) -> Path:
+        return self.observation_root / "stale_births.jsonl"
+
+    @property
     def drawdowns_path(self) -> Path:
         return self.observation_root / "drawdowns.jsonl"
 
@@ -187,6 +192,7 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
             config.followup_paths_path,
             config.events_path,
             config.metadata_path,
+            config.stale_births_path,
             config.drawdowns_path,
             config.transitions_path,
             config.status_path,
@@ -202,6 +208,7 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
         config.followup_paths_path,
         config.events_path,
         config.metadata_path,
+        config.stale_births_path,
         config.drawdowns_path,
         config.transitions_path,
         config.helius_ws_raw_path,
@@ -240,6 +247,7 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
             "max_observation_age_minutes": config.max_observation_age_minutes,
             "inactive_timeout_minutes": config.inactive_timeout_minutes,
             "maturity_followup_after_20k_minutes": config.maturity_followup_after_20k_minutes,
+            "max_birth_to_first_followup_seconds": config.max_birth_to_first_followup_seconds,
             "max_helius_credits_per_run": config.max_helius_credits_per_run,
             "global_observation_credit_cap": config.global_observation_credit_cap,
         },
@@ -482,6 +490,29 @@ def collect_initial_birth_followups(
     return sorted(results, key=lambda row: row["index"])
 
 
+def is_official_fresh_birth(candidate: dict[str, Any], first_attempt: float, *, max_delay_seconds: float = 5.0) -> bool:
+    create_time = _num(candidate.get("launch_time") or candidate.get("block_time") or candidate.get("create_time"))
+    delay = _delta(create_time, first_attempt)
+    return delay is not None and delay <= float(max_delay_seconds)
+
+
+def _stale_birth_row(candidate: dict[str, Any], first_attempt: float, *, max_delay_seconds: float) -> dict[str, Any]:
+    create_time = _num(candidate.get("launch_time") or candidate.get("block_time") or candidate.get("create_time"))
+    return {
+        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "mint": _mint(candidate),
+        "creator": candidate.get("creator"),
+        "create_signature": candidate.get("transaction_signature") or candidate.get("signature") or candidate.get("create_signature"),
+        "create_time": create_time,
+        "observed_time": _num(candidate.get("observed_at")),
+        "first_followup_attempt_time": first_attempt,
+        "create_to_first_followup_seconds": _delta(create_time, first_attempt),
+        "max_birth_to_first_followup_seconds": float(max_delay_seconds),
+        "rejection_reason": "first_followup_exceeded_5s_freshness_gate",
+        "source_provenance": "helius_pumpfun_create_websocket_logs",
+    }
+
+
 def run_official_lifecycle_smoke(
     config: OfficialLifecycleConfig,
     *,
@@ -631,6 +662,22 @@ def run_official_lifecycle_live_smoke(
             if not mint:
                 continue
             first_attempt = followup["first_attempt"]
+            if not is_official_fresh_birth(
+                candidate,
+                first_attempt,
+                max_delay_seconds=config.max_birth_to_first_followup_seconds,
+            ):
+                _append_jsonl(
+                    config.stale_births_path,
+                    [
+                        _stale_birth_row(
+                            candidate,
+                            first_attempt,
+                            max_delay_seconds=config.max_birth_to_first_followup_seconds,
+                        )
+                    ],
+                )
+                continue
             events = followup["events"]
             first_fdv = followup["first_fdv"]
             birth_row = {

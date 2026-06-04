@@ -211,6 +211,15 @@ def test_initial_birth_followups_are_collected_with_curve_addresses() -> None:
     assert fetcher.calls[1]["followup_addresses"] == ["curve-b"]
 
 
+def test_official_fresh_birth_gate_rejects_over_5_second_followup() -> None:
+    from research.mtp_research.validation.official_lifecycle_watch import is_official_fresh_birth
+
+    candidate = {"mint": "mint-a", "block_time": 100}
+
+    assert is_official_fresh_birth(candidate, 104.9, max_delay_seconds=5.0) is True
+    assert is_official_fresh_birth(candidate, 105.1, max_delay_seconds=5.0) is False
+
+
 def test_quality_audit_flags_dropped_trigger_watch_and_milestone_ordering(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     initialize_official_lifecycle_namespace(config)
