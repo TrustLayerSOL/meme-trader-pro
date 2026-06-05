@@ -12,11 +12,11 @@ exec ./trading_env/bin/python -u -m research.mtp_research.validation.run_forward
   --data-root /Volumes/ORICO/MemeTraderPro \
   --target-births 1000 \
   --target-crossed-20k 400 \
-  --max-runtime-minutes 480 \
+  --max-runtime-minutes 600 \
   --max-helius-credits 500000 \
   --max-active-birth-followups 300 \
   --signatures-per-mint 7 \
   --transactions-per-mint 7 \
-  --new-birth-collection-minutes 360 \
+  --new-birth-collection-minutes 480 \
   --post-target-followup-minutes 120 \
   --execute
