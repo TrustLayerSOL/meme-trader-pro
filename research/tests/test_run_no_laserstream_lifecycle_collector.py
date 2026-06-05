@@ -50,6 +50,7 @@ def test_cli_status_prints_v2_paper_shadow_labels_for_no_laserstream(tmp_path: P
     config.paper_shadow_labels_path.write_text(
         (
             '{"mint":"mint-a","official_baseline_entry_eligible":true,'
+            '"confirmed_actionable_crossed_20k":true,'
             '"B3_pass":true,"B4_pass":false,"E2_tracking_started":true,'
             '"no_real_trade":true,"no_paper_trade_enabled":true}\n'
         ),

@@ -67,7 +67,7 @@ def test_baseline_exit_comparison_and_recommendation(tmp_path: Path) -> None:
     assert recommendation["recommendation"] == "A_baseline_all_actionable_20k_with_filter_labels"
     assert recommendation["selected_exit_rule_id"] == "E2"
     assert config["enabled"] is False
-    assert config["selected_entry_universe"] == "baseline_all_actionable_20k"
+    assert config["selected_entry_universe"] == "confirmed_actionable_crossed_20k"
     assert config["attached_filter_labels"] == ["B1", "B2", "B3", "B4"]
 
 

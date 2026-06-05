@@ -95,6 +95,10 @@ def run_baseline_vs_filter_audit(
         "audit_label": AUDIT_LABEL,
         "source_report_root": str(source),
         "baseline_actionable_crossed_20k_count": len(inputs.actionable_rows),
+        "confirmed_actionable_crossed_20k_count": len(inputs.actionable_rows),
+        "raw_all_crossed_20k_count": inputs.summary.get("raw_all_crossed_20k_count"),
+        "raw_actionable_crossed_20k_count": inputs.summary.get("raw_actionable_crossed_20k_count"),
+        "confirmed_crossed_20k_count": inputs.summary.get("confirmed_crossed_20k_count"),
         "all_crossed_20k_count": inputs.summary.get("all_crossed_20k_count"),
         "filter_pass_counts": _filter_pass_counts(labels),
         "best_exit_candidate_on_baseline": recommendation["selected_exit_rule_id"],
@@ -116,7 +120,14 @@ def load_audit_inputs(source_report_root: Path | str) -> AuditInputs:
     source = Path(source_report_root).expanduser()
     rows = _read_jsonl(source / "buy_exit_design_dataset.jsonl")
     summary = _read_json(source / "buy_exit_start_rule_design_summary.json")
-    actionable = [row for row in rows if row.get("actionable_sample_flag") is True and row.get("crossed_20k") is True]
+    has_confirmed_flag = any("confirmed_actionable_crossed_20k" in row for row in rows)
+    actionable = [
+        row
+        for row in rows
+        if row.get("actionable_sample_flag") is True
+        and row.get("crossed_20k") is True
+        and (row.get("confirmed_actionable_crossed_20k") is True if has_confirmed_flag else True)
+    ]
     mint_counts = Counter(str(row.get("mint")) for row in actionable if row.get("mint"))
     duplicate_count = sum(1 for count in mint_counts.values() if count > 1)
     missing_path_count = sum(1 for row in actionable if (row.get("path_row_count") or 0) <= 0)
@@ -141,6 +152,7 @@ def build_rule_labels(actionable_rows: list[dict[str, Any]]) -> list[dict[str, A
         out = {
             "mint": row["mint"],
             "baseline_all_actionable_20k": True,
+            "confirmed_actionable_crossed_20k": row.get("confirmed_actionable_crossed_20k") is not False,
         }
         for rule in BUY_RULES:
             rule_id = rule["rule_id"]
@@ -155,7 +167,7 @@ def build_baseline_path_summary(actionable_rows: list[dict[str, Any]]) -> dict[s
     multiples = [_max_fdv_multiple_after_20k(row) for row in actionable_rows]
     drawdowns = [_num(row.get("max_drawdown_after_20k")) for row in actionable_rows]
     return {
-        "population": "baseline_all_actionable_20k",
+        "population": "confirmed_actionable_crossed_20k",
         "count": len(actionable_rows),
         "reached_30k": _count_crossed(actionable_rows, "30k"),
         "reached_50k": _count_crossed(actionable_rows, "50k"),
@@ -255,7 +267,8 @@ def build_disabled_baseline_config(recommendation: dict[str, Any]) -> dict[str, 
     return {
         "enabled": False,
         "sample_source": "buy_exit_design_dataset",
-        "selected_entry_universe": "baseline_all_actionable_20k",
+        "selected_entry_universe": "confirmed_actionable_crossed_20k",
+        "legacy_entry_universe_name": "baseline_all_actionable_20k",
         "entry_decision_type": "shadow_would_enter_baseline",
         "selected_exit_rule_id": recommendation["selected_exit_rule_id"],
         "attached_filter_labels": ["B1", "B2", "B3", "B4"],
@@ -299,6 +312,8 @@ def write_audit_outputs(
                 "selected_exit_rule_id": config["selected_exit_rule_id"],
                 "recommendation": recommendation["recommendation"],
                 "baseline_actionable_crossed_20k_count": len(inputs.actionable_rows),
+                "confirmed_actionable_crossed_20k_count": len(inputs.actionable_rows),
+                "raw_all_crossed_20k_count": inputs.summary.get("raw_all_crossed_20k_count"),
             }
         ],
     )
@@ -324,7 +339,8 @@ def write_status_file(
                 "",
                 "Created because the previous B3/E2 design produced only 8 hypothetical entries out of 192 actionable crossed-20k mints.",
                 "",
-                f"Baseline actionable crossed-20k count: `{len(inputs.actionable_rows)}`",
+                f"Confirmed actionable crossed-20k count: `{len(inputs.actionable_rows)}`",
+                f"Raw all crossed-20k count: `{inputs.summary.get('raw_all_crossed_20k_count', inputs.summary.get('all_crossed_20k_count'))}`",
                 f"Filter counts: `{counts}`",
                 "Narrow B3/E2 is not justified as the first start if support remains below 30 rows.",
                 f"Exit comparison open/incomplete summary: `{exit_summary}`",
@@ -507,7 +523,9 @@ def _summary_markdown(summary: dict[str, Any], baseline: dict[str, Any], recomme
             "# Baseline Vs Filter Audit Summary",
             "",
             f"Baseline actionable crossed-20k count: `{summary['baseline_actionable_crossed_20k_count']}`",
+            f"Confirmed actionable crossed-20k count: `{summary['baseline_actionable_crossed_20k_count']}`",
             f"All crossed-20k count: `{summary.get('all_crossed_20k_count')}`",
+            f"Raw all crossed-20k count: `{summary.get('raw_all_crossed_20k_count')}`",
             f"Filter pass counts: `{summary['filter_pass_counts']}`",
             f"Median baseline max FDV path multiple: `{baseline['median_max_fdv_multiple']}`",
             f"Best baseline exit candidate: `{summary['best_exit_candidate_on_baseline']}`",

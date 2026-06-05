@@ -135,6 +135,8 @@ def run_paper_trade_once(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
             continue
         if label.get("official_baseline_entry_eligible") is not True or label.get("baseline_all_actionable_20k") is not True:
             continue
+        if label.get("confirmed_actionable_crossed_20k") is not True:
+            continue
         label_time = _num(label.get("label_time") or label.get("timestamp")) or time.time()
         path_rows = paths_by_mint.get(mint, [])
         path = _nearest_path(path_rows, label_time, require_crossed_20k=True)

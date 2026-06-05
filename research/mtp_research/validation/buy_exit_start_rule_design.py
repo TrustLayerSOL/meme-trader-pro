@@ -37,6 +37,9 @@ TARGET_LEVELS: dict[str, float] = {
     "1m": 1_000_000.0,
 }
 FDV_PROXY_ANOMALY_HIGH = 100_000_000.0
+MILESTONE_CONFIRMATION_WINDOW_SECONDS = 120.0
+MILESTONE_CONFIRMATION_MIN_ROWS = 2
+FDV_CONFIRMATION_MAX_NEARBY_RATIO = 3.0
 
 GUARDRAILS = [
     "research_forward_observation_only",
@@ -190,8 +193,13 @@ def run_buy_exit_start_rule_design(
         "snapshot_label": SNAPSHOT_LABEL,
         "snapshot_source": str(source),
         "snapshot_dir": str(snapshot_root),
+        "raw_all_crossed_20k_count": snapshot_manifest["raw_all_crossed_20k_count"],
+        "raw_actionable_crossed_20k_count": snapshot_manifest["raw_actionable_crossed_20k_count"],
         "all_crossed_20k_count": snapshot_manifest["all_crossed_20k_count"],
         "actionable_crossed_20k_count": snapshot_manifest["actionable_crossed_20k_count"],
+        "confirmed_crossed_20k_count": snapshot_manifest["confirmed_crossed_20k_count"],
+        "confirmed_actionable_crossed_20k_count": snapshot_manifest["confirmed_actionable_crossed_20k_count"],
+        "unconfirmed_crossed_20k_count": snapshot_manifest["unconfirmed_crossed_20k_count"],
         "quality_gate_result": quality["quality_gate_result"],
         "buy_candidates_compared": [rule["rule_id"] for rule in BUY_RULES],
         "exit_candidates_compared": [rule["rule_id"] for rule in EXIT_RULES],
@@ -228,8 +236,11 @@ def load_snapshot_rows(source_root: Path | str) -> SnapshotRows:
 def build_snapshot_manifest(source_root: Path | str, rows: SnapshotRows) -> dict[str, Any]:
     birth_by_mint = _birth_by_mint(rows.births)
     paths_by_mint = _paths_by_mint(rows.paths)
-    crossed = sorted(mint for mint, mint_paths in paths_by_mint.items() if any(_crossed(path, "20k") for path in mint_paths))
+    raw_crossed = sorted(mint for mint, mint_paths in paths_by_mint.items() if any(_crossed(path, "20k") for path in mint_paths))
+    crossed = sorted(mint for mint, mint_paths in paths_by_mint.items() if _confirmed_crossed(mint_paths, "20k"))
+    raw_actionable = sorted(mint for mint in raw_crossed if birth_by_mint.get(mint, {}).get("fdv_path_before_20k") is True)
     actionable = sorted(mint for mint in crossed if birth_by_mint.get(mint, {}).get("fdv_path_before_20k") is True)
+    unconfirmed = sorted(set(raw_crossed) - set(crossed))
     duplicates = sorted([mint for mint, count in Counter(row.get("mint") for row in rows.births if row.get("mint")).items() if count > 1])
     path_row_mints = {row.get("mint") for row in rows.paths if row.get("mint")}
     state_mints = set((rows.state.get("mints") or {}).keys()) if isinstance(rows.state.get("mints"), dict) else set()
@@ -243,10 +254,16 @@ def build_snapshot_manifest(source_root: Path | str, rows: SnapshotRows) -> dict
             "metadata": str(Path(source_root).expanduser() / "metadata.jsonl"),
             "lifecycle_state": str(Path(source_root).expanduser() / "lifecycle_state.json"),
         },
+        "raw_all_crossed_20k_count": len(raw_crossed),
+        "raw_actionable_crossed_20k_count": len(raw_actionable),
         "all_crossed_20k_count": len(crossed),
         "actionable_crossed_20k_count": len(actionable),
-        "main_analysis_population": "actionable_crossed_20k",
-        "secondary_context_population": "all_crossed_20k",
+        "confirmed_crossed_20k_count": len(crossed),
+        "confirmed_actionable_crossed_20k_count": len(actionable),
+        "unconfirmed_crossed_20k_count": len(unconfirmed),
+        "unconfirmed_crossed_20k_mints": unconfirmed,
+        "main_analysis_population": "confirmed_actionable_crossed_20k",
+        "secondary_context_population": "raw_all_crossed_20k",
         "unique_mints": len({row.get("mint") for row in rows.births if row.get("mint")}),
         "duplicate_mints": duplicates,
         "path_row_availability": {
@@ -271,6 +288,7 @@ def build_snapshot_manifest(source_root: Path | str, rows: SnapshotRows) -> dict
             "not profitability evidence",
             "FDV proxy path outcomes are not realized PnL",
             "combined snapshot is frozen and may lag live collector progress",
+            "single-row FDV proxy spikes are excluded from confirmed milestone counts",
         ],
     }
 
@@ -300,7 +318,7 @@ def build_design_dataset(rows: SnapshotRows) -> list[dict[str, Any]]:
     actionable = sorted(
         mint
         for mint, mint_paths in paths_by_mint.items()
-        if any(_crossed(path, "20k") for path in mint_paths) and birth_by_mint.get(mint, {}).get("fdv_path_before_20k") is True
+        if _confirmed_crossed(mint_paths, "20k") and birth_by_mint.get(mint, {}).get("fdv_path_before_20k") is True
     )
     dataset: list[dict[str, Any]] = []
     for mint in actionable:
@@ -312,6 +330,8 @@ def build_design_dataset(rows: SnapshotRows) -> list[dict[str, Any]]:
             "mint": mint,
             "source_sample": birth.get("sample_label") or rows.manifest.get("sample_label") or SOURCE_SAMPLE,
             "actionable_sample_flag": True,
+            "confirmed_actionable_crossed_20k": True,
+            "confirmation_method": "two_fdv_rows_within_120s",
             "create_time": create_time,
             "first_followup_time": _num(birth.get("first_followup_attempt_time") or birth.get("account_watch_started_at")),
             "freshness_class": birth.get("freshness_class"),
@@ -324,8 +344,9 @@ def build_design_dataset(rows: SnapshotRows) -> list[dict[str, Any]]:
             "fdv_anomaly": any(_fdv_anomaly(path.get("fdv_proxy")) for path in mint_paths),
         }
         for level in TARGET_LEVELS:
-            cross_row = _first_cross_row(mint_paths, level)
+            cross_row = _first_confirmed_cross_row(mint_paths, level)
             row[f"crossed_{level}"] = cross_row is not None
+            row[f"confirmed_crossed_{level}"] = cross_row is not None
             row[f"first_crossed_{level}_time"] = _num(cross_row.get("timestamp")) if cross_row else None
         row["create_to_10k_seconds"] = _delta(create_time, row["first_crossed_10k_time"])
         row["create_to_15k_seconds"] = _delta(create_time, row["first_crossed_15k_time"])
@@ -334,7 +355,7 @@ def build_design_dataset(rows: SnapshotRows) -> list[dict[str, Any]]:
         row["10k_to_20k_seconds"] = _delta(row["first_crossed_10k_time"], row["first_crossed_20k_time"])
         row["15k_to_20k_seconds"] = _delta(row["first_crossed_15k_time"], row["first_crossed_20k_time"])
         for level in ["10k", "15k", "20k"]:
-            cross_row = _first_cross_row(mint_paths, level)
+            cross_row = _first_confirmed_cross_row(mint_paths, level)
             for out_field, source_field in {
                 f"fdv_at_{level}": "fdv_proxy",
                 f"fdv_per_event_at_{level}": "fdv_per_event",
@@ -356,7 +377,8 @@ def build_design_dataset(rows: SnapshotRows) -> list[dict[str, Any]]:
 def build_quality_gate(rows: SnapshotRows, dataset: list[dict[str, Any]]) -> dict[str, Any]:
     birth_by_mint = _birth_by_mint(rows.births)
     paths_by_mint = _paths_by_mint(rows.paths)
-    crossed = sorted(mint for mint, mint_paths in paths_by_mint.items() if any(_crossed(path, "20k") for path in mint_paths))
+    raw_crossed = sorted(mint for mint, mint_paths in paths_by_mint.items() if any(_crossed(path, "20k") for path in mint_paths))
+    crossed = sorted(mint for mint, mint_paths in paths_by_mint.items() if _confirmed_crossed(mint_paths, "20k"))
     actionable = {row["mint"] for row in dataset}
     duplicates = sorted([mint for mint, count in Counter(row.get("mint") for row in rows.births if row.get("mint")).items() if count > 1])
     missing_trigger = [row["mint"] for row in dataset if row.get("first_crossed_20k_time") is None]
@@ -372,8 +394,11 @@ def build_quality_gate(rows: SnapshotRows, dataset: list[dict[str, Any]]) -> dic
     result = "paper_start_candidate_data_limited" if severe or len(dataset) < 50 else "paper_start_candidate_ready_disabled"
     return {
         "quality_gate_result": result,
+        "raw_all_crossed_20k_count": len(raw_crossed),
+        "confirmed_crossed_20k_count": len(crossed),
+        "unconfirmed_crossed_20k_count": len(set(raw_crossed) - set(crossed)),
         "actionable_rows": len(dataset),
-        "non_actionable_rows": len(crossed) - len(actionable),
+        "non_actionable_rows": len(raw_crossed) - len(actionable),
         "duplicate_mints": duplicates,
         "missing_trigger_rows": missing_trigger,
         "missing_path_rows": missing_path,
@@ -394,6 +419,7 @@ def build_quality_gate(rows: SnapshotRows, dataset: list[dict[str, Any]]) -> dic
             "fixed forward snapshot only",
             "descriptive what-if only",
             "thresholds use fixed high buckets, not outcome fitting",
+            "single-row FDV proxy spikes excluded from confirmed milestone population",
         ],
     }
 
@@ -733,8 +759,56 @@ def _crossed(row: dict[str, Any], level: str) -> bool:
     return row.get(f"crossed_{level}") is True or (_num(row.get("fdv_proxy")) is not None and (_num(row.get("fdv_proxy")) or 0) >= TARGET_LEVELS[level])
 
 
+def _confirmed_crossed(paths: list[dict[str, Any]], level: str) -> bool:
+    return _first_confirmed_cross_row(paths, level) is not None
+
+
 def _first_cross_row(paths: list[dict[str, Any]], level: str) -> dict[str, Any] | None:
     return next((row for row in sorted(paths, key=lambda item: _num(item.get("timestamp")) or 0) if _crossed(row, level)), None)
+
+
+def _first_confirmed_cross_row(paths: list[dict[str, Any]], level: str) -> dict[str, Any] | None:
+    threshold = TARGET_LEVELS[level]
+    candidates = [
+        row
+        for row in sorted(paths, key=lambda item: _num(item.get("timestamp")) or 0)
+        if (_num(row.get("fdv_proxy")) or 0.0) >= threshold
+    ]
+    for row in candidates:
+        ts = _num(row.get("timestamp"))
+        if ts is None:
+            continue
+        nearby = [
+            other
+            for other in candidates
+            if _num(other.get("timestamp")) is not None
+            and abs((_num(other.get("timestamp")) or 0.0) - ts) <= MILESTONE_CONFIRMATION_WINDOW_SECONDS
+        ]
+        if len(nearby) >= MILESTONE_CONFIRMATION_MIN_ROWS:
+            return row
+    return None
+
+
+def _confirmed_fdv_rows(paths: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = [row for row in sorted(paths, key=lambda item: _num(item.get("timestamp")) or 0) if (_num(row.get("fdv_proxy")) or 0.0) > 0]
+    confirmed: list[dict[str, Any]] = []
+    for row in rows:
+        fdv = _num(row.get("fdv_proxy"))
+        ts = _num(row.get("timestamp"))
+        if fdv is None or ts is None:
+            continue
+        nearby = [
+            other
+            for other in rows
+            if other is not row
+            and (_num(other.get("fdv_proxy")) or 0.0) >= fdv / FDV_CONFIRMATION_MAX_NEARBY_RATIO
+            and (_num(other.get("fdv_proxy")) or 0.0) <= fdv * FDV_CONFIRMATION_MAX_NEARBY_RATIO
+            and _num(other.get("timestamp")) is not None
+            and abs((_num(other.get("timestamp")) or 0.0) - ts) <= MILESTONE_CONFIRMATION_WINDOW_SECONDS
+        ]
+        if nearby:
+            confirmed.append(row)
+    return confirmed
 
 
 def _first_path_before_level(birth: dict[str, Any], level: str) -> bool:
@@ -749,10 +823,11 @@ def _first_path_before_level(birth: dict[str, Any], level: str) -> bool:
 def _exit_features(paths: list[dict[str, Any]]) -> dict[str, Any]:
     features: dict[str, Any] = {}
     for level in ["10k", "15k", "20k"]:
-        cross = _first_cross_row(paths, level)
+        cross = _first_confirmed_cross_row(paths, level)
         after = [row for row in paths if cross and (_num(row.get("timestamp")) or 0) >= (_num(cross.get("timestamp")) or 0)]
-        features[f"max_fdv_after_{level}"] = _max([_num(row.get("fdv_proxy")) for row in after])
-    cross20 = _first_cross_row(paths, "20k")
+        confirmed_after = [row for row in _confirmed_fdv_rows(after) if (_num(row.get("timestamp")) or 0) >= (_num(cross.get("timestamp")) or 0)] if cross else []
+        features[f"max_fdv_after_{level}"] = _max([_num(row.get("fdv_proxy")) for row in confirmed_after])
+    cross20 = _first_confirmed_cross_row(paths, "20k")
     after20 = [row for row in paths if cross20 and (_num(row.get("timestamp")) or 0) >= (_num(cross20.get("timestamp")) or 0)]
     peak = max(after20, key=lambda row: _num(row.get("fdv_proxy")) or -1, default=None)
     features["time_to_peak_after_20k"] = _delta(_num(cross20.get("timestamp")) if cross20 else None, _num(peak.get("timestamp")) if peak else None)

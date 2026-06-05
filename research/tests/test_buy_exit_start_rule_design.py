@@ -21,10 +21,11 @@ def test_snapshot_manifest_uses_actionable_main_population(tmp_path: Path) -> No
 
     manifest = build_snapshot_manifest(source_root, rows)
 
-    assert manifest["all_crossed_20k_count"] == 2
+    assert manifest["raw_all_crossed_20k_count"] == 2
+    assert manifest["all_crossed_20k_count"] == 1
     assert manifest["actionable_crossed_20k_count"] == 1
-    assert manifest["main_analysis_population"] == "actionable_crossed_20k"
-    assert manifest["secondary_context_population"] == "all_crossed_20k"
+    assert manifest["main_analysis_population"] == "confirmed_actionable_crossed_20k"
+    assert manifest["secondary_context_population"] == "raw_all_crossed_20k"
     assert manifest["duplicate_mints"] == []
 
 

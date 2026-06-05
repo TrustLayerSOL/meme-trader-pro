@@ -37,6 +37,7 @@ def test_v2_paper_trader_buys_5_percent_and_sells_on_e2_with_metadata_monitor(tm
             "label_time": 100.0,
             "official_baseline_entry_eligible": True,
             "baseline_all_actionable_20k": True,
+            "confirmed_actionable_crossed_20k": True,
             "B4_pass": True,
         },
     )
@@ -102,7 +103,13 @@ def test_v2_paper_trader_is_idempotent(tmp_path: Path) -> None:
     _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 110.0, "fdv_proxy": 21_000, "crossed_20k": True})
     _append(
         lifecycle.paper_shadow_labels_path,
-        {"mint": "mint-a", "label_time": 100.0, "official_baseline_entry_eligible": True, "baseline_all_actionable_20k": True},
+        {
+            "mint": "mint-a",
+            "label_time": 100.0,
+            "official_baseline_entry_eligible": True,
+            "baseline_all_actionable_20k": True,
+            "confirmed_actionable_crossed_20k": True,
+        },
     )
 
     initialize_paper_trader(config, reset=True)
@@ -122,7 +129,13 @@ def test_v2_paper_trader_rejects_single_row_fdv_spike(tmp_path: Path) -> None:
     _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 103.0, "fdv_proxy": 3_100, "crossed_20k": False})
     _append(
         lifecycle.paper_shadow_labels_path,
-        {"mint": "mint-a", "label_time": 100.0, "official_baseline_entry_eligible": True, "baseline_all_actionable_20k": True},
+        {
+            "mint": "mint-a",
+            "label_time": 100.0,
+            "official_baseline_entry_eligible": True,
+            "baseline_all_actionable_20k": True,
+            "confirmed_actionable_crossed_20k": True,
+        },
     )
 
     initialize_paper_trader(config, reset=True)

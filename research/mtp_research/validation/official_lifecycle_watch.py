@@ -38,6 +38,8 @@ TARGET_LEVELS: dict[str, float] = {
     "500k": 500_000.0,
     "1m": 1_000_000.0,
 }
+MILESTONE_CONFIRMATION_WINDOW_SECONDS = 120.0
+MILESTONE_CONFIRMATION_MIN_ROWS = 2
 PRE_MATURITY_STATES = {
     "birth_watch",
     "fdv_followup_started",
@@ -1073,12 +1075,19 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         level: {row.get("mint") for row in paths if row.get(f"crossed_{level}") is True and row.get("mint")}
         for level in TARGET_LEVELS
     }
+    confirmed_crossed_mints = {
+        level: _confirmed_milestone_mints(paths, level)
+        for level in TARGET_LEVELS
+    }
+    confirmed_crossed_counts = {level: len(mints) for level, mints in confirmed_crossed_mints.items()}
     actionable_10k = {
         mint for mint in crossed_mints["10k"] if birth_by_mint.get(mint, {}).get("fdv_path_before_10k") is True
     }
     actionable_20k = {
         mint for mint in crossed_mints["20k"] if birth_by_mint.get(mint, {}).get("fdv_path_before_20k") is True
     }
+    confirmed_actionable_10k = actionable_10k & confirmed_crossed_mints["10k"]
+    confirmed_actionable_20k = actionable_20k & confirmed_crossed_mints["20k"]
     active = [mint for mint, row in mints.items() if row.get("state") == "trigger_qualified_active_watch"]
     matured_trigger = [mint for mint, row in mints.items() if row.get("entered_trigger_qualified_at") and row.get("state") in MATURITY_STATES]
     target = int(target_crossed_20k or config.target_crossed_20k)
@@ -1114,8 +1123,16 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "crossed_10k": crossed_counts["10k"],
         "crossed_15k": crossed_counts["15k"],
         "crossed_20k": crossed_counts["20k"],
+        "confirmed_crossed_10k": confirmed_crossed_counts["10k"],
+        "confirmed_crossed_15k": confirmed_crossed_counts["15k"],
+        "confirmed_crossed_20k": confirmed_crossed_counts["20k"],
+        "unconfirmed_crossed_10k": crossed_counts["10k"] - confirmed_crossed_counts["10k"],
+        "unconfirmed_crossed_15k": crossed_counts["15k"] - confirmed_crossed_counts["15k"],
+        "unconfirmed_crossed_20k": crossed_counts["20k"] - confirmed_crossed_counts["20k"],
         "actionable_crossed_10k": len(actionable_10k),
         "actionable_crossed_20k": len(actionable_20k),
+        "confirmed_actionable_crossed_10k": len(confirmed_actionable_10k),
+        "confirmed_actionable_crossed_20k": len(confirmed_actionable_20k),
         "official_baseline_entry_eligible": paper_shadow_label_status.get("official_baseline_entry_eligible_count", 0)
         if config.is_v2
         else 0,
@@ -1129,12 +1146,26 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "reached_100k": crossed_counts["100k"],
         "reached_500k": crossed_counts["500k"],
         "reached_1m": crossed_counts["1m"],
+        "confirmed_reached_50k": confirmed_crossed_counts["50k"],
+        "confirmed_reached_100k": confirmed_crossed_counts["100k"],
+        "confirmed_reached_500k": confirmed_crossed_counts["500k"],
+        "confirmed_reached_1m": confirmed_crossed_counts["1m"],
+        "unconfirmed_reached_50k": crossed_counts["50k"] - confirmed_crossed_counts["50k"],
+        "unconfirmed_reached_100k": crossed_counts["100k"] - confirmed_crossed_counts["100k"],
+        "unconfirmed_reached_500k": crossed_counts["500k"] - confirmed_crossed_counts["500k"],
+        "unconfirmed_reached_1m": crossed_counts["1m"] - confirmed_crossed_counts["1m"],
+        "confirmed_milestone_unconfirmed_mints": {
+            level: sorted(crossed_mints[level] - confirmed_crossed_mints[level])
+            for level in TARGET_LEVELS
+        },
         "terminal_collapse": state_counts["matured_terminal_collapse"],
         "inactive_timeout": state_counts["matured_inactive_timeout"],
         "max_age": state_counts["matured_max_age"],
         "data_limited": state_counts["data_limited"],
         "official_crossed_20k_target_progress": f"{crossed_counts['20k']}/{target}",
         "actionable_crossed_20k_target_progress": f"{len(actionable_20k)}/{target}",
+        "confirmed_crossed_20k_target_progress": f"{confirmed_crossed_counts['20k']}/{target}",
+        "confirmed_actionable_crossed_20k_target_progress": f"{len(confirmed_actionable_20k)}/{target}",
         "credits_used": int(status_payload.get("credits_used") or 0),
         "paper_shadow_label_status": paper_shadow_label_status,
         "B_label_counts": b_counts,
@@ -1157,16 +1188,35 @@ def build_paper_shadow_label_status(config: OfficialLifecycleConfig) -> dict[str
     exit_labels = _read_jsonl(config.paper_shadow_exit_labels_path)
     paths = _read_jsonl(config.followup_paths_path)
 
-    baseline = _mints_where(labels, lambda row: row.get("official_baseline_entry_eligible") is True)
+    raw_baseline = _mints_where(labels, lambda row: row.get("official_baseline_entry_eligible") is True)
+    baseline = _mints_where(
+        labels,
+        lambda row: row.get("official_baseline_entry_eligible") is True
+        and row.get("confirmed_actionable_crossed_20k") is True,
+    )
     b_mints = {
-        rule_id: _mints_where(labels, lambda row, rule_id=rule_id: row.get(f"{rule_id}_pass") is True)
+        rule_id: _mints_where(
+            labels,
+            lambda row, rule_id=rule_id: row.get(f"{rule_id}_pass") is True
+            and row.get("confirmed_actionable_crossed_20k") is True,
+        )
         for rule_id in ["B1", "B2", "B3", "B4"]
     }
-    e2_active = _mints_where(labels, lambda row: row.get("E2_tracking_started") is True)
-    e2_unique_exits = _mints_where(exit_labels, lambda row: row.get("hypothetical_exit_condition_met") is True)
-    e2_total_exit_rows = sum(1 for row in exit_labels if row.get("hypothetical_exit_condition_met") is True)
+    e2_active = _mints_where(
+        labels,
+        lambda row: row.get("E2_tracking_started") is True and row.get("confirmed_actionable_crossed_20k") is True,
+    )
+    e2_unique_exits = _mints_where(
+        exit_labels,
+        lambda row: row.get("hypothetical_exit_condition_met") is True and str(row.get("mint") or "") in e2_active,
+    )
+    e2_total_exit_rows = sum(
+        1
+        for row in exit_labels
+        if row.get("hypothetical_exit_condition_met") is True and str(row.get("mint") or "") in e2_active
+    )
     crossed_mints = {
-        level: _mints_where(paths, lambda row, level=level: row.get(f"crossed_{level}") is True)
+        level: _confirmed_milestone_mints(paths, level)
         for level in ["50k", "100k", "500k", "1m"]
     }
 
@@ -1195,6 +1245,7 @@ def build_paper_shadow_label_status(config: OfficialLifecycleConfig) -> dict[str
     )
 
     status: dict[str, Any] = {
+        "raw_official_baseline_entry_eligible_count": len(raw_baseline),
         "official_baseline_entry_eligible_count": baseline_count,
         "B1_pass_count": len(b_mints["B1"]),
         "B2_pass_count": len(b_mints["B2"]),
@@ -1242,7 +1293,8 @@ def _paper_shadow_label_status_lines(status: dict[str, Any]) -> list[str]:
     warnings = status.get("warnings") or []
     notes = status.get("informational_notes") or []
     return [
-        f"Official baseline entry eligible: {status.get('official_baseline_entry_eligible_count', 0)}",
+        f"Raw official baseline entry eligible: {status.get('raw_official_baseline_entry_eligible_count', status.get('official_baseline_entry_eligible_count', 0))}",
+        f"Confirmed official baseline entry eligible: {status.get('official_baseline_entry_eligible_count', 0)}",
         f"B1 pass: {status.get('B1_pass_count', 0)}",
         f"B2 pass: {status.get('B2_pass_count', 0)}",
         f"B3 pass: {status.get('B3_pass_count', 0)}",
@@ -1274,6 +1326,48 @@ def _mints_where(rows: list[dict[str, Any]], predicate: Any) -> set[str]:
     return {str(row.get("mint")) for row in rows if row.get("mint") and predicate(row)}
 
 
+def _confirmed_milestone_mints(rows: list[dict[str, Any]], level: str) -> set[str]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    threshold = TARGET_LEVELS[level]
+    for row in rows:
+        mint = row.get("mint")
+        fdv = _num(row.get("fdv_proxy"))
+        if not mint or fdv is None or fdv < threshold:
+            continue
+        grouped.setdefault(str(mint), []).append(row)
+    confirmed: set[str] = set()
+    for mint, mint_rows in grouped.items():
+        times = sorted(_num(row.get("timestamp")) for row in mint_rows if _num(row.get("timestamp")) is not None)
+        if len(times) < MILESTONE_CONFIRMATION_MIN_ROWS:
+            continue
+        for idx, start in enumerate(times):
+            nearby = [
+                ts
+                for ts in times[idx:]
+                if abs(ts - start) <= MILESTONE_CONFIRMATION_WINDOW_SECONDS
+            ]
+            if len(nearby) >= MILESTONE_CONFIRMATION_MIN_ROWS:
+                confirmed.add(mint)
+                break
+    return confirmed
+
+
+def _path_mint_has_confirmed_milestone(config: OfficialLifecycleConfig, path_row: dict[str, Any], level: str) -> bool:
+    mint = str(path_row.get("mint") or "")
+    if not mint:
+        return False
+    rows = [row for row in _read_jsonl(config.followup_paths_path) if str(row.get("mint") or "") == mint]
+    path_ts = _num(path_row.get("timestamp"))
+    path_fdv = _num(path_row.get("fdv_proxy"))
+    already_present = any(
+        _num(row.get("timestamp")) == path_ts and _num(row.get("fdv_proxy")) == path_fdv
+        for row in rows
+    )
+    if not already_present:
+        rows.append(path_row)
+    return mint in _confirmed_milestone_mints(rows, level)
+
+
 def _pct(numerator: int, denominator: int) -> float | None:
     if denominator <= 0:
         return None
@@ -1296,13 +1390,20 @@ def format_official_lifecycle_status(status: dict[str, Any]) -> str:
                 f"First path before 20k: {status['first_path_before_20k']}",
                 f"Crossed 10k: {status['crossed_10k']}",
                 f"Crossed 20k: {status['crossed_20k']}",
+                f"Confirmed crossed 20k: {status.get('confirmed_crossed_20k', 0)}",
+                f"Unconfirmed crossed 20k: {status.get('unconfirmed_crossed_20k', 0)}",
+                f"Confirmed actionable crossed 20k: {status.get('confirmed_actionable_crossed_20k', 0)}",
                 f"Official baseline entry eligible: {status['official_baseline_entry_eligible']}",
                 f"Trigger-qualified active watches: {status['trigger_qualified_active_watches']}",
                 f"Matured trigger-qualified: {status['matured_trigger_qualified']}",
                 f"Reached 50k: {status['reached_50k']}",
+                f"Confirmed reached 50k: {status.get('confirmed_reached_50k', 0)}",
                 f"Reached 100k: {status['reached_100k']}",
+                f"Confirmed reached 100k: {status.get('confirmed_reached_100k', 0)}",
                 f"Reached 500k: {status['reached_500k']}",
+                f"Confirmed reached 500k: {status.get('confirmed_reached_500k', 0)}",
                 f"Reached 1M: {status['reached_1m']}",
+                f"Confirmed reached 1M: {status.get('confirmed_reached_1m', 0)}",
                 f"Terminal collapse: {status['terminal_collapse']}",
                 f"Inactive timeout: {status['inactive_timeout']}",
                 f"Max age: {status['max_age']}",
@@ -1347,14 +1448,21 @@ def format_official_lifecycle_status(status: dict[str, Any]) -> str:
             f"Crossed 10k: {status['crossed_10k']}",
             f"Crossed 15k: {status['crossed_15k']}",
             f"Crossed 20k: {status['crossed_20k']}",
+            f"Confirmed crossed 20k: {status.get('confirmed_crossed_20k', 0)}",
+            f"Unconfirmed crossed 20k: {status.get('unconfirmed_crossed_20k', 0)}",
             f"Actionable crossed 10k: {status.get('actionable_crossed_10k', 0)}",
             f"Actionable crossed 20k: {status.get('actionable_crossed_20k', 0)}",
+            f"Confirmed actionable crossed 20k: {status.get('confirmed_actionable_crossed_20k', 0)}",
             f"Trigger-qualified active watches: {status['trigger_qualified_active_watches']}",
             f"Matured trigger-qualified: {status['matured_trigger_qualified']}",
             f"Reached 50k: {status['reached_50k']}",
+            f"Confirmed reached 50k: {status.get('confirmed_reached_50k', 0)}",
             f"Reached 100k: {status['reached_100k']}",
+            f"Confirmed reached 100k: {status.get('confirmed_reached_100k', 0)}",
             f"Reached 500k: {status['reached_500k']}",
+            f"Confirmed reached 500k: {status.get('confirmed_reached_500k', 0)}",
             f"Reached 1M: {status['reached_1m']}",
+            f"Confirmed reached 1M: {status.get('confirmed_reached_1m', 0)}",
             f"Terminal collapse: {status['terminal_collapse']}",
             f"Inactive timeout: {status['inactive_timeout']}",
             f"Max age: {status['max_age']}",
@@ -1658,6 +1766,8 @@ def _process_v2_paper_shadow_labels(
 ) -> None:
     if not config.is_v2 or (path_row.get("crossed_20k") is not True and "20k" not in set(state_row.get("crossed_levels") or [])):
         return
+    if not _path_mint_has_confirmed_milestone(config, path_row, "20k"):
+        return
     eligible, reason = _official_baseline_entry_eligibility(state_row, path_row)
     state_row["official_baseline_entry_eligible"] = eligible
     state_row["actionability_failure_reason"] = None if eligible else reason
@@ -1704,6 +1814,8 @@ def _v2_baseline_label_row(
         "sample_label": config.sample_label,
         "official_baseline_entry_eligible": True,
         "baseline_all_actionable_20k": True,
+        "confirmed_actionable_crossed_20k": True,
+        "confirmation_method": "two_fdv_rows_within_120s",
         **labels,
         "selected_exit_candidate_label": "E2",
         "E2_tracking_started": True,

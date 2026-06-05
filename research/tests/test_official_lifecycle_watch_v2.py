@@ -103,7 +103,8 @@ def test_v2_actionable_crossed_20k_writes_baseline_and_e2_label_only_rows(tmp_pa
     )
     machine.record_path({"mint": "mint-a", "timestamp": 103, "fdv_proxy": 12_000, "event_count": 1, "buy_count": 1})
     machine.record_path({"mint": "mint-a", "timestamp": 104, "fdv_proxy": 22_000, "event_count": 2, "buy_count": 2})
-    machine.record_path({"mint": "mint-a", "timestamp": 105, "fdv_proxy": 13_000, "event_count": 3, "buy_count": 2, "sell_count": 1})
+    machine.record_path({"mint": "mint-a", "timestamp": 105, "fdv_proxy": 23_000, "event_count": 3, "buy_count": 2, "sell_count": 1})
+    machine.record_path({"mint": "mint-a", "timestamp": 106, "fdv_proxy": 13_000, "event_count": 4, "buy_count": 2, "sell_count": 2})
 
     labels = _read_jsonl(config.paper_shadow_labels_path)
     exits = _read_jsonl(config.paper_shadow_exit_labels_path)
@@ -137,6 +138,7 @@ def test_v2_quality_audit_and_status_include_baseline_label_counts(tmp_path: Pat
         }
     )
     machine.record_path({"mint": "mint-a", "timestamp": 103, "fdv_proxy": 21_000})
+    machine.record_path({"mint": "mint-a", "timestamp": 104, "fdv_proxy": 22_000})
 
     audit, paths = build_official_lifecycle_quality_audit(config)
     status = official_lifecycle_status(config)
@@ -150,8 +152,43 @@ def test_v2_quality_audit_and_status_include_baseline_label_counts(tmp_path: Pat
     assert status["E2_labels_active"] >= 1
     assert "## Official Lifecycle Watch v2 Status" in text
     assert "Previous samples excluded: yes" in text
-    assert "Official baseline entry eligible: 1" in text
+    assert "Confirmed official baseline entry eligible: 1" in text
     assert "B1/B2/B3/B4 label counts:" in text
+
+
+def test_v2_status_separates_raw_and_confirmed_milestone_spikes(tmp_path: Path) -> None:
+    config = OfficialLifecycleV2Config(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    machine = OfficialLifecycleStateMachine(config)
+    for mint in ["spike-mint", "confirmed-mint"]:
+        machine.record_birth(
+            {
+                "mint": mint,
+                "create_time": 100,
+                "observed_time": 101,
+                "first_followup_attempt_time": 102,
+                "first_followup_before_20k": True,
+                "fdv_path_before_20k": True,
+                "valid_fdv_path_provenance": True,
+            }
+        )
+    machine.record_path({"mint": "spike-mint", "timestamp": 110, "fdv_proxy": 3_200})
+    machine.record_path({"mint": "spike-mint", "timestamp": 120, "fdv_proxy": 36_000})
+    machine.record_path({"mint": "spike-mint", "timestamp": 123, "fdv_proxy": 3_100})
+    machine.record_path({"mint": "confirmed-mint", "timestamp": 210, "fdv_proxy": 22_000})
+    machine.record_path({"mint": "confirmed-mint", "timestamp": 230, "fdv_proxy": 24_000})
+
+    status = official_lifecycle_status(config)
+    text = format_official_lifecycle_status(status)
+
+    assert status["crossed_20k"] == 2
+    assert status["confirmed_crossed_20k"] == 1
+    assert status["unconfirmed_crossed_20k"] == 1
+    assert status["actionable_crossed_20k"] == 2
+    assert status["confirmed_actionable_crossed_20k"] == 1
+    assert status["confirmed_milestone_unconfirmed_mints"]["20k"] == ["spike-mint"]
+    assert "Confirmed crossed 20k: 1" in text
+    assert "Unconfirmed crossed 20k: 1" in text
 
 
 def test_paper_shadow_label_status_uses_unique_mints_and_event_rows(tmp_path: Path) -> None:
@@ -174,11 +211,14 @@ def test_paper_shadow_label_status_uses_unique_mints_and_event_rows(tmp_path: Pa
             }
         )
     machine.record_path({"mint": "mint-b3", "timestamp": 103, "fdv_proxy": 25_000})
-    machine.record_path({"mint": "mint-b3", "timestamp": 104, "fdv_proxy": 60_000})
+    machine.record_path({"mint": "mint-b3", "timestamp": 104, "fdv_proxy": 26_000})
+    machine.record_path({"mint": "mint-b3", "timestamp": 105, "fdv_proxy": 60_000})
     machine.record_path({"mint": "mint-b3", "timestamp": 105, "fdv_proxy": 1_200_000})
+    machine.record_path({"mint": "mint-b3", "timestamp": 106, "fdv_proxy": 1_300_000})
     machine.record_path({"mint": "mint-b4", "timestamp": 203, "fdv_proxy": 35_000})
-    machine.record_path({"mint": "mint-b4", "timestamp": 204, "fdv_proxy": 8_000})
-    machine.record_path({"mint": "mint-b4", "timestamp": 205, "fdv_proxy": 7_000})
+    machine.record_path({"mint": "mint-b4", "timestamp": 204, "fdv_proxy": 36_000})
+    machine.record_path({"mint": "mint-b4", "timestamp": 205, "fdv_proxy": 8_000})
+    machine.record_path({"mint": "mint-b4", "timestamp": 206, "fdv_proxy": 7_000})
 
     status = build_paper_shadow_label_status(config)
 
@@ -207,21 +247,23 @@ def test_paper_shadow_label_status_warns_on_inconsistent_counts(tmp_path: Path) 
         "\n".join(
             [
                 json.dumps(
-                    {
-                        "mint": "mint-a",
-                        "official_baseline_entry_eligible": True,
-                        "B4_pass": True,
-                        "no_real_trade": True,
-                        "no_paper_trade_enabled": True,
+                        {
+                            "mint": "mint-a",
+                            "official_baseline_entry_eligible": True,
+                            "confirmed_actionable_crossed_20k": True,
+                            "B4_pass": True,
+                            "no_real_trade": True,
+                            "no_paper_trade_enabled": True,
                     }
                 ),
                 json.dumps(
-                    {
-                        "mint": "mint-b",
-                        "official_baseline_entry_eligible": False,
-                        "B4_pass": True,
-                        "no_real_trade": True,
-                        "no_paper_trade_enabled": True,
+                        {
+                            "mint": "mint-b",
+                            "official_baseline_entry_eligible": False,
+                            "confirmed_actionable_crossed_20k": True,
+                            "B4_pass": True,
+                            "no_real_trade": True,
+                            "no_paper_trade_enabled": True,
                     }
                 ),
             ]
@@ -261,7 +303,6 @@ def test_paper_shadow_label_status_warns_on_inconsistent_counts(tmp_path: Path) 
     assert status["official_baseline_entry_eligible_count"] == 1
     assert status["B4_pass_count"] == 2
     assert "B4_count_exceeds_baseline_eligible_count" in status["warnings"]
-    assert "E2_unique_exits_exceed_active_labeled_mints" in status["warnings"]
     assert "B4_currently_behaves_like_broad_label" in status["informational_notes"]
     assert "B3_support_too_small_for_standalone_paper_rule" in status["warnings"]
 
@@ -274,8 +315,10 @@ def test_v2_status_output_includes_paper_shadow_label_section(tmp_path: Path) ->
             {
                 "mint": "mint-a",
                 "official_baseline_entry_eligible": True,
+                "confirmed_actionable_crossed_20k": True,
                 "B3_pass": True,
                 "B4_pass": False,
+                "E2_tracking_started": True,
                 "no_real_trade": True,
                 "no_paper_trade_enabled": True,
             }
@@ -300,7 +343,7 @@ def test_v2_status_output_includes_paper_shadow_label_section(tmp_path: Path) ->
     text = format_official_lifecycle_status(official_lifecycle_status(config))
 
     assert "## Paper/Shadow Labels" in text
-    assert "Official baseline entry eligible: 1" in text
+    assert "Confirmed official baseline entry eligible: 1" in text
     assert "B3 pass: 1" in text
     assert "E2 unique mints with hypothetical exit: 1" in text
     assert "E2 total exit-event rows: 1" in text
