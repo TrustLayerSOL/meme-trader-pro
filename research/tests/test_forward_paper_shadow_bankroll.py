@@ -284,6 +284,29 @@ def test_paper_bankroll_status_reports_rule_performance(tmp_path: Path) -> None:
     assert status["rule_performance"]["PBCL_ENTRY_20K_CONFIRMATION_EFFICIENCY"]["buys"] == 1
 
 
+def test_paper_bankroll_skips_buy_when_cash_is_exhausted() -> None:
+    state = build_paper_bankroll_state(starting_bankroll_usd=100, max_position_fraction=0.10)
+    state["cash_bankroll_usd"] = 0
+    state["total_bankroll_usd"] = 100
+
+    result = apply_paper_decision(
+        state,
+        {
+            "timestamp": 1,
+            "mint": "mint-a",
+            "rule_id": "BUY_RULE_A",
+            "side": "paper_buy",
+            "paper_price_usd": 2,
+        },
+    )
+
+    assert result["ledger_row"]["side"] == "paper_skip"
+    assert result["ledger_row"]["reason"] == "insufficient_paper_cash"
+    assert result["ledger_row"]["allocation_usd"] == 0
+    assert result["state"]["open_positions"] == {}
+    assert result["state"]["rule_performance"]["BUY_RULE_A"]["skips"] == 1
+
+
 def test_official_lifecycle_path_hook_updates_paper_ledger_when_enabled(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     initialize_official_lifecycle_namespace(config)

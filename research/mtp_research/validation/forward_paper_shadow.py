@@ -462,6 +462,10 @@ def _apply_paper_buy(state: dict[str, Any], decision: dict[str, Any]) -> dict[st
     bankroll_before = float(state["total_bankroll_usd"])
     cash_before = float(state["cash_bankroll_usd"])
     allocation = min(_round_money(bankroll_before * float(state["max_position_fraction"])), cash_before)
+    if allocation <= 0:
+        skip_decision = dict(decision)
+        skip_decision["reason"] = "insufficient_paper_cash"
+        return _paper_skip_row(state, skip_decision)
     units = allocation / price
     state["cash_bankroll_usd"] = _round_money(cash_before - allocation)
     existing = state["open_positions"].get(mint)
@@ -548,6 +552,7 @@ def _paper_skip_row(state: dict[str, Any], decision: dict[str, Any]) -> dict[str
         "rule_id": rule_id,
         "side": "paper_skip",
         "paper_price_usd": decision.get("paper_price_usd"),
+        "reason": decision.get("reason"),
         "bankroll_before_usd": state["total_bankroll_usd"],
         "allocation_usd": 0,
         "position_units": 0,
