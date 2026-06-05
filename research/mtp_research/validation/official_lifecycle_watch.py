@@ -987,8 +987,6 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
     paths = _read_jsonl(config.followup_paths_path)
     stale_births = _read_jsonl(config.stale_births_path)
     hydration_results = _read_jsonl(config.hydration_results_path)
-    labels = _read_jsonl(config.paper_shadow_labels_path)
-    exit_labels = _read_jsonl(config.paper_shadow_exit_labels_path)
     status_payload = _read_json(config.status_path)
     mints = state.get("mints", {})
     state_counts = Counter(row.get("state") for row in mints.values())
@@ -1016,8 +1014,9 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
     matured_trigger = [mint for mint, row in mints.items() if row.get("entered_trigger_qualified_at") and row.get("state") in MATURITY_STATES]
     target = int(target_crossed_20k or config.target_crossed_20k)
     audit, _ = build_official_lifecycle_quality_audit(config, write_outputs=False)
+    paper_shadow_label_status = build_paper_shadow_label_status(config) if config.is_v2 else {}
     b_counts = {
-        rule_id: sum(1 for row in labels if row.get(f"{rule_id}_pass") is True)
+        rule_id: int(paper_shadow_label_status.get(f"{rule_id}_pass_count") or 0)
         for rule_id in ["B1", "B2", "B3", "B4"]
     }
     return {
@@ -1043,7 +1042,9 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "crossed_20k": crossed_counts["20k"],
         "actionable_crossed_10k": len(actionable_10k),
         "actionable_crossed_20k": len(actionable_20k),
-        "official_baseline_entry_eligible": len({row.get("mint") for row in labels if row.get("official_baseline_entry_eligible") is True}),
+        "official_baseline_entry_eligible": paper_shadow_label_status.get("official_baseline_entry_eligible_count", 0)
+        if config.is_v2
+        else 0,
         "create_log_fresh_official_births": sum(1 for row in births if row.get("create_log_freshness_accepted") is True),
         "hydration_fresh_official_births": sum(1 for row in births if row.get("hydration_freshness_accepted") is True),
         "fdv_path_before_10k": sum(1 for row in births if row.get("fdv_path_before_10k") is True),
@@ -1061,24 +1062,153 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "official_crossed_20k_target_progress": f"{crossed_counts['20k']}/{target}",
         "actionable_crossed_20k_target_progress": f"{len(actionable_20k)}/{target}",
         "credits_used": int(status_payload.get("credits_used") or 0),
+        "paper_shadow_label_status": paper_shadow_label_status,
         "B_label_counts": b_counts,
-        "E2_labels_active": len(
-            {
-                row.get("mint")
-                for row in exit_labels
-                if row.get("E2_state") == "tracking" and row.get("mint")
-            }
+        "E2_labels_active": int(paper_shadow_label_status.get("E2_active_labeled_mint_count") or 0),
+        "E2_unique_hypothetical_exit_mints": int(
+            paper_shadow_label_status.get("E2_unique_hypothetical_exit_mint_count") or 0
         ),
-        "E2_hypothetical_exits": sum(1 for row in exit_labels if row.get("hypothetical_exit_condition_met") is True),
+        "E2_total_exit_event_rows": int(paper_shadow_label_status.get("E2_total_exit_event_rows") or 0),
+        "E2_hypothetical_exits": int(paper_shadow_label_status.get("E2_total_exit_event_rows") or 0),
         "warnings": audit["warnings"],
         "quality_status": audit["quality_status"],
         "recommendation": audit["recommendation"],
     }
 
 
+def build_paper_shadow_label_status(config: OfficialLifecycleConfig) -> dict[str, Any]:
+    initialize_official_lifecycle_namespace(config)
+    labels = _read_jsonl(config.paper_shadow_labels_path)
+    exit_labels = _read_jsonl(config.paper_shadow_exit_labels_path)
+    paths = _read_jsonl(config.followup_paths_path)
+
+    baseline = _mints_where(labels, lambda row: row.get("official_baseline_entry_eligible") is True)
+    b_mints = {
+        rule_id: _mints_where(labels, lambda row, rule_id=rule_id: row.get(f"{rule_id}_pass") is True)
+        for rule_id in ["B1", "B2", "B3", "B4"]
+    }
+    e2_active = _mints_where(labels, lambda row: row.get("E2_tracking_started") is True)
+    e2_unique_exits = _mints_where(exit_labels, lambda row: row.get("hypothetical_exit_condition_met") is True)
+    e2_total_exit_rows = sum(1 for row in exit_labels if row.get("hypothetical_exit_condition_met") is True)
+    crossed_mints = {
+        level: _mints_where(paths, lambda row, level=level: row.get(f"crossed_{level}") is True)
+        for level in ["50k", "100k", "500k", "1m"]
+    }
+
+    warnings: list[str] = []
+    informational_notes: list[str] = []
+    baseline_count = len(baseline)
+    for rule_id, mints in b_mints.items():
+        if len(mints) > baseline_count:
+            warnings.append(f"{rule_id}_count_exceeds_baseline_eligible_count")
+    if len(e2_active) > baseline_count:
+        warnings.append("E2_active_labeled_mints_exceed_baseline_eligible_count")
+    if len(e2_unique_exits) > len(e2_active):
+        warnings.append("E2_unique_exits_exceed_active_labeled_mints")
+    b4_overlap_pct = _pct(len(b_mints["B4"] & baseline), baseline_count)
+    b3_b4_overlap_pct = _pct(len(b_mints["B3"] & b_mints["B4"]), len(b_mints["B3"]))
+    if b4_overlap_pct is not None and b4_overlap_pct > 80.0:
+        informational_notes.append("B4_currently_behaves_like_broad_label")
+    if len(b_mints["B3"]) < 30:
+        warnings.append("B3_support_too_small_for_standalone_paper_rule")
+
+    labels_and_exits = labels + exit_labels
+    no_live_trading = all(row.get("no_real_trade") is not False for row in labels_and_exits)
+    no_enabled_paper_trading = all(
+        row.get("no_paper_trade_enabled") is not False and row.get("no_enabled_paper_trade") is not False
+        for row in labels_and_exits
+    )
+
+    status: dict[str, Any] = {
+        "official_baseline_entry_eligible_count": baseline_count,
+        "B1_pass_count": len(b_mints["B1"]),
+        "B2_pass_count": len(b_mints["B2"]),
+        "B3_pass_count": len(b_mints["B3"]),
+        "B4_pass_count": len(b_mints["B4"]),
+        "B4_baseline_overlap_pct": b4_overlap_pct,
+        "B3_B4_overlap_pct": b3_b4_overlap_pct,
+        "E2_active_labeled_mint_count": len(e2_active),
+        "E2_unique_hypothetical_exit_mint_count": len(e2_unique_exits),
+        "E2_total_exit_event_rows": e2_total_exit_rows,
+        "warnings": sorted(set(warnings)),
+        "informational_notes": sorted(set(informational_notes)),
+        "no_live_trading": no_live_trading,
+        "no_enabled_paper_trading": no_enabled_paper_trading,
+        "private_key_logic_present": False,
+    }
+    for prefix, mint_set in [("baseline", baseline), ("B3", b_mints["B3"]), ("B4", b_mints["B4"])]:
+        for level in ["50k", "100k", "500k", "1m"]:
+            status[f"{prefix}_reached_{level}_count"] = len(mint_set & crossed_mints[level])
+    return status
+
+
+def write_paper_shadow_label_status_reports(config: OfficialLifecycleConfig) -> tuple[dict[str, Any], dict[str, Path]]:
+    status = build_paper_shadow_label_status(config)
+    paths = {
+        "json": config.report_root / "paper_shadow_label_status.json",
+        "markdown": config.report_root / "paper_shadow_label_status.md",
+    }
+    _write_json(paths["json"], {"sample_label": config.sample_label, "paper_shadow_label_status": status})
+    paths["markdown"].write_text(_paper_shadow_label_status_markdown(status), encoding="utf-8")
+    return status, paths
+
+
+def _paper_shadow_label_status_markdown(status: dict[str, Any]) -> str:
+    lines = ["# Paper/Shadow Label Status", "", "These are labels only. No paper trading is enabled. No PnL.", ""]
+    for line in _paper_shadow_label_status_lines(status):
+        lines.append(f"- {line}")
+    return "\n".join(lines) + "\n"
+
+
+def _paper_shadow_label_status_lines(status: dict[str, Any]) -> list[str]:
+    def pct_text(value: Any) -> str:
+        return "n/a" if value is None else f"{float(value):.1f}%"
+
+    warnings = status.get("warnings") or []
+    notes = status.get("informational_notes") or []
+    return [
+        f"Official baseline entry eligible: {status.get('official_baseline_entry_eligible_count', 0)}",
+        f"B1 pass: {status.get('B1_pass_count', 0)}",
+        f"B2 pass: {status.get('B2_pass_count', 0)}",
+        f"B3 pass: {status.get('B3_pass_count', 0)}",
+        f"B4 pass: {status.get('B4_pass_count', 0)}",
+        f"B4 / baseline overlap: {pct_text(status.get('B4_baseline_overlap_pct'))}",
+        f"B3 / B4 overlap: {pct_text(status.get('B3_B4_overlap_pct'))}",
+        f"E2 active labeled mints: {status.get('E2_active_labeled_mint_count', 0)}",
+        f"E2 unique mints with hypothetical exit: {status.get('E2_unique_hypothetical_exit_mint_count', 0)}",
+        f"E2 total exit-event rows: {status.get('E2_total_exit_event_rows', 0)}",
+        "Actionable outcomes:",
+        f"Reached 50k among baseline eligible: {status.get('baseline_reached_50k_count', 0)}",
+        f"Reached 100k among baseline eligible: {status.get('baseline_reached_100k_count', 0)}",
+        f"Reached 500k among baseline eligible: {status.get('baseline_reached_500k_count', 0)}",
+        f"Reached 1M among baseline eligible: {status.get('baseline_reached_1m_count', 0)}",
+        f"Reached 50k among B3: {status.get('B3_reached_50k_count', 0)}",
+        f"Reached 100k among B3: {status.get('B3_reached_100k_count', 0)}",
+        f"Reached 500k among B3: {status.get('B3_reached_500k_count', 0)}",
+        f"Reached 1M among B3: {status.get('B3_reached_1m_count', 0)}",
+        f"Reached 50k among B4: {status.get('B4_reached_50k_count', 0)}",
+        f"Reached 100k among B4: {status.get('B4_reached_100k_count', 0)}",
+        f"Reached 500k among B4: {status.get('B4_reached_500k_count', 0)}",
+        f"Reached 1M among B4: {status.get('B4_reached_1m_count', 0)}",
+        f"Paper/shadow label warnings: {warnings}",
+        f"Paper/shadow label notes: {notes}",
+    ]
+
+
+def _mints_where(rows: list[dict[str, Any]], predicate: Any) -> set[str]:
+    return {str(row.get("mint")) for row in rows if row.get("mint") and predicate(row)}
+
+
+def _pct(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round((float(numerator) / float(denominator)) * 100.0, 1)
+
+
 def format_official_lifecycle_status(status: dict[str, Any]) -> str:
     if status.get("sample_label") == OFFICIAL_V2_SAMPLE_LABEL:
         b_counts = status.get("B_label_counts") or {}
+        paper_shadow = status.get("paper_shadow_label_status") or {}
         return "\n".join(
             [
                 "## Official Lifecycle Watch v2 Status",
@@ -1103,6 +1233,12 @@ def format_official_lifecycle_status(status: dict[str, Any]) -> str:
                 f"B1/B2/B3/B4 label counts: {b_counts}",
                 f"E2 labels active: {status['E2_labels_active']}",
                 f"E2 hypothetical exits: {status['E2_hypothetical_exits']}",
+                "## Paper/Shadow Labels",
+                *_paper_shadow_label_status_lines(paper_shadow),
+                "Important:",
+                "These are labels only.",
+                "No paper trading is enabled.",
+                "No PnL.",
                 f"Quality warnings: {status['warnings']}",
                 f"Credits used: {status['credits_used']}",
                 f"Recommendation: {status['recommendation']}",

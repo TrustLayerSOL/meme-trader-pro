@@ -46,6 +46,7 @@ from research.mtp_research.validation.official_lifecycle_watch import (
     _followup_addresses,
     _mint,
     _num,
+    _paper_shadow_label_status_lines,
     _read_jsonl,
     _row_count,
     _write_json,
@@ -823,8 +824,7 @@ def extended_no_laserstream_status(config: OfficialLifecycleConfig, *, target_cr
 
 def format_no_laserstream_status(status: dict[str, Any]) -> str:
     version = "v2" if status.get("sample_label") == "official_lifecycle_watch_v2" else "v1"
-    return "\n".join(
-        [
+    lines = [
             f"## No-LaserStream Official Lifecycle Watch {version}",
             f"Provisional birth logs: {status.get('provisional_birth_logs', 0)}",
             f"Hydrated confirmed creates: {status.get('hydrated_confirmed_creates', 0)}",
@@ -856,7 +856,18 @@ def format_no_laserstream_status(status: dict[str, Any]) -> str:
             f"Readiness classification: {status.get('readiness_classification')}",
             f"Recommendation: {status.get('recommendation')}",
         ]
-    )
+    if status.get("sample_label") == "official_lifecycle_watch_v2":
+        lines.extend(
+            [
+                "## Paper/Shadow Labels",
+                *_paper_shadow_label_status_lines(status.get("paper_shadow_label_status") or {}),
+                "Important:",
+                "These are labels only.",
+                "No paper trading is enabled.",
+                "No PnL.",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _create_log_record_from_payload(payload: dict[str, Any], *, signature: str, observed_at: float) -> dict[str, Any]:

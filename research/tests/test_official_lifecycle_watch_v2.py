@@ -6,6 +6,7 @@ from research.mtp_research.validation.official_lifecycle_watch import (
     OfficialLifecycleStateMachine,
     OfficialLifecycleV2Config,
     build_official_lifecycle_quality_audit,
+    build_paper_shadow_label_status,
     freeze_mixed_forward_campaign_pre_v2,
     format_official_lifecycle_status,
     initialize_official_lifecycle_namespace,
@@ -151,6 +152,161 @@ def test_v2_quality_audit_and_status_include_baseline_label_counts(tmp_path: Pat
     assert "Previous samples excluded: yes" in text
     assert "Official baseline entry eligible: 1" in text
     assert "B1/B2/B3/B4 label counts:" in text
+
+
+def test_paper_shadow_label_status_uses_unique_mints_and_event_rows(tmp_path: Path) -> None:
+    config = OfficialLifecycleV2Config(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    machine = OfficialLifecycleStateMachine(config)
+    for mint, first_before_10k, first_before_20k in [
+        ("mint-b3", True, True),
+        ("mint-b4", False, True),
+    ]:
+        machine.record_birth(
+            {
+                "mint": mint,
+                "create_time": 100,
+                "observed_time": 101,
+                "first_followup_attempt_time": 102,
+                "first_followup_before_10k": first_before_10k,
+                "first_followup_before_20k": first_before_20k,
+                "valid_fdv_path_provenance": True,
+            }
+        )
+    machine.record_path({"mint": "mint-b3", "timestamp": 103, "fdv_proxy": 25_000})
+    machine.record_path({"mint": "mint-b3", "timestamp": 104, "fdv_proxy": 60_000})
+    machine.record_path({"mint": "mint-b3", "timestamp": 105, "fdv_proxy": 1_200_000})
+    machine.record_path({"mint": "mint-b4", "timestamp": 203, "fdv_proxy": 35_000})
+    machine.record_path({"mint": "mint-b4", "timestamp": 204, "fdv_proxy": 8_000})
+    machine.record_path({"mint": "mint-b4", "timestamp": 205, "fdv_proxy": 7_000})
+
+    status = build_paper_shadow_label_status(config)
+
+    assert status["official_baseline_entry_eligible_count"] == 2
+    assert status["B3_pass_count"] == 1
+    assert status["B4_pass_count"] == 1
+    assert status["B4_baseline_overlap_pct"] == 50.0
+    assert status["B3_B4_overlap_pct"] == 0.0
+    assert status["E2_active_labeled_mint_count"] == 2
+    assert status["E2_unique_hypothetical_exit_mint_count"] == 1
+    assert status["E2_total_exit_event_rows"] >= 2
+    assert status["baseline_reached_50k_count"] == 1
+    assert status["baseline_reached_1m_count"] == 1
+    assert status["B3_reached_50k_count"] == 1
+    assert status["B3_reached_1m_count"] == 1
+    assert status["B4_reached_50k_count"] == 0
+    assert status["no_enabled_paper_trading"] is True
+    assert status["no_live_trading"] is True
+    assert status["private_key_logic_present"] is False
+
+
+def test_paper_shadow_label_status_warns_on_inconsistent_counts(tmp_path: Path) -> None:
+    config = OfficialLifecycleV2Config(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    config.paper_shadow_labels_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "mint": "mint-a",
+                        "official_baseline_entry_eligible": True,
+                        "B4_pass": True,
+                        "no_real_trade": True,
+                        "no_paper_trade_enabled": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "mint": "mint-b",
+                        "official_baseline_entry_eligible": False,
+                        "B4_pass": True,
+                        "no_real_trade": True,
+                        "no_paper_trade_enabled": True,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config.paper_shadow_exit_labels_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "mint": "mint-a",
+                        "E2_state": "tracking",
+                        "hypothetical_exit_condition_met": False,
+                        "no_real_trade": True,
+                        "no_enabled_paper_trade": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "mint": "mint-b",
+                        "E2_state": "hypothetical_exit_condition_met",
+                        "hypothetical_exit_condition_met": True,
+                        "no_real_trade": True,
+                        "no_enabled_paper_trade": True,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status = build_paper_shadow_label_status(config)
+
+    assert status["official_baseline_entry_eligible_count"] == 1
+    assert status["B4_pass_count"] == 2
+    assert "B4_count_exceeds_baseline_eligible_count" in status["warnings"]
+    assert "E2_unique_exits_exceed_active_labeled_mints" in status["warnings"]
+    assert "B4_currently_behaves_like_broad_label" in status["informational_notes"]
+    assert "B3_support_too_small_for_standalone_paper_rule" in status["warnings"]
+
+
+def test_v2_status_output_includes_paper_shadow_label_section(tmp_path: Path) -> None:
+    config = OfficialLifecycleV2Config(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    config.paper_shadow_labels_path.write_text(
+        json.dumps(
+            {
+                "mint": "mint-a",
+                "official_baseline_entry_eligible": True,
+                "B3_pass": True,
+                "B4_pass": False,
+                "no_real_trade": True,
+                "no_paper_trade_enabled": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config.paper_shadow_exit_labels_path.write_text(
+        json.dumps(
+            {
+                "mint": "mint-a",
+                "E2_state": "hypothetical_exit_condition_met",
+                "hypothetical_exit_condition_met": True,
+                "no_real_trade": True,
+                "no_enabled_paper_trade": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    text = format_official_lifecycle_status(official_lifecycle_status(config))
+
+    assert "## Paper/Shadow Labels" in text
+    assert "Official baseline entry eligible: 1" in text
+    assert "B3 pass: 1" in text
+    assert "E2 unique mints with hypothetical exit: 1" in text
+    assert "E2 total exit-event rows: 1" in text
+    assert "These are labels only." in text
+    assert "No paper trading is enabled." in text
+    assert "No PnL." in text
 
 
 def _read_jsonl(path: Path) -> list[dict]:
