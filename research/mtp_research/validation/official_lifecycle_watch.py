@@ -317,6 +317,7 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
     config.observation_root.mkdir(parents=True, exist_ok=True)
     config.raw_root.mkdir(parents=True, exist_ok=True)
     config.report_root.mkdir(parents=True, exist_ok=True)
+    existing_manifest = _read_json(config.manifest_json_path) if config.manifest_json_path.exists() and not reset else {}
     if reset:
         for path in [
             config.births_path,
@@ -427,7 +428,10 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
         manifest["maturity_definitions"]["E2_primary_exit_label"] = (
             "milestone trailing drawdown with reclaim grace, label-only; no sell execution"
         )
-        _write_json(config.paper_shadow_v2_config_path, _disabled_v2_paper_shadow_config(config))
+        if reset or not config.paper_shadow_v2_config_path.exists():
+            _write_json(config.paper_shadow_v2_config_path, _disabled_v2_paper_shadow_config(config))
+    if existing_manifest:
+        return existing_manifest
     _write_json(config.manifest_json_path, manifest)
     config.manifest_md_path.write_text(_manifest_markdown(manifest), encoding="utf-8")
     return manifest
