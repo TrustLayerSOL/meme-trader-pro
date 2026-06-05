@@ -99,6 +99,22 @@ class RateLimitFetcher(FakeFetcher):
         raise urllib.error.HTTPError("https://helius.invalid", 429, "Too Many Requests", hdrs=None, fp=None)
 
 
+class CountingMetadataResolver:
+    def __init__(self) -> None:
+        self.requests_used = 0
+        self.calls: list[tuple[str, dict | None]] = []
+
+    def resolve(self, mint: str, candidate_metadata: dict | None = None) -> dict:
+        self.requests_used += 1
+        self.calls.append((mint, candidate_metadata))
+        return {
+            "mint": mint,
+            "metadata_source": "counting_network_resolver",
+            "token_name": "Should Not Block",
+            "token_symbol": "SLOW",
+        }
+
+
 def read_jsonl(path: Path) -> list[dict]:
     rows = []
     if not path.exists():
@@ -161,6 +177,47 @@ def test_writes_provisional_birth_before_hydration_result(tmp_path: Path) -> Non
     assert births[0]["fdv_path_before_10k"] is True
     assert births[0]["fdv_path_before_20k"] is True
     assert births[0]["observed_to_first_followup_seconds"] <= 5.0
+
+
+def test_metadata_is_not_touched_until_token_reaches_10k(tmp_path: Path) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path, max_birth_to_first_followup_seconds=5.0)
+    source = FakeLogSource([{"signature": "sig-meta", "log_observed_at": 100.0}])
+    hydrator = FakeHydrator(
+        {
+            "sig-meta": {
+                "mint": "mint-meta",
+                "launch_time": 100.0,
+                "token_name": "Meta Token",
+                "token_symbol": "META",
+            }
+        }
+    )
+    fetcher = FakeFetcher({"mint-meta": [{"mint": "mint-meta", "timestamp": 101.0, "fdv_proxy": 9_000.0}]})
+    resolver = CountingMetadataResolver()
+
+    result = run_no_laserstream_lifecycle_smoke(
+        config,
+        target_births=1,
+        execute=True,
+        source=source,
+        hydrator=hydrator,
+        fetcher=fetcher,
+        metadata_resolver=resolver,
+        enable_metadata_enrichment=False,
+        now_fn=iter([100.5, 101.0, 101.1, 101.2, 101.3]).__next__,
+        max_runtime_seconds=2,
+    )
+
+    metadata_rows = read_jsonl(config.metadata_path)
+    status = __import__("json").loads(config.status_path.read_text(encoding="utf-8"))
+    assert result["official_accepted_births"] == 1
+    assert resolver.calls == []
+    assert metadata_rows == []
+    assert status["metadata_hydration_hot_path"] is False
+    assert status["metadata_hydration_min_trigger_level"] == "10k"
+    assert status["critical_path_latency"]["median_observed_to_first_followup_seconds"] is not None
+    assert status["metadata_jobs_pending"] == 0
+    assert status["fdv_followup_jobs_pending"] >= 0
 
 
 def test_hydration_queue_streams_fast_result_before_slow_result() -> None:

@@ -120,6 +120,12 @@ class OfficialLifecycleConfig:
     global_observation_credit_cap: int = 500_000
     target_crossed_20k: int = 300
     terminal_collapse_pct: float = 70.0
+    metadata_hydration_hot_path: bool = False
+    metadata_hydration_at_birth: bool = False
+    metadata_hydration_after_first_fdv_path: bool = False
+    metadata_hydration_min_trigger_level: str = "10k"
+    metadata_hydration_after_milestones: bool = True
+    metadata_backfill_after_maturity: bool = True
 
     @property
     def root(self) -> Path:
@@ -543,12 +549,13 @@ class OfficialLifecycleStateMachine:
         if not state_row:
             _append_jsonl(self.config.births_path, [row])
             self._transition(mint, previous_state, "birth_watch", now, "verified_pumpfun_create_observed")
-            self._enqueue_metadata_snapshot(
-                mint,
-                "birth",
-                now,
-                birth.get("metadata") if isinstance(birth.get("metadata"), dict) else birth,
-            )
+            if self.config.metadata_hydration_at_birth:
+                self._enqueue_metadata_snapshot(
+                    mint,
+                    "birth",
+                    now,
+                    birth.get("metadata") if isinstance(birth.get("metadata"), dict) else birth,
+                )
         self.save()
         return row
 
@@ -597,12 +604,17 @@ class OfficialLifecycleStateMachine:
         )
         _append_jsonl(self.config.followup_paths_path, [enriched])
         _append_jsonl(self.config.drawdowns_path, [_drawdown_row(enriched, sample_label=self.config.sample_label)])
-        if not state_row.get("first_metadata_snapshot_for_fdv_path") and fdv is not None:
+        if (
+            self.config.metadata_hydration_after_first_fdv_path
+            and not state_row.get("first_metadata_snapshot_for_fdv_path")
+            and fdv is not None
+        ):
             state_row["first_metadata_snapshot_for_fdv_path"] = True
             self._enqueue_metadata_snapshot(mint, "first_fdv_path", timestamp, state_row)
-        for level in newly_crossed:
-            self._enqueue_metadata_snapshot(mint, f"crossed_{level}", timestamp, state_row)
-        if new_state in MATURITY_STATES and previous_state != new_state:
+        if self.config.metadata_hydration_after_milestones:
+            for level in newly_crossed:
+                self._enqueue_metadata_snapshot(mint, f"crossed_{level}", timestamp, state_row)
+        if self.config.metadata_backfill_after_maturity and new_state in MATURITY_STATES and previous_state != new_state:
             self._enqueue_metadata_snapshot(mint, new_state, timestamp, state_row)
         if self.config.is_v2:
             _process_v2_paper_shadow_labels(self.config, enriched, state_row)

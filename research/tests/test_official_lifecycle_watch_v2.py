@@ -14,6 +14,15 @@ from research.mtp_research.validation.official_lifecycle_watch import (
 )
 
 
+class FakeMetadataQueue:
+    def __init__(self) -> None:
+        self.jobs: list[dict] = []
+
+    def enqueue(self, **kwargs) -> bool:
+        self.jobs.append(dict(kwargs))
+        return True
+
+
 def test_v2_namespace_starts_from_zero_and_creates_disabled_shadow_files(tmp_path: Path) -> None:
     old = tmp_path / "data" / "forward_observation" / "official_lifecycle_watch_v1"
     old.mkdir(parents=True)
@@ -39,6 +48,32 @@ def test_v2_namespace_starts_from_zero_and_creates_disabled_shadow_files(tmp_pat
     assert disabled_config["execution_enabled"] is False
     assert disabled_config["private_keys_allowed"] is False
     assert old.exists()
+
+
+def test_v2_metadata_queue_skips_birth_and_first_fdv_until_10k(tmp_path: Path) -> None:
+    config = OfficialLifecycleV2Config(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(config)
+    queue = FakeMetadataQueue()
+    machine = OfficialLifecycleStateMachine(config, metadata_queue=queue)
+
+    machine.record_birth(
+        {
+            "mint": "mint-meta",
+            "create_time": 100,
+            "observed_time": 101,
+            "first_followup_attempt_time": 102,
+            "first_followup_before_20k": True,
+            "valid_fdv_path_provenance": True,
+        }
+    )
+    assert queue.jobs == []
+
+    machine.record_path({"mint": "mint-meta", "timestamp": 103, "fdv_proxy": 9_000})
+    assert queue.jobs == []
+
+    machine.record_path({"mint": "mint-meta", "timestamp": 104, "fdv_proxy": 10_500})
+
+    assert [job["lifecycle_point"] for job in queue.jobs] == ["crossed_10k"]
 
 
 def test_freeze_mixed_forward_campaign_writes_manifest_without_deleting_sources(tmp_path: Path) -> None:

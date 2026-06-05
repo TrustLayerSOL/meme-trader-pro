@@ -652,10 +652,6 @@ def run_no_laserstream_lifecycle_smoke(
                 machine.record_birth(birth_row)
                 _append_jsonl(config.hydration_results_path, [{**hydration, "hydration_status": HYDRATION_OFFICIAL}])
                 counters.official_accepted_births += 1
-                metadata = metadata_resolver.resolve(mint, hydration.get("metadata") if isinstance(hydration.get("metadata"), dict) else None)
-                metadata["sample_label"] = config.sample_label
-                _append_jsonl(config.metadata_path, [metadata])
-                counters.metadata_rows_written += 1
                 if events:
                     _append_jsonl(config.events_path, [{**event, "sample_label": config.sample_label, "mint": mint} for event in events])
                 for event in events:
@@ -713,6 +709,8 @@ def run_no_laserstream_lifecycle_smoke(
         if hasattr(source, "close"):
             source.close()
     metadata_credits = int(getattr(getattr(metadata_queue, "resolver", None), "requests_used", 0) or 0) if metadata_queue is not None else 0
+    critical_path_latency = _critical_path_latency_summary(config)
+    metadata_status = _read_json(config.metadata_status_path)
     credits = _requests_used(source, hydrator, fetcher, metadata_resolver) + metadata_credits
     _write_json(
         config.status_path,
@@ -725,7 +723,22 @@ def run_no_laserstream_lifecycle_smoke(
             "hydration_queue_size": queue.pending_count,
             "followup_queue_size": len(machine.active_watch_mints()),
             "metadata_queue_size": metadata_queue.pending_count if metadata_queue is not None else 0,
+            "metadata_jobs_pending": metadata_queue.pending_count if metadata_queue is not None else 0,
+            "fdv_followup_jobs_pending": len(machine.active_watch_mints()),
+            "critical_path_latency": critical_path_latency,
+            "metadata_queue_latency": {
+                "metadata_queue_pending": metadata_status.get("metadata_queue_pending", 0),
+                "metadata_jobs_submitted": metadata_status.get("metadata_jobs_submitted", 0),
+                "metadata_jobs_written": metadata_status.get("metadata_jobs_written", 0),
+                "metadata_jobs_rejected": metadata_status.get("metadata_jobs_rejected", 0),
+            },
             "metadata_network_calls_made": metadata_credits,
+            "metadata_hydration_hot_path": bool(config.metadata_hydration_hot_path),
+            "metadata_hydration_at_birth": bool(config.metadata_hydration_at_birth),
+            "metadata_hydration_after_first_fdv_path": bool(config.metadata_hydration_after_first_fdv_path),
+            "metadata_hydration_min_trigger_level": config.metadata_hydration_min_trigger_level,
+            "metadata_hydration_after_milestones": bool(config.metadata_hydration_after_milestones),
+            "metadata_backfill_after_maturity": bool(config.metadata_backfill_after_maturity),
         },
     )
     audit, audit_paths = build_official_lifecycle_quality_audit(config)
@@ -839,6 +852,7 @@ def extended_no_laserstream_status(config: OfficialLifecycleConfig, *, target_cr
     hydration = _read_jsonl(config.hydration_results_path)
     stale = _read_jsonl(config.stale_births_path)
     births = _read_jsonl(config.births_path)
+    runtime_status = _read_json(config.status_path)
     observed_latencies = [_num(row.get("observed_to_first_followup_seconds")) for row in births]
     observed_latencies = [value for value in observed_latencies if value is not None]
     chain_latencies = [_num(row.get("chain_create_to_first_followup_seconds") or row.get("create_to_first_followup_seconds")) for row in births]
@@ -862,6 +876,15 @@ def extended_no_laserstream_status(config: OfficialLifecycleConfig, *, target_cr
             "max_chain_create_to_first_followup": max(chain_latencies) if chain_latencies else None,
             "hydration_queue_size": _read_status_field(config, "hydration_queue_size", 0),
             "followup_queue_size": _read_status_field(config, "followup_queue_size", 0),
+            "metadata_jobs_pending": runtime_status.get("metadata_jobs_pending", runtime_status.get("metadata_queue_size", 0)),
+            "fdv_followup_jobs_pending": runtime_status.get("fdv_followup_jobs_pending", runtime_status.get("followup_queue_size", 0)),
+            "critical_path_latency": runtime_status.get("critical_path_latency", {}),
+            "metadata_queue_latency": runtime_status.get("metadata_queue_latency", {}),
+            "metadata_hydration_hot_path": runtime_status.get("metadata_hydration_hot_path", False),
+            "metadata_hydration_at_birth": runtime_status.get("metadata_hydration_at_birth", False),
+            "metadata_hydration_after_first_fdv_path": runtime_status.get("metadata_hydration_after_first_fdv_path", False),
+            "metadata_hydration_min_trigger_level": runtime_status.get("metadata_hydration_min_trigger_level", "10k"),
+            "metadata_hydration_after_milestones": runtime_status.get("metadata_hydration_after_milestones", True),
             "readiness_classification": no_laserstream_readiness(config, status=status),
         }
     )
@@ -903,6 +926,13 @@ def format_no_laserstream_status(status: dict[str, Any]) -> str:
             f"Active watchers: {status.get('trigger_qualified_active_watches', 0)}",
             f"Hydration queue size: {status.get('hydration_queue_size', 0)}",
             f"Follow-up queue size: {status.get('followup_queue_size', 0)}",
+            f"Metadata jobs pending: {status.get('metadata_jobs_pending', 0)}",
+            f"FDV follow-up jobs pending: {status.get('fdv_followup_jobs_pending', 0)}",
+            f"Metadata hot path enabled: {status.get('metadata_hydration_hot_path', False)}",
+            f"Metadata at birth enabled: {status.get('metadata_hydration_at_birth', False)}",
+            f"Metadata after first FDV path: {status.get('metadata_hydration_after_first_fdv_path', False)}",
+            f"Metadata minimum trigger: {status.get('metadata_hydration_min_trigger_level', '10k')}",
+            f"Metadata after milestones: {status.get('metadata_hydration_after_milestones', True)}",
             f"Quality status: {status.get('quality_status')}",
             f"Readiness classification: {status.get('readiness_classification')}",
             f"Recommendation: {status.get('recommendation')}",
@@ -1170,6 +1200,32 @@ def _current_crossed_20k_count(config: OfficialLifecycleConfig) -> int:
             if row.get("mint") and row.get("crossed_20k") is True
         }
     )
+
+
+def _critical_path_latency_summary(config: OfficialLifecycleConfig) -> dict[str, Any]:
+    births = _read_jsonl(config.births_path)
+    hydration = _read_jsonl(config.hydration_results_path)
+    observed_latencies = [_num(row.get("observed_to_first_followup_seconds")) for row in births]
+    observed_latencies = [value for value in observed_latencies if value is not None]
+    hydration_latencies = [_num(row.get("hydration_freshness_seconds")) for row in births]
+    hydration_latencies = [value for value in hydration_latencies if value is not None]
+    return {
+        "median_observed_to_first_followup_seconds": median(observed_latencies) if observed_latencies else None,
+        "max_observed_to_first_followup_seconds": max(observed_latencies) if observed_latencies else None,
+        "median_hydration_freshness_seconds": median(hydration_latencies) if hydration_latencies else None,
+        "max_hydration_freshness_seconds": max(hydration_latencies) if hydration_latencies else None,
+        "hydration_results_rows": len(hydration),
+        "official_birth_rows": len(births),
+    }
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8") or "{}")
+    except json.JSONDecodeError:
+        return {}
 
 
 def _snapshot_level(fdv: float, state: Any) -> str | None:
