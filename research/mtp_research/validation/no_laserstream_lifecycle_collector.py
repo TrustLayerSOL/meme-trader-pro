@@ -32,6 +32,10 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
     safe_float,
     _post_json_rpc,
 )
+from research.mtp_research.validation.forward_metadata_enrichment import (
+    ForwardMetadataConfig,
+    ForwardMetadataEnrichmentQueue,
+)
 from research.mtp_research.validation.official_lifecycle_watch import (
     OFFICIAL_SAMPLE_LABEL,
     TARGET_LEVELS,
@@ -467,6 +471,12 @@ def run_no_laserstream_lifecycle_smoke(
     now_fn: Callable[[], float] | None = None,
     rate_limit_backoff_seconds: float = 30.0,
     post_target_followup_minutes: float = 0.0,
+    enable_metadata_enrichment: bool | None = None,
+    max_metadata_workers: int = 4,
+    metadata_fetch_timeout_seconds: float = 2.0,
+    max_metadata_uri_bytes: int = 128_000,
+    enable_public_uri_fetch: bool = True,
+    enable_dexscreener_metadata: bool = False,
 ) -> dict[str, Any]:
     initialize_official_lifecycle_namespace(config, reset=execute and _row_count(config.births_path) == 0)
     write_no_laserstream_bottleneck_audit(config)
@@ -508,7 +518,20 @@ def run_no_laserstream_lifecycle_smoke(
     metadata_resolver = metadata_resolver or NoLaserstreamMetadataResolver()
     now_fn = now_fn or time.time
     queue = NoLaserstreamHydrationQueue(hydrator=hydrator, max_workers=32)
-    machine = OfficialLifecycleStateMachine(config)
+    metadata_queue = None
+    metadata_enabled = enable_metadata_enrichment if enable_metadata_enrichment is not None else config.is_v2
+    if metadata_enabled:
+        metadata_queue = ForwardMetadataEnrichmentQueue(
+            config,
+            metadata_config=ForwardMetadataConfig(
+                max_metadata_workers=max_metadata_workers,
+                metadata_fetch_timeout_seconds=metadata_fetch_timeout_seconds,
+                max_metadata_uri_bytes=max_metadata_uri_bytes,
+                enable_public_uri_fetch=enable_public_uri_fetch,
+                enable_dexscreener_metadata=enable_dexscreener_metadata,
+            ),
+        )
+    machine = OfficialLifecycleStateMachine(config, metadata_queue=metadata_queue)
     counters = NoLaserstreamCollectorCounters()
     seen_signatures: set[str] = {str(row.get("signature")) for row in _read_jsonl(config.provisional_births_path) if row.get("signature")}
     deadline = time.monotonic() + float(max_runtime_seconds if max_runtime_seconds is not None else max(1, int(max_runtime_minutes)) * 60)
@@ -608,6 +631,9 @@ def run_no_laserstream_lifecycle_smoke(
                     events=events,
                     config=config,
                 )
+                birth_row["metadata"] = (
+                    hydration.get("metadata") if isinstance(hydration.get("metadata"), dict) else _metadata_from_candidate(candidate)
+                )
                 machine.record_birth(birth_row)
                 _append_jsonl(config.hydration_results_path, [{**hydration, "hydration_status": HYDRATION_OFFICIAL}])
                 counters.official_accepted_births += 1
@@ -667,9 +693,12 @@ def run_no_laserstream_lifecycle_smoke(
             warnings.append("max_runtime_minutes_reached")
     finally:
         queue.close()
+        if metadata_queue is not None:
+            metadata_queue.close(wait=True)
         if hasattr(source, "close"):
             source.close()
-    credits = _requests_used(source, hydrator, fetcher, metadata_resolver)
+    metadata_credits = int(getattr(getattr(metadata_queue, "resolver", None), "requests_used", 0) or 0) if metadata_queue is not None else 0
+    credits = _requests_used(source, hydrator, fetcher, metadata_resolver) + metadata_credits
     _write_json(
         config.status_path,
         {
@@ -680,6 +709,8 @@ def run_no_laserstream_lifecycle_smoke(
             "network_calls_made": credits,
             "hydration_queue_size": queue.pending_count,
             "followup_queue_size": len(machine.active_watch_mints()),
+            "metadata_queue_size": metadata_queue.pending_count if metadata_queue is not None else 0,
+            "metadata_network_calls_made": metadata_credits,
         },
     )
     audit, audit_paths = build_official_lifecycle_quality_audit(config)
@@ -857,8 +888,25 @@ def format_no_laserstream_status(status: dict[str, Any]) -> str:
             f"Recommendation: {status.get('recommendation')}",
         ]
     if status.get("sample_label") == "official_lifecycle_watch_v2":
+        metadata = status.get("metadata_coverage") or {}
         lines.extend(
             [
+                "## Metadata Coverage",
+                f"Metadata snapshots: {metadata.get('metadata_snapshots', 0)}",
+                f"Unique mints with metadata: {metadata.get('unique_mints_with_metadata', 0)}",
+                f"Birth metadata coverage: {metadata.get('birth_metadata_coverage', 0)}",
+                f"10k metadata coverage: {metadata.get('10k_metadata_coverage', 0)}",
+                f"20k metadata coverage: {metadata.get('20k_metadata_coverage', 0)}",
+                f"Maturity metadata coverage: {metadata.get('maturity_metadata_coverage', 0)}",
+                f"Token name / symbol coverage: {metadata.get('token_name_coverage', 0)} / {metadata.get('symbol_coverage', 0)}",
+                f"Image URI coverage: {metadata.get('image_uri_coverage', 0)}",
+                f"Website / X / Telegram / Discord coverage: {metadata.get('website_coverage', 0)} / {metadata.get('twitter_x_coverage', 0)} / {metadata.get('telegram_coverage', 0)} / {metadata.get('discord_coverage', 0)}",
+                f"Any social coverage: {metadata.get('any_social_coverage', 0)}",
+                f"Metadata completeness median: {metadata.get('metadata_completeness_median')}",
+                f"Metadata source mix: {metadata.get('metadata_source_mix', {})}",
+                f"Metadata latest-only / point-in-time: {metadata.get('metadata_latest_only_count', 0)} / {metadata.get('metadata_point_in_time_count', 0)}",
+                f"Metadata failures: {metadata.get('metadata_failures', 0)}",
+                f"DexScreener coverage: {metadata.get('dexscreener_coverage', 0)}",
                 "## Paper/Shadow Labels",
                 *_paper_shadow_label_status_lines(status.get("paper_shadow_label_status") or {}),
                 "Important:",

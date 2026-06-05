@@ -166,6 +166,14 @@ class OfficialLifecycleConfig:
         return self.observation_root / "metadata.jsonl"
 
     @property
+    def metadata_snapshots_path(self) -> Path:
+        return self.observation_root / "metadata_snapshots.jsonl"
+
+    @property
+    def metadata_status_path(self) -> Path:
+        return self.observation_root / "metadata_status.json"
+
+    @property
     def holder_snapshots_path(self) -> Path:
         return self.observation_root / "holder_snapshots.jsonl"
 
@@ -216,6 +224,18 @@ class OfficialLifecycleConfig:
     @property
     def helius_rpc_raw_path(self) -> Path:
         return self.raw_root / "helius_rpc_raw.jsonl"
+
+    @property
+    def metadata_helius_das_raw_path(self) -> Path:
+        return self.raw_root / "metadata_helius_das_raw.jsonl"
+
+    @property
+    def metadata_uri_raw_path(self) -> Path:
+        return self.raw_root / "metadata_uri_raw.jsonl"
+
+    @property
+    def metadata_dexscreener_raw_path(self) -> Path:
+        return self.raw_root / "metadata_dexscreener_raw.jsonl"
 
     @property
     def is_v2(self) -> bool:
@@ -303,6 +323,8 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
             config.followup_paths_path,
             config.events_path,
             config.metadata_path,
+            config.metadata_snapshots_path,
+            config.metadata_status_path,
             config.holder_snapshots_path,
             config.stale_births_path,
             config.provisional_births_path,
@@ -315,6 +337,9 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
             config.helius_ws_raw_path,
             config.pumpfun_create_logs_raw_path,
             config.helius_rpc_raw_path,
+            config.metadata_helius_das_raw_path,
+            config.metadata_uri_raw_path,
+            config.metadata_dexscreener_raw_path,
         ]:
             if path.exists():
                 path.unlink()
@@ -325,6 +350,7 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
         config.followup_paths_path,
         config.events_path,
         config.metadata_path,
+        config.metadata_snapshots_path,
         config.holder_snapshots_path,
         config.stale_births_path,
         config.provisional_births_path,
@@ -336,6 +362,9 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
         config.helius_ws_raw_path,
         config.pumpfun_create_logs_raw_path,
         config.helius_rpc_raw_path,
+        config.metadata_helius_das_raw_path,
+        config.metadata_uri_raw_path,
+        config.metadata_dexscreener_raw_path,
     ]:
         path.touch(exist_ok=True)
     if not config.state_path.exists():
@@ -405,8 +434,9 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
 
 
 class OfficialLifecycleStateMachine:
-    def __init__(self, config: OfficialLifecycleConfig) -> None:
+    def __init__(self, config: OfficialLifecycleConfig, *, metadata_queue: Any | None = None) -> None:
         self.config = config
+        self.metadata_queue = metadata_queue
         initialize_official_lifecycle_namespace(config)
         self.state = _read_state(config)
 
@@ -507,6 +537,12 @@ class OfficialLifecycleStateMachine:
         if not state_row:
             _append_jsonl(self.config.births_path, [row])
             self._transition(mint, previous_state, "birth_watch", now, "verified_pumpfun_create_observed")
+            self._enqueue_metadata_snapshot(
+                mint,
+                "birth",
+                now,
+                birth.get("metadata") if isinstance(birth.get("metadata"), dict) else birth,
+            )
         self.save()
         return row
 
@@ -522,6 +558,7 @@ class OfficialLifecycleStateMachine:
         previous_state = state_row.get("state")
         crossed_levels = _crossed_levels(fdv)
         prior_crossed = set(state_row.get("crossed_levels", []))
+        newly_crossed = sorted(set(crossed_levels) - prior_crossed, key=lambda label: TARGET_LEVELS[label])
         merged_crossed = sorted(prior_crossed | set(crossed_levels), key=lambda label: TARGET_LEVELS[label])
         local_high = max([value for value in [_num(state_row.get("local_high_fdv")), fdv] if value is not None], default=None)
         drawdown_pct = _drawdown_pct(local_high, fdv)
@@ -554,6 +591,13 @@ class OfficialLifecycleStateMachine:
         )
         _append_jsonl(self.config.followup_paths_path, [enriched])
         _append_jsonl(self.config.drawdowns_path, [_drawdown_row(enriched, sample_label=self.config.sample_label)])
+        if not state_row.get("first_metadata_snapshot_for_fdv_path") and fdv is not None:
+            state_row["first_metadata_snapshot_for_fdv_path"] = True
+            self._enqueue_metadata_snapshot(mint, "first_fdv_path", timestamp, state_row)
+        for level in newly_crossed:
+            self._enqueue_metadata_snapshot(mint, f"crossed_{level}", timestamp, state_row)
+        if new_state in MATURITY_STATES and previous_state != new_state:
+            self._enqueue_metadata_snapshot(mint, new_state, timestamp, state_row)
         if self.config.is_v2:
             _process_v2_paper_shadow_labels(self.config, enriched, state_row)
         else:
@@ -562,6 +606,27 @@ class OfficialLifecycleStateMachine:
             self._transition(mint, previous_state, new_state, timestamp, "observed_fdv_path_transition")
         self.save()
         return enriched
+
+    def _enqueue_metadata_snapshot(
+        self,
+        mint: str,
+        lifecycle_point: str,
+        observed_at: float | None,
+        create_metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if self.metadata_queue is None:
+            return
+        try:
+            self.metadata_queue.enqueue(
+                mint=mint,
+                lifecycle_point=lifecycle_point,
+                source_dataset=self.config.sample_label,
+                observed_at=observed_at,
+                create_metadata=create_metadata or {},
+            )
+        except Exception:
+            # Metadata enrichment is diagnostic only and must not block lifecycle collection.
+            return
 
     def active_watch_mints(self) -> list[str]:
         active = []
@@ -1015,6 +1080,11 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
     target = int(target_crossed_20k or config.target_crossed_20k)
     audit, _ = build_official_lifecycle_quality_audit(config, write_outputs=False)
     paper_shadow_label_status = build_paper_shadow_label_status(config) if config.is_v2 else {}
+    metadata_coverage: dict[str, Any] = {}
+    if config.is_v2:
+        from research.mtp_research.validation.forward_metadata_enrichment import summarize_metadata_coverage
+
+        metadata_coverage, _ = summarize_metadata_coverage(config)
     b_counts = {
         rule_id: int(paper_shadow_label_status.get(f"{rule_id}_pass_count") or 0)
         for rule_id in ["B1", "B2", "B3", "B4"]
@@ -1070,6 +1140,7 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         ),
         "E2_total_exit_event_rows": int(paper_shadow_label_status.get("E2_total_exit_event_rows") or 0),
         "E2_hypothetical_exits": int(paper_shadow_label_status.get("E2_total_exit_event_rows") or 0),
+        "metadata_coverage": metadata_coverage,
         "warnings": audit["warnings"],
         "quality_status": audit["quality_status"],
         "recommendation": audit["recommendation"],
@@ -1209,6 +1280,7 @@ def format_official_lifecycle_status(status: dict[str, Any]) -> str:
     if status.get("sample_label") == OFFICIAL_V2_SAMPLE_LABEL:
         b_counts = status.get("B_label_counts") or {}
         paper_shadow = status.get("paper_shadow_label_status") or {}
+        metadata = status.get("metadata_coverage") or {}
         return "\n".join(
             [
                 "## Official Lifecycle Watch v2 Status",
@@ -1233,6 +1305,22 @@ def format_official_lifecycle_status(status: dict[str, Any]) -> str:
                 f"B1/B2/B3/B4 label counts: {b_counts}",
                 f"E2 labels active: {status['E2_labels_active']}",
                 f"E2 hypothetical exits: {status['E2_hypothetical_exits']}",
+                "## Metadata Coverage",
+                f"Metadata snapshots: {metadata.get('metadata_snapshots', 0)}",
+                f"Unique mints with metadata: {metadata.get('unique_mints_with_metadata', 0)}",
+                f"Birth metadata coverage: {metadata.get('birth_metadata_coverage', 0)}",
+                f"10k metadata coverage: {metadata.get('10k_metadata_coverage', 0)}",
+                f"20k metadata coverage: {metadata.get('20k_metadata_coverage', 0)}",
+                f"Maturity metadata coverage: {metadata.get('maturity_metadata_coverage', 0)}",
+                f"Token name / symbol coverage: {metadata.get('token_name_coverage', 0)} / {metadata.get('symbol_coverage', 0)}",
+                f"Image URI coverage: {metadata.get('image_uri_coverage', 0)}",
+                f"Website / X / Telegram / Discord coverage: {metadata.get('website_coverage', 0)} / {metadata.get('twitter_x_coverage', 0)} / {metadata.get('telegram_coverage', 0)} / {metadata.get('discord_coverage', 0)}",
+                f"Any social coverage: {metadata.get('any_social_coverage', 0)}",
+                f"Metadata completeness median: {metadata.get('metadata_completeness_median')}",
+                f"Metadata source mix: {metadata.get('metadata_source_mix', {})}",
+                f"Metadata latest-only / point-in-time: {metadata.get('metadata_latest_only_count', 0)} / {metadata.get('metadata_point_in_time_count', 0)}",
+                f"Metadata failures: {metadata.get('metadata_failures', 0)}",
+                f"DexScreener coverage: {metadata.get('dexscreener_coverage', 0)}",
                 "## Paper/Shadow Labels",
                 *_paper_shadow_label_status_lines(paper_shadow),
                 "Important:",
