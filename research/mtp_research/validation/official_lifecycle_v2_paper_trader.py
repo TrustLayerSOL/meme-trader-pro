@@ -21,6 +21,10 @@ from research.mtp_research.validation.official_lifecycle_watch import OfficialLi
 
 ENTRY_RULE_ID = "MTP_V2_BASELINE_ACTIONABLE_20K_ENTRY"
 EXIT_RULE_ID = "MTP_V2_E2_TRAILING_DRAWDOWN_EXIT"
+ENTRY_CONFIRMATION_WINDOW_SECONDS = 120.0
+ENTRY_CONFIRMATION_MIN_20K_ROWS = 2
+ENTRY_SPIKE_REJECTION_RATIO = 3.0
+ENTRY_THRESHOLD_FDV = 20_000.0
 
 
 @dataclass(frozen=True)
@@ -115,19 +119,33 @@ def run_paper_trade_once(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
     ledger = _read_ledger(config)
     metadata = _metadata_by_mint(config)
     paths_by_mint = _paths_by_mint(config)
+    voids_created = _void_invalid_entries(config, state, ledger, paths_by_mint)
     buys_created = 0
     sells_created = 0
 
     for label in _read_jsonl(config.lifecycle.paper_shadow_labels_path):
         mint = str(label.get("mint") or "")
-        if not mint or mint in state["open_positions"] or mint in state["closed_mints"]:
+        if (
+            not mint
+            or mint in state["open_positions"]
+            or mint in state["closed_mints"]
+            or mint in state["rejected_entry_mints"]
+            or mint in state["voided_mints"]
+        ):
             continue
         if label.get("official_baseline_entry_eligible") is not True or label.get("baseline_all_actionable_20k") is not True:
             continue
         label_time = _num(label.get("label_time") or label.get("timestamp")) or time.time()
-        path = _nearest_path(paths_by_mint.get(mint, []), label_time, require_crossed_20k=True)
+        path_rows = paths_by_mint.get(mint, [])
+        path = _nearest_path(path_rows, label_time, require_crossed_20k=True)
         buy_marketcap = _num((path or {}).get("fdv_proxy"))
         if buy_marketcap is None or buy_marketcap <= 0:
+            continue
+        confirmation = _entry_confirmation(path_rows, label_time, path)
+        if confirmation["status"] == "pending":
+            continue
+        if confirmation["status"] == "rejected":
+            _record_entry_rejection(state, ledger, mint, label, path or {}, confirmation)
             continue
         meta = metadata.get(mint, {})
         wallet_before = float(state["wallet_usd"])
@@ -200,12 +218,14 @@ def run_paper_trade_once(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
     _write_json(config.state_path, state)
     _write_ledger(config, ledger)
     _write_monitor(config, state, ledger)
+    voided = set(state.get("voided_mints") or [])
     return {
         "enabled": True,
         "buys_created": buys_created,
         "sells_created": sells_created,
+        "voids_created": voids_created,
         "open_positions": len(state["open_positions"]),
-        "closed_trades": len([row for row in ledger if row.get("side") == "paper_sell"]),
+        "closed_trades": len([row for row in ledger if row.get("side") == "paper_sell" and row.get("mint") not in voided]),
         "wallet_usd": state["wallet_usd"],
         "monitor_html_path": str(config.monitor_html_path),
         "ledger_path": str(config.ledger_path),
@@ -217,12 +237,15 @@ def paper_trade_status(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
         return {"enabled": False}
     state = _load_state(config)
     ledger = _read_ledger(config)
+    voided = set(state.get("voided_mints") or [])
     return {
         "enabled": True,
         "wallet_usd": state.get("wallet_usd"),
         "cash_usd": state.get("cash_usd"),
         "open_positions": len(state.get("open_positions") or {}),
-        "closed_trades": len([row for row in ledger if row.get("side") == "paper_sell"]),
+        "closed_trades": len([row for row in ledger if row.get("side") == "paper_sell" and row.get("mint") not in voided]),
+        "rejected_entries": len([row for row in ledger if row.get("side") == "paper_rejected_entry"]),
+        "voided_entries": len([row for row in ledger if row.get("side") == "paper_void"]),
         "ledger_rows": len(ledger),
         "monitor_html_path": str(config.monitor_html_path),
         "monitor_md_path": str(config.monitor_md_path),
@@ -242,6 +265,8 @@ def _initial_state(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
         "position_fraction": float(config.position_fraction),
         "open_positions": {},
         "closed_mints": [],
+        "rejected_entry_mints": [],
+        "voided_mints": [],
         "created_at": _utc_now(),
         "updated_at": _utc_now(),
         "guardrails": ["no_live_trading", "no_wallet_execution", "no_transaction_signing", "paper_only_accounting"],
@@ -249,7 +274,10 @@ def _initial_state(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
 
 
 def _write_monitor(config: OfficialV2PaperTradeConfig, state: dict[str, Any], ledger: list[dict[str, Any]]) -> None:
-    sells = [row for row in ledger if row.get("side") == "paper_sell"]
+    voided = set(state.get("voided_mints") or [])
+    sells = [row for row in ledger if row.get("side") == "paper_sell" and row.get("mint") not in voided]
+    rejections = [row for row in ledger if row.get("side") == "paper_rejected_entry"]
+    voids = [row for row in ledger if row.get("side") == "paper_void"]
     current_marketcaps = _latest_marketcaps_by_mint(config)
     open_positions = [
         _enrich_open_position(row, current_marketcaps.get(str(row.get("mint") or "")))
@@ -263,6 +291,8 @@ def _write_monitor(config: OfficialV2PaperTradeConfig, state: dict[str, Any], le
         "position_fraction": state.get("position_fraction"),
         "open_positions": open_positions,
         "closed_trades": sells,
+        "rejected_entries": rejections,
+        "voided_entries": voids,
         "current_market_caps": [
             {
                 "mint": row.get("mint"),
@@ -292,6 +322,8 @@ def _monitor_markdown(payload: dict[str, Any]) -> str:
         f"Cash: ${payload['cash_usd']}",
         f"Open positions: {len(payload['open_positions'])}",
         f"Closed trades: {len(payload['closed_trades'])}",
+        f"Rejected entries: {len(payload['rejected_entries'])}",
+        f"Voided entries: {len(payload['voided_entries'])}",
         f"Total paper P/L: ${payload['total_paper_profit_loss_usd']}",
         "",
         "This is paper-only accounting. No live trades, wallet execution, signing, swaps, or routing.",
@@ -321,11 +353,17 @@ def _monitor_markdown(payload: dict[str, Any]) -> str:
         lines.append(
             f"- {row.get('token_name') or row.get('mint')}: bought MC ${row.get('buy_marketcap')}, sold MC ${row.get('sell_marketcap')}, P/L ${row.get('paper_profit_loss_usd')}, sell reason {row.get('sell_reason')}"
         )
+    lines.append("")
+    lines.append("## Rejected / Voided Entries")
+    for row in payload["rejected_entries"] + payload["voided_entries"]:
+        lines.append(
+            f"- {row.get('token_name') or row.get('mint')}: {row.get('side')} at MC ${row.get('buy_marketcap')}, reason {row.get('rejection_reason') or row.get('void_reason')}"
+        )
     return "\n".join(lines) + "\n"
 
 
 def _monitor_html(payload: dict[str, Any]) -> str:
-    rows = payload["open_positions"] + payload["closed_trades"]
+    rows = payload["open_positions"] + payload["closed_trades"] + payload["rejected_entries"] + payload["voided_entries"]
     current_marketcap_rows = "\n".join(
         "<tr>"
         f"<td>{html.escape(str(row.get('token_name') or row.get('mint') or ''))}</td>"
@@ -361,7 +399,7 @@ small{{color:#667085}} .guard{{color:#7a2e0e;margin-top:12px}} button.ca{{border
 function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{document.getElementById('copy-status').textContent='Copied CA: '+value;}});}}
 </script></head><body>
 <h1>MemeTraderPro v2 Paper Monitor</h1>
-<div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_trades'])}</b></div><div class=\"stat\">Paper P/L<br><b>${payload['total_paper_profit_loss_usd']}</b></div></div>
+<div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_trades'])}</b></div><div class=\"stat\">Rejected<br><b>{len(payload['rejected_entries'])}</b></div><div class=\"stat\">Voided<br><b>{len(payload['voided_entries'])}</b></div><div class=\"stat\">Paper P/L<br><b>${payload['total_paper_profit_loss_usd']}</b></div></div>
 <p class=\"guard\">Paper-only monitor. No live trades, wallet execution, signing, swaps, or routing.</p>
 <p id=\"copy-status\"><small>Click any CA to copy it.</small></p>
 <h2>Current Market Caps</h2>
@@ -390,7 +428,7 @@ def _ca_button(mint: Any) -> str:
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["timestamp", "side", "mint", "token_name", "token_symbol", "allocation_usd", "buy_marketcap", "current_marketcap", "sell_marketcap", "paper_profit_loss_usd", "buy_reason", "sell_reason", "image_uri"]
+    fields = ["timestamp", "side", "mint", "token_name", "token_symbol", "allocation_usd", "buy_marketcap", "current_marketcap", "sell_marketcap", "paper_profit_loss_usd", "buy_reason", "sell_reason", "rejection_reason", "void_reason", "image_uri"]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -451,6 +489,130 @@ def _nearest_path(rows: list[dict[str, Any]], timestamp: float, *, require_cross
     return min(candidates, key=lambda row: abs((_num(row.get("timestamp")) or timestamp) - timestamp))
 
 
+def _entry_confirmation(rows: list[dict[str, Any]], label_time: float, trigger_path: dict[str, Any] | None) -> dict[str, Any]:
+    trigger_fdv = _num((trigger_path or {}).get("fdv_proxy"))
+    if trigger_fdv is None or trigger_fdv < ENTRY_THRESHOLD_FDV:
+        return {"status": "pending", "reason": "no_crossed_20k_path_row_yet"}
+    window_rows = [
+        row
+        for row in rows
+        if abs(((_num(row.get("timestamp")) or label_time) - label_time)) <= ENTRY_CONFIRMATION_WINDOW_SECONDS
+    ]
+    confirmed_rows = [row for row in window_rows if (_num(row.get("fdv_proxy")) or 0.0) >= ENTRY_THRESHOLD_FDV]
+    if len(confirmed_rows) >= ENTRY_CONFIRMATION_MIN_20K_ROWS:
+        return {"status": "confirmed", "reason": "confirmed_by_multiple_20k_rows", "confirming_rows": len(confirmed_rows)}
+    surrounding = [row for row in window_rows if row is not trigger_path and (_num(row.get("fdv_proxy")) or 0.0) > 0]
+    surrounding_fdvs = [_num(row.get("fdv_proxy")) or 0.0 for row in surrounding]
+    max_surrounding = max(surrounding_fdvs) if surrounding_fdvs else None
+    later_rows = [
+        row
+        for row in rows
+        if label_time < (_num(row.get("timestamp")) or 0.0) <= label_time + ENTRY_CONFIRMATION_WINDOW_SECONDS
+    ]
+    later_under_threshold = any((_num(row.get("fdv_proxy")) or 0.0) < ENTRY_THRESHOLD_FDV for row in later_rows)
+    if (
+        max_surrounding is not None
+        and max_surrounding < ENTRY_THRESHOLD_FDV
+        and trigger_fdv >= max_surrounding * ENTRY_SPIKE_REJECTION_RATIO
+        and later_under_threshold
+    ):
+        return {
+            "status": "rejected",
+            "reason": "single_row_fdv_spike_not_confirmed",
+            "trigger_fdv": trigger_fdv,
+            "max_surrounding_fdv": max_surrounding,
+            "confirming_rows": len(confirmed_rows),
+        }
+    if later_rows:
+        return {
+            "status": "rejected",
+            "reason": "crossed_20k_not_confirmed_by_followup_rows",
+            "trigger_fdv": trigger_fdv,
+            "confirming_rows": len(confirmed_rows),
+        }
+    return {"status": "pending", "reason": "waiting_for_second_20k_confirmation", "confirming_rows": len(confirmed_rows)}
+
+
+def _record_entry_rejection(
+    state: dict[str, Any],
+    ledger: list[dict[str, Any]],
+    mint: str,
+    label: dict[str, Any],
+    path: dict[str, Any],
+    confirmation: dict[str, Any],
+) -> None:
+    if mint in state["rejected_entry_mints"]:
+        return
+    state["rejected_entry_mints"].append(mint)
+    ledger.append(
+        {
+            "timestamp": _num(label.get("label_time") or label.get("timestamp")) or time.time(),
+            "side": "paper_rejected_entry",
+            "mint": mint,
+            "buy_marketcap": _num(path.get("fdv_proxy")),
+            "rejection_reason": confirmation.get("reason"),
+            "rejection_detail": confirmation,
+            "buy_reason": ENTRY_RULE_ID,
+            "entry_label": _b_label(label),
+            "paper_profit_loss_usd": 0.0,
+            "no_live_trade": True,
+        }
+    )
+
+
+def _void_invalid_entries(
+    config: OfficialV2PaperTradeConfig,
+    state: dict[str, Any],
+    ledger: list[dict[str, Any]],
+    paths_by_mint: dict[str, list[dict[str, Any]]],
+) -> int:
+    voided = set(state.get("voided_mints") or [])
+    created = 0
+    for buy in [row for row in ledger if row.get("side") == "paper_buy"]:
+        mint = str(buy.get("mint") or "")
+        if not mint or mint in voided:
+            continue
+        label_time = _num(buy.get("opened_at") or buy.get("timestamp")) or 0.0
+        path = _nearest_path(paths_by_mint.get(mint, []), label_time, require_crossed_20k=True)
+        confirmation = _entry_confirmation(paths_by_mint.get(mint, []), label_time, path)
+        if confirmation["status"] != "rejected":
+            continue
+        valid_sell_pl = sum(
+            float(row.get("paper_profit_loss_usd") or 0.0)
+            for row in ledger
+            if row.get("side") == "paper_sell" and row.get("mint") == mint
+        )
+        if mint in state["open_positions"]:
+            position = state["open_positions"].pop(mint)
+            state["cash_usd"] = _round_money(float(state["cash_usd"]) + float(position.get("allocation_usd") or 0.0))
+        elif valid_sell_pl:
+            state["cash_usd"] = _round_money(float(state["cash_usd"]) - valid_sell_pl)
+        if mint not in state["voided_mints"]:
+            state["voided_mints"].append(mint)
+        if mint not in state["rejected_entry_mints"]:
+            state["rejected_entry_mints"].append(mint)
+        ledger.append(
+            {
+                "timestamp": time.time(),
+                "side": "paper_void",
+                "mint": mint,
+                "token_name": buy.get("token_name"),
+                "token_symbol": buy.get("token_symbol"),
+                "buy_marketcap": buy.get("buy_marketcap"),
+                "void_reason": confirmation.get("reason"),
+                "void_detail": confirmation,
+                "void_correction_usd": _round_money(-valid_sell_pl),
+                "paper_profit_loss_usd": 0.0,
+                "no_live_trade": True,
+            }
+        )
+        voided.add(mint)
+        created += 1
+    if created:
+        state["wallet_usd"] = _round_money(float(state["cash_usd"]) + _open_cost_basis(state))
+    return created
+
+
 def _b_label(row: dict[str, Any]) -> str:
     for label in ["B1", "B2", "B3", "B4"]:
         if row.get(f"{label}_pass") is True:
@@ -463,7 +625,12 @@ def _open_cost_basis(state: dict[str, Any]) -> float:
 
 
 def _load_state(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
-    return json.loads(config.state_path.read_text(encoding="utf-8"))
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    state.setdefault("open_positions", {})
+    state.setdefault("closed_mints", [])
+    state.setdefault("rejected_entry_mints", [])
+    state.setdefault("voided_mints", [])
+    return state
 
 
 def _read_ledger(config: OfficialV2PaperTradeConfig) -> list[dict[str, Any]]:

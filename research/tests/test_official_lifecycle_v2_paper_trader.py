@@ -99,6 +99,7 @@ def test_v2_paper_trader_is_idempotent(tmp_path: Path) -> None:
     initialize_official_lifecycle_namespace(lifecycle)
     config = OfficialV2PaperTradeConfig(data_root=tmp_path)
     _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 100.0, "fdv_proxy": 20_000, "crossed_20k": True})
+    _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 110.0, "fdv_proxy": 21_000, "crossed_20k": True})
     _append(
         lifecycle.paper_shadow_labels_path,
         {"mint": "mint-a", "label_time": 100.0, "official_baseline_entry_eligible": True, "baseline_all_actionable_20k": True},
@@ -110,6 +111,77 @@ def test_v2_paper_trader_is_idempotent(tmp_path: Path) -> None:
 
     ledger = [json.loads(line) for line in config.ledger_path.read_text(encoding="utf-8").splitlines()]
     assert len(ledger) == 1
+
+
+def test_v2_paper_trader_rejects_single_row_fdv_spike(tmp_path: Path) -> None:
+    lifecycle = OfficialLifecycleV2Config(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(lifecycle)
+    config = OfficialV2PaperTradeConfig(data_root=tmp_path)
+    _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 90.0, "fdv_proxy": 3_200, "crossed_20k": False})
+    _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 100.0, "fdv_proxy": 36_000, "crossed_20k": True})
+    _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 103.0, "fdv_proxy": 3_100, "crossed_20k": False})
+    _append(
+        lifecycle.paper_shadow_labels_path,
+        {"mint": "mint-a", "label_time": 100.0, "official_baseline_entry_eligible": True, "baseline_all_actionable_20k": True},
+    )
+
+    initialize_paper_trader(config, reset=True)
+    result = run_paper_trade_once(config)
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    ledger = [json.loads(line) for line in config.ledger_path.read_text(encoding="utf-8").splitlines()]
+
+    assert result["buys_created"] == 0
+    assert state["wallet_usd"] == 300
+    assert state["open_positions"] == {}
+    assert state["rejected_entry_mints"] == ["mint-a"]
+    assert ledger[0]["side"] == "paper_rejected_entry"
+    assert ledger[0]["rejection_reason"] == "single_row_fdv_spike_not_confirmed"
+
+
+def test_v2_paper_trader_voids_existing_single_row_fdv_spike_trade(tmp_path: Path) -> None:
+    lifecycle = OfficialLifecycleV2Config(data_root=tmp_path)
+    initialize_official_lifecycle_namespace(lifecycle)
+    config = OfficialV2PaperTradeConfig(data_root=tmp_path)
+    _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 90.0, "fdv_proxy": 3_200, "crossed_20k": False})
+    _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 100.0, "fdv_proxy": 36_000, "crossed_20k": True})
+    _append(lifecycle.followup_paths_path, {"mint": "mint-a", "timestamp": 103.0, "fdv_proxy": 3_100, "crossed_20k": False})
+    initialize_paper_trader(config, reset=True)
+    config.ledger_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"mint": "mint-a", "timestamp": 100.0, "opened_at": 100.0, "side": "paper_buy", "allocation_usd": 15, "buy_marketcap": 36_000, "paper_profit_loss_usd": 0.0}),
+                json.dumps({"mint": "mint-a", "timestamp": 120.0, "opened_at": 100.0, "side": "paper_sell", "allocation_usd": 15, "buy_marketcap": 36_000, "sell_marketcap": 3_100, "paper_profit_loss_usd": -13.708333}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config.state_path.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "mode": "paper_only_sidecar",
+                "starting_wallet_usd": 300,
+                "wallet_usd": 286.291667,
+                "cash_usd": 286.291667,
+                "position_fraction": 0.05,
+                "open_positions": {},
+                "closed_mints": ["mint-a"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_paper_trade_once(config)
+    state = json.loads(config.state_path.read_text(encoding="utf-8"))
+    ledger = [json.loads(line) for line in config.ledger_path.read_text(encoding="utf-8").splitlines()]
+
+    assert result["voids_created"] == 1
+    assert state["wallet_usd"] == 300
+    assert state["cash_usd"] == 300
+    assert state["voided_mints"] == ["mint-a"]
+    assert ledger[-1]["side"] == "paper_void"
+    assert ledger[-1]["void_reason"] == "single_row_fdv_spike_not_confirmed"
 
 
 def test_v2_paper_trader_contains_no_live_execution_logic() -> None:
