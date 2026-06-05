@@ -16,6 +16,7 @@ from typing import Any, Callable
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from research.mtp_research.ingestion.pumpfun_create_scanner import PumpFunCreateScanner
@@ -463,6 +464,7 @@ def run_no_laserstream_lifecycle_smoke(
     fetcher: Any | None = None,
     metadata_resolver: Any | None = None,
     now_fn: Callable[[], float] | None = None,
+    rate_limit_backoff_seconds: float = 30.0,
 ) -> dict[str, Any]:
     initialize_official_lifecycle_namespace(config, reset=execute and _row_count(config.births_path) == 0)
     write_no_laserstream_bottleneck_audit(config)
@@ -550,12 +552,30 @@ def run_no_laserstream_lifecycle_smoke(
                     counters.stale_or_quarantined_births += 1
                     _append_jsonl(config.stale_births_path, [_stale_from_hydration(hydration, reason="missing_mint_after_hydration")])
                     continue
-                events = fetcher.fetch_for_mint(
-                    mint,
-                    signatures_per_mint=signatures_per_mint,
-                    transactions_per_mint=transactions_per_mint,
-                    followup_addresses=_followup_addresses(candidate),
-                )
+                try:
+                    events = fetcher.fetch_for_mint(
+                        mint,
+                        signatures_per_mint=signatures_per_mint,
+                        transactions_per_mint=transactions_per_mint,
+                        followup_addresses=_followup_addresses(candidate),
+                    )
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 429:
+                        raise
+                    warnings.append("helius_rate_limited_followup_deferred")
+                    counters.stale_or_quarantined_births += 1
+                    _append_jsonl(
+                        config.stale_births_path,
+                        [
+                            _stale_from_hydration(
+                                hydration,
+                                first_attempt=first_attempt,
+                                reason="helius_rate_limited_followup_deferred",
+                            )
+                        ],
+                    )
+                    _sleep_for_rate_limit(rate_limit_backoff_seconds, deadline)
+                    continue
                 first_fdv = next((safe_float(event.get("fdv_proxy")) for event in events if safe_float(event.get("fdv_proxy")) is not None), None)
                 birth_row = _official_birth_row(
                     hydration,
@@ -597,12 +617,18 @@ def run_no_laserstream_lifecycle_smoke(
                     if holder_snapshot:
                         _append_jsonl(config.holder_snapshots_path, [holder_snapshot])
                         counters.holder_snapshots_written += 1
-            run_active_lifecycle_followup_cycle(
-                machine,
-                fetcher,
-                signatures_per_mint=signatures_per_mint,
-                transactions_per_mint=transactions_per_mint,
-            )
+            try:
+                run_active_lifecycle_followup_cycle(
+                    machine,
+                    fetcher,
+                    signatures_per_mint=signatures_per_mint,
+                    transactions_per_mint=transactions_per_mint,
+                )
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429:
+                    raise
+                warnings.append("helius_rate_limited_active_followup_deferred")
+                _sleep_for_rate_limit(rate_limit_backoff_seconds, deadline)
             if not log_rows and not completed:
                 time.sleep(0.05)
         if time.monotonic() >= deadline and counters.official_accepted_births < int(target_births):
@@ -1014,6 +1040,14 @@ def _holder_snapshot_from_event(event: dict[str, Any], path: dict[str, Any]) -> 
         "holder_snapshot_missing_reason": None if holder_count is not None else "holder_proxy_not_available_from_followup_event",
         "not_full_chain_holder_state": True,
     }
+
+
+def _sleep_for_rate_limit(backoff_seconds: float, deadline: float) -> None:
+    delay = max(0.0, float(backoff_seconds))
+    if delay <= 0:
+        return
+    remaining = max(0.0, deadline - time.monotonic())
+    time.sleep(min(delay, remaining))
 
 
 def _snapshot_level(fdv: float, state: Any) -> str | None:

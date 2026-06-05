@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import urllib.error
 from pathlib import Path
 
 from research.mtp_research.validation.no_laserstream_lifecycle_collector import (
@@ -83,6 +84,19 @@ class FakeFetcher:
         self.requests_used += 1
         self.calls.append((mint, list(followup_addresses or [])))
         return [dict(row) for row in self.events_by_mint.get(mint, [])[:transactions_per_mint]]
+
+
+class RateLimitFetcher(FakeFetcher):
+    def fetch_for_mint(
+        self,
+        mint: str,
+        *,
+        signatures_per_mint: int,
+        transactions_per_mint: int,
+        followup_addresses: list[str] | None = None,
+    ) -> list[dict]:
+        self.requests_used += 1
+        raise urllib.error.HTTPError("https://helius.invalid", 429, "Too Many Requests", hdrs=None, fp=None)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -250,6 +264,32 @@ def test_duplicate_signature_is_written_once(tmp_path: Path) -> None:
 
     assert result["provisional_birth_logs"] == 1
     assert len(read_jsonl(config.provisional_births_path)) == 1
+
+
+def test_rate_limited_followup_does_not_crash_collector(tmp_path: Path) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path, max_birth_to_first_followup_seconds=5.0)
+    source = FakeLogSource([{"signature": "sig-rate-limit", "log_observed_at": 100.0}])
+    hydrator = FakeHydrator({"sig-rate-limit": {"mint": "mint-rate-limit", "launch_time": 100.0}})
+    fetcher = RateLimitFetcher()
+
+    result = run_no_laserstream_lifecycle_smoke(
+        config,
+        target_births=1,
+        execute=True,
+        source=source,
+        hydrator=hydrator,
+        fetcher=fetcher,
+        now_fn=iter([100.1, 100.2, 100.3, 100.4]).__next__,
+        max_runtime_seconds=0.05,
+        rate_limit_backoff_seconds=0.0,
+    )
+
+    assert result["execute"] is True
+    assert "helius_rate_limited_followup_deferred" in result["warnings"]
+    assert result["official_accepted_births"] == 0
+    assert config.status_path.exists()
+    stale_rows = read_jsonl(config.stale_births_path)
+    assert stale_rows[0]["rejection_reason"] == "helius_rate_limited_followup_deferred"
 
 
 def test_bottleneck_audit_reports_hydration_registration_blocker(tmp_path: Path) -> None:

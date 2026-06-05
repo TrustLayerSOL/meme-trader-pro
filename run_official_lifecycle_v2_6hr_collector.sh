@@ -15,6 +15,6 @@ exec ./trading_env/bin/python -u -m research.mtp_research.validation.run_forward
   --max-runtime-minutes 360 \
   --max-helius-credits 500000 \
   --max-active-birth-followups 300 \
-  --signatures-per-mint 10 \
-  --transactions-per-mint 10 \
+  --signatures-per-mint 2 \
+  --transactions-per-mint 2 \
   --execute
