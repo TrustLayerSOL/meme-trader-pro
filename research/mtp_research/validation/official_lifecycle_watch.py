@@ -8,6 +8,7 @@ validation, backtests, or strategy generation.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,8 +22,11 @@ from research.mtp_research.data_paths import data_lake_root
 
 
 OFFICIAL_SAMPLE_LABEL = "official_lifecycle_watch_v1"
+OFFICIAL_V2_SAMPLE_LABEL = "official_lifecycle_watch_v2"
 QUARANTINED_SAMPLE_LABEL = "pre_lifecycle_watch_forward_sample"
+MIXED_PRE_V2_QUARANTINE_LABEL = "mixed_forward_campaign_pre_v2"
 REPORT_ID = "official_lifecycle_watch_v1"
+REPORT_ID_V2 = "official_lifecycle_watch_v2"
 TARGET_LEVELS: dict[str, float] = {
     "10k": 10_000.0,
     "15k": 15_000.0,
@@ -99,6 +103,8 @@ PROHIBITED_USES = [
 
 @dataclass
 class OfficialLifecycleConfig:
+    sample_label: str = OFFICIAL_SAMPLE_LABEL
+    report_id: str = REPORT_ID
     data_root: Path | str | None = None
     followup_poll_seconds: float = 2.0
     trigger_qualified_followup_poll_seconds: float = 2.0
@@ -119,23 +125,25 @@ class OfficialLifecycleConfig:
 
     @property
     def observation_root(self) -> Path:
-        return self.root / "data" / "forward_observation" / OFFICIAL_SAMPLE_LABEL
+        return self.root / "data" / "forward_observation" / self.sample_label
 
     @property
     def raw_root(self) -> Path:
-        return self.root / "data" / "raw" / "forward_observation" / OFFICIAL_SAMPLE_LABEL
+        return self.root / "data" / "raw" / "forward_observation" / self.sample_label
 
     @property
     def report_root(self) -> Path:
-        return self.root / "data" / "backtests" / "diagnostics" / "reports" / "forward_observation" / OFFICIAL_SAMPLE_LABEL
+        return self.root / "data" / "backtests" / "diagnostics" / "reports" / "forward_observation" / self.sample_label
 
     @property
     def manifest_json_path(self) -> Path:
-        return self.observation_root / "official_lifecycle_manifest.json"
+        stem = "official_lifecycle_v2_manifest" if self.is_v2 else "official_lifecycle_manifest"
+        return self.observation_root / f"{stem}.json"
 
     @property
     def manifest_md_path(self) -> Path:
-        return self.observation_root / "official_lifecycle_manifest.md"
+        stem = "official_lifecycle_v2_manifest" if self.is_v2 else "official_lifecycle_manifest"
+        return self.observation_root / f"{stem}.md"
 
     @property
     def state_path(self) -> Path:
@@ -186,6 +194,18 @@ class OfficialLifecycleConfig:
         return self.observation_root / "status.json"
 
     @property
+    def paper_shadow_labels_path(self) -> Path:
+        return self.observation_root / "paper_shadow_labels.jsonl"
+
+    @property
+    def paper_shadow_exit_labels_path(self) -> Path:
+        return self.observation_root / "paper_shadow_exit_labels.jsonl"
+
+    @property
+    def paper_shadow_v2_config_path(self) -> Path:
+        return self.observation_root / "paper_shadow_v2_config.json"
+
+    @property
     def helius_ws_raw_path(self) -> Path:
         return self.raw_root / "helius_ws_raw.jsonl"
 
@@ -196,6 +216,81 @@ class OfficialLifecycleConfig:
     @property
     def helius_rpc_raw_path(self) -> Path:
         return self.raw_root / "helius_rpc_raw.jsonl"
+
+    @property
+    def is_v2(self) -> bool:
+        return self.sample_label == OFFICIAL_V2_SAMPLE_LABEL
+
+
+@dataclass
+class OfficialLifecycleV2Config(OfficialLifecycleConfig):
+    sample_label: str = OFFICIAL_V2_SAMPLE_LABEL
+    report_id: str = REPORT_ID_V2
+
+
+def freeze_mixed_forward_campaign_pre_v2(
+    *,
+    data_root: Path | str | None = None,
+    copy_sources: bool = True,
+) -> dict[str, Any]:
+    root = Path(data_root or data_lake_root()).expanduser()
+    quarantine_root = root / "data" / "forward_observation" / "quarantined" / MIXED_PRE_V2_QUARANTINE_LABEL
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+    source_roots = _mixed_pre_v2_source_roots(root)
+    source_files = _mixed_pre_v2_source_files(source_roots)
+    row_counts = {_source_rel(root, path): _row_count(path) for path in source_files}
+    crossed_counts = {
+        _source_rel(root, path): _crossed_20k_row_count(path)
+        for path in source_files
+        if path.name in {"followup_paths.jsonl", "drawdowns.jsonl"}
+    }
+    if copy_sources:
+        snapshot_root = quarantine_root / "snapshot"
+        for source in source_roots:
+            if not source.exists():
+                continue
+            destination = snapshot_root / _source_rel(root, source)
+            if source.is_dir():
+                shutil.copytree(source, destination, dirs_exist_ok=True, ignore=shutil.ignore_patterns("._*"))
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+    manifest = {
+        "quarantine_label": MIXED_PRE_V2_QUARANTINE_LABEL,
+        "created_at": _utc_now_iso(),
+        "reason": (
+            "Mixed pre-v2 forward campaign includes partial, repaired, and pre-clean-lifecycle data; "
+            "it is useful for debugging/design context but excluded from official lifecycle v2 evidence."
+        ),
+        "quarantine_root": str(quarantine_root),
+        "snapshot_root": str(quarantine_root / "snapshot") if copy_sources else None,
+        "source_folders": [_source_rel(root, path) for path in source_roots if path.exists()],
+        "source_files": [_source_rel(root, path) for path in source_files],
+        "row_counts": row_counts,
+        "crossed_20k_counts": crossed_counts,
+        "known_limitations": [
+            "some rows came from before lifecycle watching was correct",
+            "some rows came from partial collection",
+            "some rows were already quarantined as pre-lifecycle or partial-birth-coverage",
+            "not clean official paper-shadow evidence",
+        ],
+        "approved_uses": [
+            "collector debugging",
+            "tentative rule design",
+            "feature availability review",
+            "historical comparison only",
+        ],
+        "prohibited_uses": [
+            "official paper-shadow evidence",
+            "final validation",
+            "live trading",
+            "final buy/sell logic",
+            "profitability claims",
+        ],
+    }
+    _write_json(quarantine_root / "quarantine_manifest.json", manifest)
+    (quarantine_root / "quarantine_manifest.md").write_text(_quarantine_manifest_markdown(manifest), encoding="utf-8")
+    return manifest
 
 
 def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, reset: bool = False) -> dict[str, Any]:
@@ -214,6 +309,8 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
             config.hydration_results_path,
             config.drawdowns_path,
             config.transitions_path,
+            config.paper_shadow_labels_path,
+            config.paper_shadow_exit_labels_path,
             config.status_path,
             config.helius_ws_raw_path,
             config.pumpfun_create_logs_raw_path,
@@ -234,6 +331,8 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
         config.hydration_results_path,
         config.drawdowns_path,
         config.transitions_path,
+        config.paper_shadow_labels_path,
+        config.paper_shadow_exit_labels_path,
         config.helius_ws_raw_path,
         config.pumpfun_create_logs_raw_path,
         config.helius_rpc_raw_path,
@@ -242,15 +341,25 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
     if not config.state_path.exists():
         _write_json(config.state_path, _empty_state(config))
     manifest = {
-        "report_id": REPORT_ID,
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "report_id": config.report_id,
+        "sample_label": config.sample_label,
         "starts_from_zero": _row_count(config.births_path) == 0,
         "old_quarantined_sample_excluded": True,
+        "previous_samples_excluded": True,
         "excluded_sample_label": QUARANTINED_SAMPLE_LABEL,
+        "excluded_previous_samples": [OFFICIAL_SAMPLE_LABEL, QUARANTINED_SAMPLE_LABEL]
+        if config.is_v2
+        else [QUARANTINED_SAMPLE_LABEL],
         "collection_start_time": _utc_now_iso(),
+        "created_at": _utc_now_iso(),
         "observation_root": str(config.observation_root),
         "raw_root": str(config.raw_root),
         "report_root": str(config.report_root),
+        "entry_universe_definition": "baseline_all_actionable_crossed_20k_mints"
+        if config.is_v2
+        else "fresh_official_lifecycle_crossed_trigger_mints",
+        "actionability_eligibility_definition": _actionability_definition(),
+        "paper_shadow_status": "disabled",
         "allowed_uses": APPROVED_USES,
         "prohibited_uses": PROHIBITED_USES,
         "guardrails": GUARDRAILS,
@@ -285,6 +394,11 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
         },
         "network_calls_made": 0,
     }
+    if config.is_v2:
+        manifest["maturity_definitions"]["E2_primary_exit_label"] = (
+            "milestone trailing drawdown with reclaim grace, label-only; no sell execution"
+        )
+        _write_json(config.paper_shadow_v2_config_path, _disabled_v2_paper_shadow_config(config))
     _write_json(config.manifest_json_path, manifest)
     config.manifest_md_path.write_text(_manifest_markdown(manifest), encoding="utf-8")
     return manifest
@@ -325,7 +439,7 @@ class OfficialLifecycleStateMachine:
         state_row = self.state["mints"].get(mint, {})
         previous_state = state_row.get("state")
         row = {
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": self.config.sample_label,
             "observation_id": birth.get("observation_id") or f"official-birth-{mint[:12]}-{int(now)}",
             "mint": mint,
             "creator": birth.get("creator"),
@@ -352,7 +466,16 @@ class OfficialLifecycleStateMachine:
             "hydration_freshness_accepted": birth.get("hydration_freshness_accepted"),
             "fdv_path_freshness_seconds": birth.get("fdv_path_freshness_seconds"),
             "fdv_path_before_10k": birth.get("fdv_path_before_10k"),
+            "fdv_path_before_15k": birth.get("fdv_path_before_15k"),
             "fdv_path_before_20k": birth.get("fdv_path_before_20k"),
+            "actionable_sample_flag": birth.get("actionable_sample_flag"),
+            "actionability_failure_reason": birth.get("actionability_failure_reason"),
+            "official_accepted_birth": birth.get("official_accepted_birth", True),
+            "stale_quarantined_birth": birth.get("stale_quarantined_birth", False),
+            "valid_fdv_path_provenance": birth.get("valid_fdv_path_provenance", True),
+            "valid_milestone_ordering": birth.get("valid_milestone_ordering", True),
+            "fdv_proxy_anomaly": birth.get("fdv_proxy_anomaly", False),
+            "official_baseline_entry_eligible": birth.get("official_baseline_entry_eligible", False),
             "first_fdv_path_fdv": birth.get("first_fdv_path_fdv"),
             "first_fdv_path_time": birth.get("first_fdv_path_time"),
             "official_freshness_accepted": birth.get("official_freshness_accepted"),
@@ -420,10 +543,21 @@ class OfficialLifecycleStateMachine:
             self.state["counters"]["official_crossed_20k_count"] = int(self.state["counters"].get("official_crossed_20k_count", 0)) + 1
         if new_state in MATURITY_STATES and not state_row.get("matured_at"):
             state_row["matured_at"] = timestamp
-        enriched = _path_row(path, state_row, timestamp=timestamp, fdv=fdv, local_high=local_high, drawdown_pct=drawdown_pct)
+        enriched = _path_row(
+            path,
+            state_row,
+            timestamp=timestamp,
+            fdv=fdv,
+            local_high=local_high,
+            drawdown_pct=drawdown_pct,
+            sample_label=self.config.sample_label,
+        )
         _append_jsonl(self.config.followup_paths_path, [enriched])
-        _append_jsonl(self.config.drawdowns_path, [_drawdown_row(enriched)])
-        _process_optional_paper_shadow(self.config.observation_root, enriched, state_row)
+        _append_jsonl(self.config.drawdowns_path, [_drawdown_row(enriched, sample_label=self.config.sample_label)])
+        if self.config.is_v2:
+            _process_v2_paper_shadow_labels(self.config, enriched, state_row)
+        else:
+            _process_optional_paper_shadow(self.config.observation_root, enriched, state_row)
         if previous_state != new_state:
             self._transition(mint, previous_state, new_state, timestamp, "observed_fdv_path_transition")
         self.save()
@@ -442,7 +576,7 @@ class OfficialLifecycleStateMachine:
             self.config.transitions_path,
             [
                 {
-                    "sample_label": OFFICIAL_SAMPLE_LABEL,
+                    "sample_label": self.config.sample_label,
                     "mint": mint,
                     "previous_state": previous_state,
                     "new_state": new_state,
@@ -488,7 +622,7 @@ def run_active_lifecycle_followup_cycle(
         if events:
             _append_jsonl(
                 machine.config.events_path,
-                [{**event, "sample_label": OFFICIAL_SAMPLE_LABEL, "mint": mint} for event in events],
+                [{**event, "sample_label": machine.config.sample_label, "mint": mint} for event in events],
             )
             event_rows += len(events)
         for event in events:
@@ -614,7 +748,7 @@ def run_official_lifecycle_smoke(
         return {
             "report_id": "official_lifecycle_watch_smoke_v0",
             "execute": False,
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "projected_births": target_births,
             "network_calls_made": 0,
             "estimated_helius_credits_used": 0,
@@ -632,7 +766,7 @@ def run_official_lifecycle_smoke(
     result = {
         "report_id": "official_lifecycle_watch_smoke_v0",
         "execute": True,
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": config.sample_label,
         "smoke_births_observed": len(births),
         "under_5s_followup_count": sum(1 for row in births if (_delta(_num(row.get("create_time")), _num(row.get("first_followup_attempt_time"))) or 999) <= 5),
         "active_watches_created": status["trigger_qualified_active_watches"] + status["matured_trigger_qualified"],
@@ -669,7 +803,7 @@ def run_official_lifecycle_live_smoke(
         return {
             "report_id": "official_lifecycle_watch_live_smoke_v0",
             "execute": False,
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "projected_births": target_births,
             "projected_request_equivalent_credits": projected_requests,
             "network_calls_made": 0,
@@ -680,7 +814,7 @@ def run_official_lifecycle_live_smoke(
         return {
             "report_id": "official_lifecycle_watch_live_smoke_v0",
             "execute": False,
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "projected_births": target_births,
             "projected_request_equivalent_credits": projected_requests,
             "network_calls_made": 0,
@@ -787,9 +921,9 @@ def run_official_lifecycle_live_smoke(
                 "source_provenance": "helius_pumpfun_create_websocket_logs",
             }
             machine.record_birth(birth_row)
-            _append_jsonl(config.helius_ws_raw_path, [{**candidate, "official_sample_label": OFFICIAL_SAMPLE_LABEL}])
+            _append_jsonl(config.helius_ws_raw_path, [{**candidate, "official_sample_label": config.sample_label}])
             if events:
-                _append_jsonl(config.events_path, [{**event, "sample_label": OFFICIAL_SAMPLE_LABEL, "mint": mint} for event in events])
+                _append_jsonl(config.events_path, [{**event, "sample_label": config.sample_label, "mint": mint} for event in events])
             for event in events:
                 if _num(event.get("fdv_proxy")) is None:
                     continue
@@ -824,7 +958,7 @@ def run_official_lifecycle_live_smoke(
     result = {
         "report_id": "official_lifecycle_watch_live_smoke_v0",
         "execute": True,
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": config.sample_label,
         "smoke_births_observed": births_seen,
         "under_5s_followup_count": status["fresh_births_under_5s_followup"],
         "active_watches_created": status["trigger_qualified_active_watches"] + status["matured_trigger_qualified"],
@@ -851,6 +985,10 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
     state = _read_state(config)
     births = _read_jsonl(config.births_path)
     paths = _read_jsonl(config.followup_paths_path)
+    stale_births = _read_jsonl(config.stale_births_path)
+    hydration_results = _read_jsonl(config.hydration_results_path)
+    labels = _read_jsonl(config.paper_shadow_labels_path)
+    exit_labels = _read_jsonl(config.paper_shadow_exit_labels_path)
     status_payload = _read_json(config.status_path)
     mints = state.get("mints", {})
     state_counts = Counter(row.get("state") for row in mints.values())
@@ -878,8 +1016,23 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
     matured_trigger = [mint for mint, row in mints.items() if row.get("entered_trigger_qualified_at") and row.get("state") in MATURITY_STATES]
     target = int(target_crossed_20k or config.target_crossed_20k)
     audit, _ = build_official_lifecycle_quality_audit(config, write_outputs=False)
+    b_counts = {
+        rule_id: sum(1 for row in labels if row.get(f"{rule_id}_pass") is True)
+        for rule_id in ["B1", "B2", "B3", "B4"]
+    }
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": config.sample_label,
+        "previous_samples_excluded": True,
+        "official_accepted_births": len({row.get("mint") for row in births if row.get("mint")}),
+        "stale_quarantined_births": len(stale_births),
+        "hydrated_confirmed_creates": len(
+            {
+                row.get("signature")
+                for row in hydration_results
+                if row.get("signature")
+                and str(row.get("hydration_status")) in {"hydrated_create_confirmed", "official_accepted"}
+            }
+        ),
         "births_observed": len({row.get("mint") for row in births if row.get("mint")}),
         "fresh_births_under_5s_followup": fresh_under_5,
         "births_with_fdv_path": len({row.get("mint") for row in paths if _num(row.get("fdv_proxy")) is not None}),
@@ -890,6 +1043,7 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "crossed_20k": crossed_counts["20k"],
         "actionable_crossed_10k": len(actionable_10k),
         "actionable_crossed_20k": len(actionable_20k),
+        "official_baseline_entry_eligible": len({row.get("mint") for row in labels if row.get("official_baseline_entry_eligible") is True}),
         "create_log_fresh_official_births": sum(1 for row in births if row.get("create_log_freshness_accepted") is True),
         "hydration_fresh_official_births": sum(1 for row in births if row.get("hydration_freshness_accepted") is True),
         "fdv_path_before_10k": sum(1 for row in births if row.get("fdv_path_before_10k") is True),
@@ -907,6 +1061,15 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
         "official_crossed_20k_target_progress": f"{crossed_counts['20k']}/{target}",
         "actionable_crossed_20k_target_progress": f"{len(actionable_20k)}/{target}",
         "credits_used": int(status_payload.get("credits_used") or 0),
+        "B_label_counts": b_counts,
+        "E2_labels_active": len(
+            {
+                row.get("mint")
+                for row in exit_labels
+                if row.get("E2_state") == "tracking" and row.get("mint")
+            }
+        ),
+        "E2_hypothetical_exits": sum(1 for row in exit_labels if row.get("hypothetical_exit_condition_met") is True),
         "warnings": audit["warnings"],
         "quality_status": audit["quality_status"],
         "recommendation": audit["recommendation"],
@@ -914,6 +1077,37 @@ def official_lifecycle_status(config: OfficialLifecycleConfig, *, target_crossed
 
 
 def format_official_lifecycle_status(status: dict[str, Any]) -> str:
+    if status.get("sample_label") == OFFICIAL_V2_SAMPLE_LABEL:
+        b_counts = status.get("B_label_counts") or {}
+        return "\n".join(
+            [
+                "## Official Lifecycle Watch v2 Status",
+                "Previous samples excluded: yes",
+                f"Official accepted births: {status['official_accepted_births']}",
+                f"Stale/quarantined births: {status['stale_quarantined_births']}",
+                f"FDV path evidence: {status['births_with_fdv_path']}",
+                f"First path before 10k: {status['first_path_before_10k']}",
+                f"First path before 20k: {status['first_path_before_20k']}",
+                f"Crossed 10k: {status['crossed_10k']}",
+                f"Crossed 20k: {status['crossed_20k']}",
+                f"Official baseline entry eligible: {status['official_baseline_entry_eligible']}",
+                f"Trigger-qualified active watches: {status['trigger_qualified_active_watches']}",
+                f"Matured trigger-qualified: {status['matured_trigger_qualified']}",
+                f"Reached 50k: {status['reached_50k']}",
+                f"Reached 100k: {status['reached_100k']}",
+                f"Reached 500k: {status['reached_500k']}",
+                f"Reached 1M: {status['reached_1m']}",
+                f"Terminal collapse: {status['terminal_collapse']}",
+                f"Inactive timeout: {status['inactive_timeout']}",
+                f"Max age: {status['max_age']}",
+                f"B1/B2/B3/B4 label counts: {b_counts}",
+                f"E2 labels active: {status['E2_labels_active']}",
+                f"E2 hypothetical exits: {status['E2_hypothetical_exits']}",
+                f"Quality warnings: {status['warnings']}",
+                f"Credits used: {status['credits_used']}",
+                f"Recommendation: {status['recommendation']}",
+            ]
+        )
     return "\n".join(
         [
             "## Official Lifecycle Watch v1 Status",
@@ -958,6 +1152,8 @@ def build_official_lifecycle_quality_audit(
     stale_births = _read_jsonl(config.stale_births_path)
     provisional_births = _read_jsonl(config.provisional_births_path)
     hydration_results = _read_jsonl(config.hydration_results_path)
+    labels = _read_jsonl(config.paper_shadow_labels_path)
+    exit_labels = _read_jsonl(config.paper_shadow_exit_labels_path)
     state = _read_state(config)
     mints = state.get("mints", {})
     birth_mints = {row.get("mint") for row in births if row.get("mint")}
@@ -1027,10 +1223,12 @@ def build_official_lifecycle_quality_audit(
     }
     source_counts = dict(Counter(str(row.get("source_provenance") or "unknown") for row in paths))
     density = Counter(row.get("mint") for row in paths if row.get("mint"))
-    quality_status = "official_lifecycle_watch_needs_repair" if warnings else "official_lifecycle_watch_ready_for_100_birth_smoke"
+    status_prefix = "official_lifecycle_watch" if config.sample_label == OFFICIAL_SAMPLE_LABEL else config.sample_label
+    quality_status = f"{status_prefix}_needs_repair" if warnings else f"{status_prefix}_ready_for_100_birth_smoke"
+    baseline_eligible = {row.get("mint") for row in labels if row.get("official_baseline_entry_eligible") is True and row.get("mint")}
     audit = {
-        "report_id": "official_lifecycle_quality_audit_v0",
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "report_id": f"{config.report_id}_quality_audit_v0",
+        "sample_label": config.sample_label,
         "network_calls_made": 0,
         "births_observed": len(birth_mints),
         "path_rows": len(paths),
@@ -1075,6 +1273,7 @@ def build_official_lifecycle_quality_audit(
             "fdv_path_before_20k_births": sum(1 for row in births if row.get("fdv_path_before_20k") is True),
             "actionable_crossed_10k_mints": len(actionable_10k),
             "actionable_crossed_20k_mints": len(actionable_20k),
+            "official_baseline_entry_eligible": len(baseline_eligible),
             "stale_quarantined_births": len(stale_births),
             "all_fresh_births": len(birth_mints),
             "births_with_fdv_path_evidence": len(path_mints),
@@ -1082,6 +1281,17 @@ def build_official_lifecycle_quality_audit(
             "fresh_births_first_path_before_20k": sum(1 for row in births if row.get("first_followup_before_20k") is True),
             "trigger_qualified_active_watch_mints": sum(1 for row in mints.values() if row.get("state") == "trigger_qualified_active_watch"),
             "matured_trigger_qualified_mints": sum(1 for row in mints.values() if row.get("entered_trigger_qualified_at") and row.get("state") in MATURITY_STATES),
+        },
+        "paper_shadow_labels": {
+            "baseline_label_rows": len(labels),
+            "baseline_label_mints": len(baseline_eligible),
+            "B1_pass": sum(1 for row in labels if row.get("B1_pass") is True),
+            "B2_pass": sum(1 for row in labels if row.get("B2_pass") is True),
+            "B3_pass": sum(1 for row in labels if row.get("B3_pass") is True),
+            "B4_pass": sum(1 for row in labels if row.get("B4_pass") is True),
+            "E2_exit_label_rows": len(exit_labels),
+            "E2_hypothetical_exit_rows": sum(1 for row in exit_labels if row.get("hypothetical_exit_condition_met") is True),
+            "label_only_no_pnl": True,
         },
         "dedupe": {
             "duplicate_mints": duplicate_mints,
@@ -1107,9 +1317,10 @@ def build_official_lifecycle_quality_audit(
     }
     paths_out: dict[str, Path] = {}
     if write_outputs:
+        audit_stem = "official_lifecycle_v2_quality_audit" if config.is_v2 else "official_lifecycle_quality_audit"
         paths_out = {
-            "json": config.report_root / "official_lifecycle_quality_audit.json",
-            "markdown": config.report_root / "official_lifecycle_quality_audit.md",
+            "json": config.report_root / f"{audit_stem}.json",
+            "markdown": config.report_root / f"{audit_stem}.md",
         }
         _write_json(paths_out["json"], audit)
         paths_out["markdown"].write_text(_audit_markdown(audit), encoding="utf-8")
@@ -1118,7 +1329,7 @@ def build_official_lifecycle_quality_audit(
 
 def _empty_state(config: OfficialLifecycleConfig) -> dict[str, Any]:
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": config.sample_label,
         "created_at": _utc_now_iso(),
         "mints": {},
         "counters": {"official_crossed_20k_count": 0},
@@ -1142,7 +1353,7 @@ def _write_status(config: OfficialLifecycleConfig, *, target_crossed_20k: int, c
     _write_json(
         config.status_path,
         {
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "updated_at": _utc_now_iso(),
             "target_crossed_20k": target_crossed_20k,
             "credits_used": credits_used,
@@ -1159,13 +1370,14 @@ def _path_row(
     fdv: float | None,
     local_high: float | None,
     drawdown_pct: float | None,
+    sample_label: str = OFFICIAL_SAMPLE_LABEL,
 ) -> dict[str, Any]:
     event_count = _num(source.get("event_count"))
     buy_count = _num(source.get("buy_count"))
     sell_count = _num(source.get("sell_count"))
     active_wallet_count = _num(source.get("active_wallet_count") or source.get("active_wallets"))
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": sample_label,
         "timestamp": timestamp,
         "mint": state_row["mint"],
         "state": state_row["state"],
@@ -1186,10 +1398,10 @@ def _path_row(
     }
 
 
-def _drawdown_row(path: dict[str, Any]) -> dict[str, Any]:
+def _drawdown_row(path: dict[str, Any], *, sample_label: str = OFFICIAL_SAMPLE_LABEL) -> dict[str, Any]:
     drawdown = _num(path.get("drawdown_pct"))
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": sample_label,
         "mint": path.get("mint"),
         "timestamp": path.get("timestamp"),
         "state": path.get("state"),
@@ -1209,6 +1421,130 @@ def _drawdown_row(path: dict[str, Any]) -> dict[str, Any]:
         "no_reclaim_after_10m": False,
         "source_provenance": path.get("source_provenance"),
     }
+
+
+def _process_v2_paper_shadow_labels(
+    config: OfficialLifecycleConfig,
+    path_row: dict[str, Any],
+    state_row: dict[str, Any],
+) -> None:
+    if not config.is_v2 or (path_row.get("crossed_20k") is not True and "20k" not in set(state_row.get("crossed_levels") or [])):
+        return
+    eligible, reason = _official_baseline_entry_eligibility(state_row, path_row)
+    state_row["official_baseline_entry_eligible"] = eligible
+    state_row["actionability_failure_reason"] = None if eligible else reason
+    if not eligible:
+        return
+    existing_mints = {row.get("mint") for row in _read_jsonl(config.paper_shadow_labels_path)}
+    if state_row.get("mint") not in existing_mints:
+        _append_jsonl(config.paper_shadow_labels_path, [_v2_baseline_label_row(config, path_row, state_row)])
+    _append_jsonl(config.paper_shadow_exit_labels_path, [_v2_e2_exit_label_row(config, path_row)])
+
+
+def _official_baseline_entry_eligibility(state_row: dict[str, Any], path_row: dict[str, Any]) -> tuple[bool, str]:
+    if state_row.get("official_accepted_birth") is False:
+        return False, "official_accepted_birth_false"
+    if state_row.get("stale_quarantined_birth") is True:
+        return False, "stale_quarantined_birth"
+    if state_row.get("valid_fdv_path_provenance") is False:
+        return False, "invalid_fdv_path_provenance"
+    if state_row.get("valid_milestone_ordering") is False:
+        return False, "invalid_milestone_ordering"
+    if state_row.get("fdv_proxy_anomaly") is True:
+        return False, "fdv_proxy_anomaly"
+    if path_row.get("crossed_20k") is not True and "20k" not in set(state_row.get("crossed_levels") or []):
+        return False, "not_crossed_20k"
+    first_before_20k = (
+        state_row.get("first_followup_before_20k") is True
+        or state_row.get("fdv_path_before_20k") is True
+        or (_num(state_row.get("first_fdv_path_fdv")) is not None and (_num(state_row.get("first_fdv_path_fdv")) or 0) <= 20_000)
+    )
+    if not first_before_20k:
+        return False, "first_path_not_before_or_at_20k"
+    return True, "eligible"
+
+
+def _v2_baseline_label_row(
+    config: OfficialLifecycleConfig,
+    path_row: dict[str, Any],
+    state_row: dict[str, Any],
+) -> dict[str, Any]:
+    labels = _v2_b_filter_labels(path_row, state_row)
+    return {
+        "mint": state_row.get("mint"),
+        "label_time": path_row.get("timestamp"),
+        "sample_label": config.sample_label,
+        "official_baseline_entry_eligible": True,
+        "baseline_all_actionable_20k": True,
+        **labels,
+        "selected_exit_candidate_label": "E2",
+        "E2_tracking_started": True,
+        "no_real_trade": True,
+        "no_paper_trade_enabled": True,
+        "shadow_label_only": True,
+    }
+
+
+def _v2_b_filter_labels(path_row: dict[str, Any], state_row: dict[str, Any]) -> dict[str, Any]:
+    fdv = _num(path_row.get("fdv_proxy"))
+    first_before_10k = state_row.get("first_followup_before_10k") is True or state_row.get("fdv_path_before_10k") is True
+    first_before_15k = state_row.get("fdv_path_before_15k") is True or first_before_10k
+    first_before_20k = state_row.get("first_followup_before_20k") is True or state_row.get("fdv_path_before_20k") is True
+    rules = {
+        "B1": bool(first_before_10k and fdv is not None and fdv <= 15_000),
+        "B2": bool(first_before_15k and fdv is not None and fdv <= 20_000),
+        "B3": bool(first_before_20k and fdv is not None and fdv <= 30_000),
+        "B4": bool(first_before_20k and fdv is not None and fdv >= 30_000),
+    }
+    out: dict[str, Any] = {}
+    for rule_id, passed in rules.items():
+        out[f"{rule_id}_pass"] = passed
+        out[f"{rule_id}_failure_reason"] = "passed" if passed else _v2_b_failure_reason(rule_id, fdv)
+    return out
+
+
+def _v2_b_failure_reason(rule_id: str, fdv: float | None) -> str:
+    if fdv is None:
+        return "fdv_unavailable_fail_closed"
+    return f"{rule_id}_fixed_label_conditions_not_met_fail_closed"
+
+
+def _v2_e2_exit_label_row(config: OfficialLifecycleConfig, path_row: dict[str, Any]) -> dict[str, Any]:
+    fdv = _num(path_row.get("fdv_proxy"))
+    local_high = _num(path_row.get("local_high_fdv"))
+    drawdown_pct = _num(path_row.get("drawdown_pct"))
+    milestone_band, threshold, grace = _e2_milestone_band(local_high)
+    condition = bool(drawdown_pct is not None and threshold is not None and drawdown_pct >= threshold)
+    return {
+        "mint": path_row.get("mint"),
+        "timestamp": path_row.get("timestamp"),
+        "sample_label": config.sample_label,
+        "E2_state": "hypothetical_exit_condition_met" if condition else "tracking",
+        "local_high_fdv": local_high,
+        "current_fdv": fdv,
+        "drawdown_pct": drawdown_pct,
+        "milestone_band": milestone_band,
+        "reclaim_required": condition,
+        "reclaim_observed": path_row.get("reclaim_status") == "at_or_above_local_high",
+        "reclaim_grace_minutes": grace,
+        "hypothetical_exit_condition_met": condition,
+        "hypothetical_exit_reason": "E2_milestone_trailing_drawdown_no_reclaim_label" if condition else None,
+        "shadow_exit_label_only": True,
+        "no_real_trade": True,
+        "no_enabled_paper_trade": True,
+    }
+
+
+def _e2_milestone_band(local_high: float | None) -> tuple[str, float | None, int | None]:
+    if local_high is None:
+        return "unknown", None, None
+    if local_high >= 500_000:
+        return "500k_plus", 30.0, 5
+    if local_high >= 100_000:
+        return "100k_to_500k", 35.0, 10
+    if local_high >= 50_000:
+        return "50k_to_100k", 40.0, 10
+    return "pre_50k", 40.0, 10
 
 
 def _process_optional_paper_shadow(observation_root: Path, path_row: dict[str, Any], state_row: dict[str, Any]) -> None:
@@ -1324,6 +1660,46 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _mixed_pre_v2_source_roots(root: Path) -> list[Path]:
+    forward = root / "data" / "forward_observation"
+    reports = root / "data" / "backtests" / "diagnostics" / "reports" / "forward_observation"
+    raw = root / "data" / "raw" / "forward_observation"
+    return [
+        forward / OFFICIAL_SAMPLE_LABEL,
+        raw / OFFICIAL_SAMPLE_LABEL,
+        reports / OFFICIAL_SAMPLE_LABEL,
+        forward / "collector_logs",
+        forward / "combined_samples" / "fixed_5hr_plus_12hr_combined_20260605",
+        forward / "combined_samples" / "all_forward_actionable_snapshot_20260605_054826",
+        reports / "buy_exit_design",
+        reports / "baseline_vs_filter_audit",
+    ]
+
+
+def _mixed_pre_v2_source_files(source_roots: list[Path]) -> list[Path]:
+    files: list[Path] = []
+    for source in source_roots:
+        if not source.exists():
+            continue
+        if source.is_file() and not source.name.startswith("._"):
+            files.append(source)
+            continue
+        if source.is_dir():
+            files.extend(path for path in source.rglob("*") if path.is_file() and not path.name.startswith("._"))
+    return sorted(files)
+
+
+def _source_rel(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root / "data"))
+    except ValueError:
+        return str(path)
+
+
+def _crossed_20k_row_count(path: Path) -> int:
+    return sum(1 for row in _read_jsonl(path) if row.get("crossed_20k") is True or (_num(row.get("fdv_proxy")) or 0) >= 20_000)
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1333,7 +1709,11 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return []
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:
@@ -1355,7 +1735,11 @@ def _append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def _row_count(path: Path) -> int:
     if not path.exists():
         return 0
-    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return 0
+    return sum(1 for line in text.splitlines() if line.strip())
 
 
 def _mint(row: dict[str, Any]) -> str:
@@ -1440,25 +1824,72 @@ def _milestone_order_ok(row: dict[str, Any]) -> bool:
 
 
 def _readiness_from_audit(audit: dict[str, Any]) -> str:
+    sample_label = str(audit.get("sample_label") or OFFICIAL_SAMPLE_LABEL)
+    prefix = "official_lifecycle_watch" if sample_label == OFFICIAL_SAMPLE_LABEL else sample_label
     if audit["warnings"]:
-        return "official_lifecycle_watch_needs_repair"
+        return f"{prefix}_needs_repair"
     if audit["births_observed"] >= 100:
-        return "official_lifecycle_watch_ready_for_scaled_collection"
-    return "official_lifecycle_watch_ready_for_100_birth_smoke"
+        return f"{prefix}_ready_for_scaled_collection"
+    return f"{prefix}_ready_for_100_birth_smoke"
 
 
 def _requests_used(source: Any, fetcher: Any) -> int:
     return int(getattr(source, "requests_used", 0) or 0) + int(getattr(fetcher, "requests_used", 0) or 0)
 
 
+def _actionability_definition() -> dict[str, Any]:
+    return {
+        "actionable_sample_flag": "true only when all official v2 eligibility checks pass",
+        "required": [
+            "verified Pump.fun birth/create observed live",
+            "official accepted birth, not stale/quarantined",
+            "first FDV/path evidence before or at selected trigger threshold",
+            "valid FDV path provenance",
+            "no FDV proxy anomaly",
+            "no duplicate/source ambiguity",
+            "crossed 20k through observed path rows",
+            "active lifecycle watch continues until maturity or current active state",
+        ],
+        "main_paper_shadow_population": "official_baseline_entry_eligible=true and crossed_20k=true",
+    }
+
+
+def _disabled_v2_paper_shadow_config(config: OfficialLifecycleConfig) -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "sample_label": config.sample_label,
+        "entry_universe": "baseline_all_actionable_20k",
+        "filter_labels": ["B1", "B2", "B3", "B4"],
+        "filter_label_definitions": {
+            "B1": "10k aggressive efficiency entry label",
+            "B2": "15k balanced speed/efficiency label",
+            "B3": "20k confirmation efficiency label",
+            "B4": "20k conservative continuation label",
+        },
+        "primary_exit_label": "E2",
+        "primary_exit_label_definition": "milestone trailing drawdown with reclaim grace",
+        "paper_entries_enabled": False,
+        "paper_exits_enabled": False,
+        "pnl_enabled": False,
+        "execution_enabled": False,
+        "private_keys_allowed": False,
+        "no_real_trade": True,
+        "no_live_execution": True,
+        "next_enable_condition": "manual approval after sufficient official lifecycle v2 sample",
+        "created_at": _utc_now_iso(),
+    }
+
+
 def _manifest_markdown(manifest: dict[str, Any]) -> str:
+    title = "Official Lifecycle Watch v2 Manifest" if manifest.get("sample_label") == OFFICIAL_V2_SAMPLE_LABEL else "Official Lifecycle Watch v1 Manifest"
     return "\n".join(
         [
-            "# Official Lifecycle Watch v1 Manifest",
+            f"# {title}",
             "",
             f"- Sample label: `{manifest['sample_label']}`",
             f"- Starts from zero: `{manifest['starts_from_zero']}`",
-            f"- Old quarantined sample excluded: `{manifest['old_quarantined_sample_excluded']}`",
+            f"- Previous samples excluded: `{manifest.get('previous_samples_excluded', manifest['old_quarantined_sample_excluded'])}`",
+            f"- Paper-shadow status: `{manifest.get('paper_shadow_status', 'disabled')}`",
             f"- Collection start time: `{manifest['collection_start_time']}`",
             "",
             "## Approved Uses",
@@ -1475,9 +1906,10 @@ def _manifest_markdown(manifest: dict[str, Any]) -> str:
 
 
 def _audit_markdown(audit: dict[str, Any]) -> str:
+    title = "Official Lifecycle Watch v2 Quality Audit" if audit.get("sample_label") == OFFICIAL_V2_SAMPLE_LABEL else "Official Lifecycle Watch v1 Quality Audit"
     return "\n".join(
         [
-            "# Official Lifecycle Watch v1 Quality Audit",
+            f"# {title}",
             "",
             f"- Quality status: `{audit['quality_status']}`",
             f"- Births observed: `{audit['births_observed']}`",
@@ -1487,6 +1919,31 @@ def _audit_markdown(audit: dict[str, Any]) -> str:
             "",
             "## Funnel",
             *[f"- {key}: `{value}`" for key, value in audit["funnel"].items()],
+            "",
+        ]
+    )
+
+
+def _quarantine_manifest_markdown(manifest: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Mixed Forward Campaign Pre-v2 Quarantine",
+            "",
+            f"- Quarantine label: `{manifest['quarantine_label']}`",
+            f"- Created at: `{manifest['created_at']}`",
+            f"- Reason: {manifest['reason']}",
+            "",
+            "## Approved Uses",
+            *[f"- {item}" for item in manifest["approved_uses"]],
+            "",
+            "## Prohibited Uses",
+            *[f"- {item}" for item in manifest["prohibited_uses"]],
+            "",
+            "## Row Counts",
+            *[f"- `{path}`: `{count}`" for path, count in sorted(manifest["row_counts"].items())],
+            "",
+            "## Crossed-20k Counts",
+            *[f"- `{path}`: `{count}`" for path, count in sorted(manifest["crossed_20k_counts"].items())],
             "",
         ]
     )

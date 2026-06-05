@@ -17,7 +17,9 @@ from research.mtp_research.validation.forward_efficient_mover_observer import (
 )
 from research.mtp_research.validation.official_lifecycle_watch import (
     OFFICIAL_SAMPLE_LABEL,
+    OFFICIAL_V2_SAMPLE_LABEL,
     OfficialLifecycleConfig,
+    OfficialLifecycleV2Config,
     initialize_official_lifecycle_namespace,
     official_lifecycle_status,
     run_official_lifecycle_live_smoke,
@@ -71,7 +73,7 @@ def main() -> int:
         print(f"source_availability={report['source_availability']}")
         return 0
     if args.mode == "status":
-        if args.sample == OFFICIAL_SAMPLE_LABEL:
+        if args.sample in {OFFICIAL_SAMPLE_LABEL, OFFICIAL_V2_SAMPLE_LABEL}:
             lifecycle_config = _official_config(args)
             initialize_official_lifecycle_namespace(lifecycle_config)
             has_no_laserstream_rows = (
@@ -127,8 +129,8 @@ def main() -> int:
         print(f"output_path={result.get('output_path')}")
         return 0
     if args.mode == "observe-lifecycle":
-        if args.sample != OFFICIAL_SAMPLE_LABEL:
-            raise ValueError("observe-lifecycle requires --sample official_lifecycle_watch_v1")
+        if args.sample not in {OFFICIAL_SAMPLE_LABEL, OFFICIAL_V2_SAMPLE_LABEL}:
+            raise ValueError("observe-lifecycle requires --sample official_lifecycle_watch_v1 or official_lifecycle_watch_v2")
         lifecycle_config = _official_config(args)
         if args.source == "helius-pumpfun-no-laserstream":
             result = run_no_laserstream_lifecycle_smoke(
@@ -157,7 +159,8 @@ def main() -> int:
                 target_crossed_20k=args.target_crossed_20k,
                 execute=args.execute,
             )
-        print("## Official Lifecycle Watch v1 Smoke")
+        version = "v2" if args.sample == OFFICIAL_V2_SAMPLE_LABEL else "v1"
+        print(f"## Official Lifecycle Watch {version} Smoke")
         print(f"execute={result.get('execute')}")
         print(f"smoke_births_observed={result.get('smoke_births_observed', 0)}")
         print(f"under_5s_followup_count={result.get('under_5s_followup_count', 0)}")
@@ -225,7 +228,7 @@ def parse_args() -> argparse.Namespace:
         choices=["dry-run", "observe", "status", "probe", "observe-births-with-immediate-followup", "observe-lifecycle"],
         default="dry-run",
     )
-    parser.add_argument("--sample", choices=["efficient_movers", OFFICIAL_SAMPLE_LABEL], default="efficient_movers")
+    parser.add_argument("--sample", choices=["efficient_movers", OFFICIAL_SAMPLE_LABEL, OFFICIAL_V2_SAMPLE_LABEL], default="efficient_movers")
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--source",
@@ -286,7 +289,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def _official_config(args: argparse.Namespace) -> OfficialLifecycleConfig:
-    return OfficialLifecycleConfig(
+    config_cls = OfficialLifecycleV2Config if args.sample == OFFICIAL_V2_SAMPLE_LABEL else OfficialLifecycleConfig
+    return config_cls(
         data_root=Path(args.data_root).expanduser() if args.data_root else None,
         followup_poll_seconds=float(args.followup_poll_seconds),
         trigger_qualified_followup_poll_seconds=float(args.followup_poll_seconds),

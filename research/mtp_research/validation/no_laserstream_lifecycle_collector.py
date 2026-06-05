@@ -471,7 +471,7 @@ def run_no_laserstream_lifecycle_smoke(
         return {
             "report_id": "no_laserstream_official_lifecycle_smoke_v1",
             "execute": False,
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "projected_births": target_births,
             "projected_request_equivalent_credits": projected_requests,
             "readiness_classification": "no_laserstream_collector_ready_for_100_birth_run",
@@ -481,7 +481,7 @@ def run_no_laserstream_lifecycle_smoke(
         return {
             "report_id": "no_laserstream_official_lifecycle_smoke_v1",
             "execute": False,
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "projected_births": target_births,
             "projected_request_equivalent_credits": projected_requests,
             "readiness_classification": "no_laserstream_collector_blocked",
@@ -494,7 +494,7 @@ def run_no_laserstream_lifecycle_smoke(
         return {
             "report_id": "no_laserstream_official_lifecycle_smoke_v1",
             "execute": False,
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "readiness_classification": "no_laserstream_collector_blocked",
             "warnings": [availability.get("missing_reason") or "no_laserstream_source_unavailable"],
             "network_calls_made": 0,
@@ -521,7 +521,7 @@ def run_no_laserstream_lifecycle_smoke(
                     counters.duplicate_signatures += 1
                     continue
                 seen_signatures.add(signature)
-                provisional = _provisional_birth_row(raw_log, now_fn=now_fn)
+                provisional = _provisional_birth_row(raw_log, now_fn=now_fn, sample_label=config.sample_label)
                 _append_jsonl(config.pumpfun_create_logs_raw_path, [raw_log])
                 _append_jsonl(config.provisional_births_path, [provisional])
                 counters.provisional_birth_logs += 1
@@ -569,10 +569,11 @@ def run_no_laserstream_lifecycle_smoke(
                 _append_jsonl(config.hydration_results_path, [{**hydration, "hydration_status": HYDRATION_OFFICIAL}])
                 counters.official_accepted_births += 1
                 metadata = metadata_resolver.resolve(mint, hydration.get("metadata") if isinstance(hydration.get("metadata"), dict) else None)
+                metadata["sample_label"] = config.sample_label
                 _append_jsonl(config.metadata_path, [metadata])
                 counters.metadata_rows_written += 1
                 if events:
-                    _append_jsonl(config.events_path, [{**event, "sample_label": OFFICIAL_SAMPLE_LABEL, "mint": mint} for event in events])
+                    _append_jsonl(config.events_path, [{**event, "sample_label": config.sample_label, "mint": mint} for event in events])
                 for event in events:
                     if safe_float(event.get("fdv_proxy")) is None:
                         continue
@@ -614,7 +615,7 @@ def run_no_laserstream_lifecycle_smoke(
     _write_json(
         config.status_path,
         {
-            "sample_label": OFFICIAL_SAMPLE_LABEL,
+            "sample_label": config.sample_label,
             "updated_at": _utc_now_iso(),
             "target_crossed_20k": target_crossed_20k,
             "credits_used": credits,
@@ -629,7 +630,7 @@ def run_no_laserstream_lifecycle_smoke(
     result = {
         "report_id": "no_laserstream_official_lifecycle_smoke_v1",
         "execute": True,
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": config.sample_label,
         "source": availability,
         "provisional_birth_logs": counters.provisional_birth_logs,
         "hydration_results": counters.hydration_results,
@@ -665,7 +666,7 @@ def write_no_laserstream_bottleneck_audit(config: OfficialLifecycleConfig) -> tu
     initialize_official_lifecycle_namespace(config)
     audit = {
         "report_id": "no_laserstream_bottleneck_audit_v1",
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": config.sample_label,
         "current_v1_bottleneck": {
             "logs_subscribe_receive_path": "PumpFunCreateWebSocketCandidateSource._listen_for_create_signatures",
             "signature_hydration_path": "getTransaction confirmed -> PumpFunCreateScanner._extract_candidates",
@@ -762,9 +763,10 @@ def extended_no_laserstream_status(config: OfficialLifecycleConfig, *, target_cr
 
 
 def format_no_laserstream_status(status: dict[str, Any]) -> str:
+    version = "v2" if status.get("sample_label") == "official_lifecycle_watch_v2" else "v1"
     return "\n".join(
         [
-            "## No-LaserStream Official Lifecycle Watch v1",
+            f"## No-LaserStream Official Lifecycle Watch {version}",
             f"Provisional birth logs: {status.get('provisional_birth_logs', 0)}",
             f"Hydrated confirmed creates: {status.get('hydrated_confirmed_creates', 0)}",
             f"Official under-5 accepted births: {status.get('fresh_births_under_5s_followup', 0)}",
@@ -815,11 +817,11 @@ def _create_log_record_from_payload(payload: dict[str, Any], *, signature: str, 
     }
 
 
-def _provisional_birth_row(raw_log: dict[str, Any], *, now_fn: Callable[[], float]) -> dict[str, Any]:
+def _provisional_birth_row(raw_log: dict[str, Any], *, now_fn: Callable[[], float], sample_label: str = OFFICIAL_SAMPLE_LABEL) -> dict[str, Any]:
     signature = str(raw_log.get("signature") or "")
     observed = _num(raw_log.get("log_observed_at")) or now_fn()
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": sample_label,
         "provisional_birth_id": f"provisional-{signature[:16]}-{int(observed * 1000)}",
         "signature": signature,
         "program_id": raw_log.get("program_id") or PUMP_FUN_PROGRAM_ID,
@@ -847,7 +849,7 @@ def _provisional_birth_row(raw_log: dict[str, Any], *, now_fn: Callable[[], floa
 
 def _hydration_base(provisional: dict[str, Any], *, started_at: Any) -> dict[str, Any]:
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": provisional.get("sample_label") or OFFICIAL_SAMPLE_LABEL,
         "provisional_birth_id": provisional.get("provisional_birth_id"),
         "signature": provisional.get("signature"),
         "program_id": provisional.get("program_id") or PUMP_FUN_PROGRAM_ID,
@@ -956,7 +958,7 @@ def _stale_from_hydration(
 ) -> dict[str, Any]:
     observed = _num(hydration.get("log_observed_at"))
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": hydration.get("sample_label") or OFFICIAL_SAMPLE_LABEL,
         "provisional_birth_id": hydration.get("provisional_birth_id"),
         "signature": hydration.get("signature"),
         "mint": hydration.get("mint"),
@@ -999,7 +1001,7 @@ def _holder_snapshot_from_event(event: dict[str, Any], path: dict[str, Any]) -> 
     top_holder = safe_float(event.get("top_holder_share_proxy"))
     top_10 = safe_float(event.get("top_10_holder_share_proxy"))
     return {
-        "sample_label": OFFICIAL_SAMPLE_LABEL,
+        "sample_label": path.get("sample_label") or OFFICIAL_SAMPLE_LABEL,
         "mint": path.get("mint"),
         "snapshot_level": level,
         "snapshot_time": path.get("timestamp"),

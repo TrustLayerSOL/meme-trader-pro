@@ -1,7 +1,11 @@
 import sys
 from pathlib import Path
 
-from research.mtp_research.validation.official_lifecycle_watch import OfficialLifecycleConfig, initialize_official_lifecycle_namespace
+from research.mtp_research.validation.official_lifecycle_watch import (
+    OfficialLifecycleConfig,
+    OfficialLifecycleV2Config,
+    initialize_official_lifecycle_namespace,
+)
 from research.mtp_research.validation.run_forward_efficient_mover_observer import main
 
 
@@ -65,3 +69,64 @@ def test_cli_observe_lifecycle_mock_smoke_initializes_official_sample(tmp_path: 
     assert "under_5s_followup_count=3" in output
     assert "readiness_classification=official_lifecycle_watch_ready_for_100_birth_smoke" in output
     assert (tmp_path / "data" / "forward_observation" / "official_lifecycle_watch_v1" / "lifecycle_state.json").exists()
+
+
+def test_cli_status_supports_official_lifecycle_v2_sample(tmp_path: Path, monkeypatch, capsys) -> None:
+    initialize_official_lifecycle_namespace(OfficialLifecycleV2Config(data_root=tmp_path))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_forward_efficient_mover_observer",
+            "--mode",
+            "status",
+            "--sample",
+            "official_lifecycle_watch_v2",
+            "--data-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "Official Lifecycle Watch v2 Status" in output
+    assert "Previous samples excluded: yes" in output
+    assert "Official baseline entry eligible:" in output
+    assert "B1/B2/B3/B4 label counts:" in output
+
+
+def test_cli_observe_lifecycle_mock_smoke_initializes_v2_sample(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_forward_efficient_mover_observer",
+            "--mode",
+            "observe-lifecycle",
+            "--sample",
+            "official_lifecycle_watch_v2",
+            "--source",
+            "mock",
+            "--data-root",
+            str(tmp_path),
+            "--target-births",
+            "3",
+            "--target-crossed-20k",
+            "300",
+            "--max-runtime-minutes",
+            "30",
+            "--max-helius-credits",
+            "50000",
+            "--execute",
+        ],
+    )
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "Official Lifecycle Watch v2 Smoke" in output
+    assert "execute=True" in output
+    assert "smoke_births_observed=3" in output
+    assert "readiness_classification=official_lifecycle_watch_v2_ready_for_100_birth_smoke" in output
+    assert (tmp_path / "data" / "forward_observation" / "official_lifecycle_watch_v2" / "lifecycle_state.json").exists()
