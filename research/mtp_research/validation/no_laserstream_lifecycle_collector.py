@@ -465,6 +465,7 @@ def run_no_laserstream_lifecycle_smoke(
     metadata_resolver: Any | None = None,
     now_fn: Callable[[], float] | None = None,
     rate_limit_backoff_seconds: float = 30.0,
+    post_target_followup_minutes: float = 0.0,
 ) -> dict[str, Any]:
     initialize_official_lifecycle_namespace(config, reset=execute and _row_count(config.births_path) == 0)
     write_no_laserstream_bottleneck_audit(config)
@@ -510,13 +511,34 @@ def run_no_laserstream_lifecycle_smoke(
     counters = NoLaserstreamCollectorCounters()
     seen_signatures: set[str] = {str(row.get("signature")) for row in _read_jsonl(config.provisional_births_path) if row.get("signature")}
     deadline = time.monotonic() + float(max_runtime_seconds if max_runtime_seconds is not None else max(1, int(max_runtime_minutes)) * 60)
+    post_target_followup_seconds = max(0.0, float(post_target_followup_minutes) * 60.0)
+    post_target_deadline: float | None = None
+    new_birth_collection_stopped_after_target = False
     warnings: list[str] = []
     try:
-        while counters.official_accepted_births < max(0, int(target_births)) and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
             if _requests_used(source, hydrator, fetcher, metadata_resolver) >= int(config.max_helius_credits_per_run):
                 warnings.append("max_helius_credits_per_run_reached")
                 break
-            log_rows = source.fetch_logs(limit=max(1, int(target_births) - counters.official_accepted_births))
+            crossed_20k_count = _current_crossed_20k_count(config)
+            if (
+                target_crossed_20k > 0
+                and crossed_20k_count >= int(target_crossed_20k)
+                and not new_birth_collection_stopped_after_target
+            ):
+                new_birth_collection_stopped_after_target = True
+                post_target_deadline = time.monotonic() + post_target_followup_seconds
+                warnings.append("crossed_20k_target_reached_birth_collection_stopped")
+            if new_birth_collection_stopped_after_target:
+                log_rows = []
+                if post_target_deadline is not None and time.monotonic() >= post_target_deadline:
+                    warnings.append("post_target_followup_window_complete")
+                    break
+            elif counters.official_accepted_births >= max(0, int(target_births)):
+                warnings.append("target_births_reached_before_crossed_20k_target")
+                break
+            else:
+                log_rows = source.fetch_logs(limit=1)
             for raw_log in log_rows:
                 signature = str(raw_log.get("signature") or "")
                 if not signature or signature in seen_signatures:
@@ -629,6 +651,15 @@ def run_no_laserstream_lifecycle_smoke(
                     raise
                 warnings.append("helius_rate_limited_active_followup_deferred")
                 _sleep_for_rate_limit(rate_limit_backoff_seconds, deadline)
+            crossed_after_followup = _current_crossed_20k_count(config)
+            if (
+                target_crossed_20k > 0
+                and crossed_after_followup >= int(target_crossed_20k)
+                and not new_birth_collection_stopped_after_target
+            ):
+                new_birth_collection_stopped_after_target = True
+                post_target_deadline = time.monotonic() + post_target_followup_seconds
+                warnings.append("crossed_20k_target_reached_birth_collection_stopped")
             if not log_rows and not completed:
                 time.sleep(0.05)
         if time.monotonic() >= deadline and counters.official_accepted_births < int(target_births):
@@ -683,6 +714,8 @@ def run_no_laserstream_lifecycle_smoke(
         "lifecycle_state_file": str(config.state_path),
         "readiness_classification": readiness,
         "warnings": sorted(set(warnings + audit.get("warnings", []))),
+        "new_birth_collection_stopped_after_crossed_20k_target": new_birth_collection_stopped_after_target,
+        "post_target_followup_minutes": float(post_target_followup_minutes),
     }
     _write_json(config.report_root / "no_laserstream_official_lifecycle_smoke_summary.json", result)
     return result
@@ -1048,6 +1081,16 @@ def _sleep_for_rate_limit(backoff_seconds: float, deadline: float) -> None:
         return
     remaining = max(0.0, deadline - time.monotonic())
     time.sleep(min(delay, remaining))
+
+
+def _current_crossed_20k_count(config: OfficialLifecycleConfig) -> int:
+    return len(
+        {
+            row.get("mint")
+            for row in _read_jsonl(config.followup_paths_path)
+            if row.get("mint") and row.get("crossed_20k") is True
+        }
+    )
 
 
 def _snapshot_level(fdv: float, state: Any) -> str | None:

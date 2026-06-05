@@ -292,6 +292,46 @@ def test_rate_limited_followup_does_not_crash_collector(tmp_path: Path) -> None:
     assert stale_rows[0]["rejection_reason"] == "helius_rate_limited_followup_deferred"
 
 
+def test_crossed_20k_target_stops_new_birth_collection_but_runs_followup(tmp_path: Path) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path, followup_poll_seconds=0)
+    source = FakeLogSource(
+        [
+            {"signature": "sig-target", "log_observed_at": 100.0},
+            {"signature": "sig-should-not-fetch", "log_observed_at": 101.0},
+        ]
+    )
+    hydrator = FakeHydrator(
+        {
+            "sig-target": {"mint": "mint-target", "launch_time": 100.0},
+            "sig-should-not-fetch": {"mint": "mint-extra", "launch_time": 101.0},
+        }
+    )
+    fetcher = FakeFetcher(
+        {
+            "mint-target": [{"mint": "mint-target", "timestamp": 100.5, "fdv_proxy": 25_000.0}],
+        }
+    )
+
+    result = run_no_laserstream_lifecycle_smoke(
+        config,
+        target_births=10,
+        target_crossed_20k=1,
+        execute=True,
+        source=source,
+        hydrator=hydrator,
+        fetcher=fetcher,
+        now_fn=iter([100.1, 100.2, 100.3, 100.4, 100.5, 100.6]).__next__,
+        max_runtime_seconds=1,
+        post_target_followup_minutes=0.0,
+    )
+
+    assert result["crossed_20k"] == 1
+    assert result["new_birth_collection_stopped_after_crossed_20k_target"] is True
+    assert "crossed_20k_target_reached_birth_collection_stopped" in result["warnings"]
+    assert len(read_jsonl(config.provisional_births_path)) == 1
+    assert source.fetch_calls == 1
+
+
 def test_bottleneck_audit_reports_hydration_registration_blocker(tmp_path: Path) -> None:
     config = OfficialLifecycleConfig(data_root=tmp_path)
     audit, paths = write_no_laserstream_bottleneck_audit(config)

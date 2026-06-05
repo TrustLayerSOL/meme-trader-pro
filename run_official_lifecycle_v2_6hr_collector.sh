@@ -11,10 +11,11 @@ exec ./trading_env/bin/python -u -m research.mtp_research.validation.run_forward
   --source helius-pumpfun-no-laserstream \
   --data-root /Volumes/ORICO/MemeTraderPro \
   --target-births 1000 \
-  --target-crossed-20k 300 \
-  --max-runtime-minutes 360 \
+  --target-crossed-20k 400 \
+  --max-runtime-minutes 720 \
   --max-helius-credits 500000 \
   --max-active-birth-followups 300 \
   --signatures-per-mint 7 \
   --transactions-per-mint 7 \
+  --post-target-followup-minutes 120 \
   --execute
