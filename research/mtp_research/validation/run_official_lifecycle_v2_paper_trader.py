@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--starting-wallet-usd", type=float, default=300.0)
     parser.add_argument("--position-fraction", type=float, default=0.05)
-    parser.add_argument("--poll-seconds", type=float, default=30.0)
+    parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--initialize", action="store_true")
     parser.add_argument("--reset", action="store_true")
     parser.add_argument("--loop", action="store_true")

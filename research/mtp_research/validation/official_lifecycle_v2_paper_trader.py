@@ -250,15 +250,29 @@ def _initial_state(config: OfficialV2PaperTradeConfig) -> dict[str, Any]:
 
 def _write_monitor(config: OfficialV2PaperTradeConfig, state: dict[str, Any], ledger: list[dict[str, Any]]) -> None:
     sells = [row for row in ledger if row.get("side") == "paper_sell"]
-    buys = [row for row in ledger if row.get("side") == "paper_buy"]
+    current_marketcaps = _latest_marketcaps_by_mint(config)
+    open_positions = [
+        _enrich_open_position(row, current_marketcaps.get(str(row.get("mint") or "")))
+        for row in (state.get("open_positions") or {}).values()
+    ]
     payload = {
         "updated_at": _utc_now(),
         "wallet_usd": state.get("wallet_usd"),
         "cash_usd": state.get("cash_usd"),
         "starting_wallet_usd": state.get("starting_wallet_usd"),
         "position_fraction": state.get("position_fraction"),
-        "open_positions": list((state.get("open_positions") or {}).values()),
+        "open_positions": open_positions,
         "closed_trades": sells,
+        "current_market_caps": [
+            {
+                "mint": row.get("mint"),
+                "token_name": row.get("token_name"),
+                "token_symbol": row.get("token_symbol"),
+                "current_marketcap": row.get("current_marketcap"),
+                "buy_marketcap": row.get("buy_marketcap"),
+            }
+            for row in open_positions
+        ],
         "ledger_rows": len(ledger),
         "total_paper_profit_loss_usd": _round_money(sum(float(row.get("paper_profit_loss_usd") or 0) for row in sells)),
         "no_live_trade": True,
@@ -282,10 +296,25 @@ def _monitor_markdown(payload: dict[str, Any]) -> str:
         "",
         "This is paper-only accounting. No live trades, wallet execution, signing, swaps, or routing.",
         "",
-        "## Open Positions",
+        "## Current Market Caps",
     ]
+    for row in payload["current_market_caps"]:
+        lines.append(
+            f"- {row.get('token_name') or row.get('mint')}: CA {row.get('mint')}, "
+            f"current MC ${row.get('current_marketcap')} (bought MC ${row.get('buy_marketcap')})"
+        )
+    lines.extend(
+        [
+            "",
+            "## Open Positions",
+        ]
+    )
     for row in payload["open_positions"]:
-        lines.append(f"- {row.get('token_name') or row.get('mint')} ({row.get('token_symbol') or 'n/a'}): bought at MC ${row.get('buy_marketcap')} because {row.get('buy_reason')}")
+        lines.append(
+            f"- {row.get('token_name') or row.get('mint')} ({row.get('token_symbol') or 'n/a'}): "
+            f"CA {row.get('mint')}, bought at MC ${row.get('buy_marketcap')}, "
+            f"current MC ${row.get('current_marketcap')} because {row.get('buy_reason')}"
+        )
     lines.append("")
     lines.append("## Closed Trades")
     for row in payload["closed_trades"]:
@@ -297,13 +326,23 @@ def _monitor_markdown(payload: dict[str, Any]) -> str:
 
 def _monitor_html(payload: dict[str, Any]) -> str:
     rows = payload["open_positions"] + payload["closed_trades"]
+    current_marketcap_rows = "\n".join(
+        "<tr>"
+        f"<td>{html.escape(str(row.get('token_name') or row.get('mint') or ''))}</td>"
+        f"<td>{_ca_button(row.get('mint'))}</td>"
+        f"<td>${html.escape(str(row.get('current_marketcap') or ''))}</td>"
+        f"<td>${html.escape(str(row.get('buy_marketcap') or ''))}</td>"
+        "</tr>"
+        for row in payload["current_market_caps"]
+    )
     table = "\n".join(
         "<tr>"
         f"<td>{_img(row.get('image_uri'))}</td>"
-        f"<td>{html.escape(str(row.get('token_name') or row.get('mint') or ''))}<br><small>{html.escape(str(row.get('token_symbol') or ''))}</small></td>"
+        f"<td>{html.escape(str(row.get('token_name') or row.get('mint') or ''))}<br><small>{html.escape(str(row.get('token_symbol') or ''))}</small><br>{_ca_button(row.get('mint'))}</td>"
         f"<td>{html.escape(str(row.get('side') or 'open'))}</td>"
         f"<td>${html.escape(str(row.get('allocation_usd') or ''))}</td>"
         f"<td>${html.escape(str(row.get('buy_marketcap') or ''))}</td>"
+        f"<td>${html.escape(str(row.get('current_marketcap') or row.get('sell_marketcap') or 'open'))}</td>"
         f"<td>${html.escape(str(row.get('sell_marketcap') or 'open'))}</td>"
         f"<td>${html.escape(str(row.get('paper_profit_loss_usd') if row.get('paper_profit_loss_usd') is not None else 'open'))}</td>"
         f"<td>{html.escape(str(row.get('buy_reason') or ''))}<br>{html.escape(str(row.get('sell_reason') or ''))}</td>"
@@ -311,19 +350,25 @@ def _monitor_html(payload: dict[str, Any]) -> str:
         for row in rows
     )
     return f"""<!doctype html>
-<html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"30\">
+<html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"10\">
 <title>MTP v2 Paper Monitor</title>
 <style>
 body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;margin:24px;background:#f7f7f4;color:#1f2933}}
 .stats{{display:flex;gap:12px;flex-wrap:wrap}} .stat{{background:white;border:1px solid #ddd;border-radius:8px;padding:12px 16px}}
 table{{border-collapse:collapse;width:100%;background:white;margin-top:18px}} th,td{{border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;vertical-align:middle}} img{{width:44px;height:44px;object-fit:cover;border-radius:6px}}
-small{{color:#667085}} .guard{{color:#7a2e0e;margin-top:12px}}
-</style></head><body>
+small{{color:#667085}} .guard{{color:#7a2e0e;margin-top:12px}} button.ca{{border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:4px 8px;cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}}
+</style><script>
+function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{document.getElementById('copy-status').textContent='Copied CA: '+value;}});}}
+</script></head><body>
 <h1>MemeTraderPro v2 Paper Monitor</h1>
 <div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_trades'])}</b></div><div class=\"stat\">Paper P/L<br><b>${payload['total_paper_profit_loss_usd']}</b></div></div>
 <p class=\"guard\">Paper-only monitor. No live trades, wallet execution, signing, swaps, or routing.</p>
-<table><thead><tr><th>Image</th><th>Token</th><th>Status</th><th>Size</th><th>Buy MC</th><th>Sell MC</th><th>P/L</th><th>Why</th></tr></thead><tbody>{table}</tbody></table>
-<p><small>Updated {payload['updated_at']}. Auto-refreshes every 30 seconds.</small></p>
+<p id=\"copy-status\"><small>Click any CA to copy it.</small></p>
+<h2>Current Market Caps</h2>
+<table><thead><tr><th>Token</th><th>CA</th><th>Current MC</th><th>Buy MC</th></tr></thead><tbody>{current_marketcap_rows}</tbody></table>
+<h2>Trades</h2>
+<table><thead><tr><th>Image</th><th>Token / CA</th><th>Status</th><th>Size</th><th>Buy MC</th><th>Current MC</th><th>Sell MC</th><th>P/L</th><th>Why</th></tr></thead><tbody>{table}</tbody></table>
+<p><small>Updated {payload['updated_at']}. Auto-refreshes every 10 seconds.</small></p>
 </body></html>"""
 
 
@@ -333,9 +378,19 @@ def _img(uri: Any) -> str:
     return f"<img src=\"{html.escape(str(uri), quote=True)}\" alt=\"token image\">"
 
 
+def _ca_button(mint: Any) -> str:
+    if not mint:
+        return ""
+    value = str(mint)
+    return (
+        f"<button class=\"ca\" onclick=\"copyCA('{html.escape(value, quote=True)}')\" "
+        f"title=\"Copy contract address\">{html.escape(value)}</button>"
+    )
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["timestamp", "side", "mint", "token_name", "token_symbol", "allocation_usd", "buy_marketcap", "sell_marketcap", "paper_profit_loss_usd", "buy_reason", "sell_reason", "image_uri"]
+    fields = ["timestamp", "side", "mint", "token_name", "token_symbol", "allocation_usd", "buy_marketcap", "current_marketcap", "sell_marketcap", "paper_profit_loss_usd", "buy_reason", "sell_reason", "image_uri"]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -360,6 +415,33 @@ def _paths_by_mint(config: OfficialV2PaperTradeConfig) -> dict[str, list[dict[st
         if mint:
             out.setdefault(str(mint), []).append(row)
     return out
+
+
+def _latest_marketcaps_by_mint(config: OfficialV2PaperTradeConfig) -> dict[str, float]:
+    out: dict[str, float] = {}
+    latest_ts: dict[str, float] = {}
+    for row in _read_jsonl(config.lifecycle.followup_paths_path):
+        mint = str(row.get("mint") or "")
+        fdv = _num(row.get("fdv_proxy"))
+        timestamp = _num(row.get("timestamp")) or 0.0
+        if not mint or fdv is None:
+            continue
+        if mint not in latest_ts or timestamp >= latest_ts[mint]:
+            latest_ts[mint] = timestamp
+            out[mint] = fdv
+    return out
+
+
+def _enrich_open_position(row: dict[str, Any], current_marketcap: float | None) -> dict[str, Any]:
+    enriched = dict(row)
+    if current_marketcap is not None:
+        enriched["current_marketcap"] = current_marketcap
+        allocation = _num(enriched.get("allocation_usd")) or 0.0
+        units = _num(enriched.get("paper_units")) or 0.0
+        current_value = _round_money(units * current_marketcap)
+        enriched["current_paper_value_usd"] = current_value
+        enriched["unrealized_paper_profit_loss_usd"] = _round_money(current_value - allocation)
+    return enriched
 
 
 def _nearest_path(rows: list[dict[str, Any]], timestamp: float, *, require_crossed_20k: bool = False) -> dict[str, Any] | None:

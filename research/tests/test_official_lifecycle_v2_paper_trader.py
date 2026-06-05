@@ -27,6 +27,10 @@ def test_v2_paper_trader_buys_5_percent_and_sells_on_e2_with_metadata_monitor(tm
         {"mint": "mint-a", "timestamp": 100.0, "fdv_proxy": 22_000, "crossed_20k": True},
     )
     _append(
+        lifecycle.followup_paths_path,
+        {"mint": "mint-a", "timestamp": 120.0, "fdv_proxy": 33_000, "crossed_20k": True},
+    )
+    _append(
         lifecycle.paper_shadow_labels_path,
         {
             "mint": "mint-a",
@@ -57,7 +61,13 @@ def test_v2_paper_trader_buys_5_percent_and_sells_on_e2_with_metadata_monitor(tm
     assert state["open_positions"]["mint-a"]["buy_marketcap"] == 22_000
     assert state["open_positions"]["mint-a"]["allocation_usd"] == 15
     assert state["open_positions"]["mint-a"]["token_name"] == "Token A"
-    assert "Token A" in config.monitor_html_path.read_text(encoding="utf-8")
+    monitor_html = config.monitor_html_path.read_text(encoding="utf-8")
+    monitor_json = json.loads(config.monitor_json_path.read_text(encoding="utf-8"))
+    assert "Token A" in monitor_html
+    assert 'content="10"' in monitor_html
+    assert "copyCA('mint-a')" in monitor_html
+    assert "Current Market Caps" in monitor_html
+    assert monitor_json["open_positions"][0]["current_marketcap"] == 33_000
 
     _append(
         lifecycle.paper_shadow_exit_labels_path,
