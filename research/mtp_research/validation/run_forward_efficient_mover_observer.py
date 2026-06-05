@@ -141,6 +141,7 @@ def main() -> int:
                 signatures_per_mint=args.signatures_per_mint,
                 transactions_per_mint=args.transactions_per_mint,
                 post_target_followup_minutes=args.post_target_followup_minutes,
+                new_birth_collection_minutes=args.new_birth_collection_minutes,
                 execute=args.execute,
             )
         elif args.source != "mock":
@@ -283,6 +284,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--signatures-per-mint", type=int, default=10)
     parser.add_argument("--transactions-per-mint", type=int, default=10)
     parser.add_argument("--post-target-followup-minutes", type=float, default=0.0)
+    parser.add_argument("--new-birth-collection-minutes", type=float, default=None)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--live-health-check", action="store_true")
     parser.add_argument("--enable-dexscreener-metadata", action="store_true")

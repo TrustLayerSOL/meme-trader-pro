@@ -471,6 +471,7 @@ def run_no_laserstream_lifecycle_smoke(
     now_fn: Callable[[], float] | None = None,
     rate_limit_backoff_seconds: float = 30.0,
     post_target_followup_minutes: float = 0.0,
+    new_birth_collection_minutes: float | None = None,
     enable_metadata_enrichment: bool | None = None,
     max_metadata_workers: int = 4,
     metadata_fetch_timeout_seconds: float = 2.0,
@@ -534,7 +535,13 @@ def run_no_laserstream_lifecycle_smoke(
     machine = OfficialLifecycleStateMachine(config, metadata_queue=metadata_queue)
     counters = NoLaserstreamCollectorCounters()
     seen_signatures: set[str] = {str(row.get("signature")) for row in _read_jsonl(config.provisional_births_path) if row.get("signature")}
-    deadline = time.monotonic() + float(max_runtime_seconds if max_runtime_seconds is not None else max(1, int(max_runtime_minutes)) * 60)
+    started_monotonic = time.monotonic()
+    deadline = started_monotonic + float(max_runtime_seconds if max_runtime_seconds is not None else max(1, int(max_runtime_minutes)) * 60)
+    birth_collection_deadline = (
+        started_monotonic + max(0.0, float(new_birth_collection_minutes)) * 60.0
+        if new_birth_collection_minutes is not None
+        else None
+    )
     post_target_followup_seconds = max(0.0, float(post_target_followup_minutes) * 60.0)
     post_target_deadline: float | None = None
     new_birth_collection_stopped_after_target = False
@@ -545,6 +552,14 @@ def run_no_laserstream_lifecycle_smoke(
                 warnings.append("max_helius_credits_per_run_reached")
                 break
             crossed_20k_count = _current_crossed_20k_count(config)
+            if (
+                birth_collection_deadline is not None
+                and time.monotonic() >= birth_collection_deadline
+                and not new_birth_collection_stopped_after_target
+            ):
+                new_birth_collection_stopped_after_target = True
+                post_target_deadline = time.monotonic() + post_target_followup_seconds
+                warnings.append("new_birth_collection_window_complete_birth_collection_stopped")
             if (
                 target_crossed_20k > 0
                 and crossed_20k_count >= int(target_crossed_20k)
