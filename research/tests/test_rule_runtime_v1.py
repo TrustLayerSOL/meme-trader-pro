@@ -15,6 +15,7 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     run_rule_runtime_smoke,
     rule_runtime_status,
 )
+from research.mtp_research.validation.official_lifecycle_watch import OfficialLifecycleV2Config, OfficialLifecycleStateMachine
 
 
 def _rows(path: Path) -> list[dict]:
@@ -389,3 +390,34 @@ def test_normalize_live_path_row_rejects_missing_path_evidence() -> None:
     )
 
     assert normalized is None
+
+
+def test_official_lifecycle_record_path_emits_hot_path_event_before_jsonl_write(tmp_path: Path) -> None:
+    config = OfficialLifecycleV2Config(data_root=tmp_path)
+    seen: list[tuple[dict, bool]] = []
+
+    def callback(event: dict) -> None:
+        seen.append((event, config.followup_paths_path.exists() and bool(config.followup_paths_path.read_text(encoding="utf-8").strip())))
+
+    machine = OfficialLifecycleStateMachine(config, hot_path_event_callback=callback)
+    machine.record_birth({"mint": "mint-a", "observed_time": 90.0})
+    machine.record_path(
+        {
+            "mint": "mint-a",
+            "timestamp": 100.0,
+            "fdv_proxy": 10_500,
+            "event_count": 4,
+            "buy_count": 2,
+            "sell_count": 1,
+            "active_wallet_count": 3,
+            "source_provenance": "mock_collector",
+        }
+    )
+
+    assert len(seen) == 1
+    event, file_had_path_rows = seen[0]
+    assert file_had_path_rows is False
+    assert event["mint"] == "mint-a"
+    assert event["source_event_type"] == "fdv_path_update"
+    assert event["fdv_proxy"] == 10_500
+    assert event["raw_crossed_10k"] is True

@@ -478,6 +478,7 @@ def run_no_laserstream_lifecycle_smoke(
     max_metadata_uri_bytes: int = 128_000,
     enable_public_uri_fetch: bool = True,
     enable_dexscreener_metadata: bool = False,
+    hot_path_event_callback: Any | None = None,
 ) -> dict[str, Any]:
     initialize_official_lifecycle_namespace(config, reset=execute and _row_count(config.births_path) == 0)
     write_no_laserstream_bottleneck_audit(config)
@@ -532,7 +533,7 @@ def run_no_laserstream_lifecycle_smoke(
                 enable_dexscreener_metadata=enable_dexscreener_metadata,
             ),
         )
-    machine = OfficialLifecycleStateMachine(config, metadata_queue=metadata_queue)
+    machine = OfficialLifecycleStateMachine(config, metadata_queue=metadata_queue, hot_path_event_callback=hot_path_event_callback)
     counters = NoLaserstreamCollectorCounters()
     seen_signatures: set[str] = {str(row.get("signature")) for row in _read_jsonl(config.provisional_births_path) if row.get("signature")}
     started_monotonic = time.monotonic()

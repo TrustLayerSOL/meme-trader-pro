@@ -446,9 +446,16 @@ def initialize_official_lifecycle_namespace(config: OfficialLifecycleConfig, *, 
 
 
 class OfficialLifecycleStateMachine:
-    def __init__(self, config: OfficialLifecycleConfig, *, metadata_queue: Any | None = None) -> None:
+    def __init__(
+        self,
+        config: OfficialLifecycleConfig,
+        *,
+        metadata_queue: Any | None = None,
+        hot_path_event_callback: Any | None = None,
+    ) -> None:
         self.config = config
         self.metadata_queue = metadata_queue
+        self.hot_path_event_callback = hot_path_event_callback
         initialize_official_lifecycle_namespace(config)
         self.state = _read_state(config)
 
@@ -602,6 +609,15 @@ class OfficialLifecycleStateMachine:
             drawdown_pct=drawdown_pct,
             sample_label=self.config.sample_label,
         )
+        if self.hot_path_event_callback is not None:
+            self.hot_path_event_callback(
+                _hot_path_event_from_path_row(
+                    enriched,
+                    previous_state=previous_state,
+                    candidate_state_after=new_state,
+                    source_adapter=path.get("source_adapter") or path.get("source_provenance") or "official_lifecycle_state_machine",
+                )
+            )
         _append_jsonl(self.config.followup_paths_path, [enriched])
         _append_jsonl(self.config.drawdowns_path, [_drawdown_row(enriched, sample_label=self.config.sample_label)])
         if (
@@ -1743,6 +1759,43 @@ def _path_row(
         "drawdown_pct": drawdown_pct,
         "reclaim_status": _reclaim_status(fdv, local_high),
         "source_provenance": source.get("source_provenance") or source.get("source") or "observed_path_row",
+    }
+
+
+def _hot_path_event_from_path_row(
+    row: dict[str, Any],
+    *,
+    previous_state: str | None,
+    candidate_state_after: str | None,
+    source_adapter: str,
+) -> dict[str, Any]:
+    timestamp = _num(row.get("timestamp")) or time.time()
+    mint = str(row.get("mint") or "")
+    fdv = _num(row.get("fdv_proxy"))
+    return {
+        "event_id": f"{mint}-{timestamp}-{fdv}-{row.get('source_provenance') or source_adapter}",
+        "mint": mint,
+        "observed_at": timestamp,
+        "monotonic_observed_at": time.monotonic(),
+        "source_adapter": source_adapter,
+        "source_event_type": "fdv_path_update",
+        "fdv_proxy": fdv,
+        "event_count": row.get("event_count"),
+        "buy_count": row.get("buy_count"),
+        "sell_count": row.get("sell_count"),
+        "active_wallet_count": row.get("active_wallet_count"),
+        "path_evidence_count": 1,
+        "raw_crossed_10k": bool(row.get("crossed_10k")),
+        "raw_crossed_15k": bool(row.get("crossed_15k")),
+        "raw_crossed_20k": bool(row.get("crossed_20k")),
+        "raw_crossed_50k": bool(row.get("crossed_50k")),
+        "raw_crossed_100k": bool(row.get("crossed_100k")),
+        "raw_crossed_500k": bool(row.get("crossed_500k")),
+        "raw_crossed_1m": bool(row.get("crossed_1m")),
+        "candidate_state_before": previous_state,
+        "candidate_state_after": candidate_state_after,
+        "source_provenance": row.get("source_provenance") or source_adapter,
+        "raw_snapshot_ref": None,
     }
 
 

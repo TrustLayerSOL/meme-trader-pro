@@ -18,6 +18,7 @@ import json
 import time
 
 from research.mtp_research.data_paths import data_lake_root
+from research.mtp_research.validation.rule_runtime_event_bus import RuleRuntimeEventBus
 
 
 RUNTIME_LABEL = "rule_runtime_v1"
@@ -113,6 +114,18 @@ class RuleRuntimeConfig:
     @property
     def smoke_summary_md_path(self) -> Path:
         return self.report_root / "rule_runtime_v1_smoke_summary.md"
+
+    @property
+    def live_bus_smoke_summary_json_path(self) -> Path:
+        return self.report_root / "rule_runtime_v1_live_bus_smoke_summary.json"
+
+    @property
+    def live_bus_smoke_summary_md_path(self) -> Path:
+        return self.report_root / "rule_runtime_v1_live_bus_smoke_summary.md"
+
+    @property
+    def hot_path_gap_analysis_path(self) -> Path:
+        return self.report_root / "hot_path_gap_analysis.md"
 
     @property
     def status_md_path(self) -> Path:
@@ -211,10 +224,14 @@ class RuleRuntimeEngine:
         if not config.runtime_state_path.exists():
             initialize_rule_runtime(config)
 
-    def process_path_event(self, event: dict[str, Any]) -> dict[str, Any]:
+    def process_path_event(self, event: dict[str, Any], *, runtime_mode: str = "file_adapter") -> dict[str, Any]:
         started = time.time()
+        runtime_receive_monotonic = time.monotonic()
         state = _load_state(self.config)
         normalized = _normalize_path_event(event)
+        normalized["runtime_mode"] = runtime_mode
+        normalized["runtime_receive_at"] = time.time()
+        normalized["runtime_receive_monotonic_at"] = runtime_receive_monotonic
         mint = normalized["mint"]
         fdv = float(normalized["fdv_proxy"])
         timestamp = float(normalized["timestamp"])
@@ -244,7 +261,7 @@ class RuleRuntimeEngine:
             candidate["tier"] = -1
             candidate["fdv_anomaly_flag"] = True
             _record_rejection(self.config, candidate, normalized, "rejected_fdv_anomaly", "fdv_anomaly")
-            _finish_event(self.config, state, candidate, normalized, started, previous_state)
+            _finish_event(self.config, state, candidate, normalized, started, previous_state, runtime_mode=runtime_mode)
             return _result(candidate, result)
 
         candidate["last_fdv_proxy"] = fdv
@@ -294,9 +311,30 @@ class RuleRuntimeEngine:
                 _create_paper_sell(self.config, state, candidate, normalized, sell)
                 result["paper_sell_created"] = True
 
-        _finish_event(self.config, state, candidate, normalized, started, previous_state)
+        _finish_event(self.config, state, candidate, normalized, started, previous_state, runtime_mode=runtime_mode)
         _write_monitor(self.config, state)
         return _result(candidate, result)
+
+    def consume_event_bus(self, bus: RuleRuntimeEventBus, *, max_events: int | None = None) -> dict[str, Any]:
+        processed = 0
+        buys = 0
+        sells = 0
+        background_before = int(bus.metrics().get("background_skipped") or 0)
+        for event in bus.drain(max_events=max_events):
+            result = self.process_path_event(event, runtime_mode="live_bus")
+            processed += 1
+            buys += int(bool(result.get("paper_buy_created")))
+            sells += int(bool(result.get("paper_sell_created")))
+        background_after = int(bus.metrics().get("background_skipped") or 0)
+        status = rule_runtime_status(self.config)
+        return {
+            "processed": processed,
+            "paper_buys_created": buys,
+            "paper_sells_created": sells,
+            "background_skipped": background_after - background_before,
+            "bus_metrics": bus.metrics(),
+            **status,
+        }
 
 
 def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -> dict[str, Any]:
@@ -336,7 +374,7 @@ def run_rule_runtime_once(config: RuleRuntimeConfig, events: list[dict[str, Any]
     buys = 0
     sells = 0
     for event in events:
-        result = engine.process_path_event(event)
+        result = engine.process_path_event(event, runtime_mode="file_adapter")
         buys += int(bool(result.get("paper_buy_created")))
         sells += int(bool(result.get("paper_sell_created")))
     status = rule_runtime_status(config)
@@ -413,12 +451,20 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
     queue_sizes = state.get("queue_sizes") or RuleRuntimePriorityScheduler().queue_sizes()
     detection = [_num(row.get("detection_to_rule_latency_ms")) for row in latency]
     age = [_num(row.get("state_age_ms")) for row in latency]
+    event_to_rule = [_num(row.get("event_to_rule_ms")) for row in latency]
+    bus_to_runtime = [_num(row.get("bus_to_runtime_ms")) for row in latency]
+    runtime_eval = [_num(row.get("runtime_eval_ms")) for row in latency]
+    runtime_stats = state.get("runtime_stats") or {}
     status = {
         "runtime_label": RUNTIME_LABEL,
+        "runtime_mode": runtime_stats.get("last_runtime_mode") or "idle",
         "frozen_buy_rule": FROZEN_BUY_RULE_ID,
         "frozen_exit_rule": FROZEN_EXIT_RULE_ID,
         "live_trading_enabled": False,
         "paper_trading_enabled": True,
+        "events_processed": int(runtime_stats.get("events_processed") or 0),
+        "live_bus_events": int(runtime_stats.get("live_bus_events") or 0),
+        "file_adapter_events": int(runtime_stats.get("file_adapter_events") or 0),
         "confirmed_10k_watches": sum(1 for row in candidates.values() if row.get("confirmed_crossed_10k")),
         "confirmed_20k_entry_candidates": sum(1 for row in candidates.values() if row.get("confirmed_crossed_20k")),
         "paper_buys": len(buys),
@@ -429,8 +475,12 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "rejected_fdv_anomalies": sum(1 for row in candidates.values() if row.get("fdv_anomaly_flag")),
         "archived_no_activity": sum(1 for row in candidates.values() if row.get("state") == "archived_no_activity"),
         "latency_p50_p90_p99": _percentiles(detection),
+        "event_to_rule_p50_p90_p99": _percentiles(event_to_rule),
+        "bus_to_runtime_p50_p90_p99": _percentiles(bus_to_runtime),
+        "runtime_eval_p50_p90_p99": _percentiles(runtime_eval),
         "state_age_p50_p90_p99": _percentiles(age),
         "queue_sizes": queue_sizes,
+        "bus_queue_depth": int(runtime_stats.get("bus_queue_depth") or 0),
         "metadata_hot_path_blocked": True,
         "no_real_trade_flag": True,
         "wallet_usd": state.get("wallet_usd"),
@@ -442,6 +492,98 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
     }
     _write_monitor(config, state)
     return status
+
+
+def run_rule_runtime_mock_live_bus_smoke(config: RuleRuntimeConfig, events: list[dict[str, Any]]) -> dict[str, Any]:
+    initialize_rule_runtime(config, reset=not config.runtime_state_path.exists())
+    bus = RuleRuntimeEventBus()
+    for event in events:
+        bus.emit(event)
+    result = RuleRuntimeEngine(config).consume_event_bus(bus, max_events=len(events))
+    summary = _live_bus_smoke_summary(config, result, collector_result=None, bus_metrics=result.get("bus_metrics") or {})
+    _write_live_bus_smoke_reports(config, summary)
+    return summary
+
+
+def run_rule_runtime_live_bus_collector_smoke(
+    config: RuleRuntimeConfig,
+    *,
+    collector_data_root: Path | str,
+    target_births: int = 5,
+    target_crossed_20k: int = 1,
+    max_runtime_seconds: float = 600.0,
+    max_helius_credits: int = 10_000,
+    signatures_per_mint: int = 7,
+    transactions_per_mint: int = 7,
+) -> dict[str, Any]:
+    from research.mtp_research.validation.no_laserstream_lifecycle_collector import run_no_laserstream_lifecycle_smoke
+    from research.mtp_research.validation.official_lifecycle_watch import OfficialLifecycleV2Config
+
+    initialize_rule_runtime(config, reset=not config.runtime_state_path.exists())
+    bus = RuleRuntimeEventBus(max_queue_size=10_000)
+    engine = RuleRuntimeEngine(config)
+    collector_config = OfficialLifecycleV2Config(
+        data_root=Path(collector_data_root).expanduser(),
+        max_helius_credits_per_run=max_helius_credits,
+        max_active_birth_followups=100,
+        max_active_trigger_watches=100,
+        metadata_hydration_hot_path=False,
+        metadata_hydration_at_birth=False,
+        metadata_hydration_after_first_fdv_path=False,
+        metadata_hydration_after_milestones=False,
+        metadata_backfill_after_maturity=False,
+    )
+
+    def on_hot_event(event: dict[str, Any]) -> None:
+        if bus.emit(event, block=False):
+            result = engine.consume_event_bus(bus, max_events=100)
+            _update_runtime_bus_depth(config, int((result.get("bus_metrics") or {}).get("queue_depth") or 0))
+
+    collector_result = run_no_laserstream_lifecycle_smoke(
+        collector_config,
+        target_births=target_births,
+        target_crossed_20k=target_crossed_20k,
+        max_runtime_seconds=max_runtime_seconds,
+        max_runtime_minutes=max(1, int(max_runtime_seconds // 60) or 1),
+        signatures_per_mint=signatures_per_mint,
+        transactions_per_mint=transactions_per_mint,
+        execute=True,
+        enable_metadata_enrichment=False,
+        new_birth_collection_minutes=max_runtime_seconds / 60.0,
+        post_target_followup_minutes=2,
+        rate_limit_backoff_seconds=10,
+        hot_path_event_callback=on_hot_event,
+    )
+    final = engine.consume_event_bus(bus, max_events=10_000)
+    summary = _live_bus_smoke_summary(config, rule_runtime_status(config), collector_result=collector_result, bus_metrics=final.get("bus_metrics") or bus.metrics())
+    _write_live_bus_smoke_reports(config, summary)
+    write_hot_path_gap_analysis(config)
+    return summary
+
+
+def write_hot_path_gap_analysis(config: RuleRuntimeConfig) -> Path:
+    config.hot_path_gap_analysis_path.parent.mkdir(parents=True, exist_ok=True)
+    config.hot_path_gap_analysis_path.write_text(
+        "\n".join(
+            [
+                "# Rule Runtime v1 Hot Path Gap Analysis",
+                "",
+                "Previous path:",
+                "collector event -> enriched path row -> JSONL write -> file adapter read -> runtime event.",
+                "",
+                "Latency source:",
+                "The runtime waited for collector file writes and a later adapter poll/read cycle before rule evaluation.",
+                "",
+                "New path:",
+                "collector event -> enriched path state -> in-memory event bus -> runtime event -> paper decision -> JSONL/report writes.",
+                "",
+                "File adapter remains available for replay, backfill, repair, and debugging.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return config.hot_path_gap_analysis_path
 
 
 def archive_stale_candidates(config: RuleRuntimeConfig, *, now: float | None = None, timeout_seconds: float = 120.0) -> dict[str, Any]:
@@ -547,6 +689,13 @@ def _initial_state(config: RuleRuntimeConfig) -> dict[str, Any]:
         "closed_positions": {},
         "rejected_candidates": {},
         "queue_sizes": RuleRuntimePriorityScheduler().queue_sizes(),
+        "runtime_stats": {
+            "last_runtime_mode": "idle",
+            "events_processed": 0,
+            "live_bus_events": 0,
+            "file_adapter_events": 0,
+            "bus_queue_depth": 0,
+        },
         "warnings": ["fdv_efficiency_threshold_unfrozen"],
         "created_at": _utc_now(),
         "updated_at": _utc_now(),
@@ -603,6 +752,10 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
         "active_wallet_count": int(_num(event.get("active_wallet_count")) or 0),
         "data_source": str(event.get("data_source") or "helius_rpc_read_only"),
         "source_event_type": str(event.get("source_event_type") or "fdv_path"),
+        "observed_at": float(_num(event.get("observed_at")) or timestamp),
+        "monotonic_observed_at": _num(event.get("monotonic_observed_at")),
+        "bus_emit_at": event.get("bus_emit_at"),
+        "bus_emit_monotonic_at": _num(event.get("bus_emit_monotonic_at")),
         "path_evidence_count": int(_num(event.get("path_evidence_count")) or 1),
         "raw_crossed_10k": _bool_or_none(event.get("raw_crossed_10k")),
         "raw_crossed_20k": _bool_or_none(event.get("raw_crossed_20k")),
@@ -927,30 +1080,60 @@ def _finish_event(
     row: dict[str, Any],
     started: float,
     previous_state: Any,
+    *,
+    runtime_mode: str,
 ) -> None:
     state["updated_at"] = _utc_now()
     state["candidates"][candidate["mint"]] = candidate
     state["queue_sizes"] = _queue_sizes_from_state(state)
-    latency = _latency_row(candidate, row, started, previous_state)
+    latency = _latency_row(candidate, row, started, previous_state, runtime_mode=runtime_mode)
+    stats = state.setdefault("runtime_stats", {})
+    stats["last_runtime_mode"] = runtime_mode
+    stats["events_processed"] = int(stats.get("events_processed") or 0) + 1
+    if runtime_mode == "live_bus":
+        stats["live_bus_events"] = int(stats.get("live_bus_events") or 0) + 1
+        stats["bus_queue_depth"] = int(stats.get("bus_queue_depth") or 0)
+    elif runtime_mode == "file_adapter":
+        stats["file_adapter_events"] = int(stats.get("file_adapter_events") or 0) + 1
     _append_jsonl(config.latency_events_path, latency)
     _write_json(config.runtime_state_path, state)
 
 
-def _latency_row(candidate: dict[str, Any], row: dict[str, Any], started: float, previous_state: Any) -> dict[str, Any]:
+def _latency_row(candidate: dict[str, Any], row: dict[str, Any], started: float, previous_state: Any, *, runtime_mode: str) -> dict[str, Any]:
     now = time.time()
     observed = float(row.get("event_observed_at") or row["timestamp"])
+    bus_emit_monotonic = _num(row.get("bus_emit_monotonic_at"))
+    observed_monotonic = _num(row.get("monotonic_observed_at"))
+    receive_monotonic = _num(row.get("runtime_receive_monotonic_at")) or time.monotonic()
+    event_to_bus_ms = _round_ms(max(0.0, (bus_emit_monotonic - observed_monotonic) * 1000.0)) if bus_emit_monotonic is not None and observed_monotonic is not None else None
+    bus_to_runtime_ms = _round_ms(max(0.0, (receive_monotonic - bus_emit_monotonic) * 1000.0)) if bus_emit_monotonic is not None else None
+    runtime_eval_ms = _round_ms((time.time() - started) * 1000.0)
+    event_to_rule_ms = (
+        _round_ms(max(0.0, (time.monotonic() - observed_monotonic) * 1000.0)) if observed_monotonic is not None else _round_ms((now - observed) * 1000.0)
+    )
     confirmed_times = candidate.get("confirmed_milestone_times") or {}
     return {
+        "runtime_mode": runtime_mode,
         "event_observed_at": observed,
+        "source_event_observed_at": observed,
+        "bus_emit_at": row.get("bus_emit_at"),
+        "runtime_receive_at": row.get("runtime_receive_at"),
         "candidate_state_update_at": float(row["timestamp"]),
         "confirmed_10k_at": confirmed_times.get("10k"),
         "confirmed_20k_at": confirmed_times.get("20k"),
         "rule_eval_started_at": started,
+        "rule_eval_finished_at": time.time(),
         "rule_fired_at": float(row["timestamp"]) if candidate.get("paper_buy_created") else None,
         "paper_buy_event_written_at": float(row["timestamp"]) if candidate.get("paper_buy_created") else None,
+        "paper_event_written_at": float(row["timestamp"]) if candidate.get("paper_buy_created") or candidate.get("paper_closed") else None,
+        "event_to_bus_ms": event_to_bus_ms,
+        "bus_to_runtime_ms": bus_to_runtime_ms,
+        "runtime_eval_ms": runtime_eval_ms,
+        "event_to_rule_ms": event_to_rule_ms,
+        "event_to_paper_write_ms": event_to_rule_ms if candidate.get("paper_buy_created") or candidate.get("paper_closed") else None,
         "detection_to_rule_latency_ms": _round_ms((now - observed) * 1000.0),
         "state_age_ms": _round_ms(max(0.0, float(row["timestamp"]) - float(candidate.get("first_seen_at") or row["timestamp"])) * 1000.0),
-        "rule_eval_latency_ms": _round_ms((time.time() - started) * 1000.0),
+        "rule_eval_latency_ms": runtime_eval_ms,
         "source_event_type": row.get("source_event_type"),
         "data_source": row.get("data_source"),
         "path_row_count": len(candidate.get("path_rows") or []),
@@ -987,6 +1170,7 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
     payload = {
         "updated_at": _utc_now(),
         "runtime_label": RUNTIME_LABEL,
+        "runtime_mode": (state.get("runtime_stats") or {}).get("last_runtime_mode") or "idle",
         "wallet_usd": state.get("wallet_usd"),
         "cash_usd": state.get("cash_usd"),
         "paper_trading_enabled": True,
@@ -999,9 +1183,17 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
         "confirmed_20k_entry_candidates": sum(1 for row in candidates.values() if row.get("confirmed_crossed_20k")),
         "paper_buys": len([row for row in trades if row.get("side") == "paper_buy"]),
         "paper_sells": len([row for row in trades if row.get("side") == "paper_sell"]),
+        "live_bus_events": int((state.get("runtime_stats") or {}).get("live_bus_events") or 0),
+        "file_adapter_events": int((state.get("runtime_stats") or {}).get("file_adapter_events") or 0),
         "latency_p50_p90_p99": _percentiles([_num(row.get("detection_to_rule_latency_ms")) for row in latency]),
+        "event_to_rule_p50_p90_p99": _percentiles([_num(row.get("event_to_rule_ms")) for row in latency]),
+        "bus_to_runtime_p50_p90_p99": _percentiles([_num(row.get("bus_to_runtime_ms")) for row in latency]),
+        "runtime_eval_p50_p90_p99": _percentiles([_num(row.get("runtime_eval_ms")) for row in latency]),
         "state_age_p50_p90_p99": _percentiles([_num(row.get("state_age_ms")) for row in latency]),
         "queue_sizes": state.get("queue_sizes") or {},
+        "bus_queue_depth": int((state.get("runtime_stats") or {}).get("bus_queue_depth") or 0),
+        "last_paper_decision": decisions[-1] if decisions else None,
+        "last_rejection_reason": next((row.get("rejection_reason") for row in reversed(decisions) if row.get("rejection_reason")), None),
         "no_real_trade": True,
     }
     _write_json(config.monitor_json_path, payload)
@@ -1018,6 +1210,8 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         f"Wallet: ${payload['wallet_usd']}",
         f"Cash: ${payload['cash_usd']}",
         f"Open paper positions: {len(payload['open_positions'])}",
+        f"Runtime mode: {payload.get('runtime_mode')}",
+        f"Live bus events: {payload.get('live_bus_events')}",
         f"Closed paper positions: {len(payload['closed_positions'])}",
         f"Rejected entries: {len(payload['rejected_entries'])}",
         "",
@@ -1076,7 +1270,12 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 <p class=\"guard\">Paper-only monitor. Live trading, wallet execution, signing, swaps, and routing are disabled.</p>
 <p id=\"copy-status\"><small>Click any CA to copy it.</small></p>
 <h2>Latency</h2>
-<p>Detection-to-rule p50/p90/p99: {html.escape(str(payload['latency_p50_p90_p99']))}</p>
+<p>Runtime mode: {html.escape(str(payload['runtime_mode']))}</p>
+<p>Live bus events: {html.escape(str(payload['live_bus_events']))}; file adapter events: {html.escape(str(payload['file_adapter_events']))}; bus queue depth: {html.escape(str(payload['bus_queue_depth']))}</p>
+<p>Event-to-rule p50/p90/p99: {html.escape(str(payload['event_to_rule_p50_p90_p99']))}</p>
+<p>Bus-to-runtime p50/p90/p99: {html.escape(str(payload['bus_to_runtime_p50_p90_p99']))}</p>
+<p>Runtime eval p50/p90/p99: {html.escape(str(payload['runtime_eval_p50_p90_p99']))}</p>
+<p>Last rejection reason: {html.escape(str(payload['last_rejection_reason'] or ''))}</p>
 <h2>Trades and Rejections</h2>
 <table><thead><tr><th>CA</th><th>Status</th><th>Buy FDV</th><th>Current FDV</th><th>Sell FDV</th><th>Local High</th><th>Drawdown</th><th>10k Confirmed</th><th>20k Confirmed</th><th>Why</th></tr></thead><tbody>{table}</tbody></table>
 <p><small>Updated {payload['updated_at']}. Auto-refreshes every 10 seconds.</small></p>
@@ -1180,6 +1379,79 @@ def _smoke_summary_md(summary: dict[str, Any]) -> str:
     ) + "\n"
 
 
+def _live_bus_smoke_summary(
+    config: RuleRuntimeConfig,
+    status: dict[str, Any],
+    *,
+    collector_result: dict[str, Any] | None,
+    bus_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "report_id": "rule_runtime_v1_live_bus_smoke_summary",
+        "runtime_label": RUNTIME_LABEL,
+        "updated_at": _utc_now(),
+        "runtime_mode": status.get("runtime_mode") or "live_bus",
+        "events_processed": int(status.get("events_processed") or 0),
+        "live_bus_events": int(status.get("live_bus_events") or 0),
+        "file_adapter_events": int(status.get("file_adapter_events") or 0),
+        "confirmed_10k_watches": int(status.get("confirmed_10k_watches") or 0),
+        "confirmed_20k_candidates": int(status.get("confirmed_20k_entry_candidates") or 0),
+        "paper_buys": int(status.get("paper_buys") or 0),
+        "paper_sells": int(status.get("paper_sells") or 0),
+        "rejected_spikes": int(status.get("rejected_spike_candidates") or 0),
+        "rejected_same_timestamp_jumps": int(status.get("rejected_same_timestamp_jumps") or 0),
+        "rejected_fdv_anomalies": int(status.get("rejected_fdv_anomalies") or 0),
+        "event_to_rule_latency_p50_p90_p99": status.get("event_to_rule_p50_p90_p99"),
+        "bus_to_runtime_latency_p50_p90_p99": status.get("bus_to_runtime_p50_p90_p99"),
+        "runtime_eval_latency_p50_p90_p99": status.get("runtime_eval_p50_p90_p99"),
+        "bus_queue_depth": int(bus_metrics.get("queue_depth") or status.get("bus_queue_depth") or 0),
+        "bus_metrics": bus_metrics,
+        "monitor_path": str(config.monitor_html_path),
+        "threshold_status": "baseline-label-mode" if "fdv_efficiency_threshold_unfrozen" in (status.get("warnings") or []) else "frozen",
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "no_real_trade_flag": True,
+        "collector_result": collector_result or {},
+        "warnings": status.get("warnings") or [],
+    }
+
+
+def _write_live_bus_smoke_reports(config: RuleRuntimeConfig, summary: dict[str, Any]) -> None:
+    _write_json(config.live_bus_smoke_summary_json_path, summary)
+    config.live_bus_smoke_summary_md_path.write_text(_live_bus_smoke_summary_md(summary), encoding="utf-8")
+    config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
+    config.status_md_path.write_text(_status_md(summary), encoding="utf-8")
+
+
+def _live_bus_smoke_summary_md(summary: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Rule Runtime v1 Live Bus Smoke Summary",
+            "",
+            f"- Updated: `{summary['updated_at']}`",
+            f"- Runtime mode: `{summary['runtime_mode']}`",
+            f"- Events processed: `{summary['events_processed']}`",
+            f"- Live bus events: `{summary['live_bus_events']}`",
+            f"- File adapter events: `{summary['file_adapter_events']}`",
+            f"- Confirmed 10k watches: `{summary['confirmed_10k_watches']}`",
+            f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
+            f"- Paper buys: `{summary['paper_buys']}`",
+            f"- Paper sells: `{summary['paper_sells']}`",
+            f"- Rejected spikes: `{summary['rejected_spikes']}`",
+            f"- Rejected same-timestamp jumps: `{summary['rejected_same_timestamp_jumps']}`",
+            f"- Rejected FDV anomalies: `{summary['rejected_fdv_anomalies']}`",
+            f"- Event-to-rule p50/p90/p99: `{summary['event_to_rule_latency_p50_p90_p99']}`",
+            f"- Bus-to-runtime p50/p90/p99: `{summary['bus_to_runtime_latency_p50_p90_p99']}`",
+            f"- Runtime eval p50/p90/p99: `{summary['runtime_eval_latency_p50_p90_p99']}`",
+            f"- Bus queue depth: `{summary['bus_queue_depth']}`",
+            f"- Threshold status: `{summary['threshold_status']}`",
+            f"- Monitor path: `{summary['monitor_path']}`",
+            "",
+            "Paper-only. Live trading, private keys, transaction building, swaps, and routing remain disabled.",
+        ]
+    ) + "\n"
+
+
 def _status_md(summary: dict[str, Any]) -> str:
     return "\n".join(
         [
@@ -1199,6 +1471,13 @@ def _status_md(summary: dict[str, Any]) -> str:
             f"- Monitor: `{summary['monitor_path']}`",
         ]
     ) + "\n"
+
+
+def _update_runtime_bus_depth(config: RuleRuntimeConfig, depth: int) -> None:
+    state = _load_state(config)
+    stats = state.setdefault("runtime_stats", {})
+    stats["bus_queue_depth"] = int(depth)
+    _write_json(config.runtime_state_path, state)
 
 
 def _rejection_flags(candidate: dict[str, Any]) -> dict[str, bool]:
