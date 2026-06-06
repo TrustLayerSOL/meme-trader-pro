@@ -77,7 +77,8 @@ def normalize_bus_event(event: dict[str, Any]) -> dict[str, Any]:
     observed = _num(payload.get("observed_at") or payload.get("timestamp") or payload.get("event_observed_at")) or time.time()
     monotonic_observed = _num(payload.get("monotonic_observed_at")) or time.monotonic()
     mint = str(payload.get("mint") or "")
-    fdv = _num(payload.get("fdv_proxy"))
+    fdv = _event_fdv_proxy(payload)
+    milestone_fdv = _event_fdv_usd(payload)
     event_type = str(payload.get("source_event_type") or "fdv_path_update")
     payload["event_id"] = str(payload.get("event_id") or f"{mint}-{observed}-{fdv}-{uuid.uuid4().hex[:8]}")
     payload["mint"] = mint
@@ -108,9 +109,28 @@ def normalize_bus_event(event: dict[str, Any]) -> dict[str, Any]:
         ("1m", 1_000_000),
     ]:
         key = f"raw_crossed_{level}"
-        if payload.get(key) is None and fdv is not None:
-            payload[key] = fdv >= threshold
+        if payload.get(key) is None and milestone_fdv is not None:
+            payload[key] = milestone_fdv >= threshold
     return payload
+
+
+def _event_fdv_proxy(payload: dict[str, Any]) -> float | None:
+    fdv_usd = _num(payload.get("fdv_usd") or payload.get("fdv_proxy_usd"))
+    if fdv_usd is not None:
+        payload["fdv_units"] = "usd"
+        payload["fdv_usd"] = fdv_usd
+        return fdv_usd
+    return _num(payload.get("fdv_proxy"))
+
+
+def _event_fdv_usd(payload: dict[str, Any]) -> float | None:
+    fdv_usd = _num(payload.get("fdv_usd") or payload.get("fdv_proxy_usd"))
+    if fdv_usd is not None:
+        return fdv_usd
+    units = str(payload.get("fdv_units") or "").strip().lower()
+    if units in {"sol", "quote", "fdv_sol", "fdv_quote"}:
+        return None
+    return _num(payload.get("fdv_proxy"))
 
 
 def _dedupe_key(event: dict[str, Any]) -> str:

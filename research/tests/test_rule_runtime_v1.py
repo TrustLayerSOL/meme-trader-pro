@@ -299,6 +299,47 @@ def test_account_state_single_raw_row_does_not_buy_but_two_confirmed_rows_can_pr
     assert len([row for row in _rows(config.paper_trades_path) if row["side"] == "paper_buy"]) == 1
 
 
+def test_runtime_milestones_use_explicit_usd_fdv_not_sol_proxy(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(
+        _event(
+            "sol-only",
+            100,
+            250.0,
+            fdv_units="sol",
+            fdv_sol=250.0,
+            fdv_source="bonding_curve_account_state",
+            fdv_source_confidence="high",
+        )
+    )
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    assert state["candidates"]["sol-only"]["raw_milestones"] == {}
+    assert state["candidates"]["sol-only"]["state"] == "fdv_path_seen"
+
+    result = engine.process_path_event(
+        _event(
+            "usd-explicit",
+            100,
+            250.0,
+            fdv_units="sol",
+            fdv_sol=250.0,
+            fdv_usd=20_250.0,
+            fdv_source="bonding_curve_account_state",
+            fdv_source_confidence="high",
+        )
+    )
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    row = state["candidates"]["usd-explicit"]["path_rows"][0]
+    assert row["fdv_proxy"] == 20_250.0
+    assert row["fdv_units"] == "usd"
+    assert row["fdv_sol"] == 250.0
+    assert row["raw_crossed_20k"] is True
+    assert result["paper_buy_created"] is False
+
+
 def test_first_fdv_source_metrics_and_latency_decomposition_are_reported(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)

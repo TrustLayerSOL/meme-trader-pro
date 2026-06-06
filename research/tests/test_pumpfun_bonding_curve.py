@@ -77,6 +77,31 @@ def test_bonding_curve_decoder_and_fdv_math_use_decimal_safe_reserves() -> None:
     assert result.fdv_usd is not None
 
 
+def test_bonding_curve_decoder_finds_extended_create_v2_reserve_tuple() -> None:
+    prefix = b"pumpv2!!" + b"\x00" * 32
+    reserve_tuple = (
+        (793_100_000_000_000).to_bytes(8, "little")
+        + (34_000_000_000).to_bytes(8, "little")
+        + (793_000_000_000_000).to_bytes(8, "little")
+        + (4_000_000_000).to_bytes(8, "little")
+        + (1_000_000_000_000_000).to_bytes(8, "little")
+        + b"\x00"
+    )
+    raw = (prefix + reserve_tuple).ljust(115, b"\x00")
+
+    state = decode_pump_bonding_curve_account(raw)
+    result = compute_fdv_from_bonding_curve_state(state, sol_usd=100)
+
+    assert state.decode_status == "decoded"
+    assert state.layout_version == "pumpfun_extended_scan_v1"
+    assert state.virtual_token_reserves == 793_100_000_000_000
+    assert state.virtual_sol_reserves == 34_000_000_000
+    assert state.token_total_supply == 1_000_000_000_000_000
+    assert result.probe_status == "success"
+    assert result.fdv_usd is not None
+    assert result.fdv_usd > 4_000
+
+
 def test_no_new_paid_provider_dependency_in_bonding_curve_module() -> None:
     text = Path("research/mtp_research/validation/pumpfun_bonding_curve.py").read_text(encoding="utf-8").lower()
     for forbidden in ["laserstream", "yellowstone", "geyser", "pumpportal", "birdeye", "bitquery", "jupiter"]:

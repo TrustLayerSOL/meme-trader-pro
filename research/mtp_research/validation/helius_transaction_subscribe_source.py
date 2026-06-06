@@ -229,6 +229,7 @@ def run_bonding_curve_account_probe_for_create_event(
     now_fn: Callable[[], float] = time.time,
     sleep_fn: Callable[[float], None] = time.sleep,
     account_not_found_retry_delays: tuple[float, ...] = ACCOUNT_NOT_FOUND_RETRY_DELAYS_SECONDS,
+    follow_up_probe_delays: tuple[float, ...] = (),
 ) -> dict[str, Any]:
     started = now_fn()
     create_observed_at = _num(create_event.get("observed_at") or create_event.get("create_log_observed_at") or create_event.get("timestamp"))
@@ -294,9 +295,11 @@ def run_bonding_curve_account_probe_for_create_event(
         runtime_event["account_not_found_recovered_by_retry"] = recovered_by_retry
         runtime_event["first_failure_reason"] = first_failure_reason
         runtime_event["retry_delays_ms"] = retry_delays_ms
+        _copy_fdv_probe_fields(result, runtime_event)
     winning = "getAccountInfo_processed" if status == "success" else "none"
     row = {
         "event_id": f"probe_{create_event.get('event_id') or create_event.get('signature')}_{int(started * 1000)}",
+        "probe_phase": "initial",
         "mint": create_event.get("mint"),
         "bonding_curve": create_event.get("bonding_curve"),
         "source_create_signature": create_event.get("signature"),
@@ -330,10 +333,125 @@ def run_bonding_curve_account_probe_for_create_event(
         "helius_rpc_request_count": int(getattr(result, "helius_rpc_request_count", None) or getattr(probe, "requests_used", 0) or 0),
         "http_429_count": int(getattr(result, "http_429_count", None) or getattr(probe, "http_429_count", 0) or 0),
     }
+    _copy_fdv_probe_fields(result, row)
+    if runtime_event is not None:
+        _copy_fdv_probe_fields(runtime_event, row)
     _append_jsonl(config.bonding_curve_account_probe_events_path, row)
     if runtime_event is not None and event_callback is not None:
         event_callback(runtime_event)
+    if status == "success" and runtime_event is not None and follow_up_probe_delays:
+        for follow_up_index, delay in enumerate(tuple(follow_up_probe_delays), start=1):
+            sleep_fn(float(delay))
+            follow_started = now_fn()
+            follow_result = probe.probe_create_event(probe_input, now_fn=now_fn)
+            follow_response = now_fn()
+            follow_status = str(getattr(follow_result, "probe_status", "failed") or "failed")
+            follow_event = follow_result.to_runtime_event(timestamp=follow_response) if follow_status == "success" else None
+            follow_curve_state_at = (
+                _num(getattr(follow_result, "decode_finished_at", None))
+                or _num(getattr(follow_result, "get_account_info_finished_at", None))
+                or follow_response
+                if follow_status == "success"
+                else None
+            )
+            follow_fdv_emitted_at = follow_curve_state_at if follow_event is not None else None
+            if follow_event is not None:
+                follow_event["event_id"] = f"fdv_follow_{create_event.get('event_id') or create_event.get('signature')}_{follow_up_index}_{int(follow_response * 1000)}"
+                follow_event["source_event_type"] = "fdv_path_update"
+                follow_event["source_adapter"] = "helius_transaction_subscribe_bonding_curve_probe"
+                follow_event["source_provenance"] = "helius_transaction_subscribe_bonding_curve_probe"
+                follow_event["path_evidence_count"] = int(follow_event.get("path_evidence_count") or (follow_up_index + 1))
+                follow_event["create_observed_at"] = create_observed_at
+                follow_event["probe_started_at"] = follow_started
+                follow_event["first_curve_state_at"] = follow_curve_state_at
+                follow_event["first_fdv_emitted_at"] = follow_fdv_emitted_at
+                follow_event["observed_to_probe_started_ms"] = _duration_ms(create_observed_at, follow_started)
+                follow_event["probe_started_to_first_curve_state_ms"] = _duration_ms(follow_started, follow_curve_state_at)
+                follow_event["observed_to_first_fdv_emitted_ms"] = _duration_ms(create_observed_at, follow_fdv_emitted_at)
+                follow_event["probe_attempt_count"] = 1
+                follow_event["account_not_found_retry_count"] = 0
+                follow_event["account_not_found_recovered_by_retry"] = False
+                follow_event["first_failure_reason"] = None
+                follow_event["retry_delays_ms"] = []
+                _copy_fdv_probe_fields(follow_result, follow_event)
+            follow_row = {
+                "event_id": f"probe_follow_{create_event.get('event_id') or create_event.get('signature')}_{follow_up_index}_{int(follow_started * 1000)}",
+                "probe_phase": "follow_up",
+                "follow_up_index": follow_up_index,
+                "follow_up_delay_seconds": float(delay),
+                "mint": create_event.get("mint"),
+                "bonding_curve": create_event.get("bonding_curve"),
+                "source_create_signature": create_event.get("signature"),
+                "create_slot": create_event.get("slot"),
+                "create_observed_at": create_observed_at,
+                "probe_scheduled_during_stream": bool(create_event.get("probe_scheduled_during_stream")),
+                "probe_started_at": follow_started,
+                "account_subscribe_started_at": None,
+                "get_account_info_started_at": follow_started,
+                "first_curve_state_at": follow_curve_state_at,
+                "first_fdv_emitted_at": follow_fdv_emitted_at,
+                "first_response_at": follow_response,
+                "winning_probe_source": "getAccountInfo_processed" if follow_status == "success" else "none",
+                "probe_attempt_count": 1,
+                "account_not_found_retry_count": 0,
+                "account_not_found_recovered_by_retry": False,
+                "account_not_found_final_failure": bool(follow_status != "success" and getattr(follow_result, "failure_reason", None) == "account_not_found"),
+                "first_failure_reason": getattr(follow_result, "failure_reason", None) if follow_status != "success" else None,
+                "final_failure_reason": None if follow_status == "success" else getattr(follow_result, "failure_reason", None),
+                "retry_delays_ms": [],
+                "attempts": [
+                    {
+                        "attempt_index": 0,
+                        "started_at": follow_started,
+                        "finished_at": follow_response,
+                        "probe_status": follow_status,
+                        "failure_reason": getattr(follow_result, "failure_reason", None),
+                    }
+                ],
+                "observed_to_probe_started_ms": _duration_ms(create_observed_at, follow_started),
+                "probe_started_to_first_curve_state_ms": _duration_ms(follow_started, follow_curve_state_at),
+                "observed_to_first_fdv_emitted_ms": _duration_ms(create_observed_at, follow_fdv_emitted_at),
+                "getAccountInfo_latency_ms": getattr(follow_result, "getAccountInfo_latency_ms", None),
+                "accountSubscribe_latency_ms": getattr(follow_result, "accountSubscribe_latency_ms", None),
+                "account_data_slot": getattr(follow_result, "account_data_slot", None),
+                "account_data_encoding": "base64",
+                "probe_status": follow_status,
+                "probe_error": None if follow_status == "success" else getattr(follow_result, "failure_reason", None),
+                "helius_rpc_request_count": int(getattr(follow_result, "helius_rpc_request_count", None) or getattr(probe, "requests_used", 0) or 0),
+                "http_429_count": int(getattr(follow_result, "http_429_count", None) or getattr(probe, "http_429_count", 0) or 0),
+            }
+            _copy_fdv_probe_fields(follow_result, follow_row)
+            if follow_event is not None:
+                _copy_fdv_probe_fields(follow_event, follow_row)
+            _append_jsonl(config.bonding_curve_account_probe_events_path, follow_row)
+            if follow_event is not None and event_callback is not None:
+                event_callback(follow_event)
     return row
+
+
+def _copy_fdv_probe_fields(source: Any, target: dict[str, Any]) -> None:
+    for key in [
+        "fdv_proxy",
+        "fdv_usd",
+        "fdv_sol",
+        "fdv_quote",
+        "fdv_units",
+        "price_sol",
+        "price_quote",
+        "sol_usd",
+        "quote_decimals",
+        "token_decimals",
+        "calculation_status",
+        "calculation_error",
+        "quote_type",
+        "account_state",
+    ]:
+        if isinstance(source, dict):
+            value = source.get(key)
+        else:
+            value = getattr(source, key, None)
+        if value is not None:
+            target[key] = value
 
 
 def _audit_endpoint(endpoint: dict[str, str | None], *, ws_connect: Any, rpc_post: Any, timeout_seconds: int) -> dict[str, Any]:

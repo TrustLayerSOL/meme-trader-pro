@@ -59,6 +59,21 @@ OPTIONAL_LIVE_FIELDS = sorted(set(AVAILABLE_RISK_FIELDS + FULL_RISK_FIELDS + [
     "top_holder_share_proxy",
     "creator_funder",
 ]))
+FDV_UNIT_FIELDS = [
+    "fdv_usd",
+    "fdv_sol",
+    "fdv_quote",
+    "fdv_units",
+    "price_sol",
+    "price_quote",
+    "sol_usd",
+    "quote_decimals",
+    "token_decimals",
+    "calculation_status",
+    "calculation_error",
+    "quote_type",
+    "account_state",
+]
 MILESTONES = [10_000, 15_000, 20_000, 50_000, 100_000, 500_000, 1_000_000]
 ENTRY_THRESHOLD_FDV = 20_000.0
 WATCH_THRESHOLD_FDV = 10_000.0
@@ -76,6 +91,7 @@ STALE_RETRY_INTERVAL_SECONDS = 30.0
 MAX_STALE_RETRIES = 2
 TIER_1_MAX_AGE_SECONDS = 600.0
 TIER_1_PRESSURE_THRESHOLD = 25
+ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 SCHEDULER_MODE = "priority_single_worker"
 ARCHIVE_STATES = {
     "archived_no_activity",
@@ -1059,6 +1075,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             if bus.emit(event, block=False):
                 result = engine.consume_event_bus(bus, max_events=100)
                 _update_runtime_bus_depth(config, int((result.get("bus_metrics") or {}).get("queue_depth") or 0))
+                archive_runtime_queue_candidates(config, now=_num(event.get("timestamp")) or time.time())
 
     source = HeliusTransactionSubscribeCreateSource(
         config=config,
@@ -1071,7 +1088,23 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
 
     def run_probe(event: dict[str, Any]) -> dict[str, Any]:
         probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
-        return run_bonding_curve_account_probe_for_create_event(config, event, probe=probe, event_callback=on_hot_event)
+        try:
+            return run_bonding_curve_account_probe_for_create_event(
+                config,
+                event,
+                probe=probe,
+                event_callback=on_hot_event,
+                follow_up_probe_delays=ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS,
+            )
+        except TypeError as exc:
+            if "follow_up_probe_delays" not in str(exc):
+                raise
+            return run_bonding_curve_account_probe_for_create_event(
+                config,
+                event,
+                probe=probe,
+                event_callback=on_hot_event,
+            )
 
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor:
         def on_create_event(event: dict[str, Any]) -> None:
@@ -1258,13 +1291,14 @@ def normalize_live_path_row_for_rule_runtime(
 ) -> dict[str, Any] | None:
     mint = str(row.get("mint") or row.get("ca") or "").strip()
     timestamp = _num(row.get("timestamp") or row.get("observed_at") or row.get("block_time"))
-    fdv = _num(row.get("fdv_proxy") if row.get("fdv_proxy") is not None else row.get("current_fdv"))
+    fdv = _normalized_fdv_usd(row)
     if not mint or timestamp is None or fdv is None:
         return None
     source_label = str(source_sample_label or row.get("sample_label") or "official_lifecycle_watch_v2")
     provenance = str(row.get("milestone_provenance") or row.get("source_provenance") or row.get("source") or source_label)
-    raw_10k = _bool_or_fdv(row.get("raw_crossed_10k", row.get("crossed_10k")), fdv, 10_000)
-    raw_20k = _bool_or_fdv(row.get("raw_crossed_20k", row.get("crossed_20k")), fdv, 20_000)
+    milestone_fdv = _milestone_fdv_usd({**row, "fdv_proxy": fdv})
+    raw_10k = _bool_or_fdv(row.get("raw_crossed_10k", row.get("crossed_10k")), milestone_fdv, 10_000)
+    raw_20k = _bool_or_fdv(row.get("raw_crossed_20k", row.get("crossed_20k")), milestone_fdv, 20_000)
     normalized = {
         "mint": mint,
         "timestamp": float(timestamp),
@@ -1286,8 +1320,12 @@ def normalize_live_path_row_for_rule_runtime(
         "milestone_provenance": provenance,
         "data_source": source_label,
     }
+    _copy_fdv_unit_fields(row, normalized)
     _copy_first_fdv_probe_fields(row, normalized)
     _copy_optional_live_fields(row, normalized)
+    if _num(row.get("fdv_usd")) is not None:
+        normalized["fdv_units"] = "usd"
+        normalized["fdv_usd"] = float(_num(row.get("fdv_usd")) or 0.0)
     return normalized
 
 
@@ -1523,7 +1561,7 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
     if not mint:
         raise ValueError("path event requires mint")
     timestamp = _num(event.get("timestamp"))
-    fdv = _num(event.get("fdv_proxy") if event.get("fdv_proxy") is not None else event.get("fdv"))
+    fdv = _normalized_fdv_usd(event)
     if timestamp is None:
         raise ValueError("path event requires timestamp")
     if fdv is None:
@@ -1554,9 +1592,45 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
         "milestone_provenance": event.get("milestone_provenance"),
         "recorded_at": _utc_now(),
     }
+    _copy_fdv_unit_fields(event, normalized)
     _copy_first_fdv_probe_fields(event, normalized)
     _copy_optional_live_fields(event, normalized)
+    if _num(event.get("fdv_usd")) is not None:
+        normalized["fdv_units"] = "usd"
+        normalized["fdv_usd"] = float(_num(event.get("fdv_usd")) or 0.0)
+    milestone_fdv = _milestone_fdv_usd(normalized)
+    if normalized.get("raw_crossed_10k") is None:
+        normalized["raw_crossed_10k"] = _bool_or_fdv(None, milestone_fdv, 10_000)
+    if normalized.get("raw_crossed_20k") is None:
+        normalized["raw_crossed_20k"] = _bool_or_fdv(None, milestone_fdv, 20_000)
     return normalized
+
+
+def _normalized_fdv_usd(event: dict[str, Any]) -> float | None:
+    fdv_usd = _num(event.get("fdv_usd") or event.get("fdv_proxy_usd"))
+    if fdv_usd is not None:
+        return fdv_usd
+    fdv = _num(event.get("fdv_proxy") if event.get("fdv_proxy") is not None else event.get("fdv"))
+    units = str(event.get("fdv_units") or "").strip().lower()
+    if units in {"sol", "quote", "fdv_sol", "fdv_quote"}:
+        return fdv
+    return fdv
+
+
+def _milestone_fdv_usd(row: dict[str, Any]) -> float | None:
+    fdv_usd = _num(row.get("fdv_usd") or row.get("fdv_proxy_usd"))
+    if fdv_usd is not None:
+        return fdv_usd
+    units = str(row.get("fdv_units") or "").strip().lower()
+    if units in {"sol", "quote", "fdv_sol", "fdv_quote"}:
+        return None
+    return _num(row.get("fdv_proxy") if row.get("fdv_proxy") is not None else row.get("current_fdv"))
+
+
+def _copy_fdv_unit_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
+    for key in FDV_UNIT_FIELDS:
+        if key in source and source.get(key) is not None:
+            target[key] = source.get(key)
 
 
 def _copy_first_fdv_probe_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
@@ -1583,6 +1657,7 @@ def _copy_first_fdv_probe_fields(source: dict[str, Any], target: dict[str, Any])
         "account_not_found_recovered_by_retry",
         "first_failure_reason",
         "retry_delays_ms",
+        *FDV_UNIT_FIELDS,
     ]:
         if key in source:
             target[key] = source.get(key)
@@ -1609,7 +1684,9 @@ def _copy_optional_live_fields(source: dict[str, Any], target: dict[str, Any]) -
 
 
 def _update_raw_milestones(candidate: dict[str, Any], row: dict[str, Any]) -> None:
-    fdv = float(row["fdv_proxy"])
+    fdv = _milestone_fdv_usd(row)
+    if fdv is None:
+        return
     ts = float(row["timestamp"])
     for level in MILESTONES:
         key = _level_key(level)
@@ -1624,7 +1701,7 @@ def _update_confirmed_milestones(candidate: dict[str, Any], window_seconds: floa
         key = _level_key(level)
         if candidate["confirmed_milestones"].get(f"confirmed_crossed_{key}"):
             continue
-        crossing_rows = [row for row in rows if float(row.get("fdv_proxy") or 0.0) >= level]
+        crossing_rows = [row for row in rows if (_milestone_fdv_usd(row) or 0.0) >= level]
         for first in crossing_rows:
             first_ts = float(first["timestamp"])
             confirmations = [
@@ -3524,10 +3601,12 @@ def _bool_or_none(value: Any) -> bool | None:
     return None
 
 
-def _bool_or_fdv(value: Any, fdv: float, threshold: float) -> bool:
+def _bool_or_fdv(value: Any, fdv: float | None, threshold: float) -> bool:
     parsed = _bool_or_none(value)
     if parsed is not None:
         return parsed
+    if fdv is None:
+        return False
     return float(fdv) >= float(threshold)
 
 

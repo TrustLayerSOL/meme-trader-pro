@@ -272,6 +272,15 @@ def test_get_account_info_probe_row_uses_min_context_slot_and_emits_runtime_even
                         "timestamp": timestamp or 101.0,
                         "event_observed_at": create_event["observed_at"],
                         "fdv_proxy": 9_000.0,
+                        "fdv_usd": 9_000.0,
+                        "fdv_sol": 90.0,
+                        "fdv_units": "usd",
+                        "price_sol": 0.00009,
+                        "sol_usd": 100.0,
+                        "token_decimals": 6,
+                        "quote_decimals": 9,
+                        "calculation_status": "fdv_usd_available",
+                        "quote_type": "sol",
                         "source_event_type": "fdv_path_update",
                         "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
                         "fdv_source": "bonding_curve_account_state",
@@ -307,8 +316,101 @@ def test_get_account_info_probe_row_uses_min_context_slot_and_emits_runtime_even
     assert row["observed_to_probe_started_ms"] == 500.0
     assert row["probe_started_to_first_curve_state_ms"] == 200.0
     assert row["observed_to_first_fdv_emitted_ms"] == 700.0
+    assert row["fdv_proxy"] == 9_000.0
+    assert row["fdv_usd"] == 9_000.0
+    assert row["fdv_sol"] == 90.0
+    assert row["fdv_units"] == "usd"
+    assert row["calculation_status"] == "fdv_usd_available"
+    assert emitted[0]["fdv_usd"] == 9_000.0
+    assert emitted[0]["fdv_sol"] == 90.0
+    assert emitted[0]["fdv_units"] == "usd"
     assert emitted[0]["source_adapter"] == "helius_transaction_subscribe_bonding_curve_probe"
     assert json.loads(config.bonding_curve_account_probe_events_path.read_text(encoding="utf-8").splitlines()[0])["probe_status"] == "success"
+
+
+def test_probe_helper_emits_follow_up_account_state_rows_for_confirmation(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+
+    class FakeProbe:
+        requests_used = 1
+        http_429_count = 0
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def probe_create_event(self, create_event: dict, *, now_fn: object) -> object:
+            self.calls += 1
+            fdv = 21_000.0 if self.calls == 1 else 22_000.0
+
+            class Result:
+                probe_status = "success"
+                failure_reason = None
+                fdv_proxy = fdv
+                fdv_usd = fdv
+                fdv_sol = fdv / 100.0
+                fdv_quote = None
+                fdv_units = "usd"
+                price_sol = 0.0001
+                price_quote = None
+                sol_usd = 100.0
+                quote_decimals = 9
+                token_decimals = 6
+                calculation_status = "fdv_usd_available"
+                quote_type = "sol"
+                account_state = {"virtual_token_reserves": 1, "virtual_sol_reserves": 1}
+                getAccountInfo_latency_ms = 5.0
+                accountSubscribe_latency_ms = None
+                decode_finished_at = 100.0 + self.calls
+                helius_rpc_request_count = 1
+                http_429_count = 0
+
+                def to_runtime_event(self, timestamp: float | None = None) -> dict:
+                    return {
+                        "event_id": f"fdv-follow-{fdv}",
+                        "mint": create_event["mint"],
+                        "timestamp": timestamp or self.decode_finished_at,
+                        "event_observed_at": create_event["observed_at"],
+                        "fdv_proxy": self.fdv_proxy,
+                        "fdv_usd": self.fdv_usd,
+                        "fdv_sol": self.fdv_sol,
+                        "fdv_units": self.fdv_units,
+                        "source_event_type": "fdv_path_update",
+                        "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                        "fdv_source": "bonding_curve_account_state",
+                        "fdv_source_confidence": "high",
+                    }
+
+            return Result()
+
+    emitted: list[dict] = []
+    sleep_calls: list[float] = []
+    probe = FakeProbe()
+    row = run_bonding_curve_account_probe_for_create_event(
+        config,
+        {
+            "event_id": "txsub_sig-follow_123_0",
+            "signature": "sig-follow",
+            "slot": 123,
+            "observed_at": 100.0,
+            "mint": "mint-follow",
+            "bonding_curve": "curve-follow",
+        },
+        probe=probe,
+        event_callback=emitted.append,
+        now_fn=iter([100.0, 100.01, 101.0, 101.01]).__next__,
+        sleep_fn=sleep_calls.append,
+        account_not_found_retry_delays=(),
+        follow_up_probe_delays=(0.25,),
+    )
+
+    rows = [json.loads(line) for line in config.bonding_curve_account_probe_events_path.read_text(encoding="utf-8").splitlines()]
+    assert probe.calls == 2
+    assert sleep_calls == [0.25]
+    assert row["probe_status"] == "success"
+    assert [event["fdv_usd"] for event in emitted] == [21_000.0, 22_000.0]
+    assert [row["probe_phase"] for row in rows] == ["initial", "follow_up"]
+    assert rows[1]["fdv_units"] == "usd"
 
 
 def test_account_not_found_retry_recovers_fast_first_fdv(tmp_path: Path) -> None:

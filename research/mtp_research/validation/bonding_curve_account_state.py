@@ -67,6 +67,8 @@ class FDVProbeResult:
     fdv_usd: float | None = None
     price_quote: float | None = None
     fdv_quote: float | None = None
+    fdv_units: str | None = None
+    sol_usd: float | None = None
     quote_decimals: int | None = None
     token_decimals: int | None = None
     calculation_status: str | None = None
@@ -105,6 +107,18 @@ class FDVProbeResult:
             "event_observed_at": observed,
             "observed_at": observed,
             "fdv_proxy": float(self.fdv_proxy),
+            "fdv_usd": self.fdv_usd,
+            "fdv_sol": self.fdv_sol,
+            "fdv_quote": self.fdv_quote,
+            "fdv_units": self.fdv_units,
+            "price_sol": self.price_sol,
+            "price_quote": self.price_quote,
+            "sol_usd": self.sol_usd,
+            "quote_decimals": self.quote_decimals,
+            "token_decimals": self.token_decimals,
+            "calculation_status": self.calculation_status,
+            "quote_type": self.quote_type,
+            "account_state": self.account_state,
             "event_count": 1,
             "buy_count": 0,
             "sell_count": 0,
@@ -218,6 +232,8 @@ class BondingCurveAccountStateProbe:
             fdv_usd=fdv.fdv_usd,
             price_quote=fdv.price_quote,
             fdv_quote=fdv.fdv_quote,
+            fdv_units="usd" if fdv.fdv_usd is not None else ("sol" if fdv.fdv_sol is not None else "quote"),
+            sol_usd=self.sol_usd,
             quote_decimals=fdv.quote_decimals,
             token_decimals=fdv.token_decimals,
             calculation_status=fdv.calculation_status,
@@ -335,17 +351,27 @@ def decode_pump_bonding_curve_account(account_data: bytes | str | list[Any] | No
         return BondingCurveState(decode_status="decode_failed", decode_error="account_data_missing")
     if len(raw) < PUMPFUN_CLASSIC_MIN_ACCOUNT_BYTES:
         return BondingCurveState(decode_status="decode_failed", decode_error="account_data_too_short")
-    offset = 8
+    classic = _decode_reserve_tuple_at(raw, 8, layout_version="pumpfun_classic_v1")
+    if classic is not None:
+        return classic
+    for offset in range(16, len(raw) - 40, 8):
+        scanned = _decode_reserve_tuple_at(raw, offset, layout_version="pumpfun_extended_scan_v1")
+        if scanned is not None:
+            return scanned
+    return BondingCurveState(decode_status="decode_failed", decode_error="no_reserve_state")
+
+
+def _decode_reserve_tuple_at(raw: bytes, offset: int, *, layout_version: str) -> BondingCurveState | None:
     values = [_read_u64(raw, offset + index * 8) for index in range(5)]
     if any(value is None for value in values):
-        return BondingCurveState(decode_status="decode_failed", decode_error="account_data_too_short")
+        return None
     virtual_token, virtual_sol, real_token, real_sol, total_supply = [int(value or 0) for value in values]
-    if virtual_token <= 0 or virtual_sol <= 0 or total_supply <= 0:
-        return BondingCurveState(decode_status="decode_failed", decode_error="no_reserve_state")
-    complete = bool(raw[offset + 40])
+    if not _plausible_bonding_curve_reserves(virtual_token, virtual_sol, real_token, real_sol, total_supply):
+        return None
+    complete = bool(raw[offset + 40]) if offset + 40 < len(raw) else None
     return BondingCurveState(
         decode_status="decoded",
-        layout_version="pumpfun_classic_v1",
+        layout_version=layout_version,
         virtual_token_reserves=virtual_token,
         virtual_sol_reserves=virtual_sol,
         real_token_reserves=real_token,
@@ -355,6 +381,26 @@ def decode_pump_bonding_curve_account(account_data: bytes | str | list[Any] | No
         token_decimals=DEFAULT_TOKEN_DECIMALS,
         quote_type="sol",
     )
+
+
+def _plausible_bonding_curve_reserves(
+    virtual_token: int,
+    virtual_sol: int,
+    real_token: int,
+    real_sol: int,
+    total_supply: int,
+) -> bool:
+    if virtual_token <= 0 or virtual_sol <= 0 or total_supply <= 0:
+        return False
+    if total_supply < 1_000_000 or virtual_token < 1_000_000 or virtual_sol < 1_000_000:
+        return False
+    if real_token < 0 or real_sol < 0:
+        return False
+    if real_token > total_supply:
+        return False
+    if virtual_token > total_supply * 10:
+        return False
+    return True
 
 
 def compute_fdv_from_bonding_curve_state(curve_state: BondingCurveState, *, sol_usd: float | None = None) -> FDVProbeResult:
@@ -390,6 +436,8 @@ def compute_fdv_from_bonding_curve_state(curve_state: BondingCurveState, *, sol_
             price_sol=_round_num(price_sol_decimal),
             fdv_sol=_round_num(fdv_sol_decimal),
             fdv_usd=_round_num(fdv_usd_decimal) if fdv_usd_decimal is not None else None,
+            fdv_units="usd" if fdv_usd_decimal is not None else "sol",
+            sol_usd=sol_usd,
             quote_decimals=SOL_DECIMALS,
             token_decimals=token_decimals,
             calculation_status="fdv_usd_available" if fdv_usd_decimal is not None else "fdv_sol_only",
@@ -414,6 +462,7 @@ def compute_fdv_from_bonding_curve_state(curve_state: BondingCurveState, *, sol_
         fdv_proxy=_round_num(fdv_quote_decimal),
         price_quote=_round_num(price_quote_decimal),
         fdv_quote=_round_num(fdv_quote_decimal),
+        fdv_units="quote",
         quote_decimals=int(quote_decimals),
         token_decimals=token_decimals,
         calculation_status="fdv_quote_only",
