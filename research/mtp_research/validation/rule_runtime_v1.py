@@ -40,6 +40,7 @@ class RuleRuntimeConfig:
     position_fraction: float = 0.05
     confirmation_window_seconds: float = CONFIRMATION_WINDOW_SECONDS
     allow_unfrozen_efficiency_baseline: bool = True
+    repo_root: Path | str | None = None
 
     @property
     def root(self) -> Path:
@@ -101,6 +102,79 @@ class RuleRuntimeConfig:
     def trades_csv_path(self) -> Path:
         return self.report_root / "rule_runtime_v1_paper_trades.csv"
 
+    @property
+    def live_adapter_cursor_path(self) -> Path:
+        return self.runtime_root / "live_adapter_cursor.json"
+
+    @property
+    def smoke_summary_json_path(self) -> Path:
+        return self.report_root / "rule_runtime_v1_smoke_summary.json"
+
+    @property
+    def smoke_summary_md_path(self) -> Path:
+        return self.report_root / "rule_runtime_v1_smoke_summary.md"
+
+    @property
+    def status_md_path(self) -> Path:
+        if self.repo_root is not None:
+            return Path(self.repo_root).expanduser() / "theses" / "RULE_RUNTIME_V1_STATUS.md"
+        if self.data_root is None or self.root == data_lake_root():
+            return Path.cwd() / "theses" / "RULE_RUNTIME_V1_STATUS.md"
+        return self.root / "theses" / "RULE_RUNTIME_V1_STATUS.md"
+
+
+@dataclass(frozen=True)
+class RuleRuntimeLiveAdapterConfig:
+    data_root: Path | str | None = None
+    source_sample_label: str = "official_lifecycle_watch_v2"
+    source_followup_paths_path: Path | str | None = None
+
+    @property
+    def root(self) -> Path:
+        return Path(self.data_root or data_lake_root()).expanduser()
+
+    @property
+    def followup_paths_path(self) -> Path:
+        if self.source_followup_paths_path is not None:
+            return Path(self.source_followup_paths_path).expanduser()
+        return self.root / "data" / "forward_observation" / self.source_sample_label / "followup_paths.jsonl"
+
+
+class RuleRuntimeLiveAdapter:
+    """Read-only adapter over collector follow-up path rows."""
+
+    def __init__(self, config: RuleRuntimeLiveAdapterConfig) -> None:
+        self.config = config
+        self.runtime_config = RuleRuntimeConfig(data_root=config.data_root)
+
+    def read_new_events(self, *, limit: int | None = None, update_cursor: bool = True) -> list[dict[str, Any]]:
+        source_path = self.config.followup_paths_path
+        rows = _read_jsonl(source_path)
+        cursor = _read_json(self.runtime_config.live_adapter_cursor_path)
+        consumed = int(cursor.get("rows_consumed") or 0)
+        if consumed > len(rows):
+            consumed = 0
+        end = len(rows) if limit is None else min(len(rows), consumed + max(0, int(limit)))
+        selected = rows[consumed:end]
+        events: list[dict[str, Any]] = []
+        for offset, row in enumerate(selected, start=consumed):
+            normalized = normalize_live_path_row_for_rule_runtime(row, row_index=offset, source_sample_label=self.config.source_sample_label)
+            if normalized is not None:
+                events.append(normalized)
+        if update_cursor:
+            _write_json(
+                self.runtime_config.live_adapter_cursor_path,
+                {
+                    "source_followup_paths_path": str(source_path),
+                    "source_sample_label": self.config.source_sample_label,
+                    "rows_consumed": end,
+                    "valid_events_emitted": len(events),
+                    "updated_at": _utc_now(),
+                    "collector_files_read_only": True,
+                },
+            )
+        return events
+
 
 class RuleRuntimePriorityScheduler:
     priority_order = [
@@ -145,8 +219,9 @@ class RuleRuntimeEngine:
         fdv = float(normalized["fdv_proxy"])
         timestamp = float(normalized["timestamp"])
         event_observed_at = float(normalized.get("event_observed_at") or timestamp)
-        candidate = state["candidates"].setdefault(mint, _new_candidate(mint))
+        candidate = state["candidates"].setdefault(mint, _new_candidate(mint, first_seen_at=timestamp))
         previous_state = candidate.get("state")
+        candidate["first_seen_at"] = min(float(candidate.get("first_seen_at") or timestamp), timestamp)
         candidate["path_rows"].append(normalized)
         candidate["path_rows"] = sorted(candidate["path_rows"], key=lambda row: (float(row["timestamp"]), float(row["fdv_proxy"])))
         _append_jsonl(self.config.path_events_path, normalized)
@@ -164,7 +239,7 @@ class RuleRuntimeEngine:
             "paper_sell_created": False,
         }
 
-        if fdv <= 0 or fdv >= FDV_ANOMALY_HIGH:
+        if fdv <= 0 or fdv >= FDV_ANOMALY_HIGH or normalized.get("fdv_anomaly_flag_from_source") is True:
             candidate["state"] = "rejected_fdv_anomaly"
             candidate["tier"] = -1
             candidate["fdv_anomaly_flag"] = True
@@ -181,6 +256,11 @@ class RuleRuntimeEngine:
 
         _update_raw_milestones(candidate, normalized)
         _update_confirmed_milestones(candidate, self.config.confirmation_window_seconds)
+        _apply_source_confirmations(candidate, normalized)
+        if normalized.get("single_row_spike_flag_from_source") is True:
+            candidate["single_row_spike_flag"] = True
+        if normalized.get("same_timestamp_major_jump_flag_from_source") is True:
+            candidate["same_timestamp_major_jump_flag"] = True
         _update_rejection_flags(candidate)
         _update_state_from_milestones(candidate)
 
@@ -198,6 +278,14 @@ class RuleRuntimeEngine:
             if decision["decision"] == "paper_buy":
                 _create_paper_buy(self.config, state, candidate, normalized, decision)
                 result["paper_buy_created"] = True
+        elif fdv >= ENTRY_THRESHOLD_FDV and not candidate.get("confirmed_crossed_20k"):
+            _record_rejection(
+                self.config,
+                candidate,
+                normalized,
+                candidate.get("state") or "fdv_path_seen",
+                "insufficient_path_evidence_for_confirmed_20k",
+            )
 
         if candidate.get("paper_buy_created") and not candidate.get("paper_closed"):
             sell = _evaluate_exit(self.config, state, candidate, normalized)
@@ -222,6 +310,8 @@ def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -
         _write_json(config.runtime_state_path, _initial_state(config))
         for path in [config.path_events_path, config.paper_trades_path, config.paper_decisions_path, config.latency_events_path]:
             path.write_text("", encoding="utf-8")
+        if config.live_adapter_cursor_path.exists():
+            config.live_adapter_cursor_path.unlink()
     else:
         for path in [config.path_events_path, config.paper_trades_path, config.paper_decisions_path, config.latency_events_path]:
             path.touch(exist_ok=True)
@@ -251,6 +341,64 @@ def run_rule_runtime_once(config: RuleRuntimeConfig, events: list[dict[str, Any]
         sells += int(bool(result.get("paper_sell_created")))
     status = rule_runtime_status(config)
     return {"processed_events": len(events), "paper_buys_created": buys, "paper_sells_created": sells, **status}
+
+
+def run_rule_runtime_live_adapter_once(
+    config: RuleRuntimeConfig,
+    *,
+    adapter_config: RuleRuntimeLiveAdapterConfig | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    if not config.runtime_state_path.exists():
+        initialize_rule_runtime(config)
+    adapter = RuleRuntimeLiveAdapter(adapter_config or RuleRuntimeLiveAdapterConfig(data_root=config.root))
+    events = adapter.read_new_events(limit=limit)
+    result = run_rule_runtime_once(config, events=events)
+    return {
+        "events_processed": result["processed_events"],
+        "paper_buys_created": result["paper_buys_created"],
+        "paper_sells_created": result["paper_sells_created"],
+        **rule_runtime_status(config),
+    }
+
+
+def run_rule_runtime_smoke(
+    config: RuleRuntimeConfig,
+    *,
+    adapter_config: RuleRuntimeLiveAdapterConfig | None = None,
+    max_events: int = 500,
+    max_seconds: float = 60.0,
+    target_confirmed_10k_watches: int = 1,
+    target_confirmed_20k_candidates: int = 1,
+) -> dict[str, Any]:
+    if not config.runtime_state_path.exists():
+        initialize_rule_runtime(config)
+    started = time.monotonic()
+    events_processed = 0
+    adapter_config = adapter_config or RuleRuntimeLiveAdapterConfig(data_root=config.root)
+    while events_processed < max(0, int(max_events)):
+        batch_limit = max(1, min(100, int(max_events) - events_processed))
+        result = run_rule_runtime_live_adapter_once(config, adapter_config=adapter_config, limit=batch_limit)
+        processed = int(result.get("events_processed") or 0)
+        events_processed += processed
+        status = rule_runtime_status(config)
+        if (
+            int(status["confirmed_10k_watches"]) >= int(target_confirmed_10k_watches)
+            or int(status["confirmed_20k_entry_candidates"]) >= int(target_confirmed_20k_candidates)
+        ):
+            break
+        if processed == 0:
+            break
+        if max_seconds <= 0 or time.monotonic() - started >= float(max_seconds):
+            break
+        time.sleep(0.25)
+    status = rule_runtime_status(config)
+    summary = _smoke_summary(config, status, events_processed=events_processed, adapter_config=adapter_config)
+    _write_json(config.smoke_summary_json_path, summary)
+    config.smoke_summary_md_path.write_text(_smoke_summary_md(summary), encoding="utf-8")
+    config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
+    config.status_md_path.write_text(_status_md(summary), encoding="utf-8")
+    return summary
 
 
 def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
@@ -313,6 +461,44 @@ def archive_stale_candidates(config: RuleRuntimeConfig, *, now: float | None = N
     return {"archived_no_activity": archived}
 
 
+def normalize_live_path_row_for_rule_runtime(
+    row: dict[str, Any],
+    *,
+    row_index: int | None = None,
+    source_sample_label: str | None = None,
+) -> dict[str, Any] | None:
+    mint = str(row.get("mint") or row.get("ca") or "").strip()
+    timestamp = _num(row.get("timestamp") or row.get("observed_at") or row.get("block_time"))
+    fdv = _num(row.get("fdv_proxy") if row.get("fdv_proxy") is not None else row.get("current_fdv"))
+    if not mint or timestamp is None or fdv is None:
+        return None
+    source_label = str(source_sample_label or row.get("sample_label") or "official_lifecycle_watch_v2")
+    provenance = str(row.get("milestone_provenance") or row.get("source_provenance") or row.get("source") or source_label)
+    raw_10k = _bool_or_fdv(row.get("raw_crossed_10k", row.get("crossed_10k")), fdv, 10_000)
+    raw_20k = _bool_or_fdv(row.get("raw_crossed_20k", row.get("crossed_20k")), fdv, 20_000)
+    return {
+        "mint": mint,
+        "timestamp": float(timestamp),
+        "source_event_type": str(row.get("source_event_type") or "collector_followup_path"),
+        "event_observed_at": float(_num(row.get("event_observed_at") or row.get("observed_at")) or timestamp),
+        "fdv_proxy": float(fdv),
+        "event_count": int(_num(row.get("event_count")) or 0),
+        "buy_count": int(_num(row.get("buy_count")) or 0),
+        "sell_count": int(_num(row.get("sell_count")) or 0),
+        "active_wallet_count": int(_num(row.get("active_wallet_count") or row.get("active_wallets")) or 0),
+        "path_evidence_count": int(_num(row.get("path_evidence_count")) or ((int(row_index) + 1) if row_index is not None else 1)),
+        "raw_crossed_10k": bool(raw_10k),
+        "raw_crossed_20k": bool(raw_20k),
+        "confirmed_crossed_10k": _bool_or_none(row.get("confirmed_crossed_10k")),
+        "confirmed_crossed_20k": _bool_or_none(row.get("confirmed_crossed_20k")),
+        "single_row_spike_flag": bool(row.get("single_row_spike_flag") is True),
+        "same_timestamp_major_jump_flag": bool(row.get("same_timestamp_major_jump_flag") is True),
+        "fdv_anomaly_flag": bool(row.get("fdv_anomaly_flag") is True),
+        "milestone_provenance": provenance,
+        "data_source": source_label,
+    }
+
+
 def _manifest(config: RuleRuntimeConfig) -> dict[str, Any]:
     return {
         "runtime_label": RUNTIME_LABEL,
@@ -373,8 +559,8 @@ def _initial_state(config: RuleRuntimeConfig) -> dict[str, Any]:
     }
 
 
-def _new_candidate(mint: str) -> dict[str, Any]:
-    now = time.time()
+def _new_candidate(mint: str, *, first_seen_at: float | None = None) -> dict[str, Any]:
+    now = float(first_seen_at if first_seen_at is not None else time.time())
     return {
         "mint": mint,
         "state": "birth_seen",
@@ -417,6 +603,15 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
         "active_wallet_count": int(_num(event.get("active_wallet_count")) or 0),
         "data_source": str(event.get("data_source") or "helius_rpc_read_only"),
         "source_event_type": str(event.get("source_event_type") or "fdv_path"),
+        "path_evidence_count": int(_num(event.get("path_evidence_count")) or 1),
+        "raw_crossed_10k": _bool_or_none(event.get("raw_crossed_10k")),
+        "raw_crossed_20k": _bool_or_none(event.get("raw_crossed_20k")),
+        "confirmed_crossed_10k_from_source": _bool_or_none(event.get("confirmed_crossed_10k")),
+        "confirmed_crossed_20k_from_source": _bool_or_none(event.get("confirmed_crossed_20k")),
+        "single_row_spike_flag_from_source": bool(event.get("single_row_spike_flag") is True),
+        "same_timestamp_major_jump_flag_from_source": bool(event.get("same_timestamp_major_jump_flag") is True),
+        "fdv_anomaly_flag_from_source": bool(event.get("fdv_anomaly_flag") is True),
+        "milestone_provenance": event.get("milestone_provenance"),
         "recorded_at": _utc_now(),
     }
 
@@ -451,6 +646,18 @@ def _update_confirmed_milestones(candidate: dict[str, Any], window_seconds: floa
                 if key in {"10k", "20k"}:
                     candidate[f"confirmed_crossed_{key}"] = True
                 break
+
+
+def _apply_source_confirmations(candidate: dict[str, Any], row: dict[str, Any]) -> None:
+    timestamp = float(row["timestamp"])
+    if row.get("confirmed_crossed_10k_from_source") is True:
+        candidate["confirmed_milestones"]["confirmed_crossed_10k"] = True
+        candidate["confirmed_milestone_times"].setdefault("10k", timestamp)
+        candidate["confirmed_crossed_10k"] = True
+    if row.get("confirmed_crossed_20k_from_source") is True:
+        candidate["confirmed_milestones"]["confirmed_crossed_20k"] = True
+        candidate["confirmed_milestone_times"].setdefault("20k", timestamp)
+        candidate["confirmed_crossed_20k"] = True
 
 
 def _update_rejection_flags(candidate: dict[str, Any]) -> None:
@@ -535,6 +742,7 @@ def _evaluate_entry(
     return {
         "paper_event_id": f"decision_{candidate['mint']}_{int(float(row['timestamp']) * 1000)}",
         "mint": candidate["mint"],
+        "ca": candidate["mint"],
         "timestamp": row["timestamp"],
         "decision": decision,
         "rule_id": FROZEN_BUY_RULE_ID,
@@ -545,7 +753,11 @@ def _evaluate_entry(
         "rejection_flags": _rejection_flags(candidate),
         "rejection_reason": ",".join(reasons) if reasons else None,
         "efficiency_threshold_status": "efficiency_unfrozen",
+        "threshold_status": "baseline_label_mode" if not reasons else "rejected",
+        "efficiency_threshold_warning": "fdv_efficiency_threshold_unfrozen_baseline_mode" if not reasons else None,
+        "fdv_efficiency_bucket_labels": _efficiency_bucket_labels(features),
         "data_source": row.get("data_source"),
+        "milestone_provenance": row.get("milestone_provenance"),
         "no_real_trade": True,
         **features,
     }
@@ -566,6 +778,7 @@ def _create_paper_buy(
     position = {
         "paper_event_id": f"paper_buy_{candidate['mint']}_{int(float(row['timestamp']) * 1000)}",
         "mint": candidate["mint"],
+        "ca": candidate["mint"],
         "timestamp": row["timestamp"],
         "side": "paper_buy",
         "rule_id": FROZEN_BUY_RULE_ID,
@@ -580,6 +793,10 @@ def _create_paper_buy(
         "drawdown_pct": 0.0,
         "rejection_flags": decision.get("rejection_flags") or {},
         "data_source": row.get("data_source"),
+        "milestone_provenance": row.get("milestone_provenance"),
+        "threshold_status": "baseline_label_mode",
+        "efficiency_threshold_warning": "fdv_efficiency_threshold_unfrozen_baseline_mode",
+        "fdv_efficiency_bucket_labels": _efficiency_bucket_labels(_efficiency_features(row)),
         "no_real_trade": True,
         **_efficiency_features(row),
     }
@@ -732,7 +949,7 @@ def _latency_row(candidate: dict[str, Any], row: dict[str, Any], started: float,
         "rule_fired_at": float(row["timestamp"]) if candidate.get("paper_buy_created") else None,
         "paper_buy_event_written_at": float(row["timestamp"]) if candidate.get("paper_buy_created") else None,
         "detection_to_rule_latency_ms": _round_ms((now - observed) * 1000.0),
-        "state_age_ms": _round_ms((float(row["timestamp"]) - float(candidate.get("first_seen_at") or row["timestamp"])) * 1000.0),
+        "state_age_ms": _round_ms(max(0.0, float(row["timestamp"]) - float(candidate.get("first_seen_at") or row["timestamp"])) * 1000.0),
         "rule_eval_latency_ms": _round_ms((time.time() - started) * 1000.0),
         "source_event_type": row.get("source_event_type"),
         "data_source": row.get("data_source"),
@@ -891,6 +1108,99 @@ def _efficiency_features(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _efficiency_bucket_labels(features: dict[str, Any]) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for key in ["fdv_per_event_at_20k", "fdv_per_buy_at_20k", "fdv_per_active_wallet_at_20k"]:
+        value = _num(features.get(key))
+        if value is None:
+            labels[key] = "missing"
+        elif value >= 10_000:
+            labels[key] = "very_high"
+        elif value >= 5_000:
+            labels[key] = "high"
+        elif value >= 2_000:
+            labels[key] = "medium"
+        else:
+            labels[key] = "low"
+    return labels
+
+
+def _smoke_summary(
+    config: RuleRuntimeConfig,
+    status: dict[str, Any],
+    *,
+    events_processed: int,
+    adapter_config: RuleRuntimeLiveAdapterConfig,
+) -> dict[str, Any]:
+    threshold_status = "baseline-label-mode" if "fdv_efficiency_threshold_unfrozen" in (status.get("warnings") or []) else "frozen"
+    return {
+        "report_id": "rule_runtime_v1_smoke_summary",
+        "runtime_label": RUNTIME_LABEL,
+        "updated_at": _utc_now(),
+        "source_followup_paths_path": str(adapter_config.followup_paths_path),
+        "collector_files_read_only": True,
+        "events_processed": int(events_processed),
+        "confirmed_10k_watches": int(status.get("confirmed_10k_watches") or 0),
+        "confirmed_20k_candidates": int(status.get("confirmed_20k_entry_candidates") or 0),
+        "paper_buys": int(status.get("paper_buys") or 0),
+        "paper_sells": int(status.get("paper_sells") or 0),
+        "rejected_spikes": int(status.get("rejected_spike_candidates") or 0),
+        "rejected_same_timestamp_jumps": int(status.get("rejected_same_timestamp_jumps") or 0),
+        "rejected_fdv_anomalies": int(status.get("rejected_fdv_anomalies") or 0),
+        "latency_p50_p90_p99": status.get("latency_p50_p90_p99"),
+        "monitor_path": str(config.monitor_html_path),
+        "threshold_status": threshold_status,
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "no_real_trade_flag": True,
+        "warnings": status.get("warnings") or [],
+    }
+
+
+def _smoke_summary_md(summary: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Rule Runtime v1 Smoke Summary",
+            "",
+            f"- Updated: `{summary['updated_at']}`",
+            f"- Events processed: `{summary['events_processed']}`",
+            f"- Confirmed 10k watches: `{summary['confirmed_10k_watches']}`",
+            f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
+            f"- Paper buys: `{summary['paper_buys']}`",
+            f"- Paper sells: `{summary['paper_sells']}`",
+            f"- Rejected spikes: `{summary['rejected_spikes']}`",
+            f"- Rejected same-timestamp jumps: `{summary['rejected_same_timestamp_jumps']}`",
+            f"- Rejected FDV anomalies: `{summary['rejected_fdv_anomalies']}`",
+            f"- Latency p50/p90/p99: `{summary['latency_p50_p90_p99']}`",
+            f"- Threshold status: `{summary['threshold_status']}`",
+            f"- Monitor path: `{summary['monitor_path']}`",
+            "",
+            "Paper-only. Live trading, private keys, transaction building, swaps, and routing remain disabled.",
+        ]
+    ) + "\n"
+
+
+def _status_md(summary: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# RULE_RUNTIME_V1_STATUS",
+            "",
+            f"- Runtime label: `{RUNTIME_LABEL}`",
+            f"- Frozen buy rule: `{FROZEN_BUY_RULE_ID}`",
+            f"- Frozen exit rule: `{FROZEN_EXIT_RULE_ID}`",
+            f"- Paper-only: `{summary['paper_only']}`",
+            f"- Live trading enabled: `{summary['live_trading_enabled']}`",
+            f"- Events processed: `{summary['events_processed']}`",
+            f"- Confirmed 10k watches: `{summary['confirmed_10k_watches']}`",
+            f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
+            f"- Paper buys: `{summary['paper_buys']}`",
+            f"- Paper sells: `{summary['paper_sells']}`",
+            f"- Threshold status: `{summary['threshold_status']}`",
+            f"- Monitor: `{summary['monitor_path']}`",
+        ]
+    ) + "\n"
+
+
 def _rejection_flags(candidate: dict[str, Any]) -> dict[str, bool]:
     return {
         "single_row_spike_flag": bool(candidate.get("single_row_spike_flag")),
@@ -973,6 +1283,16 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -1008,6 +1328,27 @@ def _num(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is True:
+        return True
+    if value is False:
+        return False
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def _bool_or_fdv(value: Any, fdv: float, threshold: float) -> bool:
+    parsed = _bool_or_none(value)
+    if parsed is not None:
+        return parsed
+    return float(fdv) >= float(threshold)
 
 
 def _round_money(value: float) -> float:

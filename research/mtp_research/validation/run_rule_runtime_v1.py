@@ -10,9 +10,12 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     FROZEN_BUY_RULE_ID,
     FROZEN_EXIT_RULE_ID,
     RuleRuntimeConfig,
+    RuleRuntimeLiveAdapterConfig,
     initialize_rule_runtime,
     rule_runtime_status,
+    run_rule_runtime_live_adapter_once,
     run_rule_runtime_once,
+    run_rule_runtime_smoke,
 )
 
 
@@ -32,6 +35,23 @@ def main() -> int:
         print(f"Monitor path: {result['monitor_html_path']}")
         return 0
     if args.mode == "once":
+        if args.source_followup_path:
+            result = run_rule_runtime_live_adapter_once(
+                config,
+                adapter_config=RuleRuntimeLiveAdapterConfig(
+                    data_root=config.root,
+                    source_sample_label=args.source_sample_label,
+                    source_followup_paths_path=Path(args.source_followup_path).expanduser(),
+                ),
+                limit=args.max_events,
+            )
+            print("## Rule Runtime v1 Live Adapter Update")
+            print(f"events_processed={result['events_processed']}")
+            print(f"paper_buys={result['paper_buys']}")
+            print(f"paper_sells={result['paper_sells']}")
+            print(f"confirmed_10k_watches={result['confirmed_10k_watches']}")
+            print(f"confirmed_20k_entry_candidates={result['confirmed_20k_entry_candidates']}")
+            return 0
         events = []
         if args.event_json:
             events.append(json.loads(args.event_json))
@@ -44,10 +64,28 @@ def main() -> int:
         print(f"confirmed_20k_entry_candidates={result['confirmed_20k_entry_candidates']}")
         return 0
     if args.mode == "smoke":
-        initialize_rule_runtime(config, reset=args.reset)
+        if args.reset:
+            initialize_rule_runtime(config, reset=True)
+        result = run_rule_runtime_smoke(
+            config,
+            adapter_config=RuleRuntimeLiveAdapterConfig(
+                data_root=config.root,
+                source_sample_label=args.source_sample_label,
+                source_followup_paths_path=Path(args.source_followup_path).expanduser() if args.source_followup_path else None,
+            ),
+            max_events=args.max_events,
+            max_seconds=args.max_seconds,
+            target_confirmed_10k_watches=args.target_confirmed_10k_watches,
+            target_confirmed_20k_candidates=args.target_confirmed_20k_candidates,
+        )
         print("## Rule Runtime v1 Smoke")
-        print("smoke_result=not_started_by_cli")
-        print("reason=live feed startup is intentionally separate from this paper-only module")
+        print(f"events_processed={result['events_processed']}")
+        print(f"confirmed_10k_watches={result['confirmed_10k_watches']}")
+        print(f"confirmed_20k_candidates={result['confirmed_20k_candidates']}")
+        print(f"paper_buys={result['paper_buys']}")
+        print(f"paper_sells={result['paper_sells']}")
+        print(f"threshold_status={result['threshold_status']}")
+        print(f"monitor_path={result['monitor_path']}")
         return 0
     print_status(rule_runtime_status(config))
     return 0
@@ -88,6 +126,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--position-fraction", type=float, default=0.05)
     parser.add_argument("--event-json", default=None)
     parser.add_argument("--reset", action="store_true")
+    parser.add_argument("--source-sample-label", default="official_lifecycle_watch_v2")
+    parser.add_argument("--source-followup-path", default=None)
+    parser.add_argument("--max-events", type=int, default=500)
+    parser.add_argument("--max-seconds", type=float, default=60.0)
+    parser.add_argument("--target-confirmed-10k-watches", type=int, default=1)
+    parser.add_argument("--target-confirmed-20k-candidates", type=int, default=1)
     return parser.parse_args()
 
 

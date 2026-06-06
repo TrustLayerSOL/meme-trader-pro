@@ -6,8 +6,13 @@ from pathlib import Path
 from research.mtp_research.validation.rule_runtime_v1 import (
     RuleRuntimeConfig,
     RuleRuntimeEngine,
+    RuleRuntimeLiveAdapter,
+    RuleRuntimeLiveAdapterConfig,
     RuleRuntimePriorityScheduler,
     initialize_rule_runtime,
+    normalize_live_path_row_for_rule_runtime,
+    run_rule_runtime_live_adapter_once,
+    run_rule_runtime_smoke,
     rule_runtime_status,
 )
 
@@ -197,3 +202,190 @@ def test_runtime_contains_no_live_execution_logic() -> None:
         "build_transaction",
     ]
     assert not any(term in text for term in forbidden)
+
+
+def test_live_adapter_normalizes_followup_path_rows_without_mutating_source(tmp_path: Path) -> None:
+    source = tmp_path / "collector" / "followup_paths.jsonl"
+    source.parent.mkdir(parents=True)
+    row = {
+        "sample_label": "official_lifecycle_watch_v2",
+        "mint": "mint-a",
+        "timestamp": 100.0,
+        "fdv_proxy": 10_500,
+        "event_count": 7,
+        "buy_count": 3,
+        "sell_count": 1,
+        "active_wallet_count": 4,
+        "crossed_10k": True,
+        "crossed_20k": False,
+        "source_provenance": "helius_pumpfun_no_laserstream_logs",
+    }
+    source.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    before = source.read_bytes()
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    adapter = RuleRuntimeLiveAdapter(RuleRuntimeLiveAdapterConfig(data_root=tmp_path, source_followup_paths_path=source))
+
+    events = adapter.read_new_events(limit=10)
+
+    assert source.read_bytes() == before
+    assert events == [
+        {
+            "mint": "mint-a",
+            "timestamp": 100.0,
+            "source_event_type": "collector_followup_path",
+            "event_observed_at": 100.0,
+            "fdv_proxy": 10_500.0,
+            "event_count": 7,
+            "buy_count": 3,
+            "sell_count": 1,
+            "active_wallet_count": 4,
+            "path_evidence_count": 1,
+            "raw_crossed_10k": True,
+            "raw_crossed_20k": False,
+            "confirmed_crossed_10k": None,
+            "confirmed_crossed_20k": None,
+            "single_row_spike_flag": False,
+            "same_timestamp_major_jump_flag": False,
+            "fdv_anomaly_flag": False,
+            "milestone_provenance": "helius_pumpfun_no_laserstream_logs",
+            "data_source": "official_lifecycle_watch_v2",
+        }
+    ]
+    cursor = json.loads(config.live_adapter_cursor_path.read_text(encoding="utf-8"))
+    assert cursor["rows_consumed"] == 1
+
+
+def test_live_adapter_once_rejects_raw_20k_only_and_logs_reason(tmp_path: Path) -> None:
+    source = tmp_path / "collector" / "followup_paths.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "sample_label": "official_lifecycle_watch_v2",
+                "mint": "raw-only",
+                "timestamp": 100.0,
+                "fdv_proxy": 22_000,
+                "event_count": 1,
+                "buy_count": 1,
+                "active_wallet_count": 1,
+                "crossed_20k": True,
+                "source_provenance": "helius_pumpfun_no_laserstream_logs",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime_config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(runtime_config, reset=True)
+
+    result = run_rule_runtime_live_adapter_once(
+        runtime_config,
+        adapter_config=RuleRuntimeLiveAdapterConfig(data_root=tmp_path, source_followup_paths_path=source),
+        limit=10,
+    )
+
+    decisions = _rows(runtime_config.paper_decisions_path)
+    assert result["events_processed"] == 1
+    assert result["paper_buys"] == 0
+    assert decisions[-1]["decision"] == "paper_rejected_entry"
+    assert decisions[-1]["rejection_reason"] == "insufficient_path_evidence_for_confirmed_20k"
+    assert decisions[-1]["no_real_trade"] is True
+
+
+def test_live_adapter_once_allows_confirmed_clean_20k_baseline_mode(tmp_path: Path) -> None:
+    source = tmp_path / "collector" / "followup_paths.jsonl"
+    source.parent.mkdir(parents=True)
+    rows = [
+        _event("mint-a", 100, 10_500, events=4, buys=2, wallets=2),
+        _event("mint-a", 120, 11_000, events=5, buys=3, wallets=3),
+        _event("mint-a", 150, 20_500, events=8, buys=4, wallets=4),
+        _event("mint-a", 170, 22_000, events=10, buys=5, wallets=5),
+    ]
+    source.write_text(
+        "\n".join(
+            json.dumps({**row, "sample_label": "official_lifecycle_watch_v2", "source_provenance": "helius_pumpfun_no_laserstream_logs"})
+            for row in rows
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime_config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(runtime_config, reset=True)
+
+    result = run_rule_runtime_live_adapter_once(
+        runtime_config,
+        adapter_config=RuleRuntimeLiveAdapterConfig(data_root=tmp_path, source_followup_paths_path=source),
+        limit=10,
+    )
+
+    trades = _rows(runtime_config.paper_trades_path)
+    assert result["events_processed"] == 4
+    assert result["confirmed_10k_watches"] == 1
+    assert result["confirmed_20k_entry_candidates"] == 1
+    assert result["paper_buys"] == 1
+    assert trades[0]["side"] == "paper_buy"
+    assert trades[0]["threshold_status"] == "baseline_label_mode"
+    assert trades[0]["efficiency_threshold_warning"] == "fdv_efficiency_threshold_unfrozen_baseline_mode"
+    assert trades[0]["ca"] == "mint-a"
+
+
+def test_smoke_summary_writes_required_report_fields(tmp_path: Path) -> None:
+    source = tmp_path / "collector" / "followup_paths.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "\n".join(
+            [
+                json.dumps({"mint": "mint-a", "timestamp": 100, "fdv_proxy": 10_500, "event_count": 3, "buy_count": 2, "active_wallet_count": 2}),
+                json.dumps({"mint": "mint-a", "timestamp": 120, "fdv_proxy": 11_000, "event_count": 4, "buy_count": 2, "active_wallet_count": 2}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime_config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(runtime_config, reset=True)
+
+    result = run_rule_runtime_smoke(
+        runtime_config,
+        adapter_config=RuleRuntimeLiveAdapterConfig(data_root=tmp_path, source_followup_paths_path=source),
+        max_events=10,
+        max_seconds=0,
+        target_confirmed_10k_watches=1,
+    )
+
+    assert result["events_processed"] == 2
+    assert result["confirmed_10k_watches"] == 1
+    assert result["threshold_status"] == "baseline-label-mode"
+    summary = json.loads(runtime_config.smoke_summary_json_path.read_text(encoding="utf-8"))
+    md = runtime_config.smoke_summary_md_path.read_text(encoding="utf-8")
+    status_md = runtime_config.status_md_path.read_text(encoding="utf-8")
+    for key in [
+        "events_processed",
+        "confirmed_10k_watches",
+        "confirmed_20k_candidates",
+        "paper_buys",
+        "paper_sells",
+        "rejected_spikes",
+        "rejected_same_timestamp_jumps",
+        "rejected_fdv_anomalies",
+        "latency_p50_p90_p99",
+        "monitor_path",
+        "threshold_status",
+    ]:
+        assert key in summary
+    assert "Rule Runtime v1 Smoke Summary" in md
+    assert "RULE_RUNTIME_V1_STATUS" in status_md
+
+
+def test_normalize_live_path_row_rejects_missing_path_evidence() -> None:
+    normalized = normalize_live_path_row_for_rule_runtime(
+        {
+            "mint": "missing-fdv",
+            "timestamp": 1,
+            "event_count": 1,
+        },
+        row_index=0,
+    )
+
+    assert normalized is None
