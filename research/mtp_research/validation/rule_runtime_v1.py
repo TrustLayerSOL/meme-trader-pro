@@ -89,8 +89,12 @@ NO_ACTIVITY_ARCHIVE_SECONDS = 120.0
 NO_FDV_PATH_ARCHIVE_SECONDS = 120.0
 STALE_RETRY_INTERVAL_SECONDS = 30.0
 MAX_STALE_RETRIES = 2
-TIER_1_MAX_AGE_SECONDS = 600.0
-TIER_1_PRESSURE_THRESHOLD = 25
+TIER_1_MAX_AGE_SECONDS = 30.0
+TIER_1_LOW_FDV_STALE_SECONDS = 20.0
+TIER_1_PROMOTION_FLOOR_FDV = 3_000.0
+TIER_1_RISING_DELTA_PCT = 0.20
+TIER_1_FLAT_DELTA_PCT = 0.05
+TIER_1_PRESSURE_THRESHOLD = 20
 ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 SCHEDULER_MODE = "priority_single_worker"
 ARCHIVE_STATES = {
@@ -444,6 +448,7 @@ class RuleRuntimeEngine:
         candidate["last_activity_time"] = timestamp if _event_has_activity(normalized) else candidate.get("last_activity_time")
         candidate["max_fdv_proxy"] = max(float(candidate.get("max_fdv_proxy") or 0.0), fdv)
         candidate.setdefault("first_fdv_path_time", timestamp)
+        _update_fdv_movement(candidate)
         if candidate.get("state") in (None, "birth_seen", "light_watch"):
             candidate["state"] = "fdv_path_seen"
             candidate["tier"] = 1
@@ -1241,6 +1246,16 @@ def archive_runtime_queue_candidates(
             continue
         if state_name == "fdv_path_seen" and candidate.get("path_rows"):
             tier_1_age = now - first_seen
+            last_update_age = now - (_num(candidate.get("last_path_time")) or first_seen)
+            candidate["last_update_age_seconds"] = _round_seconds(max(0.0, last_update_age))
+            if _tier_1_low_fdv_flat_stale(candidate, now=now, stale_seconds=TIER_1_LOW_FDV_STALE_SECONDS):
+                candidate["state"] = "archived_no_activity"
+                candidate["tier"] = -1
+                candidate["archive_reason"] = "tier_1_low_fdv_flat_stale"
+                stats["archived_no_activity"] = int(stats.get("archived_no_activity") or 0) + 1
+                stats["tier_1_archive_count"] = int(stats.get("tier_1_archive_count") or 0) + 1
+                result["archived_no_activity"] += 1
+                continue
             retry_count = int(candidate.get("tier_1_retry_count") or 0)
             last_retry = _num(candidate.get("tier_1_last_retry_at")) or first_seen
             retry_due = tier_1_age >= first_path_fast_attempt_window_seconds and now - last_retry >= tier_1_retry_interval_seconds
@@ -1757,6 +1772,88 @@ def _update_rejection_flags(candidate: dict[str, Any]) -> None:
         candidate["same_timestamp_major_jump_flag"] = True
 
 
+def _update_fdv_movement(candidate: dict[str, Any]) -> None:
+    rows = candidate.get("path_rows") or []
+    if not rows:
+        return
+    first = rows[0]
+    latest = rows[-1]
+    first_fdv = float(first.get("fdv_proxy") or 0.0)
+    latest_fdv = float(latest.get("fdv_proxy") or 0.0)
+    first_ts = float(first.get("timestamp") or 0.0)
+    latest_ts = float(latest.get("timestamp") or first_ts)
+    elapsed = max(0.0, latest_ts - first_ts)
+    fdv_delta = latest_fdv - first_fdv
+    fdv_delta_pct = fdv_delta / first_fdv if first_fdv > 0 else 0.0
+    candidate["first_fdv_proxy"] = _round_num(first_fdv)
+    candidate["latest_fdv_proxy"] = _round_num(latest_fdv)
+    candidate["fdv_delta"] = _round_num(fdv_delta)
+    candidate["fdv_delta_pct"] = _round_pct(fdv_delta_pct)
+    candidate["fdv_velocity_per_second"] = _round_num(fdv_delta / elapsed) if elapsed > 0 else 0.0
+    candidate["path_row_count"] = len(rows)
+
+
+def _tier_1_promotion_reason(candidate: dict[str, Any]) -> str | None:
+    if candidate.get("confirmed_milestones", {}).get("confirmed_crossed_10k"):
+        return "confirmed_10k"
+    if float(candidate.get("max_fdv_proxy") or 0.0) >= NEAR_THRESHOLD_FDV:
+        return "near_threshold"
+    if float(candidate.get("fdv_delta_pct") or 0.0) >= TIER_1_RISING_DELTA_PCT:
+        return "rising_fdv"
+    if float(candidate.get("latest_fdv_proxy") or candidate.get("last_fdv_proxy") or 0.0) >= TIER_1_PROMOTION_FLOOR_FDV:
+        return "fdv_above_promotion_floor"
+    return None
+
+
+def _tier_1_low_fdv_flat_stale(candidate: dict[str, Any], *, now: float, stale_seconds: float) -> bool:
+    if candidate.get("confirmed_milestones", {}).get("confirmed_crossed_10k"):
+        return False
+    if _tier_1_promotion_reason(candidate) is not None:
+        return False
+    if int(candidate.get("path_row_count") or len(candidate.get("path_rows") or [])) < 2:
+        return False
+    latest_fdv = float(candidate.get("latest_fdv_proxy") or candidate.get("last_fdv_proxy") or 0.0)
+    if latest_fdv >= TIER_1_PROMOTION_FLOOR_FDV:
+        return False
+    fdv_delta_pct = float(candidate.get("fdv_delta_pct") or 0.0)
+    if fdv_delta_pct > TIER_1_FLAT_DELTA_PCT:
+        return False
+    last_path = _num(candidate.get("last_path_time")) or _num(candidate.get("first_seen_at")) or now
+    return now - last_path >= float(stale_seconds)
+
+
+def _tier_1_retention_reason(candidate: dict[str, Any], *, now: float) -> str:
+    if not candidate.get("path_rows"):
+        return "needs_first_fdv"
+    promotion_reason = _tier_1_promotion_reason(candidate)
+    if promotion_reason is not None:
+        return f"should_promote:{promotion_reason}"
+    if _tier_1_low_fdv_flat_stale(candidate, now=now, stale_seconds=TIER_1_LOW_FDV_STALE_SECONDS):
+        return "should_archive:tier_1_low_fdv_flat_stale"
+    latest_fdv = float(candidate.get("latest_fdv_proxy") or candidate.get("last_fdv_proxy") or 0.0)
+    fdv_delta_pct = float(candidate.get("fdv_delta_pct") or 0.0)
+    last_path = _num(candidate.get("last_path_time")) or _num(candidate.get("first_seen_at")) or now
+    last_update_age = now - last_path
+    if latest_fdv < TIER_1_PROMOTION_FLOOR_FDV and fdv_delta_pct <= TIER_1_FLAT_DELTA_PCT:
+        return "waiting_for_low_fdv_stale_timeout" if last_update_age < TIER_1_LOW_FDV_STALE_SECONDS else "low_fdv_flat"
+    return "awaiting_next_classification"
+
+
+def _tier_1_audit_row(candidate: dict[str, Any], *, now: float) -> dict[str, Any]:
+    last_path = _num(candidate.get("last_path_time")) or _num(candidate.get("first_seen_at")) or now
+    return {
+        "mint": str(candidate.get("mint") or ""),
+        "latest_fdv": candidate.get("latest_fdv_proxy") or candidate.get("last_fdv_proxy"),
+        "first_fdv": candidate.get("first_fdv_proxy"),
+        "max_fdv": candidate.get("max_fdv_proxy"),
+        "fdv_delta_pct": candidate.get("fdv_delta_pct"),
+        "fdv_velocity_per_second": candidate.get("fdv_velocity_per_second"),
+        "last_update_age_seconds": _round_seconds(max(0.0, now - last_path)),
+        "path_row_count": int(candidate.get("path_row_count") or len(candidate.get("path_rows") or [])),
+        "retention_reason": _tier_1_retention_reason(candidate, now=now),
+    }
+
+
 def _detect_spike(candidate: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     for index, row in enumerate(rows):
         fdv = float(row.get("fdv_proxy") or 0.0)
@@ -1788,9 +1885,10 @@ def _update_state_from_milestones(candidate: dict[str, Any]) -> None:
         candidate["state"] = "confirmed_10k_watch"
         candidate["tier"] = 3
         candidate["confirmed_crossed_10k"] = True
-    elif float(candidate.get("max_fdv_proxy") or 0.0) >= NEAR_THRESHOLD_FDV:
+    elif (tier_1_reason := _tier_1_promotion_reason(candidate)) is not None:
         candidate["state"] = "near_threshold_watch"
         candidate["tier"] = 2
+        candidate["tier_1_exit_reason"] = tier_1_reason
     elif candidate.get("path_rows"):
         candidate["state"] = "fdv_path_seen"
         candidate["tier"] = 1
@@ -2488,6 +2586,9 @@ def _first_fdv_queue_summary(config: RuleRuntimeConfig, state: dict[str, Any], l
         "tier_1_pressure_threshold": TIER_1_PRESSURE_THRESHOLD,
         "tier_1_pressure_mode": tier_1_pressure_mode,
         "tier_1_next_mints_oldest_first": [str(row.get("mint") or "") for row in tier_1_rows_oldest_first[:10]],
+        "tier_1_retention_reasons_oldest_first": [
+            _tier_1_audit_row(row, now=now) for row in tier_1_rows_oldest_first[:20]
+        ],
         "promotion_rate": _round_num(tier_1_promotion_count / max(1, tier_1_processed_count)),
         "archive_rate": _round_num(tier_1_archive_count / max(1, tier_1_processed_count)),
         "first_path_success_rate": first_fdv_success_rate,

@@ -729,15 +729,14 @@ def test_runtime_aging_downgrades_and_archives_stale_first_path_candidates(tmp_p
     engine = RuleRuntimeEngine(config)
 
     engine.process_path_event(_event("quiet", 100, 1_100, events=0, buys=0, wallets=0))
-    downgraded = archive_runtime_queue_candidates(config, now=170)
-    archived = archive_runtime_queue_candidates(config, now=230)
+    archived = archive_runtime_queue_candidates(config, now=170)
 
     state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
     status = rule_runtime_status(config)
-    assert downgraded["downgrade_count"] == 1
     assert archived["archived_no_activity"] == 1
     assert state["candidates"]["quiet"]["state"] == "archived_no_activity"
-    assert status["first_fdv_queue"]["downgrade_count"] == 1
+    assert state["candidates"]["quiet"]["archive_reason"] == "tier_1_max_age"
+    assert status["first_fdv_queue"]["downgrade_count"] == 0
     assert status["first_fdv_queue"]["archived_no_activity"] == 1
     assert status["queue_sizes"]["first_fdv_path"] == 0
 
@@ -792,6 +791,41 @@ def test_tier_1_pressure_reports_oldest_first_retry_budget_and_rates(tmp_path: P
     assert queue["first_fdv_median_latency_ms"] == 0.0
     assert queue["metadata_hot_path_allowed"] is False
     assert queue["metadata_enrichment_in_first_fdv"] is False
+
+
+def test_tier_1_drains_flat_low_fdv_and_promotes_rising_or_floor_candidates(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("flat-low", 100, 800, events=1, buys=0, wallets=1))
+    engine.process_path_event(_event("flat-low", 110, 805, events=1, buys=0, wallets=1))
+    engine.process_path_event(_event("rising", 100, 800, events=1, buys=0, wallets=1))
+    engine.process_path_event(_event("rising", 110, 3_600, events=1, buys=1, wallets=2))
+    engine.process_path_event(_event("floor", 100, 3_200, events=1, buys=0, wallets=1))
+    engine.process_path_event(_event("floor", 110, 3_150, events=1, buys=0, wallets=1))
+    engine.process_path_event(_event("confirmed", 100, 10_200, events=2, buys=1, wallets=2))
+    engine.process_path_event(_event("confirmed", 110, 10_400, events=2, buys=1, wallets=2))
+
+    archived = archive_runtime_queue_candidates(config, now=131)
+
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    status = rule_runtime_status(config)
+    queue = status["first_fdv_queue"]
+
+    assert archived["archived_no_activity"] == 1
+    assert state["candidates"]["flat-low"]["state"] == "archived_no_activity"
+    assert state["candidates"]["flat-low"]["archive_reason"] == "tier_1_low_fdv_flat_stale"
+    assert state["candidates"]["flat-low"]["fdv_delta_pct"] < 0.01
+    assert state["candidates"]["rising"]["state"] == "near_threshold_watch"
+    assert state["candidates"]["rising"]["tier_1_exit_reason"] == "rising_fdv"
+    assert state["candidates"]["floor"]["state"] == "near_threshold_watch"
+    assert state["candidates"]["floor"]["tier_1_exit_reason"] == "fdv_above_promotion_floor"
+    assert state["candidates"]["confirmed"]["state"] == "confirmed_10k_watch"
+    assert queue["tier_1_depth"] == 0
+    assert queue["tier_1_retention_reasons_oldest_first"] == []
+    assert queue["tier_1_archive_count"] == 1
+    assert queue["promoted_to_near_threshold"] == 3
 
 
 def test_runtime_archives_birth_without_fdv_path_after_timeout(tmp_path: Path) -> None:
