@@ -1,6 +1,6 @@
 # Rule Runtime v1 Safety Patch Summary
 
-Updated: 2026-06-06T17:07:44.955807+00:00
+Updated: 2026-06-06T18:14:07.633797+00:00
 Paper-only. Live trading, private keys, signing, swaps, and routing remain disabled.
 
 - Duplicate confirmation patch: `True`
@@ -10,13 +10,13 @@ Paper-only. Live trading, private keys, signing, swaps, and routing remain disab
 - Mayhem label-only: `True`
 - Stagnation exit added: `True`
 - Duplicate same-state rejects: `1`
-- Chase guard rejects: `2`
+- Chase guard rejects: `0`
 - Holder <=1 rejects: `0`
-- Mayhem labels: `2`
+- Mayhem labels: `0`
 - Dev-pump suspect labels: `3`
 - Fake-volume suspect labels: `3`
 - Stagnation exits: `0`
-- Valid/voided/rejected paper buys: `0` / `3` / `3`
+- Valid/voided/rejected paper buys: `0` / `1` / `5`
 - Paper cash/wallet: `$300.0` / `$300.0`
 - Monitor path: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/rule_runtime_v1/rule_runtime_v1_monitor.html`
 - Retroactive review path: `/Volumes/ORICO/MemeTraderPro/data/backtests/diagnostics/reports/forward_observation/rule_runtime_v1/retroactive_paper_buy_safety_review.json`

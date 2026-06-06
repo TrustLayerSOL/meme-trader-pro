@@ -233,6 +233,7 @@ def run_bonding_curve_account_probe_for_create_event(
 ) -> dict[str, Any]:
     started = now_fn()
     create_observed_at = _num(create_event.get("observed_at") or create_event.get("create_log_observed_at") or create_event.get("timestamp"))
+    mint_owner = _resolve_mint_account_owner(probe, str(create_event.get("mint") or ""), min_context_slot=_optional_int(create_event.get("slot")))
     attempt_started_at = started
     probe_input = {
         **create_event,
@@ -295,6 +296,7 @@ def run_bonding_curve_account_probe_for_create_event(
         runtime_event["account_not_found_recovered_by_retry"] = recovered_by_retry
         runtime_event["first_failure_reason"] = first_failure_reason
         runtime_event["retry_delays_ms"] = retry_delays_ms
+        runtime_event.update(mint_owner)
         _copy_fdv_probe_fields(result, runtime_event)
     winning = "getAccountInfo_processed" if status == "success" else "none"
     row = {
@@ -332,6 +334,7 @@ def run_bonding_curve_account_probe_for_create_event(
         "probe_error": None if status == "success" else getattr(result, "failure_reason", None),
         "helius_rpc_request_count": int(getattr(result, "helius_rpc_request_count", None) or getattr(probe, "requests_used", 0) or 0),
         "http_429_count": int(getattr(result, "http_429_count", None) or getattr(probe, "http_429_count", 0) or 0),
+        **mint_owner,
     }
     _copy_fdv_probe_fields(result, row)
     if runtime_event is not None:
@@ -373,6 +376,7 @@ def run_bonding_curve_account_probe_for_create_event(
                 follow_event["account_not_found_recovered_by_retry"] = False
                 follow_event["first_failure_reason"] = None
                 follow_event["retry_delays_ms"] = []
+                follow_event.update(mint_owner)
                 _copy_fdv_probe_fields(follow_result, follow_event)
             follow_row = {
                 "event_id": f"probe_follow_{create_event.get('event_id') or create_event.get('signature')}_{follow_up_index}_{int(follow_started * 1000)}",
@@ -419,6 +423,7 @@ def run_bonding_curve_account_probe_for_create_event(
                 "probe_error": None if follow_status == "success" else getattr(follow_result, "failure_reason", None),
                 "helius_rpc_request_count": int(getattr(follow_result, "helius_rpc_request_count", None) or getattr(probe, "requests_used", 0) or 0),
                 "http_429_count": int(getattr(follow_result, "http_429_count", None) or getattr(probe, "http_429_count", 0) or 0),
+                **mint_owner,
             }
             _copy_fdv_probe_fields(follow_result, follow_row)
             if follow_event is not None:
@@ -445,6 +450,9 @@ def _copy_fdv_probe_fields(source: Any, target: dict[str, Any]) -> None:
         "calculation_error",
         "quote_type",
         "account_state",
+        "token_program",
+        "mint_account_owner",
+        "mint_account_owner_status",
     ]:
         if isinstance(source, dict):
             value = source.get(key)
@@ -452,6 +460,39 @@ def _copy_fdv_probe_fields(source: Any, target: dict[str, Any]) -> None:
             value = getattr(source, key, None)
         if value is not None:
             target[key] = value
+
+
+def _resolve_mint_account_owner(probe: Any, mint: str, *, min_context_slot: int | None = None) -> dict[str, Any]:
+    if not mint:
+        return {"mint_account_owner": None, "token_program": None, "mint_account_owner_status": "missing_mint"}
+    rpc_post = getattr(probe, "_rpc_post", None)
+    rpc_url = getattr(probe, "rpc_url", "") or ""
+    if rpc_post is None:
+        return {"mint_account_owner": None, "token_program": None, "mint_account_owner_status": "unavailable"}
+    options: dict[str, Any] = {"encoding": "base64", "commitment": "processed"}
+    if min_context_slot is not None:
+        options["minContextSlot"] = int(min_context_slot)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "mtp-mint-owner-get-account-info",
+        "method": "getAccountInfo",
+        "params": [mint, options],
+    }
+    try:
+        if hasattr(probe, "requests_used"):
+            probe.requests_used += 1
+        response = rpc_post(rpc_url, payload, getattr(probe, "timeout_seconds", 3))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429 and hasattr(probe, "http_429_count"):
+            probe.http_429_count += 1
+        return {"mint_account_owner": None, "token_program": None, "mint_account_owner_status": f"rpc_error_{getattr(exc, 'code', 'unknown')}"}
+    except Exception:
+        return {"mint_account_owner": None, "token_program": None, "mint_account_owner_status": "rpc_error"}
+    value = ((response or {}).get("result") or {}).get("value") if isinstance(response, dict) else None
+    if not isinstance(value, dict):
+        return {"mint_account_owner": None, "token_program": None, "mint_account_owner_status": "account_not_found"}
+    owner = value.get("owner")
+    return {"mint_account_owner": owner, "token_program": owner, "mint_account_owner_status": "found" if owner else "owner_missing"}
 
 
 def _audit_endpoint(endpoint: dict[str, str | None], *, ws_connect: Any, rpc_post: Any, timeout_seconds: int) -> dict[str, Any]:
@@ -654,6 +695,11 @@ def _num(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_int(value: Any) -> int | None:
+    number = _num(value)
+    return int(number) if number is not None else None
 
 
 def _write_json(path: Path, payload: Any) -> None:

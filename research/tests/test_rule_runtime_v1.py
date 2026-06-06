@@ -57,6 +57,7 @@ def _event(mint: str, ts: float, fdv: float, *, events: int = 10, buys: int = 5,
         "event_count": events,
         "buy_count": buys,
         "active_wallet_count": wallets,
+        "holder_count_at_10k_proxy": 5,
         "data_source": "mock_helius_rpc",
     }
     row.update(extra)
@@ -513,7 +514,7 @@ def test_confirmed_20k_creates_three_variant_decisions_with_available_risk_field
     assert len([row for row in _rows(config.paper_trades_path) if row["side"] == "paper_buy"]) == 1
 
 
-def test_missing_risk_fields_do_not_block_fdv_baseline_variant(tmp_path: Path) -> None:
+def test_partial_clean_risk_fields_do_not_block_fdv_baseline_variant(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
@@ -528,8 +529,8 @@ def test_missing_risk_fields_do_not_block_fdv_baseline_variant(tmp_path: Path) -
 
     by_variant = {row["variant_id"]: row for row in _rows(config.paper_rule_variant_decisions_path)}
     assert by_variant["FDV_BASELINE_20K"]["variant_status"] == "paper_buy"
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["variant_status"] == "not_evaluable"
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["risk_filter_status"] == "missing"
+    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["variant_status"] == "paper_buy"
+    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["risk_filter_status"] == "risk_filter_available_pass"
     assert "creator_prior_migration_count" in by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["missing_required_fields"]
     assert by_variant["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["variant_status"] == "not_evaluable"
 
@@ -614,7 +615,7 @@ def test_status_and_monitor_include_variant_counts(tmp_path: Path) -> None:
     status = rule_runtime_status(config)
     html = config.monitor_html_path.read_text(encoding="utf-8")
     assert status["variants"]["FDV_BASELINE_20K"]["paper_buys"] == 1
-    assert status["variants"]["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["not_evaluable"] == 1
+    assert status["variants"]["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["paper_buys"] == 1
     assert status["variants"]["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["not_evaluable"] == 1
     assert "Rule Runtime v1 Variants" in html
     assert "FDV_BASELINE_20K" in html
@@ -1112,6 +1113,66 @@ def test_missing_fdv_units_or_usd_rejects_paper_buy(tmp_path: Path) -> None:
     assert rule_runtime_status(config)["paper_buys"] == 0
 
 
+def test_unsupported_token_program_rejects_paper_buy(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(
+        _event(
+            "token-2022-pump",
+            100,
+            20_100,
+            token_program="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            mint_account_owner="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            reserve_state_fingerprint="token2022-a",
+            account_data_hash="token2022-a",
+        )
+    )
+    engine.process_path_event(
+        _event(
+            "token-2022-pump",
+            110,
+            20_200,
+            token_program="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            mint_account_owner="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            reserve_state_fingerprint="token2022-b",
+            account_data_hash="token2022-b",
+        )
+    )
+    decision = next(
+        row
+        for row in _rows(config.paper_decisions_path)
+        if row["mint"] == "token-2022-pump" and row["paper_event_id"].startswith("decision_")
+    )
+
+    assert decision["decision"] == "paper_rejected_entry"
+    assert decision["rejection_reason"] == "unsupported_token_program"
+    assert "unsupported_token_program" in decision["risk_labels"]
+    assert rule_runtime_status(config)["paper_buys"] == 0
+
+
+def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("label-risk", 100, 20_100, events=1, buys=0, wallets=1, holder_count_at_10k_proxy=None, reserve_state_fingerprint="risk-a", account_data_hash="risk-a"))
+    engine.process_path_event(_event("label-risk", 110, 20_200, events=1, buys=0, wallets=1, holder_count_at_10k_proxy=None, reserve_state_fingerprint="risk-b", account_data_hash="risk-b"))
+    decision = next(
+        row
+        for row in _rows(config.paper_decisions_path)
+        if row["mint"] == "label-risk" and row["paper_event_id"].startswith("decision_")
+    )
+
+    assert decision["decision"] == "paper_rejected_entry"
+    assert decision["rejection_reason"] == "high_risk_label_hard_reject"
+    assert "dev_pump_suspect" in decision["risk_labels"]
+    assert "fake_volume_suspect" in decision["risk_labels"]
+    assert "missing_holder_depth" in decision["risk_labels"]
+    assert rule_runtime_status(config)["paper_buys"] == 0
+
+
 def test_holder_gate_and_mayhem_labels_are_entry_safe(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
@@ -1180,6 +1241,65 @@ def test_retroactive_safety_review_voids_bugged_and_chased_buys(tmp_path: Path) 
     assert status["valid_paper_buys"] == 0
     assert status["cash_usd"] == 300.0
     assert config.retroactive_paper_buy_safety_review_json_path.exists()
+
+
+def test_retroactive_safety_review_voids_unsupported_or_high_risk_paper_buy(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    state["cash_usd"] = 285.0
+    state["wallet_usd"] = 300.0
+    state["open_positions"]["token-2022-pump"] = {
+        "mint": "token-2022-pump",
+        "paper_buy_fdv": 22_436.05,
+        "allocation_usd": 15.0,
+        "paper_units": 15.0 / 22_436.05,
+        "side": "paper_buy",
+    }
+    state["candidates"]["token-2022-pump"] = {
+        "mint": "token-2022-pump",
+        "state": "paper_position_open",
+        "tier": 4,
+        "paper_buy_created": True,
+    }
+    state["variant_open_positions"]["FDV_BASELINE_20K|token-2022-pump"] = {
+        "variant_id": "FDV_BASELINE_20K",
+        "mint": "token-2022-pump",
+        "paper_buy_fdv": 22_436.05,
+        "no_real_trade": True,
+    }
+    config.runtime_state_path.write_text(json.dumps(state), encoding="utf-8")
+    config.paper_trades_path.write_text(
+        json.dumps(
+            {
+                "mint": "token-2022-pump",
+                "ca": "token-2022-pump",
+                "side": "paper_buy",
+                "timestamp": 100.0,
+                "allocation_usd": 15.0,
+                "paper_buy_fdv": 22_436.05,
+                "fdv_usd": 22_436.05,
+                "fdv_units": "usd",
+                "token_program": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                "mint_account_owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                "risk_labels": ["dev_pump_suspect", "fake_volume_suspect", "missing_holder_depth"],
+                "no_real_trade": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    review = run_rule_runtime_safety_patch_review(config)
+    status = rule_runtime_status(config)
+    row = next(row for row in review["rows"] if row["mint"] == "token-2022-pump")
+
+    assert row["action"] == "voided"
+    assert row["void_reason"] == "unsupported_token_program"
+    assert status["valid_paper_buys"] == 0
+    assert status["voided_paper_buys"] == 1
+    assert status["variants"]["FDV_BASELINE_20K"]["open_positions"] == 0
+    assert status["cash_usd"] == 300.0
 
 
 def test_first_fdv_queue_triage_smoke_writes_summary(tmp_path: Path) -> None:

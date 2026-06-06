@@ -66,6 +66,9 @@ OPTIONAL_LIVE_FIELDS = sorted(set(AVAILABLE_RISK_FIELDS + FULL_RISK_FIELDS + [
     "dev_pump_suspect",
     "fake_volume_suspect",
     "concentrated_buying_suspect",
+    "token_program",
+    "mint_account_owner",
+    "mint_account_owner_status",
 ]))
 FDV_UNIT_FIELDS = [
     "fdv_usd",
@@ -105,6 +108,13 @@ TIER_1_FLAT_DELTA_PCT = 0.05
 TIER_1_PRESSURE_THRESHOLD = 20
 ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 SCHEDULER_MODE = "priority_single_worker"
+SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS = {SPL_TOKEN_PROGRAM_ID}
+HARD_REJECT_ENTRY_RISK_LABELS = {
+    "dev_pump_suspect",
+    "fake_volume_suspect",
+    "missing_holder_depth",
+}
 ENTRY_CHASE_TRIGGER_FDV_USD = 20_000.0
 MAX_ENTRY_ABOVE_TRIGGER_PCT = 0.15
 MAX_ALLOWED_PAPER_ENTRY_FDV_USD = ENTRY_CHASE_TRIGGER_FDV_USD * (1.0 + MAX_ENTRY_ABOVE_TRIGGER_PCT)
@@ -939,7 +949,8 @@ def paper_buy_fdv_reconciliation_audit(
     path_rows = _read_jsonl(config.path_events_path)
     probe_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
     variant_exits = _read_jsonl(config.paper_rule_variant_exits_path)
-    targets = target_mints or PAPER_BUY_FDV_RECONCILIATION_TARGET_MINTS
+    paper_buy_mints = sorted({str(row.get("mint") or "") for row in trades if row.get("side") == "paper_buy" and row.get("mint")})
+    targets = target_mints if target_mints is not None else sorted(set(PAPER_BUY_FDV_RECONCILIATION_TARGET_MINTS + paper_buy_mints))
     manual = manual_axiom_evidence or PAPER_BUY_MANUAL_AXIOM_EVIDENCE
     buys_by_mint = {
         row.get("mint"): row
@@ -1003,9 +1014,15 @@ def paper_buy_fdv_reconciliation_audit(
             warnings.append("confirming_rows_same_slot_or_create_signature")
         if not fdv_units:
             warnings.append("fdv_source_units_missing")
+        token_program = _first_present(trigger_row, trigger_probe, buy, keys=["token_program", "mint_account_owner"])
+        if token_program and str(token_program) not in SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS:
+            warnings.append("unsupported_token_program")
         if buy_over_manual_pct is not None and buy_over_manual_pct > 0.15:
             warnings.append("manual_axiom_market_cap_materially_below_runtime_fdv")
         labels = _paper_buy_labels(buy, evidence, duplicate_state=duplicate_state, variant_exits=variant_exits)
+        labels = sorted(set(labels + list(buy.get("risk_labels") or [])))
+        if HARD_REJECT_ENTRY_RISK_LABELS & set(labels):
+            warnings.append("high_risk_label_hard_reject")
         row = {
             "mint": mint,
             "paper_buy_found": True,
@@ -1018,6 +1035,9 @@ def paper_buy_fdv_reconciliation_audit(
             "fdv_sol": _round_optional(fdv_sol),
             "fdv_quote": _round_optional(_num(_first_present(trigger_row, trigger_probe, keys=["fdv_quote"]))),
             "fdv_units": fdv_units,
+            "token_program": token_program,
+            "mint_account_owner": _first_present(trigger_row, trigger_probe, buy, keys=["mint_account_owner", "token_program"]),
+            "mint_account_owner_status": _first_present(trigger_row, trigger_probe, buy, keys=["mint_account_owner_status"]),
             "sol_usd_used": _round_optional(sol_usd),
             "price_sol": _round_optional_precise(_num(_first_present(trigger_row, trigger_probe, keys=["price_sol"])) or computed_price_sol),
             "price_usd": _round_optional_precise(_num(_first_present(trigger_row, trigger_probe, keys=["price_usd"])) or computed_price_usd),
@@ -1107,6 +1127,10 @@ def run_rule_runtime_safety_patch_review(config: RuleRuntimeConfig, *, apply_voi
         void_reason = None
         if "confirming_rows_duplicate_same_state" in warnings:
             void_reason = "duplicate_same_state_confirmation_bug"
+        elif "unsupported_token_program" in warnings:
+            void_reason = "unsupported_token_program"
+        elif "high_risk_label_hard_reject" in warnings:
+            void_reason = "high_risk_label_hard_reject"
         elif "paper_buy_fdv_more_than_15pct_above_trigger_without_chase_approval" in warnings or (
             (_num(row.get("paper_buy_fdv")) or 0.0) > MAX_ALLOWED_PAPER_ENTRY_FDV_USD
         ):
@@ -1140,6 +1164,9 @@ def run_rule_runtime_safety_patch_review(config: RuleRuntimeConfig, *, apply_voi
             state["voided_paper_positions"][mint] = void_row
             if mint in state.get("open_positions", {}):
                 del state["open_positions"][mint]
+            for key, position in list((state.get("variant_open_positions") or {}).items()):
+                if position.get("mint") == mint or str(key).endswith(f"|{mint}"):
+                    del state["variant_open_positions"][key]
             candidate = (state.get("candidates") or {}).get(mint)
             if candidate:
                 candidate["paper_buy_voided"] = True
@@ -1149,6 +1176,11 @@ def run_rule_runtime_safety_patch_review(config: RuleRuntimeConfig, *, apply_voi
             _append_jsonl(config.paper_trades_path, void_row)
         elif mint in state["voided_paper_positions"]:
             existing_void = state["voided_paper_positions"][mint]
+            if mint in state.get("open_positions", {}):
+                del state["open_positions"][mint]
+            for key, position in list((state.get("variant_open_positions") or {}).items()):
+                if position.get("mint") == mint or str(key).endswith(f"|{mint}"):
+                    del state["variant_open_positions"][key]
             void_row = {
                 **existing_void,
                 **void_row,
@@ -1183,7 +1215,7 @@ def run_rule_runtime_safety_patch_review(config: RuleRuntimeConfig, *, apply_voi
     config.runtime_safety_patch_summary_md_path.write_text(_runtime_safety_patch_summary_md(summary), encoding="utf-8")
     config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
     config.status_md_path.write_text(_runtime_safety_patch_summary_md(summary), encoding="utf-8")
-    return {**summary, "retroactive_review": review["retroactive_review"]}
+    return {**summary, "retroactive_review": review["retroactive_review"], "rows": rows}
 
 
 def run_first_fdv_queue_triage_smoke(config: RuleRuntimeConfig, *, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -2304,6 +2336,8 @@ def _primary_rejection_reason(reasons: list[str]) -> str | None:
         return None
     priority = [
         "duplicate_same_state_confirmation",
+        "unsupported_token_program",
+        "high_risk_label_hard_reject",
         "missing_fdv_units",
         "missing_fdv_usd_for_usd_threshold",
         "holder_count_lte_1_hard_reject",
@@ -2316,6 +2350,19 @@ def _primary_rejection_reason(reasons: list[str]) -> str | None:
         if reason in reasons:
             return reason
     return reasons[0]
+
+
+def _token_program_rejection(row: dict[str, Any]) -> tuple[str | None, list[str]]:
+    token_program = str(row.get("token_program") or row.get("mint_account_owner") or "").strip()
+    if not token_program:
+        return None, []
+    if token_program not in SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS:
+        return "unsupported_token_program", ["unsupported_token_program"]
+    return None, []
+
+
+def _high_risk_label_rejection(labels: list[str]) -> str | None:
+    return "high_risk_label_hard_reject" if HARD_REJECT_ENTRY_RISK_LABELS & set(labels) else None
 
 
 def _fdv_provenance_fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -2343,6 +2390,9 @@ def _fdv_provenance_fields(row: dict[str, Any]) -> dict[str, Any]:
         "fdv_source_confidence",
         "account_data_hash",
         "reserve_state_fingerprint",
+        "token_program",
+        "mint_account_owner",
+        "mint_account_owner_status",
     ]
     fields = {}
     for key in keys:
@@ -2943,6 +2993,10 @@ def _evaluate_entry(
     fdv_usd = _num(row.get("fdv_usd"))
     if fdv_units == "usd" and fdv_usd is None:
         reasons.append("missing_fdv_usd_for_usd_threshold")
+    token_program_reason, token_program_labels = _token_program_rejection(row)
+    labels.extend(token_program_labels)
+    if token_program_reason:
+        reasons.append(token_program_reason)
     holder_status = _holder_gate_status(config, row)
     labels.extend(holder_status.get("risk_labels") or [])
     if holder_status.get("rejection_reason"):
@@ -2957,6 +3011,9 @@ def _evaluate_entry(
     features = _efficiency_features(row)
     labels.extend(_volume_risk_labels(row, features))
     labels = sorted(set(labels))
+    label_reason = _high_risk_label_rejection(labels)
+    if label_reason:
+        reasons.append(label_reason)
     primary_reason = _primary_rejection_reason(reasons)
     decision = "paper_rejected_entry" if reasons else "paper_buy"
     return {

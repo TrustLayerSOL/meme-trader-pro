@@ -39,6 +39,7 @@ def _event(mint: str, ts: float, fdv: float, *, event_id: str | None = None, eve
         "buy_count": 5,
         "sell_count": 1,
         "active_wallet_count": 4,
+        "holder_count_at_10k_proxy": 5,
         "path_evidence_count": 1,
         "raw_crossed_10k": fdv >= 10_000,
         "raw_crossed_15k": fdv >= 15_000,

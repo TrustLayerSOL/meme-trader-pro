@@ -255,6 +255,13 @@ def test_get_account_info_probe_row_uses_min_context_slot_and_emits_runtime_even
     class FakeProbe:
         requests_used = 1
         http_429_count = 0
+        rpc_url = "https://fake-rpc"
+        timeout_seconds = 3
+
+        def _rpc_post(self, _rpc_url: str, payload: dict, _timeout: int) -> dict:
+            assert payload["method"] == "getAccountInfo"
+            assert payload["params"][0] == "mint-a"
+            return {"result": {"value": {"owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}}}
 
         def probe_create_event(self, create_event: dict, *, now_fn: object) -> object:
             seen_payloads.append(create_event)
@@ -321,9 +328,13 @@ def test_get_account_info_probe_row_uses_min_context_slot_and_emits_runtime_even
     assert row["fdv_sol"] == 90.0
     assert row["fdv_units"] == "usd"
     assert row["calculation_status"] == "fdv_usd_available"
+    assert row["mint_account_owner"] == "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    assert row["token_program"] == "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    assert row["mint_account_owner_status"] == "found"
     assert emitted[0]["fdv_usd"] == 9_000.0
     assert emitted[0]["fdv_sol"] == 90.0
     assert emitted[0]["fdv_units"] == "usd"
+    assert emitted[0]["token_program"] == "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
     assert emitted[0]["source_adapter"] == "helius_transaction_subscribe_bonding_curve_probe"
     assert json.loads(config.bonding_curve_account_probe_events_path.read_text(encoding="utf-8").splitlines()[0])["probe_status"] == "success"
 
