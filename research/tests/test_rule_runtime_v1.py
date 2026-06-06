@@ -9,10 +9,13 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     RuleRuntimeLiveAdapter,
     RuleRuntimeLiveAdapterConfig,
     RuleRuntimePriorityScheduler,
+    archive_runtime_queue_candidates,
+    first_fdv_queue_triage_audit,
     initialize_rule_runtime,
     load_historical_rule_config,
     normalize_live_path_row_for_rule_runtime,
     run_rule_runtime_live_adapter_once,
+    run_first_fdv_queue_triage_smoke,
     run_rule_runtime_smoke,
     rule_runtime_status,
 )
@@ -119,7 +122,7 @@ def test_confirmed_10k_promotes_to_watch_and_logs_latency(tmp_path: Path) -> Non
     result = engine.process_path_event(_event("mint-a", 130, 11_200))
 
     assert result["state"] == "confirmed_10k_watch"
-    assert result["tier"] == 2
+    assert result["tier"] == 3
     assert result["confirmed_crossed_10k"] is True
     status = rule_runtime_status(config)
     assert status["confirmed_10k_watches"] == 1
@@ -379,18 +382,127 @@ def test_priority_scheduler_orders_hot_work_before_background_metadata() -> None
     scheduler = RuleRuntimePriorityScheduler()
     scheduler.add_job("metadata_background", {"mint": "m5"})
     scheduler.add_job("light_watch", {"mint": "m4"})
+    scheduler.add_job("fresh_birth_first_path", {"mint": "m6"})
     scheduler.add_job("first_fdv_path", {"mint": "m3"})
+    scheduler.add_job("near_threshold_watch", {"mint": "m25"})
     scheduler.add_job("confirmed_10k_watch", {"mint": "m2"})
     scheduler.add_job("paper_position_open", {"mint": "m1"})
 
-    assert [scheduler.pop_next_job()["mint"] for _ in range(5)] == ["m1", "m2", "m3", "m4", "m5"]
+    assert [scheduler.pop_next_job()["mint"] for _ in range(7)] == ["m1", "m2", "m25", "m3", "m6", "m4", "m5"]
     assert scheduler.queue_sizes() == {
         "paper_position_open": 0,
         "confirmed_10k_watch": 0,
+        "near_threshold_watch": 0,
         "first_fdv_path": 0,
+        "fresh_birth_first_path": 0,
         "light_watch": 0,
         "metadata_background": 0,
     }
+
+
+def test_runtime_promotes_near_threshold_and_reports_first_fdv_queue_metrics(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("low", 100, 1_200))
+    engine.process_path_event(_event("near", 110, 5_100))
+    engine.process_path_event(_event("ten", 120, 10_500))
+    engine.process_path_event(_event("ten", 150, 11_000))
+
+    status = rule_runtime_status(config)
+    queue = status["first_fdv_queue"]
+    assert status["queue_sizes"]["near_threshold_watch"] == 1
+    assert status["queue_sizes"]["confirmed_10k_watch"] == 1
+    assert queue["scheduler_mode"] == "priority_single_worker"
+    assert queue["queue_depth_by_tier"]["tier_1_fdv_path_seen"] == 1
+    assert queue["queue_depth_by_tier"]["tier_2_near_threshold_watch"] == 1
+    assert queue["queue_depth_by_tier"]["tier_3_confirmed_10k_watch"] == 1
+    assert queue["promoted_to_fdv_path"] == 3
+    assert queue["promoted_to_near_threshold"] == 2
+    assert queue["promoted_to_confirmed_10k"] == 1
+    assert queue["first_path_success_rate"] == 1.0
+    assert "fdv_efficiency_threshold_unfrozen" in status["warnings"]
+
+
+def test_runtime_aging_downgrades_and_archives_stale_first_path_candidates(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("quiet", 100, 1_100, events=0, buys=0, wallets=0))
+    downgraded = archive_runtime_queue_candidates(config, now=170)
+    archived = archive_runtime_queue_candidates(config, now=230)
+
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    status = rule_runtime_status(config)
+    assert downgraded["downgrade_count"] == 1
+    assert archived["archived_no_activity"] == 1
+    assert state["candidates"]["quiet"]["state"] == "archived_no_activity"
+    assert status["first_fdv_queue"]["downgrade_count"] == 1
+    assert status["first_fdv_queue"]["archived_no_activity"] == 1
+    assert status["queue_sizes"]["first_fdv_path"] == 0
+
+
+def test_runtime_archives_birth_without_fdv_path_after_timeout(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    state["candidates"]["birth-only"] = {
+        "mint": "birth-only",
+        "state": "birth_seen",
+        "tier": 0,
+        "first_seen_at": 100.0,
+        "path_rows": [],
+        "raw_milestones": {},
+        "confirmed_milestones": {},
+        "milestone_first_times": {},
+        "confirmed_milestone_times": {},
+    }
+    config.runtime_state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    archived = archive_runtime_queue_candidates(config, now=230)
+
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    assert archived["archived_no_fdv_path_timeout"] == 1
+    assert state["candidates"]["birth-only"]["state"] == "archived_no_fdv_path_timeout"
+
+
+def test_first_fdv_queue_triage_audit_writes_reports(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+    engine.process_path_event(_event("near", 100, 5_500))
+
+    audit = first_fdv_queue_triage_audit(config)
+
+    assert audit["scheduler_mode"] == "priority_single_worker"
+    assert audit["parallel_workers_added"] is False
+    assert audit["queue_entries_created_from"] == "candidate_state"
+    assert config.first_fdv_queue_triage_audit_json_path.exists()
+    assert "First FDV Queue Triage Audit" in config.first_fdv_queue_triage_audit_md_path.read_text(encoding="utf-8")
+
+
+def test_first_fdv_queue_triage_smoke_writes_summary(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path, repo_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+
+    summary = run_first_fdv_queue_triage_smoke(
+        config,
+        events=[
+            _event("low", 100, 1_000),
+            _event("near", 110, 5_500),
+            _event("ten", 120, 10_500),
+            _event("ten", 150, 11_000),
+        ],
+    )
+
+    assert summary["runtime_mode"] == "mock_live_bus"
+    assert summary["events_processed"] == 4
+    assert summary["first_fdv_queue"]["queue_depth_by_tier"]["tier_2_near_threshold_watch"] == 1
+    assert summary["confirmed_10k_watches"] == 1
+    assert config.first_fdv_queue_triage_smoke_summary_json_path.exists()
+    assert "First FDV Queue Triage Smoke Summary" in config.first_fdv_queue_triage_smoke_summary_md_path.read_text(encoding="utf-8")
 
 
 def test_runtime_contains_no_live_execution_logic() -> None:

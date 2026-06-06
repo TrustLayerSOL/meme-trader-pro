@@ -11,8 +11,10 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     FROZEN_EXIT_RULE_ID,
     RuleRuntimeConfig,
     RuleRuntimeLiveAdapterConfig,
+    first_fdv_queue_triage_audit,
     initialize_rule_runtime,
     rule_runtime_status,
+    run_first_fdv_queue_triage_smoke,
     run_rule_runtime_live_bus_collector_smoke,
     run_rule_runtime_mock_live_bus_smoke,
     run_rule_runtime_live_adapter_once,
@@ -141,6 +143,31 @@ def main() -> int:
         print(f"runtime_eval_latency={result['runtime_eval_latency_p50_p90_p99']}")
         print(f"monitor_path={result['monitor_path']}")
         return 0
+    if args.mode == "triage-audit":
+        result = first_fdv_queue_triage_audit(config)
+        print("## First FDV Queue Triage Audit")
+        print(f"scheduler_mode={result['scheduler_mode']}")
+        print(f"parallel_workers_added={result['parallel_workers_added']}")
+        print(f"queue_entries_created_from={result['queue_entries_created_from']}")
+        print(f"report_path={config.first_fdv_queue_triage_audit_json_path}")
+        return 0
+    if args.mode == "triage-smoke":
+        if args.reset:
+            initialize_rule_runtime(config, reset=True)
+        result = run_first_fdv_queue_triage_smoke(config, events=_read_jsonl(Path(args.mock_live_bus_events).expanduser()) if args.mock_live_bus_events else [])
+        queue = result.get("first_fdv_queue") or {}
+        print("## First FDV Queue Triage Smoke")
+        print(f"runtime_mode={result['runtime_mode']}")
+        print(f"scheduler_mode={result['scheduler_mode']}")
+        print(f"parallel_workers_added={result['parallel_workers_added']}")
+        print(f"events_processed={result['events_processed']}")
+        print(f"queue_depth_by_tier={queue.get('queue_depth_by_tier')}")
+        print(f"archived_no_activity={queue.get('archived_no_activity')}")
+        print(f"archived_no_fdv_path_timeout={queue.get('archived_no_fdv_path_timeout')}")
+        print(f"promotions={queue.get('promoted_to_fdv_path')}/{queue.get('promoted_to_near_threshold')}/{queue.get('promoted_to_confirmed_10k')}/{queue.get('promoted_to_paper_position')}")
+        print(f"first_path_latency={queue.get('first_path_latency_p50_p90_p99')}")
+        print(f"monitor_path={result['monitor_path']}")
+        return 0
     print_status(rule_runtime_status(config))
     return 0
 
@@ -178,6 +205,27 @@ def print_status(status: dict) -> None:
     print(f"State age p50/p90/p99: {status['state_age_p50_p90_p99']}")
     print(f"Bus queue depth: {status['bus_queue_depth']}")
     print(f"Queue sizes: {status['queue_sizes']}")
+    queue = status.get("first_fdv_queue") or {}
+    print("## First FDV Queue")
+    print(f"Scheduler mode: {queue.get('scheduler_mode')}")
+    print(f"Queue depth total: {queue.get('queue_depth_total')}")
+    print(f"Queue depth by tier: {queue.get('queue_depth_by_tier')}")
+    print(f"Oldest queued age by tier: {queue.get('oldest_queued_age_seconds_by_tier')}")
+    print(f"Average queued age by tier: {queue.get('average_queued_age_seconds_by_tier')}")
+    print(f"Archived no activity: {queue.get('archived_no_activity')}")
+    print(f"Archived no FDV path timeout: {queue.get('archived_no_fdv_path_timeout')}")
+    print(f"Archived parser failure: {queue.get('archived_parser_failure')}")
+    print(f"Archived duplicate: {queue.get('archived_duplicate')}")
+    print(f"Archived provenance failure: {queue.get('archived_provenance_failure')}")
+    print(f"Promoted to FDV path: {queue.get('promoted_to_fdv_path')}")
+    print(f"Promoted to near-threshold: {queue.get('promoted_to_near_threshold')}")
+    print(f"Promoted to confirmed 10k: {queue.get('promoted_to_confirmed_10k')}")
+    print(f"Promoted to paper position: {queue.get('promoted_to_paper_position')}")
+    print(f"First path success rate: {queue.get('first_path_success_rate')}")
+    print(f"First path latency p50/p90/p99: {queue.get('first_path_latency_p50_p90_p99')}")
+    print(f"Downgrade count: {queue.get('downgrade_count')}")
+    print(f"Reactivation count: {queue.get('reactivation_count')}")
+    print(f"HTTP 429 count: {queue.get('http_429_count')}")
     print("Metadata hot path blocked: true")
     print("No real trade flag: true")
     print(f"Monitor path: {status['monitor_html_path']}")
@@ -191,7 +239,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run or inspect the Rule Runtime v1 paper-only observer.")
     parser.add_argument(
         "--mode",
-        choices=["init", "status", "once", "smoke", "smoke-file-adapter", "replay-file", "smoke-live-bus"],
+        choices=["init", "status", "once", "smoke", "smoke-file-adapter", "replay-file", "smoke-live-bus", "triage-audit", "triage-smoke"],
         default="status",
     )
     parser.add_argument("--data-root", default=None)

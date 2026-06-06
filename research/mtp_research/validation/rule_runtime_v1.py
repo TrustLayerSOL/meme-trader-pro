@@ -62,6 +62,21 @@ DRAW_DOWN_EXIT_PCT = 0.30
 NO_RECLAIM_EXIT_SECONDS = 600.0
 SPIKE_REJECTION_RATIO = 3.0
 FDV_ANOMALY_HIGH = 100_000_000.0
+NEAR_THRESHOLD_FDV = 5_000.0
+FIRST_PATH_FAST_ATTEMPT_WINDOW_SECONDS = 15.0
+LIGHT_WATCH_TIMEOUT_SECONDS = 60.0
+NO_ACTIVITY_ARCHIVE_SECONDS = 120.0
+NO_FDV_PATH_ARCHIVE_SECONDS = 120.0
+STALE_RETRY_INTERVAL_SECONDS = 30.0
+MAX_STALE_RETRIES = 2
+SCHEDULER_MODE = "priority_single_worker"
+ARCHIVE_STATES = {
+    "archived_no_activity",
+    "archived_no_fdv_path_timeout",
+    "archived_parser_failure",
+    "archived_duplicate",
+    "archived_provenance_failure",
+}
 
 
 @dataclass(frozen=True)
@@ -178,6 +193,22 @@ class RuleRuntimeConfig:
         return self.report_root / "historical_rule_config_load_audit.md"
 
     @property
+    def first_fdv_queue_triage_audit_json_path(self) -> Path:
+        return self.report_root / "first_fdv_queue_triage_audit.json"
+
+    @property
+    def first_fdv_queue_triage_audit_md_path(self) -> Path:
+        return self.report_root / "first_fdv_queue_triage_audit.md"
+
+    @property
+    def first_fdv_queue_triage_smoke_summary_json_path(self) -> Path:
+        return self.report_root / "first_fdv_queue_triage_smoke_summary.json"
+
+    @property
+    def first_fdv_queue_triage_smoke_summary_md_path(self) -> Path:
+        return self.report_root / "first_fdv_queue_triage_smoke_summary.md"
+
+    @property
     def hot_path_gap_analysis_path(self) -> Path:
         return self.report_root / "hot_path_gap_analysis.md"
 
@@ -247,7 +278,9 @@ class RuleRuntimePriorityScheduler:
     priority_order = [
         "paper_position_open",
         "confirmed_10k_watch",
+        "near_threshold_watch",
         "first_fdv_path",
+        "fresh_birth_first_path",
         "light_watch",
         "metadata_background",
     ]
@@ -292,6 +325,7 @@ class RuleRuntimeEngine:
         event_observed_at = float(normalized.get("event_observed_at") or timestamp)
         candidate = state["candidates"].setdefault(mint, _new_candidate(mint, first_seen_at=timestamp))
         previous_state = candidate.get("state")
+        previous_tier = int(candidate.get("tier") or 0)
         candidate["first_seen_at"] = min(float(candidate.get("first_seen_at") or timestamp), timestamp)
         candidate["path_rows"].append(normalized)
         candidate["path_rows"] = sorted(candidate["path_rows"], key=lambda row: (float(row["timestamp"]), float(row["fdv_proxy"])))
@@ -321,7 +355,9 @@ class RuleRuntimeEngine:
 
         candidate["last_fdv_proxy"] = fdv
         candidate["last_path_time"] = timestamp
+        candidate["last_activity_time"] = timestamp if _event_has_activity(normalized) else candidate.get("last_activity_time")
         candidate["max_fdv_proxy"] = max(float(candidate.get("max_fdv_proxy") or 0.0), fdv)
+        candidate.setdefault("first_fdv_path_time", timestamp)
         if candidate.get("state") in (None, "birth_seen", "light_watch"):
             candidate["state"] = "fdv_path_seen"
             candidate["tier"] = 1
@@ -335,6 +371,7 @@ class RuleRuntimeEngine:
             candidate["same_timestamp_major_jump_flag"] = True
         _update_rejection_flags(candidate)
         _update_state_from_milestones(candidate)
+        _record_promotions(state, candidate, previous_state, previous_tier)
 
         if candidate.get("same_timestamp_major_jump_flag"):
             candidate["state"] = "rejected_same_timestamp_jump"
@@ -602,6 +639,87 @@ def run_rule_runtime_smoke(
     return summary
 
 
+def first_fdv_queue_triage_audit(config: RuleRuntimeConfig) -> dict[str, Any]:
+    if not config.runtime_state_path.exists():
+        initialize_rule_runtime(config)
+    state = _load_state(config)
+    status = rule_runtime_status(config)
+    audit = {
+        "report_id": "first_fdv_queue_triage_audit",
+        "updated_at": _utc_now(),
+        "scheduler_mode": SCHEDULER_MODE,
+        "parallel_workers_added": False,
+        "queue_entries_created_from": "candidate_state",
+        "metadata_competes_with_hot_path": False,
+        "metadata_hot_path_allowed": False,
+        "active_paper_positions_priority": 1,
+        "near_threshold_priority": 3,
+        "first_fdv_path_priority": 4,
+        "queue_processing_model": "single scheduler priority ordering over state-derived candidate queues",
+        "aging_rules": {
+            "first_path_fast_attempt_window_seconds": FIRST_PATH_FAST_ATTEMPT_WINDOW_SECONDS,
+            "light_watch_timeout_seconds": LIGHT_WATCH_TIMEOUT_SECONDS,
+            "no_activity_archive_seconds": NO_ACTIVITY_ARCHIVE_SECONDS,
+            "no_fdv_path_archive_seconds": NO_FDV_PATH_ARCHIVE_SECONDS,
+            "stale_retry_interval_seconds": STALE_RETRY_INTERVAL_SECONDS,
+            "max_stale_retries": MAX_STALE_RETRIES,
+        },
+        "priority_order": RuleRuntimePriorityScheduler.priority_order,
+        "first_fdv_queue": status.get("first_fdv_queue") or {},
+        "queue_sizes": status.get("queue_sizes") or {},
+        "candidate_count": len(state.get("candidates") or {}),
+        "confirmed_milestone_safety": {
+            "confirmed_milestones_only": True,
+            "raw_20k_only_rejected": True,
+            "single_row_spikes_rejected": True,
+            "same_timestamp_major_jumps_rejected": True,
+            "fdv_anomalies_rejected": True,
+            "missing_path_evidence_rejected": True,
+        },
+        "no_real_trade": True,
+    }
+    _write_json(config.first_fdv_queue_triage_audit_json_path, audit)
+    config.first_fdv_queue_triage_audit_md_path.write_text(_first_fdv_queue_triage_audit_md(audit), encoding="utf-8")
+    return audit
+
+
+def run_first_fdv_queue_triage_smoke(config: RuleRuntimeConfig, *, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    initialize_rule_runtime(config, reset=not config.runtime_state_path.exists())
+    bus = RuleRuntimeEventBus()
+    events = events or []
+    for event in events:
+        bus.emit(event)
+    result = RuleRuntimeEngine(config).consume_event_bus(bus, max_events=len(events))
+    status = rule_runtime_status(config)
+    summary = {
+        "report_id": "first_fdv_queue_triage_smoke_summary",
+        "updated_at": _utc_now(),
+        "runtime_mode": "mock_live_bus",
+        "scheduler_mode": SCHEDULER_MODE,
+        "parallel_workers_added": False,
+        "events_processed": int(result.get("processed") or status.get("events_processed") or 0),
+        "confirmed_10k_watches": int(status.get("confirmed_10k_watches") or 0),
+        "confirmed_20k_candidates": int(status.get("confirmed_20k_entry_candidates") or 0),
+        "paper_buys": int(status.get("paper_buys") or 0),
+        "paper_sells": int(status.get("paper_sells") or 0),
+        "variants": status.get("variants") or {},
+        "latency_p50_p90_p99": status.get("latency_p50_p90_p99"),
+        "event_to_rule_latency_p50_p90_p99": status.get("event_to_rule_p50_p90_p99"),
+        "threshold_status": "baseline-label-mode" if "fdv_efficiency_threshold_unfrozen" in (status.get("warnings") or []) else "frozen",
+        "first_fdv_queue": status.get("first_fdv_queue") or {},
+        "warnings": status.get("warnings") or [],
+        "monitor_path": str(config.monitor_html_path),
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "no_real_trade_flag": True,
+    }
+    _write_json(config.first_fdv_queue_triage_smoke_summary_json_path, summary)
+    config.first_fdv_queue_triage_smoke_summary_md_path.write_text(_first_fdv_queue_triage_smoke_summary_md(summary), encoding="utf-8")
+    config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
+    config.status_md_path.write_text(_status_md(summary), encoding="utf-8")
+    return summary
+
+
 def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
     if not config.runtime_state_path.exists():
         initialize_rule_runtime(config)
@@ -619,6 +737,11 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
     runtime_eval = [_num(row.get("runtime_eval_ms")) for row in latency]
     runtime_stats = state.get("runtime_stats") or {}
     variants = _variant_status(config, state)
+    first_fdv_queue = _first_fdv_queue_summary(config, state, latency)
+    warnings = list(state.get("warnings") or [])
+    for warning in first_fdv_queue.get("warnings") or []:
+        if warning not in warnings:
+            warnings.append(warning)
     status = {
         "runtime_label": RUNTIME_LABEL,
         "runtime_mode": runtime_stats.get("last_runtime_mode") or "idle",
@@ -635,6 +758,7 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "open_paper_positions": len(state.get("open_positions") or {}),
         "paper_sells": len(sells),
         "variants": variants,
+        "first_fdv_queue": first_fdv_queue,
         "confirmed_20k_variant_candidates": len({row.get("mint") for row in _read_jsonl(config.paper_rule_variant_decisions_path) if row.get("variant_id") == VARIANT_A_ID}),
         "rejected_spike_candidates": sum(1 for row in candidates.values() if row.get("state") == "rejected_spike"),
         "rejected_same_timestamp_jumps": sum(1 for row in candidates.values() if row.get("state") == "rejected_same_timestamp_jump"),
@@ -656,7 +780,7 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "paper_rule_variant_decisions_path": str(config.paper_rule_variant_decisions_path),
         "paper_rule_variant_exits_path": str(config.paper_rule_variant_exits_path),
         "latency_events_path": str(config.latency_events_path),
-        "warnings": state.get("warnings") or [],
+        "warnings": warnings,
     }
     _write_monitor(config, state)
     return status
@@ -771,6 +895,59 @@ def archive_stale_candidates(config: RuleRuntimeConfig, *, now: float | None = N
     return {"archived_no_activity": archived}
 
 
+def archive_runtime_queue_candidates(
+    config: RuleRuntimeConfig,
+    *,
+    now: float | None = None,
+    first_path_fast_attempt_window_seconds: float = FIRST_PATH_FAST_ATTEMPT_WINDOW_SECONDS,
+    light_watch_timeout_seconds: float = LIGHT_WATCH_TIMEOUT_SECONDS,
+    no_activity_archive_seconds: float = NO_ACTIVITY_ARCHIVE_SECONDS,
+    no_fdv_path_archive_seconds: float = NO_FDV_PATH_ARCHIVE_SECONDS,
+) -> dict[str, Any]:
+    state = _load_state(config)
+    now = float(now if now is not None else time.time())
+    stats = _scheduler_stats(state)
+    result = {
+        "downgrade_count": 0,
+        "archived_no_activity": 0,
+        "archived_no_fdv_path_timeout": 0,
+    }
+    for candidate in (state.get("candidates") or {}).values():
+        state_name = candidate.get("state")
+        if state_name in ARCHIVE_STATES or state_name in {"paper_position_open", "paper_position_closed", "confirmed_10k_watch", "confirmed_20k_entry_candidate"}:
+            continue
+        first_seen = _num(candidate.get("first_seen_at")) or now
+        last_path = _num(candidate.get("last_path_time"))
+        last_activity = _num(candidate.get("last_activity_time"))
+        if not candidate.get("path_rows") and now - first_seen >= no_fdv_path_archive_seconds:
+            candidate["state"] = "archived_no_fdv_path_timeout"
+            candidate["tier"] = -1
+            candidate["archive_reason"] = "no_fdv_path_timeout"
+            stats["archived_no_fdv_path_timeout"] = int(stats.get("archived_no_fdv_path_timeout") or 0) + 1
+            result["archived_no_fdv_path_timeout"] += 1
+            continue
+        if state_name == "fdv_path_seen" and now - first_seen >= first_path_fast_attempt_window_seconds and last_activity is None:
+            candidate["state"] = "light_watch"
+            candidate["tier"] = 0
+            candidate["downgraded_at"] = now
+            candidate["downgrade_reason"] = "no_activity_after_fast_attempt_window"
+            stats["downgrade_count"] = int(stats.get("downgrade_count") or 0) + 1
+            result["downgrade_count"] += 1
+            state_name = "light_watch"
+        inactive_since = last_activity or last_path or first_seen
+        if state_name in {"light_watch", "fdv_path_seen", "near_threshold_watch", "birth_seen"} and now - inactive_since >= no_activity_archive_seconds:
+            candidate["state"] = "archived_no_activity"
+            candidate["tier"] = -1
+            candidate["archive_reason"] = "no_activity"
+            stats["archived_no_activity"] = int(stats.get("archived_no_activity") or 0) + 1
+            result["archived_no_activity"] += 1
+    state["queue_sizes"] = _queue_sizes_from_state(state)
+    state["updated_at"] = _utc_now()
+    _write_json(config.runtime_state_path, state)
+    _write_monitor(config, state)
+    return result
+
+
 def normalize_live_path_row_for_rule_runtime(
     row: dict[str, Any],
     *,
@@ -867,6 +1044,57 @@ def _historical_rule_config_audit_md(audit: dict[str, Any]) -> str:
     ) + "\n"
 
 
+def _first_fdv_queue_triage_audit_md(audit: dict[str, Any]) -> str:
+    queue = audit.get("first_fdv_queue") or {}
+    return "\n".join(
+        [
+            "# First FDV Queue Triage Audit",
+            "",
+            f"- Updated: `{audit['updated_at']}`",
+            f"- Scheduler mode: `{audit['scheduler_mode']}`",
+            f"- Parallel workers added: `{audit['parallel_workers_added']}`",
+            f"- Queue entries created from: `{audit['queue_entries_created_from']}`",
+            f"- Metadata competes with hot path: `{audit['metadata_competes_with_hot_path']}`",
+            f"- Priority order: `{audit['priority_order']}`",
+            f"- Queue sizes: `{audit.get('queue_sizes')}`",
+            f"- Queue depth by tier: `{queue.get('queue_depth_by_tier')}`",
+            f"- Archive counts: no_activity `{queue.get('archived_no_activity')}`, no_fdv_path `{queue.get('archived_no_fdv_path_timeout')}`",
+            f"- Promotion counts: fdv_path `{queue.get('promoted_to_fdv_path')}`, near_threshold `{queue.get('promoted_to_near_threshold')}`, confirmed_10k `{queue.get('promoted_to_confirmed_10k')}`, paper_position `{queue.get('promoted_to_paper_position')}`",
+            f"- First path success rate: `{queue.get('first_path_success_rate')}`",
+            f"- First path latency p50/p90/p99: `{queue.get('first_path_latency_p50_p90_p99')}`",
+            "",
+            "Paper-only runtime triage audit. No private keys, swaps, routing, or live execution.",
+        ]
+    ) + "\n"
+
+
+def _first_fdv_queue_triage_smoke_summary_md(summary: dict[str, Any]) -> str:
+    queue = summary.get("first_fdv_queue") or {}
+    return "\n".join(
+        [
+            "# First FDV Queue Triage Smoke Summary",
+            "",
+            f"- Updated: `{summary['updated_at']}`",
+            f"- Runtime mode: `{summary['runtime_mode']}`",
+            f"- Scheduler mode: `{summary['scheduler_mode']}`",
+            f"- Parallel workers added: `{summary['parallel_workers_added']}`",
+            f"- Events processed: `{summary['events_processed']}`",
+            f"- Confirmed 10k watches: `{summary['confirmed_10k_watches']}`",
+            f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
+            f"- Paper buys/sells: `{summary['paper_buys']}` / `{summary['paper_sells']}`",
+            f"- Queue depth by tier: `{queue.get('queue_depth_by_tier')}`",
+            f"- Archived no activity: `{queue.get('archived_no_activity')}`",
+            f"- Archived no FDV path timeout: `{queue.get('archived_no_fdv_path_timeout')}`",
+            f"- Promotions: fdv_path `{queue.get('promoted_to_fdv_path')}`, near_threshold `{queue.get('promoted_to_near_threshold')}`, confirmed_10k `{queue.get('promoted_to_confirmed_10k')}`, paper_position `{queue.get('promoted_to_paper_position')}`",
+            f"- Latency p50/p90/p99: `{summary.get('latency_p50_p90_p99')}`",
+            f"- First path latency p50/p90/p99: `{queue.get('first_path_latency_p50_p90_p99')}`",
+            f"- Monitor path: `{summary.get('monitor_path')}`",
+            "",
+            "Paper-only. Live trading, private keys, transaction building, swaps, and routing remain disabled.",
+        ]
+    ) + "\n"
+
+
 def _initial_state(config: RuleRuntimeConfig) -> dict[str, Any]:
     wallet = _round_money(config.starting_wallet_usd)
     return {
@@ -889,6 +1117,7 @@ def _initial_state(config: RuleRuntimeConfig) -> dict[str, Any]:
             "file_adapter_events": 0,
             "bus_queue_depth": 0,
         },
+        "scheduler_stats": _default_scheduler_stats(),
         "warnings": ["fdv_efficiency_threshold_unfrozen"],
         "created_at": _utc_now(),
         "updated_at": _utc_now(),
@@ -921,6 +1150,26 @@ def _new_candidate(mint: str, *, first_seen_at: float | None = None) -> dict[str
         "paper_closed": False,
         "local_high_fdv": 0.0,
         "drawdowns": {},
+    }
+
+
+def _default_scheduler_stats() -> dict[str, Any]:
+    return {
+        "scheduler_mode": SCHEDULER_MODE,
+        "parallel_workers_added": False,
+        "downgrade_count": 0,
+        "reactivation_count": 0,
+        "archived_no_activity": 0,
+        "archived_no_fdv_path_timeout": 0,
+        "archived_parser_failure": 0,
+        "archived_duplicate": 0,
+        "archived_provenance_failure": 0,
+        "promoted_to_fdv_path": 0,
+        "promoted_to_near_threshold": 0,
+        "promoted_to_confirmed_10k": 0,
+        "promoted_to_paper_position": 0,
+        "http_429_count": 0,
+        "helius_rpc_request_count": None,
     }
 
 
@@ -1071,8 +1320,11 @@ def _update_state_from_milestones(candidate: dict[str, Any]) -> None:
         candidate["confirmed_crossed_20k"] = True
     elif candidate.get("confirmed_milestones", {}).get("confirmed_crossed_10k"):
         candidate["state"] = "confirmed_10k_watch"
-        candidate["tier"] = 2
+        candidate["tier"] = 3
         candidate["confirmed_crossed_10k"] = True
+    elif float(candidate.get("max_fdv_proxy") or 0.0) >= NEAR_THRESHOLD_FDV:
+        candidate["state"] = "near_threshold_watch"
+        candidate["tier"] = 2
     elif candidate.get("path_rows"):
         candidate["state"] = "fdv_path_seen"
         candidate["tier"] = 1
@@ -1586,15 +1838,54 @@ def _queue_sizes_from_state(state: dict[str, Any]) -> dict[str, int]:
     sizes = RuleRuntimePriorityScheduler().queue_sizes()
     for row in (state.get("candidates") or {}).values():
         state_name = row.get("state")
+        if state_name in ARCHIVE_STATES:
+            continue
         if state_name == "paper_position_open":
             sizes["paper_position_open"] += 1
         elif state_name == "confirmed_10k_watch":
             sizes["confirmed_10k_watch"] += 1
+        elif state_name == "near_threshold_watch":
+            sizes["near_threshold_watch"] += 1
         elif state_name == "fdv_path_seen":
             sizes["first_fdv_path"] += 1
         elif state_name in {"birth_seen", "light_watch"}:
-            sizes["light_watch"] += 1
+            if state_name == "birth_seen":
+                sizes["fresh_birth_first_path"] += 1
+            else:
+                sizes["light_watch"] += 1
     return sizes
+
+
+def _record_promotions(state: dict[str, Any], candidate: dict[str, Any], previous_state: Any, previous_tier: int) -> None:
+    stats = _scheduler_stats(state)
+    state_name = candidate.get("state")
+    tier = int(candidate.get("tier") or 0)
+    promotions = candidate.setdefault("promotions_recorded", [])
+    if candidate.get("path_rows") and "fdv_path_seen" not in promotions:
+        promotions.append("fdv_path_seen")
+        stats["promoted_to_fdv_path"] = int(stats.get("promoted_to_fdv_path") or 0) + 1
+    if tier >= 2 and "near_threshold_watch" not in promotions:
+        promotions.append("near_threshold_watch")
+        stats["promoted_to_near_threshold"] = int(stats.get("promoted_to_near_threshold") or 0) + 1
+    if state_name == "confirmed_10k_watch" and "confirmed_10k_watch" not in promotions:
+        promotions.append("confirmed_10k_watch")
+        stats["promoted_to_confirmed_10k"] = int(stats.get("promoted_to_confirmed_10k") or 0) + 1
+    if state_name == "paper_position_open" and "paper_position_open" not in promotions:
+        promotions.append("paper_position_open")
+        stats["promoted_to_paper_position"] = int(stats.get("promoted_to_paper_position") or 0) + 1
+    if previous_state in ARCHIVE_STATES and state_name not in ARCHIVE_STATES:
+        stats["reactivation_count"] = int(stats.get("reactivation_count") or 0) + 1
+
+
+def _event_has_activity(row: dict[str, Any]) -> bool:
+    return any(int(_num(row.get(key)) or 0) > 0 for key in ["event_count", "buy_count", "sell_count", "active_wallet_count"])
+
+
+def _scheduler_stats(state: dict[str, Any]) -> dict[str, Any]:
+    stats = state.setdefault("scheduler_stats", {})
+    for key, value in _default_scheduler_stats().items():
+        stats.setdefault(key, value)
+    return stats
 
 
 def _variant_status(
@@ -1621,6 +1912,72 @@ def _variant_status(
             "missing_fields": sum(len(row.get("missing_required_fields") or []) for row in variant_rows),
         }
     return summary
+
+
+def _first_fdv_queue_summary(config: RuleRuntimeConfig, state: dict[str, Any], latency_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    now = time.time()
+    candidates = state.get("candidates") or {}
+    stats = _scheduler_stats(state)
+    tier_names = {
+        0: "tier_0_light_watch",
+        1: "tier_1_fdv_path_seen",
+        2: "tier_2_near_threshold_watch",
+        3: "tier_3_confirmed_10k_watch",
+        4: "tier_4_paper_position_open",
+    }
+    depth_by_tier = {name: 0 for name in tier_names.values()}
+    ages_by_tier: dict[str, list[float]] = {name: [] for name in tier_names.values()}
+    active_with_path = 0
+    first_path_latencies: list[float | None] = []
+    for candidate in candidates.values():
+        state_name = candidate.get("state")
+        if state_name in ARCHIVE_STATES:
+            continue
+        tier = int(candidate.get("tier") or 0)
+        name = tier_names.get(tier, "tier_0_light_watch")
+        depth_by_tier[name] += 1
+        first_seen = _num(candidate.get("first_seen_at")) or now
+        ages_by_tier[name].append(max(0.0, now - first_seen))
+        if candidate.get("path_rows"):
+            active_with_path += 1
+            first_path = _num(candidate.get("first_fdv_path_time"))
+            if first_path is not None:
+                first_path_latencies.append(max(0.0, (first_path - first_seen) * 1000.0))
+    total_active = sum(depth_by_tier.values())
+    oldest_by_tier = {tier: (_round_seconds(max(values)) if values else None) for tier, values in ages_by_tier.items()}
+    avg_by_tier = {tier: (_round_seconds(sum(values) / len(values)) if values else None) for tier, values in ages_by_tier.items()}
+    warnings: list[str] = []
+    if depth_by_tier["tier_1_fdv_path_seen"] >= 50:
+        warnings.append("first_fdv_queue_growth_warning")
+    if any((value or 0) > NO_FDV_PATH_ARCHIVE_SECONDS for value in oldest_by_tier.values()):
+        warnings.append("oldest_first_fdv_job_above_timeout")
+    if depth_by_tier["tier_2_near_threshold_watch"] > 0 and depth_by_tier["tier_1_fdv_path_seen"] > 100:
+        warnings.append("near_threshold_starvation_warning")
+    if depth_by_tier["tier_4_paper_position_open"] > 0 and depth_by_tier["tier_1_fdv_path_seen"] > 100:
+        warnings.append("paper_position_starvation_warning")
+    return {
+        "scheduler_mode": SCHEDULER_MODE,
+        "queue_depth_total": total_active,
+        "queue_depth_by_tier": depth_by_tier,
+        "oldest_queued_age_seconds_by_tier": oldest_by_tier,
+        "average_queued_age_seconds_by_tier": avg_by_tier,
+        "archived_no_activity": int(stats.get("archived_no_activity") or 0),
+        "archived_no_fdv_path_timeout": int(stats.get("archived_no_fdv_path_timeout") or 0),
+        "archived_parser_failure": int(stats.get("archived_parser_failure") or 0),
+        "archived_duplicate": int(stats.get("archived_duplicate") or 0),
+        "archived_provenance_failure": int(stats.get("archived_provenance_failure") or 0),
+        "promoted_to_fdv_path": int(stats.get("promoted_to_fdv_path") or 0),
+        "promoted_to_near_threshold": int(stats.get("promoted_to_near_threshold") or 0),
+        "promoted_to_confirmed_10k": int(stats.get("promoted_to_confirmed_10k") or 0),
+        "promoted_to_paper_position": int(stats.get("promoted_to_paper_position") or 0),
+        "first_path_success_rate": _round_num(active_with_path / max(1, len(candidates))) if candidates else 0.0,
+        "first_path_latency_p50_p90_p99": _percentiles(first_path_latencies),
+        "downgrade_count": int(stats.get("downgrade_count") or 0),
+        "reactivation_count": int(stats.get("reactivation_count") or 0),
+        "helius_rpc_request_count": stats.get("helius_rpc_request_count"),
+        "http_429_count": int(stats.get("http_429_count") or 0),
+        "warnings": warnings,
+    }
 
 
 def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
@@ -1650,6 +2007,7 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
         "paper_buys": len([row for row in trades if row.get("side") == "paper_buy"]),
         "paper_sells": len([row for row in trades if row.get("side") == "paper_sell"]),
         "variants": _variant_status(config, state, variant_decisions=variant_decisions, variant_exits=variant_exits),
+        "first_fdv_queue": _first_fdv_queue_summary(config, state, latency),
         "variant_decisions": variant_decisions,
         "variant_exits": variant_exits,
         "live_bus_events": int((state.get("runtime_stats") or {}).get("live_bus_events") or 0),
@@ -1690,6 +2048,20 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         lines.append(
             f"- {variant_id}: buys {row.get('paper_buys')}, sells {row.get('paper_sells')}, open {row.get('open_positions')}, rejected {row.get('rejected')}, not evaluable {row.get('not_evaluable')}, missing fields {row.get('missing_fields')}"
         )
+    queue = payload.get("first_fdv_queue") or {}
+    lines.extend([
+        "",
+        "## First FDV Queue",
+        f"- Scheduler mode: {queue.get('scheduler_mode')}",
+        f"- Queue depth total: {queue.get('queue_depth_total')}",
+        f"- Queue depth by tier: {queue.get('queue_depth_by_tier')}",
+        f"- Oldest queued age by tier: {queue.get('oldest_queued_age_seconds_by_tier')}",
+        f"- Archived no activity: {queue.get('archived_no_activity')}",
+        f"- Archived no FDV path timeout: {queue.get('archived_no_fdv_path_timeout')}",
+        f"- Promotions: fdv_path={queue.get('promoted_to_fdv_path')}, near_threshold={queue.get('promoted_to_near_threshold')}, confirmed_10k={queue.get('promoted_to_confirmed_10k')}, paper_position={queue.get('promoted_to_paper_position')}",
+        f"- First path success rate: {queue.get('first_path_success_rate')}",
+        f"- First path latency p50/p90/p99: {queue.get('first_path_latency_p50_p90_p99')}",
+    ])
     lines.extend([
         "",
         "Paper-only accounting. Live trading is disabled.",
@@ -1722,6 +2094,11 @@ def _monitor_html(payload: dict[str, Any]) -> str:
         f"<p>Rejected <b>{row.get('rejected')}</b> | Not evaluable <b>{row.get('not_evaluable')}</b> | Missing fields <b>{row.get('missing_fields')}</b></p>"
         "</div>"
         for variant_id, row in (payload.get("variants") or {}).items()
+    )
+    queue = payload.get("first_fdv_queue") or {}
+    queue_cards = "\n".join(
+        f"<div class=\"stat\">{html.escape(str(tier))}<br><b>{html.escape(str(depth))}</b></div>"
+        for tier, depth in (queue.get("queue_depth_by_tier") or {}).items()
     )
     table = "\n".join(
         "<tr>"
@@ -1764,6 +2141,13 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 <p>Last rejection reason: {html.escape(str(payload['last_rejection_reason'] or ''))}</p>
 <h2>Rule Runtime v1 Variants</h2>
 <div class=\"variants\">{variant_cards}</div>
+<h2>First FDV Queue</h2>
+<div class=\"stats\">{queue_cards}</div>
+<p>Scheduler mode: {html.escape(str(queue.get('scheduler_mode')))}; total depth: {html.escape(str(queue.get('queue_depth_total')))}</p>
+<p>Oldest age by tier: {html.escape(str(queue.get('oldest_queued_age_seconds_by_tier')))}</p>
+<p>Archived no activity: {html.escape(str(queue.get('archived_no_activity')))}; archived no FDV path timeout: {html.escape(str(queue.get('archived_no_fdv_path_timeout')))}</p>
+<p>Promotions: FDV path {html.escape(str(queue.get('promoted_to_fdv_path')))}, near-threshold {html.escape(str(queue.get('promoted_to_near_threshold')))}, confirmed 10k {html.escape(str(queue.get('promoted_to_confirmed_10k')))}, paper position {html.escape(str(queue.get('promoted_to_paper_position')))}</p>
+<p>First path success rate: {html.escape(str(queue.get('first_path_success_rate')))}; first path latency p50/p90/p99: {html.escape(str(queue.get('first_path_latency_p50_p90_p99')))}</p>
 <h2>Trades and Rejections</h2>
 <table><thead><tr><th>CA</th><th>Status</th><th>Buy FDV</th><th>Current FDV</th><th>Sell FDV</th><th>Local High</th><th>Drawdown</th><th>10k Confirmed</th><th>20k Confirmed</th><th>Why</th></tr></thead><tbody>{table}</tbody></table>
 <p><small>Updated {payload['updated_at']}. Auto-refreshes every 10 seconds.</small></p>
@@ -1877,6 +2261,7 @@ def _smoke_summary(
         "paper_buys": int(status.get("paper_buys") or 0),
         "paper_sells": int(status.get("paper_sells") or 0),
         "variants": status.get("variants") or {},
+        "first_fdv_queue": status.get("first_fdv_queue") or {},
         "variant_a_paper_buys": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_buys") or 0),
         "variant_a_paper_sells": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_sells") or 0),
         "variant_b_paper_buys": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("paper_buys") or 0),
@@ -1944,6 +2329,7 @@ def _live_bus_smoke_summary(
         "paper_buys": int(status.get("paper_buys") or 0),
         "paper_sells": int(status.get("paper_sells") or 0),
         "variants": status.get("variants") or {},
+        "first_fdv_queue": status.get("first_fdv_queue") or {},
         "variant_a_paper_buys": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_buys") or 0),
         "variant_a_paper_sells": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_sells") or 0),
         "variant_b_paper_buys": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("paper_buys") or 0),
@@ -2027,12 +2413,32 @@ def _status_md(summary: dict[str, Any]) -> str:
         f"- Paper sells: `{summary['paper_sells']}`",
         f"- Threshold status: `{summary['threshold_status']}`",
         f"- Monitor: `{summary['monitor_path']}`",
-        "",
-        "## Rule Runtime v1 Variants",
     ]
-    for variant_id, row in (summary.get("variants") or {}).items():
-        lines.append(
-            f"- `{variant_id}`: buys `{row.get('paper_buys')}`, sells `{row.get('paper_sells')}`, open `{row.get('open_positions')}`, rejected `{row.get('rejected')}`, not_evaluable `{row.get('not_evaluable')}`, missing_fields `{row.get('missing_fields')}`"
+    variants = summary.get("variants") or {}
+    if variants:
+        lines.extend(["", "## Rule Runtime v1 Variants"])
+        for variant_id, row in variants.items():
+            lines.append(
+                f"- `{variant_id}`: buys `{row.get('paper_buys')}`, sells `{row.get('paper_sells')}`, open `{row.get('open_positions')}`, rejected `{row.get('rejected')}`, not_evaluable `{row.get('not_evaluable')}`, missing_fields `{row.get('missing_fields')}`"
+            )
+    queue = summary.get("first_fdv_queue") or {}
+    if queue:
+        lines.extend(
+            [
+                "",
+                "## First FDV Queue",
+                f"- Scheduler mode: `{queue.get('scheduler_mode')}`",
+                f"- Queue depth total: `{queue.get('queue_depth_total')}`",
+                f"- Queue depth by tier: `{queue.get('queue_depth_by_tier')}`",
+                f"- Archived no activity: `{queue.get('archived_no_activity')}`",
+                f"- Archived no FDV path timeout: `{queue.get('archived_no_fdv_path_timeout')}`",
+                f"- Promoted to FDV path: `{queue.get('promoted_to_fdv_path')}`",
+                f"- Promoted to near-threshold: `{queue.get('promoted_to_near_threshold')}`",
+                f"- Promoted to confirmed 10k: `{queue.get('promoted_to_confirmed_10k')}`",
+                f"- Promoted to paper position: `{queue.get('promoted_to_paper_position')}`",
+                f"- First path success rate: `{queue.get('first_path_success_rate')}`",
+                f"- First path latency p50/p90/p99: `{queue.get('first_path_latency_p50_p90_p99')}`",
+            ]
         )
     return "\n".join(lines) + "\n"
 
@@ -2168,6 +2574,7 @@ def _load_state(config: RuleRuntimeConfig) -> dict[str, Any]:
     state.setdefault("closed_positions", {})
     state.setdefault("candidates", {})
     state.setdefault("runtime_stats", {})
+    _scheduler_stats(state)
     return state
 
 
