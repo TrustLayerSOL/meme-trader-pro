@@ -107,6 +107,7 @@ TIER_1_RISING_DELTA_PCT = 0.20
 TIER_1_FLAT_DELTA_PCT = 0.05
 TIER_1_PRESSURE_THRESHOLD = 20
 ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
+TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS: tuple[float, ...] = ()
 SCHEDULER_MODE = "priority_single_worker"
 SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS = {SPL_TOKEN_PROGRAM_ID}
@@ -1490,7 +1491,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 event,
                 probe=probe,
                 event_callback=on_hot_event,
-                follow_up_probe_delays=ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS,
+                follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS,
             )
         except TypeError as exc:
             if "follow_up_probe_delays" not in str(exc):
@@ -1505,7 +1506,28 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor:
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
-            probe_futures.append(executor.submit(run_probe, dict(event)))
+            try:
+                probe_futures.append(executor.submit(run_probe, dict(event)))
+            except Exception as exc:
+                _append_jsonl(
+                    config.bonding_curve_account_probe_events_path,
+                    {
+                        "event_id": f"probe_schedule_failed_{event.get('event_id') or event.get('signature')}",
+                        "probe_phase": "initial",
+                        "mint": event.get("mint"),
+                        "bonding_curve": event.get("bonding_curve"),
+                        "source_create_signature": event.get("signature"),
+                        "create_slot": event.get("slot"),
+                        "create_observed_at": event.get("observed_at"),
+                        "probe_scheduled_during_stream": True,
+                        "probe_started_at": None,
+                        "probe_status": "failed",
+                        "probe_error": f"probe_schedule_failed:{type(exc).__name__}:{exc}",
+                        "helius_rpc_request_count": 0,
+                        "http_429_count": 0,
+                    },
+                )
+                raise
 
         create_events = source.fetch_create_events(
             max_events=target_births,
@@ -3849,6 +3871,10 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
     probe_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
     audit = _read_json(config.helius_transaction_subscribe_capability_audit_json_path)
     recommended = audit.get("recommended_endpoint") if isinstance(audit.get("recommended_endpoint"), dict) else {}
+    decoded_create_rows = [row for row in create_rows if row.get("parser_status") == "decoded"]
+    decoded_create_mints = {row.get("mint") for row in decoded_create_rows if row.get("mint")}
+    probed_mints = {row.get("mint") for row in probe_rows if row.get("mint")}
+    missing_probe_mints = sorted(str(mint) for mint in decoded_create_mints - probed_mints)
     probe_failures = [row for row in probe_rows if row.get("probe_status") != "success"]
     failure_reasons: dict[str, int] = {}
     for row in probe_failures:
@@ -3859,13 +3885,20 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         warnings.append("transactionSubscribe_unsupported_fallback_to_logs")
     if probe_failures:
         warnings.append("bonding_curve_account_probe_failures_present")
+    if missing_probe_mints:
+        warnings.append("decoded_creates_missing_bonding_curve_probe")
     account_not_found_retries = int(sum(_num(row.get("account_not_found_retry_count")) or 0 for row in probe_rows))
     account_not_found_recovered = sum(1 for row in probe_rows if row.get("account_not_found_recovered_by_retry") is True)
     account_not_found_final_failures = sum(1 for row in probe_rows if row.get("account_not_found_final_failure") is True)
     return {
         "transactionSubscribe_supported": bool(recommended.get("transactionSubscribe_supported")),
         "endpoint_used": recommended.get("name"),
-        "create_events_decoded": sum(1 for row in create_rows if row.get("parser_status") == "decoded"),
+        "create_events_decoded": len(decoded_create_rows),
+        "decoded_create_unique_mints": len(decoded_create_mints),
+        "decoded_create_mints_with_probe": len(decoded_create_mints & probed_mints),
+        "decoded_create_mints_without_probe": len(missing_probe_mints),
+        "decoded_create_probe_coverage_rate": _round_num(len(decoded_create_mints & probed_mints) / max(1, len(decoded_create_mints))),
+        "decoded_create_mints_without_probe_sample": missing_probe_mints[:25],
         "curve_pda_verified": sum(1 for row in create_rows if row.get("bonding_curve_verified") is True),
         "curve_account_probes_started": len(probe_rows),
         "probes_started_during_stream": sum(1 for row in probe_rows if row.get("probe_scheduled_during_stream") is True),
@@ -4129,6 +4162,8 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- transactionSubscribe supported: {txsub.get('transactionSubscribe_supported')}",
             f"- endpoint used: {txsub.get('endpoint_used')}",
             f"- create events decoded: {txsub.get('create_events_decoded')}",
+            f"- decoded create probe coverage: {txsub.get('decoded_create_mints_with_probe')} / {txsub.get('decoded_create_unique_mints')} ({txsub.get('decoded_create_probe_coverage_rate')})",
+            f"- decoded creates without probe: {txsub.get('decoded_create_mints_without_probe')} sample {txsub.get('decoded_create_mints_without_probe_sample')}",
             f"- curve PDA verified: {txsub.get('curve_pda_verified')}",
             f"- curve account probes started: {txsub.get('curve_account_probes_started')}",
             f"- probes started during stream: {txsub.get('probes_started_during_stream')}",
@@ -4266,6 +4301,8 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 <h2>Helius transactionSubscribe First-FDV</h2>
 <p>transactionSubscribe supported: {html.escape(str(txsub.get('transactionSubscribe_supported')))}; endpoint used: {html.escape(str(txsub.get('endpoint_used')))}</p>
 <p>Create events decoded: {html.escape(str(txsub.get('create_events_decoded')))}; curve PDA verified: {html.escape(str(txsub.get('curve_pda_verified')))}</p>
+	<p>Decoded create probe coverage: {html.escape(str(txsub.get('decoded_create_mints_with_probe')))} / {html.escape(str(txsub.get('decoded_create_unique_mints')))} ({html.escape(str(txsub.get('decoded_create_probe_coverage_rate')))}); missing probes: {html.escape(str(txsub.get('decoded_create_mints_without_probe')))}</p>
+	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
 	<p>First-attempt successes: {html.escape(str(txsub.get('first_attempt_successes')))}; account-not-found retries: {html.escape(str(txsub.get('account_not_found_retries')))}</p>
 	<p>Account-not-found recovered by retry: {html.escape(str(txsub.get('account_not_found_recovered_by_retry')))}; final failures: {html.escape(str(txsub.get('account_not_found_final_failures')))}; recovery rate: {html.escape(str(txsub.get('account_not_found_retry_recovery_rate')))}</p>
@@ -4514,6 +4551,11 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "transactionSubscribe_used": bool(transaction_subscribe_used),
         "endpoint_used": txsub.get("endpoint_used"),
         "decoded_create_events": int(create_events_decoded),
+        "decoded_create_unique_mints": int(txsub.get("decoded_create_unique_mints") or 0),
+        "decoded_create_mints_with_probe": int(txsub.get("decoded_create_mints_with_probe") or 0),
+        "decoded_create_mints_without_probe": int(txsub.get("decoded_create_mints_without_probe") or 0),
+        "decoded_create_probe_coverage_rate": txsub.get("decoded_create_probe_coverage_rate"),
+        "decoded_create_mints_without_probe_sample": txsub.get("decoded_create_mints_without_probe_sample") or [],
         "events_processed": int(status.get("events_processed") or 0),
         "accepted_births": int(create_events_decoded) if transaction_subscribe_used else int((fallback_summary.get("collector_result") or {}).get("official_accepted_births") or 0),
         "bonding_curve_probes_started": int(txsub.get("curve_account_probes_started") or 0),
@@ -4584,6 +4626,8 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary_md(summary: dict[s
             f"- transactionSubscribe used: `{summary['transactionSubscribe_used']}`",
             f"- Endpoint used: `{summary.get('endpoint_used')}`",
             f"- Decoded create events: `{summary['decoded_create_events']}`",
+            f"- Decoded create probe coverage: `{summary['decoded_create_mints_with_probe']}` / `{summary['decoded_create_unique_mints']}` (`{summary['decoded_create_probe_coverage_rate']}`)",
+            f"- Decoded creates without probe: `{summary['decoded_create_mints_without_probe']}` sample `{summary['decoded_create_mints_without_probe_sample']}`",
             f"- Accepted births: `{summary['accepted_births']}`",
             f"- Bonding curve probes started/during-stream/succeeded/failed: `{summary['bonding_curve_probes_started']}` / `{summary['probes_started_during_stream']}` / `{summary['bonding_curve_probes_succeeded']}` / `{summary['bonding_curve_probes_failed']}`",
             f"- First-attempt successes: `{summary['first_attempt_successes']}`",

@@ -1636,7 +1636,16 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
             stream_active["value"] = False
             return [create_event]
 
-    def fake_probe_runner(config: RuleRuntimeConfig, create: dict, *, probe: object, event_callback=None, now_fn=None) -> dict:
+    def fake_probe_runner(
+        config: RuleRuntimeConfig,
+        create: dict,
+        *,
+        probe: object,
+        event_callback=None,
+        now_fn=None,
+        follow_up_probe_delays=None,
+    ) -> dict:
+        assert follow_up_probe_delays == ()
         probe_started_during_stream.append(stream_active["value"])
         row = {
             "event_id": "probe-a",
@@ -1697,10 +1706,55 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
 
     assert probe_started_during_stream == [True]
     assert summary["probes_started_during_stream"] == 1
+    assert summary["decoded_create_mints_with_probe"] == 1
+    assert summary["decoded_create_unique_mints"] == 1
+    assert summary["decoded_create_mints_without_probe"] == 0
+    assert summary["decoded_create_probe_coverage_rate"] == 1.0
     assert summary["account_not_found_retries"] == 1
     assert summary["account_not_found_recovered_by_retry"] == 1
     assert summary["observed_to_probe_started_p50_p90_p99"] == {"p50": 10.0, "p90": 10.0, "p99": 10.0}
     assert summary["observed_to_first_fdv_p50_p90_p99"] == {"p50": 20.0, "p90": 20.0, "p99": 20.0}
+
+
+def test_transaction_subscribe_status_reports_decoded_creates_without_probe(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+    config.helius_transaction_subscribe_capability_audit_json_path.write_text(
+        json.dumps(
+            {
+                "recommended_endpoint": {
+                    "name": "helius_beta",
+                    "transactionSubscribe_supported": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.pumpfun_create_stream_events_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {"mint": "mint-covered", "parser_status": "decoded", "bonding_curve_verified": True},
+                {"mint": "mint-missing", "parser_status": "decoded", "bonding_curve_verified": True},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config.bonding_curve_account_probe_events_path.write_text(
+        json.dumps({"mint": "mint-covered", "probe_status": "success", "probe_scheduled_during_stream": True}) + "\n",
+        encoding="utf-8",
+    )
+
+    txsub = rule_runtime_status(config)["helius_transaction_subscribe_first_fdv"]
+
+    assert txsub["decoded_create_unique_mints"] == 2
+    assert txsub["decoded_create_mints_with_probe"] == 1
+    assert txsub["decoded_create_mints_without_probe"] == 1
+    assert txsub["decoded_create_probe_coverage_rate"] == 0.5
+    assert txsub["decoded_create_mints_without_probe_sample"] == ["mint-missing"]
+    assert "decoded_creates_missing_bonding_curve_probe" in txsub["warnings"]
 
 
 def test_transaction_subscribe_smoke_runs_final_archive_sweep_before_summary(tmp_path: Path, monkeypatch) -> None:

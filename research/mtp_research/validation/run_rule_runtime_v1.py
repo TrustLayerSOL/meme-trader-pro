@@ -265,6 +265,12 @@ def main() -> int:
         print(f"transactionSubscribe_used={result['transactionSubscribe_used']}")
         print(f"endpoint_used={result.get('endpoint_used')}")
         print(f"decoded_create_events={result['decoded_create_events']}")
+        print(
+            "decoded_create_probe_coverage="
+            f"{result.get('decoded_create_mints_with_probe')}/{result.get('decoded_create_unique_mints')} "
+            f"rate={result.get('decoded_create_probe_coverage_rate')} "
+            f"missing={result.get('decoded_create_mints_without_probe')}"
+        )
         print(f"accepted_births={result['accepted_births']}")
         print(f"bonding_curve_probes={result['bonding_curve_probes_started']}/{result['bonding_curve_probes_succeeded']}/{result['bonding_curve_probes_failed']}")
         print(f"probes_started_during_stream={result['probes_started_during_stream']}")
