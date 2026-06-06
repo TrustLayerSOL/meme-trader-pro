@@ -86,6 +86,7 @@ def write_campaign_preflight(
     initialize_rule_runtime(config, reset=False)
     capability = capability_audit_fn(config)
     recommended = capability.get("recommended_endpoint") if isinstance(capability.get("recommended_endpoint"), dict) else {}
+    status = rule_runtime_status(config)
     checks = {
         "orico_mounted": config.root.exists(),
         "helius_api_key_available": bool(resolve_helius_api_key(load_project_dotenv=True)),
@@ -102,7 +103,7 @@ def write_campaign_preflight(
         "no_conflicting_campaign_process_running": not _transaction_subscribe_scan_running(),
         "no_stale_reporting_automation_running": True,
         "caffeinate_available": shutil.which("caffeinate") is not None,
-        "rule_config_loaded": bool((rule_runtime_status(config).get("historical_rule_config") or {}).get("loaded")),
+        "rule_config_loaded": status.get("frozen_buy_rule") == FROZEN_BUY_RULE_ID and status.get("frozen_exit_rule") == FROZEN_EXIT_RULE_ID,
         "no_private_key_work": True,
         "paper_only": True,
         "metadata_hot_path_blocked": True,
