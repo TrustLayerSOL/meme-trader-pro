@@ -1328,6 +1328,92 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
     assert summary["observed_to_first_fdv_p50_p90_p99"] == {"p50": 20.0, "p90": 20.0, "p99": 20.0}
 
 
+def test_transaction_subscribe_smoke_runs_final_archive_sweep_before_summary(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-stale_123_0",
+        "signature": "sig-stale",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "stale-low",
+        "bonding_curve": "curve-stale",
+        "parser_status": "decoded",
+    }
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+            assert on_create_event is not None
+            on_create_event(dict(create_event))
+            return [create_event]
+
+    def fake_probe_runner(config: RuleRuntimeConfig, create: dict, *, probe: object, event_callback=None, now_fn=None, follow_up_probe_delays=None) -> dict:
+        assert event_callback is not None
+        for index, timestamp in enumerate([100.0, 101.0, 102.0, 103.0]):
+            event_callback(
+                {
+                    "event_id": f"fdv-stale-{index}",
+                    "mint": create["mint"],
+                    "timestamp": timestamp,
+                    "observed_at": create["observed_at"],
+                    "event_observed_at": create["observed_at"],
+                    "fdv_proxy": 2_257.0,
+                    "source_event_type": "fdv_path_update",
+                    "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                    "fdv_source": "bonding_curve_account_state",
+                    "fdv_source_confidence": "high",
+                    "observed_to_first_fdv_account_state_ms": 20.0,
+                }
+            )
+        return {
+            "event_id": "probe-stale",
+            "mint": create["mint"],
+            "probe_status": "success",
+            "probe_scheduled_during_stream": True,
+            "helius_rpc_request_count": 1,
+            "http_429_count": 0,
+        }
+
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=2.0,
+    )
+
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    candidate = state["candidates"]["stale-low"]
+    assert candidate["state"] == "archived_no_activity"
+    assert candidate["archive_reason"] == "tier_1_low_fdv_flat_stale"
+    assert summary["first_fdv_queue"]["tier_1_depth"] == 0
+    assert summary["first_fdv_queue"]["tier_1_retention_reasons_oldest_first"] == []
+
+
 def test_normalize_live_path_row_rejects_missing_path_evidence() -> None:
     normalized = normalize_live_path_row_for_rule_runtime(
         {

@@ -1128,6 +1128,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 probe_errors.append({"error": f"{type(exc).__name__}:{exc}"})
     with runtime_lock:
         final = engine.consume_event_bus(bus, max_events=10_000)
+        archive_runtime_queue_candidates(config, now=time.time())
     status = rule_runtime_status(config)
     probe_stats = _bonding_curve_probe_stats_from_rows(config)
     if probe_errors:
