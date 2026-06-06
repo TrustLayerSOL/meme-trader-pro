@@ -67,8 +67,8 @@ def test_rule_runtime_cli_init_status_and_once(tmp_path: Path) -> None:
         text=True,
     )
     assert "## Rule Runtime v1 Status" in status.stdout
-    assert "Frozen buy rule: BROAD_10K_WATCH_20K_BUY" in status.stdout
-    assert "Frozen exit rule: EXIT_NO_RECLAIM" in status.stdout
+    assert "Frozen buy rule: RULE_D_20K_EFFICIENCY_CREATOR_HOLDER_RISK_FILTER" in status.stdout
+    assert "Frozen exit rule: EXIT_NO_RECLAIM_AFTER_30PCT_10M" in status.stdout
     assert "Live trading enabled: false" in status.stdout
     assert "Paper trading enabled: true" in status.stdout
     assert "Confirmed 10k watches:" in status.stdout

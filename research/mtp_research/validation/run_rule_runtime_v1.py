@@ -86,6 +86,15 @@ def main() -> int:
         print(f"confirmed_20k_candidates={result['confirmed_20k_candidates']}")
         print(f"paper_buys={result['paper_buys']}")
         print(f"paper_sells={result['paper_sells']}")
+        print(f"variant_a_buys_sells={result.get('variant_a_paper_buys')}/{result.get('variant_a_paper_sells')}")
+        print(
+            "variant_b_buys_sells_not_evaluable="
+            f"{result.get('variant_b_paper_buys')}/{result.get('variant_b_paper_sells')}/{result.get('variant_b_not_evaluable')}"
+        )
+        print(
+            "variant_c_buys_sells_not_evaluable="
+            f"{result.get('variant_c_paper_buys')}/{result.get('variant_c_paper_sells')}/{result.get('variant_c_not_evaluable')}"
+        )
         print(f"threshold_status={result['threshold_status']}")
         print(f"monitor_path={result['monitor_path']}")
         return 0
@@ -118,6 +127,15 @@ def main() -> int:
         print(f"confirmed_20k_candidates={result['confirmed_20k_candidates']}")
         print(f"paper_buys={result['paper_buys']}")
         print(f"paper_sells={result['paper_sells']}")
+        print(f"variant_a_buys_sells={result.get('variant_a_paper_buys')}/{result.get('variant_a_paper_sells')}")
+        print(
+            "variant_b_buys_sells_not_evaluable="
+            f"{result.get('variant_b_paper_buys')}/{result.get('variant_b_paper_sells')}/{result.get('variant_b_not_evaluable')}"
+        )
+        print(
+            "variant_c_buys_sells_not_evaluable="
+            f"{result.get('variant_c_paper_buys')}/{result.get('variant_c_paper_sells')}/{result.get('variant_c_not_evaluable')}"
+        )
         print(f"event_to_rule_latency={result['event_to_rule_latency_p50_p90_p99']}")
         print(f"bus_to_runtime_latency={result['bus_to_runtime_latency_p50_p90_p99']}")
         print(f"runtime_eval_latency={result['runtime_eval_latency_p50_p90_p99']}")
@@ -142,6 +160,13 @@ def print_status(status: dict) -> None:
     print(f"Paper buys: {status['paper_buys']}")
     print(f"Open paper positions: {status['open_paper_positions']}")
     print(f"Paper sells: {status['paper_sells']}")
+    print("## Rule Runtime v1 Variants")
+    for variant_id, row in (status.get("variants") or {}).items():
+        print(
+            f"{variant_id}: buys={row.get('paper_buys')} sells={row.get('paper_sells')} "
+            f"open={row.get('open_positions')} rejected={row.get('rejected')} "
+            f"not_evaluable={row.get('not_evaluable')} missing_fields={row.get('missing_fields')}"
+        )
     print(f"Rejected spike candidates: {status['rejected_spike_candidates']}")
     print(f"Rejected same-timestamp jumps: {status['rejected_same_timestamp_jumps']}")
     print(f"Rejected FDV anomalies: {status['rejected_fdv_anomalies']}")

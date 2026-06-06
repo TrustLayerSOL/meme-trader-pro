@@ -22,8 +22,38 @@ from research.mtp_research.validation.rule_runtime_event_bus import RuleRuntimeE
 
 
 RUNTIME_LABEL = "rule_runtime_v1"
-FROZEN_BUY_RULE_ID = "BROAD_10K_WATCH_20K_BUY"
-FROZEN_EXIT_RULE_ID = "EXIT_NO_RECLAIM"
+FROZEN_BUY_RULE_ID = "RULE_D_20K_EFFICIENCY_CREATOR_HOLDER_RISK_FILTER"
+FROZEN_EXIT_RULE_ID = "EXIT_NO_RECLAIM_AFTER_30PCT_10M"
+VARIANT_A_ID = "FDV_BASELINE_20K"
+VARIANT_B_ID = "FDV_CREATOR_HOLDER_AVAILABLE_FILTER"
+VARIANT_C_ID = "FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"
+RULE_VARIANTS = [VARIANT_A_ID, VARIANT_B_ID, VARIANT_C_ID]
+AVAILABLE_RISK_FIELDS = [
+    "creator_prior_migration_count",
+    "repeated_buyer_count",
+    "holder_count_at_10k_proxy",
+    "holder_growth_to_20k_proxy",
+]
+FULL_RISK_FIELDS = [
+    "creator_prior_migration_count",
+    "repeated_buyer_count",
+    "early_buyer_with_prior_100k_count",
+    "early_buyer_with_prior_500k_count",
+    "early_buyer_with_prior_1m_count",
+    "holder_count_at_10k_proxy",
+    "holder_growth_to_20k_proxy",
+    "social_link_count",
+    "topicality_bucket",
+]
+OPTIONAL_LIVE_FIELDS = sorted(set(AVAILABLE_RISK_FIELDS + FULL_RISK_FIELDS + [
+    "early_buyer_prior_failure_count",
+    "telegram_url",
+    "discord_url",
+    "twitter_x_url",
+    "website_url",
+    "top_holder_share_proxy",
+    "creator_funder",
+]))
 MILESTONES = [10_000, 15_000, 20_000, 50_000, 100_000, 500_000, 1_000_000]
 ENTRY_THRESHOLD_FDV = 20_000.0
 WATCH_THRESHOLD_FDV = 10_000.0
@@ -84,6 +114,14 @@ class RuleRuntimeConfig:
         return self.runtime_root / "paper_decisions.jsonl"
 
     @property
+    def paper_rule_variant_decisions_path(self) -> Path:
+        return self.runtime_root / "paper_rule_variant_decisions.jsonl"
+
+    @property
+    def paper_rule_variant_exits_path(self) -> Path:
+        return self.runtime_root / "paper_rule_variant_exits.jsonl"
+
+    @property
     def latency_events_path(self) -> Path:
         return self.runtime_root / "latency_events.jsonl"
 
@@ -122,6 +160,22 @@ class RuleRuntimeConfig:
     @property
     def live_bus_smoke_summary_md_path(self) -> Path:
         return self.report_root / "rule_runtime_v1_live_bus_smoke_summary.md"
+
+    @property
+    def variant_smoke_summary_json_path(self) -> Path:
+        return self.report_root / "rule_runtime_variant_smoke_summary.json"
+
+    @property
+    def variant_smoke_summary_md_path(self) -> Path:
+        return self.report_root / "rule_runtime_variant_smoke_summary.md"
+
+    @property
+    def historical_rule_config_audit_json_path(self) -> Path:
+        return self.report_root / "historical_rule_config_load_audit.json"
+
+    @property
+    def historical_rule_config_audit_md_path(self) -> Path:
+        return self.report_root / "historical_rule_config_load_audit.md"
 
     @property
     def hot_path_gap_analysis_path(self) -> Path:
@@ -261,6 +315,7 @@ class RuleRuntimeEngine:
             candidate["tier"] = -1
             candidate["fdv_anomaly_flag"] = True
             _record_rejection(self.config, candidate, normalized, "rejected_fdv_anomaly", "fdv_anomaly")
+            _record_variant_rejections(self.config, candidate, normalized, "fdv_anomaly")
             _finish_event(self.config, state, candidate, normalized, started, previous_state, runtime_mode=runtime_mode)
             return _result(candidate, result)
 
@@ -285,16 +340,20 @@ class RuleRuntimeEngine:
             candidate["state"] = "rejected_same_timestamp_jump"
             candidate["tier"] = -1
             _record_rejection(self.config, candidate, normalized, "rejected_same_timestamp_jump", "same_timestamp_major_jump")
+            _record_variant_rejections(self.config, candidate, normalized, "same_timestamp_major_jump")
         elif candidate.get("single_row_spike_flag"):
             candidate["state"] = "rejected_spike"
             candidate["tier"] = -1
             _record_rejection(self.config, candidate, normalized, "rejected_spike", "single_row_fdv_spike")
+            _record_variant_rejections(self.config, candidate, normalized, "single_row_spike")
         elif candidate.get("confirmed_crossed_20k") and not candidate.get("paper_buy_created") and not candidate.get("paper_closed"):
             decision = _evaluate_entry(self.config, state, candidate, normalized)
             _append_jsonl(self.config.paper_decisions_path, decision)
+            variant_buys = _record_variant_decisions(self.config, state, candidate, normalized, decision)
             if decision["decision"] == "paper_buy":
                 _create_paper_buy(self.config, state, candidate, normalized, decision)
                 result["paper_buy_created"] = True
+            result["variant_paper_buys_created"] = variant_buys
         elif fdv >= ENTRY_THRESHOLD_FDV and not candidate.get("confirmed_crossed_20k"):
             _record_rejection(
                 self.config,
@@ -310,6 +369,9 @@ class RuleRuntimeEngine:
                 _append_jsonl(self.config.paper_decisions_path, sell)
                 _create_paper_sell(self.config, state, candidate, normalized, sell)
                 result["paper_sell_created"] = True
+        variant_sells = _evaluate_variant_exits(self.config, state, candidate, normalized)
+        if variant_sells:
+            result["variant_paper_sells_created"] = variant_sells
 
         _finish_event(self.config, state, candidate, normalized, started, previous_state, runtime_mode=runtime_mode)
         _write_monitor(self.config, state)
@@ -341,17 +403,34 @@ def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -
     config.runtime_root.mkdir(parents=True, exist_ok=True)
     config.raw_root.mkdir(parents=True, exist_ok=True)
     config.report_root.mkdir(parents=True, exist_ok=True)
+    historical_config = load_historical_rule_config(config)
     manifest = _manifest(config)
+    manifest["historical_rule_config_loaded"] = bool(historical_config.get("loaded"))
+    manifest["historical_rule_config_source"] = historical_config.get("source_path")
     _write_json(config.runtime_manifest_json_path, manifest)
     config.runtime_manifest_md_path.write_text(_manifest_md(manifest), encoding="utf-8")
     if reset or not config.runtime_state_path.exists():
         _write_json(config.runtime_state_path, _initial_state(config))
-        for path in [config.path_events_path, config.paper_trades_path, config.paper_decisions_path, config.latency_events_path]:
+        for path in [
+            config.path_events_path,
+            config.paper_trades_path,
+            config.paper_decisions_path,
+            config.paper_rule_variant_decisions_path,
+            config.paper_rule_variant_exits_path,
+            config.latency_events_path,
+        ]:
             path.write_text("", encoding="utf-8")
         if config.live_adapter_cursor_path.exists():
             config.live_adapter_cursor_path.unlink()
     else:
-        for path in [config.path_events_path, config.paper_trades_path, config.paper_decisions_path, config.latency_events_path]:
+        for path in [
+            config.path_events_path,
+            config.paper_trades_path,
+            config.paper_decisions_path,
+            config.paper_rule_variant_decisions_path,
+            config.paper_rule_variant_exits_path,
+            config.latency_events_path,
+        ]:
             path.touch(exist_ok=True)
     state = _load_state(config)
     _write_monitor(config, state)
@@ -364,6 +443,88 @@ def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -
         "live_trading_enabled": False,
         "monitor_html_path": str(config.monitor_html_path),
     }
+
+
+def load_historical_rule_config(config: RuleRuntimeConfig) -> dict[str, Any]:
+    source_root = config.root / "data" / "forward_observation" / "official_lifecycle_watch_v2"
+    repaired_config = source_root / "refined_historical_rule_paper_shadow_config_repaired.json"
+    refined_config = source_root / "refined_historical_rule_paper_shadow_config.json"
+    repaired_summary = (
+        config.root
+        / "data"
+        / "backtests"
+        / "diagnostics"
+        / "reports"
+        / "historical_rule_refinement_repaired"
+        / "historical_rule_refinement_repaired_summary.json"
+    )
+    repair_coverage_md = (
+        config.root
+        / "data"
+        / "backtests"
+        / "diagnostics"
+        / "reports"
+        / "historical_rule_refinement_field_repair"
+        / "repair_coverage_summary.md"
+    )
+    checked = [repaired_config, refined_config, repaired_summary, repair_coverage_md]
+    payload: dict[str, Any] = {}
+    source_path: Path | None = None
+    for path in [repaired_config, refined_config]:
+        if path.exists():
+            payload = _read_json(path)
+            source_path = path
+            break
+    repaired_context = _read_json(repaired_summary)
+    if not payload and repaired_context:
+        selected = repaired_context.get("selected_repaired_rule") or {}
+        payload = {
+            "selected_buy_rule_id": selected.get("buy_rule_id") or FROZEN_BUY_RULE_ID,
+            "selected_exit_rule_id": selected.get("exit_rule_id") or FROZEN_EXIT_RULE_ID,
+            "base_gate": "confirmed clean 10k watch -> confirmed clean 20k candidate",
+            "positive_confirms": ["high_fdv_efficiency_bucket"],
+            "risk_rejects": [
+                "single-row spikes, same-timestamp major jumps, FDV anomalies, invalid milestone ordering",
+            ],
+            "required_live_fields": [
+                "confirmed_crossed_10k",
+                "confirmed_crossed_20k",
+                "fdv_per_event_at_20k",
+                "fdv_per_buy_at_20k",
+                "fdv_per_active_wallet_at_20k",
+            ],
+            "confirmed_milestones_only": True,
+            "raw_milestones_allowed": False,
+        }
+        source_path = repaired_summary
+    required = ["selected_buy_rule_id", "selected_exit_rule_id", "base_gate"]
+    missing = [key for key in required if not payload.get(key)]
+    loaded = bool(payload) and not missing
+    audit = {
+        "report_id": "historical_rule_config_load_audit",
+        "updated_at": _utc_now(),
+        "loaded": loaded,
+        "source_path": str(source_path) if source_path else None,
+        "paths_checked": [str(path) for path in checked],
+        "missing_config": not bool(payload),
+        "missing_required_fields": missing,
+        "selected_buy_rule_id": payload.get("selected_buy_rule_id") if loaded else None,
+        "selected_exit_rule_id": payload.get("selected_exit_rule_id") if loaded else None,
+        "base_gate": payload.get("base_gate"),
+        "positive_confirms": payload.get("positive_confirms") or [],
+        "risk_rejects": payload.get("risk_rejects") or [],
+        "required_live_fields": payload.get("required_live_fields") or [],
+        "confirmed_milestones_only": payload.get("confirmed_milestones_only") is True,
+        "raw_milestones_allowed": payload.get("raw_milestones_allowed") is True,
+        "invalidation_criteria": payload.get("invalidation_criteria") or [],
+        "repaired_context": repaired_context,
+        "repair_coverage_summary_path": str(repair_coverage_md) if repair_coverage_md.exists() else None,
+        "paper_only": True,
+        "live_trading_enabled": False,
+    }
+    _write_json(config.historical_rule_config_audit_json_path, audit)
+    config.historical_rule_config_audit_md_path.write_text(_historical_rule_config_audit_md(audit), encoding="utf-8")
+    return audit
 
 
 def run_rule_runtime_once(config: RuleRuntimeConfig, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -433,7 +594,9 @@ def run_rule_runtime_smoke(
     status = rule_runtime_status(config)
     summary = _smoke_summary(config, status, events_processed=events_processed, adapter_config=adapter_config)
     _write_json(config.smoke_summary_json_path, summary)
+    _write_json(config.variant_smoke_summary_json_path, summary)
     config.smoke_summary_md_path.write_text(_smoke_summary_md(summary), encoding="utf-8")
+    config.variant_smoke_summary_md_path.write_text(_smoke_summary_md(summary), encoding="utf-8")
     config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
     config.status_md_path.write_text(_status_md(summary), encoding="utf-8")
     return summary
@@ -455,6 +618,7 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
     bus_to_runtime = [_num(row.get("bus_to_runtime_ms")) for row in latency]
     runtime_eval = [_num(row.get("runtime_eval_ms")) for row in latency]
     runtime_stats = state.get("runtime_stats") or {}
+    variants = _variant_status(config, state)
     status = {
         "runtime_label": RUNTIME_LABEL,
         "runtime_mode": runtime_stats.get("last_runtime_mode") or "idle",
@@ -470,6 +634,8 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "paper_buys": len(buys),
         "open_paper_positions": len(state.get("open_positions") or {}),
         "paper_sells": len(sells),
+        "variants": variants,
+        "confirmed_20k_variant_candidates": len({row.get("mint") for row in _read_jsonl(config.paper_rule_variant_decisions_path) if row.get("variant_id") == VARIANT_A_ID}),
         "rejected_spike_candidates": sum(1 for row in candidates.values() if row.get("state") == "rejected_spike"),
         "rejected_same_timestamp_jumps": sum(1 for row in candidates.values() if row.get("state") == "rejected_same_timestamp_jump"),
         "rejected_fdv_anomalies": sum(1 for row in candidates.values() if row.get("fdv_anomaly_flag")),
@@ -487,6 +653,8 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "cash_usd": state.get("cash_usd"),
         "monitor_html_path": str(config.monitor_html_path),
         "paper_trades_path": str(config.paper_trades_path),
+        "paper_rule_variant_decisions_path": str(config.paper_rule_variant_decisions_path),
+        "paper_rule_variant_exits_path": str(config.paper_rule_variant_exits_path),
         "latency_events_path": str(config.latency_events_path),
         "warnings": state.get("warnings") or [],
     }
@@ -618,7 +786,7 @@ def normalize_live_path_row_for_rule_runtime(
     provenance = str(row.get("milestone_provenance") or row.get("source_provenance") or row.get("source") or source_label)
     raw_10k = _bool_or_fdv(row.get("raw_crossed_10k", row.get("crossed_10k")), fdv, 10_000)
     raw_20k = _bool_or_fdv(row.get("raw_crossed_20k", row.get("crossed_20k")), fdv, 20_000)
-    return {
+    normalized = {
         "mint": mint,
         "timestamp": float(timestamp),
         "source_event_type": str(row.get("source_event_type") or "collector_followup_path"),
@@ -639,6 +807,8 @@ def normalize_live_path_row_for_rule_runtime(
         "milestone_provenance": provenance,
         "data_source": source_label,
     }
+    _copy_optional_live_fields(row, normalized)
+    return normalized
 
 
 def _manifest(config: RuleRuntimeConfig) -> dict[str, Any]:
@@ -676,6 +846,27 @@ def _manifest_md(manifest: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _historical_rule_config_audit_md(audit: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Historical Rule Config Load Audit",
+            "",
+            f"- Updated: `{audit['updated_at']}`",
+            f"- Loaded: `{audit['loaded']}`",
+            f"- Source path: `{audit.get('source_path')}`",
+            f"- Selected buy rule: `{audit.get('selected_buy_rule_id')}`",
+            f"- Selected exit rule: `{audit.get('selected_exit_rule_id')}`",
+            f"- Base gate: `{audit.get('base_gate')}`",
+            f"- Confirmed milestones only: `{audit.get('confirmed_milestones_only')}`",
+            f"- Raw milestones allowed: `{audit.get('raw_milestones_allowed')}`",
+            f"- Missing config: `{audit.get('missing_config')}`",
+            f"- Missing required fields: `{audit.get('missing_required_fields')}`",
+            "",
+            "Paper-only runtime configuration audit. Live trading, private keys, transaction building, swaps, and routing remain disabled.",
+        ]
+    ) + "\n"
+
+
 def _initial_state(config: RuleRuntimeConfig) -> dict[str, Any]:
     wallet = _round_money(config.starting_wallet_usd)
     return {
@@ -687,6 +878,8 @@ def _initial_state(config: RuleRuntimeConfig) -> dict[str, Any]:
         "candidates": {},
         "open_positions": {},
         "closed_positions": {},
+        "variant_open_positions": {},
+        "variant_closed_positions": {},
         "rejected_candidates": {},
         "queue_sizes": RuleRuntimePriorityScheduler().queue_sizes(),
         "runtime_stats": {
@@ -741,7 +934,7 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("path event requires timestamp")
     if fdv is None:
         raise ValueError("path event requires fdv_proxy")
-    return {
+    normalized = {
         "mint": mint,
         "timestamp": float(timestamp),
         "event_observed_at": float(_num(event.get("event_observed_at")) or timestamp),
@@ -767,6 +960,26 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
         "milestone_provenance": event.get("milestone_provenance"),
         "recorded_at": _utc_now(),
     }
+    _copy_optional_live_fields(event, normalized)
+    return normalized
+
+
+def _copy_optional_live_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
+    for key in OPTIONAL_LIVE_FIELDS:
+        if key in source:
+            target[key] = source.get(key)
+    if "holder_count_at_10k" in source and "holder_count_at_10k_proxy" not in target:
+        target["holder_count_at_10k_proxy"] = source.get("holder_count_at_10k")
+    if "holder_growth_to_20k" in source and "holder_growth_to_20k_proxy" not in target:
+        target["holder_growth_to_20k_proxy"] = source.get("holder_growth_to_20k")
+    if "social_link_count" not in target and any(
+        key in source for key in ["telegram_url", "discord_url", "twitter_x_url", "website_url"]
+    ):
+        target["social_link_count"] = sum(
+            1
+            for key in ["telegram_url", "discord_url", "twitter_x_url", "website_url"]
+            if source.get(key)
+        )
 
 
 def _update_raw_milestones(candidate: dict[str, Any], row: dict[str, Any]) -> None:
@@ -1048,6 +1261,231 @@ def _create_paper_sell(
     _append_jsonl(config.paper_trades_path, sell)
 
 
+def _record_variant_decisions(
+    config: RuleRuntimeConfig,
+    state: dict[str, Any],
+    candidate: dict[str, Any],
+    row: dict[str, Any],
+    base_decision: dict[str, Any],
+) -> int:
+    created = 0
+    candidate.setdefault("variant_decisions_created", [])
+    for variant_id in RULE_VARIANTS:
+        if variant_id in candidate["variant_decisions_created"]:
+            continue
+        decision = _variant_decision_row(config, candidate, row, base_decision, variant_id)
+        _append_jsonl(config.paper_rule_variant_decisions_path, decision)
+        candidate["variant_decisions_created"].append(variant_id)
+        if decision["variant_status"] == "paper_buy":
+            _create_variant_position(config, state, candidate, row, decision)
+            created += 1
+    return created
+
+
+def _record_variant_rejections(
+    config: RuleRuntimeConfig,
+    candidate: dict[str, Any],
+    row: dict[str, Any],
+    reason: str,
+) -> None:
+    existing = {
+        item.get("decision_id")
+        for item in _read_jsonl(config.paper_rule_variant_decisions_path)
+    }
+    for variant_id in RULE_VARIANTS:
+        decision_id = f"variant_decision_{variant_id}_{candidate['mint']}_{int(float(row['timestamp']) * 1000)}"
+        if decision_id in existing:
+            continue
+        features = _efficiency_features(row)
+        decision = {
+            "decision_id": decision_id,
+            "mint": candidate["mint"],
+            "ca": candidate["mint"],
+            "timestamp": row["timestamp"],
+            "base_rule_id": FROZEN_BUY_RULE_ID,
+            "exit_rule_id": FROZEN_EXIT_RULE_ID,
+            "variant_id": variant_id,
+            "variant_status": "rejected",
+            "paper_buy_allowed": False,
+            "paper_buy_emitted": False,
+            "confirmed_10k_time": candidate.get("confirmed_milestone_times", {}).get("10k"),
+            "confirmed_20k_time": candidate.get("confirmed_milestone_times", {}).get("20k"),
+            "paper_buy_fdv": row.get("fdv_proxy"),
+            "fdv_efficiency_bucket": _overall_efficiency_bucket(features),
+            "fdv_efficiency_threshold_status": "fdv_threshold_unfrozen",
+            "risk_filter_status": "rejected",
+            "missing_required_fields": [],
+            "rejection_reason": reason,
+            "no_real_trade": True,
+            **features,
+            **_risk_field_values(row),
+        }
+        _append_jsonl(config.paper_rule_variant_decisions_path, decision)
+
+
+def _variant_decision_row(
+    config: RuleRuntimeConfig,
+    candidate: dict[str, Any],
+    row: dict[str, Any],
+    base_decision: dict[str, Any],
+    variant_id: str,
+) -> dict[str, Any]:
+    features = _efficiency_features(row)
+    base_reasons = [
+        item
+        for item in str(base_decision.get("rejection_reason") or "").split(",")
+        if item
+    ]
+    missing: list[str] = []
+    risk_status = "not_required"
+    status = "paper_buy" if not base_reasons else "rejected"
+    paper_buy_allowed = not base_reasons
+    rejection_reason = ",".join(base_reasons) if base_reasons else None
+    if variant_id == VARIANT_B_ID and not base_reasons:
+        available = [field for field in AVAILABLE_RISK_FIELDS if _field_has_value(row, field)]
+        missing = [field for field in AVAILABLE_RISK_FIELDS if not _field_has_value(row, field)]
+        if not available:
+            status = "not_evaluable"
+            paper_buy_allowed = False
+            risk_status = "missing"
+            rejection_reason = "available_risk_fields_missing"
+        elif _has_negative_risk_value(row, available):
+            status = "rejected"
+            paper_buy_allowed = False
+            risk_status = "risk_filter_available_fail"
+            rejection_reason = "available_risk_filter_fail"
+        else:
+            risk_status = "risk_filter_available_pass"
+    elif variant_id == VARIANT_C_ID and not base_reasons:
+        missing = [field for field in FULL_RISK_FIELDS if not _field_has_value(row, field)]
+        if missing:
+            status = "not_evaluable"
+            paper_buy_allowed = False
+            risk_status = "missing"
+            rejection_reason = "full_risk_fields_missing"
+        elif _has_negative_risk_value(row, FULL_RISK_FIELDS):
+            status = "rejected"
+            paper_buy_allowed = False
+            risk_status = "risk_filter_full_fail"
+            rejection_reason = "full_risk_filter_fail"
+        else:
+            risk_status = "risk_filter_full_pass"
+    elif variant_id == VARIANT_A_ID:
+        risk_status = "not_required" if not base_reasons else "rejected"
+    decision = {
+        "decision_id": f"variant_decision_{variant_id}_{candidate['mint']}_{int(float(row['timestamp']) * 1000)}",
+        "mint": candidate["mint"],
+        "ca": candidate["mint"],
+        "timestamp": row["timestamp"],
+        "base_rule_id": FROZEN_BUY_RULE_ID,
+        "exit_rule_id": FROZEN_EXIT_RULE_ID,
+        "variant_id": variant_id,
+        "variant_status": status,
+        "paper_buy_allowed": bool(paper_buy_allowed),
+        "paper_buy_emitted": status == "paper_buy",
+        "confirmed_10k_time": candidate.get("confirmed_milestone_times", {}).get("10k"),
+        "confirmed_20k_time": candidate.get("confirmed_milestone_times", {}).get("20k"),
+        "paper_buy_fdv": row.get("fdv_proxy"),
+        "fdv_efficiency_bucket": _overall_efficiency_bucket(features),
+        "fdv_efficiency_threshold_status": "fdv_threshold_unfrozen",
+        "risk_filter_status": risk_status,
+        "missing_required_fields": missing,
+        "rejection_reason": rejection_reason,
+        "no_real_trade": True,
+        **features,
+        **_risk_field_values(row),
+    }
+    return decision
+
+
+def _create_variant_position(
+    config: RuleRuntimeConfig,
+    state: dict[str, Any],
+    candidate: dict[str, Any],
+    row: dict[str, Any],
+    decision: dict[str, Any],
+) -> None:
+    state.setdefault("variant_open_positions", {})
+    key = _variant_position_key(decision["variant_id"], candidate["mint"])
+    if key in state["variant_open_positions"]:
+        return
+    fdv = float(row["fdv_proxy"])
+    state["variant_open_positions"][key] = {
+        "position_id": f"variant_position_{key}_{int(float(row['timestamp']) * 1000)}",
+        "variant_id": decision["variant_id"],
+        "mint": candidate["mint"],
+        "ca": candidate["mint"],
+        "entry_time": row["timestamp"],
+        "paper_buy_fdv": fdv,
+        "local_high_fdv": fdv,
+        "drawdown_pct": 0.0,
+        "first_30pct_drawdown_time": None,
+        "reclaim_timer_started_at": None,
+        "reclaim_prior_high_time": None,
+        "paper_sell_emitted": False,
+        "base_rule_id": FROZEN_BUY_RULE_ID,
+        "exit_rule_id": FROZEN_EXIT_RULE_ID,
+        "no_real_trade": True,
+    }
+
+
+def _evaluate_variant_exits(
+    config: RuleRuntimeConfig,
+    state: dict[str, Any],
+    candidate: dict[str, Any],
+    row: dict[str, Any],
+) -> int:
+    state.setdefault("variant_open_positions", {})
+    state.setdefault("variant_closed_positions", {})
+    fdv = float(row["fdv_proxy"])
+    timestamp = float(row["timestamp"])
+    closed = 0
+    for key, position in list(state["variant_open_positions"].items()):
+        if position.get("mint") != candidate["mint"]:
+            continue
+        local_high = max(float(position.get("local_high_fdv") or 0.0), fdv)
+        position["local_high_fdv"] = local_high
+        position["current_fdv"] = fdv
+        drawdown_pct = 0.0 if local_high <= 0 else max(0.0, (local_high - fdv) / local_high)
+        position["drawdown_pct"] = _round_pct(drawdown_pct)
+        if fdv >= local_high:
+            position["reclaim_prior_high_time"] = timestamp
+        if drawdown_pct >= DRAW_DOWN_EXIT_PCT and position.get("first_30pct_drawdown_time") is None:
+            position["first_30pct_drawdown_time"] = timestamp
+            position["reclaim_timer_started_at"] = timestamp
+        drawdown_time = _num(position.get("first_30pct_drawdown_time"))
+        if drawdown_time is None or timestamp - drawdown_time < NO_RECLAIM_EXIT_SECONDS or fdv >= local_high:
+            continue
+        exit_row = {
+            "paper_event_id": f"variant_paper_sell_{position['variant_id']}_{candidate['mint']}_{int(timestamp * 1000)}",
+            "variant_id": position["variant_id"],
+            "mint": candidate["mint"],
+            "ca": candidate["mint"],
+            "timestamp": timestamp,
+            "base_rule_id": FROZEN_BUY_RULE_ID,
+            "exit_rule_id": FROZEN_EXIT_RULE_ID,
+            "paper_buy_fdv": position.get("paper_buy_fdv"),
+            "paper_sell_fdv": fdv,
+            "local_high_fdv": local_high,
+            "drawdown_pct": _round_pct(drawdown_pct),
+            "first_30pct_drawdown_time": drawdown_time,
+            "reclaim_timer_started_at": position.get("reclaim_timer_started_at"),
+            "reclaim_prior_high_time": position.get("reclaim_prior_high_time"),
+            "no_reclaim_after_10m": True,
+            "paper_sell_emitted": True,
+            "exit_reason": "no_reclaim_after_10m_30pct_drawdown",
+            "time_since_entry_seconds": _round_seconds(timestamp - float(position.get("entry_time") or timestamp)),
+            "no_real_trade": True,
+        }
+        _append_jsonl(config.paper_rule_variant_exits_path, exit_row)
+        position.update(exit_row)
+        position["paper_sell_emitted"] = True
+        state["variant_closed_positions"][key] = position
+        del state["variant_open_positions"][key]
+        closed += 1
+    return closed
+
+
 def _record_rejection(
     config: RuleRuntimeConfig,
     candidate: dict[str, Any],
@@ -1159,9 +1597,37 @@ def _queue_sizes_from_state(state: dict[str, Any]) -> dict[str, int]:
     return sizes
 
 
+def _variant_status(
+    config: RuleRuntimeConfig,
+    state: dict[str, Any],
+    *,
+    variant_decisions: list[dict[str, Any]] | None = None,
+    variant_exits: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    decisions = variant_decisions if variant_decisions is not None else _read_jsonl(config.paper_rule_variant_decisions_path)
+    exits = variant_exits if variant_exits is not None else _read_jsonl(config.paper_rule_variant_exits_path)
+    open_positions = state.get("variant_open_positions") or {}
+    summary: dict[str, dict[str, Any]] = {}
+    for variant_id in RULE_VARIANTS:
+        variant_rows = [row for row in decisions if row.get("variant_id") == variant_id]
+        exit_rows = [row for row in exits if row.get("variant_id") == variant_id]
+        summary[variant_id] = {
+            "paper_buys": sum(1 for row in variant_rows if row.get("variant_status") == "paper_buy"),
+            "paper_sells": sum(1 for row in exit_rows if row.get("paper_sell_emitted") is True),
+            "open_positions": sum(1 for row in open_positions.values() if row.get("variant_id") == variant_id),
+            "rejected": sum(1 for row in variant_rows if row.get("variant_status") == "rejected"),
+            "not_evaluable": sum(1 for row in variant_rows if row.get("variant_status") == "not_evaluable"),
+            "label_only": sum(1 for row in variant_rows if row.get("variant_status") == "label_only"),
+            "missing_fields": sum(len(row.get("missing_required_fields") or []) for row in variant_rows),
+        }
+    return summary
+
+
 def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
     trades = _read_jsonl(config.paper_trades_path)
     decisions = _read_jsonl(config.paper_decisions_path)
+    variant_decisions = _read_jsonl(config.paper_rule_variant_decisions_path)
+    variant_exits = _read_jsonl(config.paper_rule_variant_exits_path)
     latency = _read_jsonl(config.latency_events_path)
     candidates = state.get("candidates") or {}
     rejected = [row for row in decisions if row.get("decision") == "paper_rejected_entry"]
@@ -1183,6 +1649,9 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
         "confirmed_20k_entry_candidates": sum(1 for row in candidates.values() if row.get("confirmed_crossed_20k")),
         "paper_buys": len([row for row in trades if row.get("side") == "paper_buy"]),
         "paper_sells": len([row for row in trades if row.get("side") == "paper_sell"]),
+        "variants": _variant_status(config, state, variant_decisions=variant_decisions, variant_exits=variant_exits),
+        "variant_decisions": variant_decisions,
+        "variant_exits": variant_exits,
         "live_bus_events": int((state.get("runtime_stats") or {}).get("live_bus_events") or 0),
         "file_adapter_events": int((state.get("runtime_stats") or {}).get("file_adapter_events") or 0),
         "latency_p50_p90_p99": _percentiles([_num(row.get("detection_to_rule_latency_ms")) for row in latency]),
@@ -1215,10 +1684,18 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         f"Closed paper positions: {len(payload['closed_positions'])}",
         f"Rejected entries: {len(payload['rejected_entries'])}",
         "",
+        "## Rule Runtime v1 Variants",
+    ]
+    for variant_id, row in (payload.get("variants") or {}).items():
+        lines.append(
+            f"- {variant_id}: buys {row.get('paper_buys')}, sells {row.get('paper_sells')}, open {row.get('open_positions')}, rejected {row.get('rejected')}, not evaluable {row.get('not_evaluable')}, missing fields {row.get('missing_fields')}"
+        )
+    lines.extend([
+        "",
         "Paper-only accounting. Live trading is disabled.",
         "",
         "## Open Positions",
-    ]
+    ])
     for row in payload["open_positions"]:
         lines.append(
             f"- {row.get('mint')}: buy FDV ${row.get('paper_buy_fdv')}, current FDV ${row.get('current_fdv')}, local high ${row.get('local_high_fdv')}, drawdown {row.get('drawdown_pct')}"
@@ -1238,6 +1715,14 @@ def _monitor_md(payload: dict[str, Any]) -> str:
 
 def _monitor_html(payload: dict[str, Any]) -> str:
     rows = payload["open_positions"] + payload["closed_positions"] + payload["rejected_entries"]
+    variant_cards = "\n".join(
+        "<div class=\"variant\">"
+        f"<h3>{html.escape(str(variant_id))}</h3>"
+        f"<p>Buys <b>{row.get('paper_buys')}</b> | Sells <b>{row.get('paper_sells')}</b> | Open <b>{row.get('open_positions')}</b></p>"
+        f"<p>Rejected <b>{row.get('rejected')}</b> | Not evaluable <b>{row.get('not_evaluable')}</b> | Missing fields <b>{row.get('missing_fields')}</b></p>"
+        "</div>"
+        for variant_id, row in (payload.get("variants") or {}).items()
+    )
     table = "\n".join(
         "<tr>"
         f"<td>{_ca_button(row.get('mint'))}</td>"
@@ -1260,6 +1745,7 @@ def _monitor_html(payload: dict[str, Any]) -> str:
 body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;margin:24px;background:#f7f7f4;color:#1f2933}}
 .stats{{display:flex;gap:12px;flex-wrap:wrap}} .stat{{background:white;border:1px solid #ddd;border-radius:8px;padding:12px 16px}}
 table{{border-collapse:collapse;width:100%;background:white;margin-top:18px}} th,td{{border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;vertical-align:top}}
+.variants{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:12px}} .variant{{background:white;border:1px solid #ddd;border-radius:8px;padding:12px 16px}}
 button.ca{{border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:4px 8px;cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}}
 .guard{{color:#7a2e0e;margin-top:12px}}
 </style><script>
@@ -1276,6 +1762,8 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 <p>Bus-to-runtime p50/p90/p99: {html.escape(str(payload['bus_to_runtime_p50_p90_p99']))}</p>
 <p>Runtime eval p50/p90/p99: {html.escape(str(payload['runtime_eval_p50_p90_p99']))}</p>
 <p>Last rejection reason: {html.escape(str(payload['last_rejection_reason'] or ''))}</p>
+<h2>Rule Runtime v1 Variants</h2>
+<div class=\"variants\">{variant_cards}</div>
 <h2>Trades and Rejections</h2>
 <table><thead><tr><th>CA</th><th>Status</th><th>Buy FDV</th><th>Current FDV</th><th>Sell FDV</th><th>Local High</th><th>Drawdown</th><th>10k Confirmed</th><th>20k Confirmed</th><th>Why</th></tr></thead><tbody>{table}</tbody></table>
 <p><small>Updated {payload['updated_at']}. Auto-refreshes every 10 seconds.</small></p>
@@ -1324,6 +1812,51 @@ def _efficiency_bucket_labels(features: dict[str, Any]) -> dict[str, str]:
     return labels
 
 
+def _overall_efficiency_bucket(features: dict[str, Any]) -> str:
+    labels = _efficiency_bucket_labels(features)
+    values = set(labels.values())
+    if "very_high" in values:
+        return "very_high"
+    if "high" in values:
+        return "high"
+    if "medium" in values:
+        return "medium"
+    if values == {"missing"}:
+        return "missing"
+    return "low"
+
+
+def _risk_field_values(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "creator_prior_migration_count": row.get("creator_prior_migration_count"),
+        "repeated_buyer_count": row.get("repeated_buyer_count"),
+        "holder_count_at_10k_proxy": row.get("holder_count_at_10k_proxy"),
+        "holder_growth_to_20k_proxy": row.get("holder_growth_to_20k_proxy"),
+        "early_buyer_with_prior_100k_count": row.get("early_buyer_with_prior_100k_count"),
+        "early_buyer_with_prior_500k_count": row.get("early_buyer_with_prior_500k_count"),
+        "early_buyer_with_prior_1m_count": row.get("early_buyer_with_prior_1m_count"),
+        "social_link_count": row.get("social_link_count"),
+        "topicality_bucket": row.get("topicality_bucket"),
+    }
+
+
+def _field_has_value(row: dict[str, Any], field: str) -> bool:
+    value = row.get(field)
+    return value is not None and value != ""
+
+
+def _has_negative_risk_value(row: dict[str, Any], fields: list[str]) -> bool:
+    for field in fields:
+        value = _num(row.get(field))
+        if value is not None and value < 0:
+            return True
+    return False
+
+
+def _variant_position_key(variant_id: str, mint: str) -> str:
+    return f"{variant_id}|{mint}"
+
+
 def _smoke_summary(
     config: RuleRuntimeConfig,
     status: dict[str, Any],
@@ -1343,6 +1876,15 @@ def _smoke_summary(
         "confirmed_20k_candidates": int(status.get("confirmed_20k_entry_candidates") or 0),
         "paper_buys": int(status.get("paper_buys") or 0),
         "paper_sells": int(status.get("paper_sells") or 0),
+        "variants": status.get("variants") or {},
+        "variant_a_paper_buys": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_buys") or 0),
+        "variant_a_paper_sells": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_sells") or 0),
+        "variant_b_paper_buys": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("paper_buys") or 0),
+        "variant_b_paper_sells": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("paper_sells") or 0),
+        "variant_b_not_evaluable": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("not_evaluable") or 0),
+        "variant_c_paper_buys": int((status.get("variants") or {}).get(VARIANT_C_ID, {}).get("paper_buys") or 0),
+        "variant_c_paper_sells": int((status.get("variants") or {}).get(VARIANT_C_ID, {}).get("paper_sells") or 0),
+        "variant_c_not_evaluable": int((status.get("variants") or {}).get(VARIANT_C_ID, {}).get("not_evaluable") or 0),
         "rejected_spikes": int(status.get("rejected_spike_candidates") or 0),
         "rejected_same_timestamp_jumps": int(status.get("rejected_same_timestamp_jumps") or 0),
         "rejected_fdv_anomalies": int(status.get("rejected_fdv_anomalies") or 0),
@@ -1367,6 +1909,9 @@ def _smoke_summary_md(summary: dict[str, Any]) -> str:
             f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
             f"- Paper buys: `{summary['paper_buys']}`",
             f"- Paper sells: `{summary['paper_sells']}`",
+            f"- Variant A buys/sells: `{summary.get('variant_a_paper_buys')}` / `{summary.get('variant_a_paper_sells')}`",
+            f"- Variant B buys/sells/not-evaluable: `{summary.get('variant_b_paper_buys')}` / `{summary.get('variant_b_paper_sells')}` / `{summary.get('variant_b_not_evaluable')}`",
+            f"- Variant C buys/sells/not-evaluable: `{summary.get('variant_c_paper_buys')}` / `{summary.get('variant_c_paper_sells')}` / `{summary.get('variant_c_not_evaluable')}`",
             f"- Rejected spikes: `{summary['rejected_spikes']}`",
             f"- Rejected same-timestamp jumps: `{summary['rejected_same_timestamp_jumps']}`",
             f"- Rejected FDV anomalies: `{summary['rejected_fdv_anomalies']}`",
@@ -1398,6 +1943,15 @@ def _live_bus_smoke_summary(
         "confirmed_20k_candidates": int(status.get("confirmed_20k_entry_candidates") or 0),
         "paper_buys": int(status.get("paper_buys") or 0),
         "paper_sells": int(status.get("paper_sells") or 0),
+        "variants": status.get("variants") or {},
+        "variant_a_paper_buys": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_buys") or 0),
+        "variant_a_paper_sells": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_sells") or 0),
+        "variant_b_paper_buys": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("paper_buys") or 0),
+        "variant_b_paper_sells": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("paper_sells") or 0),
+        "variant_b_not_evaluable": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("not_evaluable") or 0),
+        "variant_c_paper_buys": int((status.get("variants") or {}).get(VARIANT_C_ID, {}).get("paper_buys") or 0),
+        "variant_c_paper_sells": int((status.get("variants") or {}).get(VARIANT_C_ID, {}).get("paper_sells") or 0),
+        "variant_c_not_evaluable": int((status.get("variants") or {}).get(VARIANT_C_ID, {}).get("not_evaluable") or 0),
         "rejected_spikes": int(status.get("rejected_spike_candidates") or 0),
         "rejected_same_timestamp_jumps": int(status.get("rejected_same_timestamp_jumps") or 0),
         "rejected_fdv_anomalies": int(status.get("rejected_fdv_anomalies") or 0),
@@ -1418,7 +1972,9 @@ def _live_bus_smoke_summary(
 
 def _write_live_bus_smoke_reports(config: RuleRuntimeConfig, summary: dict[str, Any]) -> None:
     _write_json(config.live_bus_smoke_summary_json_path, summary)
+    _write_json(config.variant_smoke_summary_json_path, summary)
     config.live_bus_smoke_summary_md_path.write_text(_live_bus_smoke_summary_md(summary), encoding="utf-8")
+    config.variant_smoke_summary_md_path.write_text(_live_bus_smoke_summary_md(summary), encoding="utf-8")
     config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
     config.status_md_path.write_text(_status_md(summary), encoding="utf-8")
 
@@ -1437,6 +1993,9 @@ def _live_bus_smoke_summary_md(summary: dict[str, Any]) -> str:
             f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
             f"- Paper buys: `{summary['paper_buys']}`",
             f"- Paper sells: `{summary['paper_sells']}`",
+            f"- Variant A buys/sells: `{summary.get('variant_a_paper_buys')}` / `{summary.get('variant_a_paper_sells')}`",
+            f"- Variant B buys/sells/not-evaluable: `{summary.get('variant_b_paper_buys')}` / `{summary.get('variant_b_paper_sells')}` / `{summary.get('variant_b_not_evaluable')}`",
+            f"- Variant C buys/sells/not-evaluable: `{summary.get('variant_c_paper_buys')}` / `{summary.get('variant_c_paper_sells')}` / `{summary.get('variant_c_not_evaluable')}`",
             f"- Rejected spikes: `{summary['rejected_spikes']}`",
             f"- Rejected same-timestamp jumps: `{summary['rejected_same_timestamp_jumps']}`",
             f"- Rejected FDV anomalies: `{summary['rejected_fdv_anomalies']}`",
@@ -1453,24 +2012,29 @@ def _live_bus_smoke_summary_md(summary: dict[str, Any]) -> str:
 
 
 def _status_md(summary: dict[str, Any]) -> str:
-    return "\n".join(
-        [
-            "# RULE_RUNTIME_V1_STATUS",
-            "",
-            f"- Runtime label: `{RUNTIME_LABEL}`",
-            f"- Frozen buy rule: `{FROZEN_BUY_RULE_ID}`",
-            f"- Frozen exit rule: `{FROZEN_EXIT_RULE_ID}`",
-            f"- Paper-only: `{summary['paper_only']}`",
-            f"- Live trading enabled: `{summary['live_trading_enabled']}`",
-            f"- Events processed: `{summary['events_processed']}`",
-            f"- Confirmed 10k watches: `{summary['confirmed_10k_watches']}`",
-            f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
-            f"- Paper buys: `{summary['paper_buys']}`",
-            f"- Paper sells: `{summary['paper_sells']}`",
-            f"- Threshold status: `{summary['threshold_status']}`",
-            f"- Monitor: `{summary['monitor_path']}`",
-        ]
-    ) + "\n"
+    lines = [
+        "# RULE_RUNTIME_V1_STATUS",
+        "",
+        f"- Runtime label: `{RUNTIME_LABEL}`",
+        f"- Frozen buy rule: `{FROZEN_BUY_RULE_ID}`",
+        f"- Frozen exit rule: `{FROZEN_EXIT_RULE_ID}`",
+        f"- Paper-only: `{summary['paper_only']}`",
+        f"- Live trading enabled: `{summary['live_trading_enabled']}`",
+        f"- Events processed: `{summary['events_processed']}`",
+        f"- Confirmed 10k watches: `{summary['confirmed_10k_watches']}`",
+        f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
+        f"- Paper buys: `{summary['paper_buys']}`",
+        f"- Paper sells: `{summary['paper_sells']}`",
+        f"- Threshold status: `{summary['threshold_status']}`",
+        f"- Monitor: `{summary['monitor_path']}`",
+        "",
+        "## Rule Runtime v1 Variants",
+    ]
+    for variant_id, row in (summary.get("variants") or {}).items():
+        lines.append(
+            f"- `{variant_id}`: buys `{row.get('paper_buys')}`, sells `{row.get('paper_sells')}`, open `{row.get('open_positions')}`, rejected `{row.get('rejected')}`, not_evaluable `{row.get('not_evaluable')}`, missing_fields `{row.get('missing_fields')}`"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _update_runtime_bus_depth(config: RuleRuntimeConfig, depth: int) -> None:
@@ -1597,7 +2161,14 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _load_state(config: RuleRuntimeConfig) -> dict[str, Any]:
     if not config.runtime_state_path.exists():
         return _initial_state(config)
-    return json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    state.setdefault("variant_open_positions", {})
+    state.setdefault("variant_closed_positions", {})
+    state.setdefault("open_positions", {})
+    state.setdefault("closed_positions", {})
+    state.setdefault("candidates", {})
+    state.setdefault("runtime_stats", {})
+    return state
 
 
 def _num(value: Any) -> float | None:
