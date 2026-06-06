@@ -2533,12 +2533,17 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
     rejected = [row for row in decisions if row.get("decision") == "paper_rejected_entry"]
     open_positions = list((state.get("open_positions") or {}).values())
     closed_positions = list((state.get("closed_positions") or {}).values())
+    paper_accounting = _monitor_paper_accounting(config, state, trades)
     payload = {
         "updated_at": _utc_now(),
         "runtime_label": RUNTIME_LABEL,
         "runtime_mode": (state.get("runtime_stats") or {}).get("last_runtime_mode") or "idle",
         "wallet_usd": state.get("wallet_usd"),
         "cash_usd": state.get("cash_usd"),
+        "open_position_value_usd": paper_accounting["open_position_value_usd"],
+        "realized_paper_pl_usd": paper_accounting["realized_paper_pl_usd"],
+        "unrealized_paper_pl_usd": paper_accounting["unrealized_paper_pl_usd"],
+        "current_buy_size_usd": paper_accounting["current_buy_size_usd"],
         "paper_trading_enabled": True,
         "live_trading_enabled": False,
         "open_positions": open_positions,
@@ -2577,6 +2582,27 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
     _write_csv(config.trades_csv_path, trades)
 
 
+def _monitor_paper_accounting(config: RuleRuntimeConfig, state: dict[str, Any], trades: list[dict[str, Any]]) -> dict[str, float]:
+    open_value = 0.0
+    unrealized = 0.0
+    for position in (state.get("open_positions") or {}).values():
+        allocation = _num(position.get("allocation_usd")) or 0.0
+        buy_fdv = _num(position.get("paper_buy_fdv") or position.get("buy_fdv")) or 0.0
+        current_fdv = _num(position.get("current_fdv") or position.get("local_high_fdv")) or buy_fdv
+        value = allocation if buy_fdv <= 0 else allocation * (current_fdv / buy_fdv)
+        open_value += value
+        unrealized += value - allocation
+    realized = sum(_num(row.get("paper_pnl_usd") or row.get("realized_pnl_usd")) or 0.0 for row in trades if row.get("side") == "paper_sell")
+    cash = _num(state.get("cash_usd")) or 0.0
+    wallet = cash + open_value
+    return {
+        "open_position_value_usd": _round_money(open_value),
+        "realized_paper_pl_usd": _round_money(realized),
+        "unrealized_paper_pl_usd": _round_money(unrealized),
+        "current_buy_size_usd": _round_money(wallet * float(config.position_fraction)),
+    }
+
+
 def _monitor_md(payload: dict[str, Any]) -> str:
     lines = [
         "# Rule Runtime v1 Paper Monitor",
@@ -2584,6 +2610,10 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         f"Updated: {payload['updated_at']}",
         f"Wallet: ${payload['wallet_usd']}",
         f"Cash: ${payload['cash_usd']}",
+        f"Open position value: ${payload.get('open_position_value_usd')}",
+        f"Realized paper P/L: ${payload.get('realized_paper_pl_usd')}",
+        f"Unrealized paper P/L: ${payload.get('unrealized_paper_pl_usd')}",
+        f"Current buy size: ${payload.get('current_buy_size_usd')}",
         f"Open paper positions: {len(payload['open_positions'])}",
         f"Runtime mode: {payload.get('runtime_mode')}",
         f"Live bus events: {payload.get('live_bus_events')}",
@@ -2736,7 +2766,7 @@ button.ca{{border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:4p
 function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{document.getElementById('copy-status').textContent='Copied CA: '+value;}});}}
 </script></head><body>
 <h1>Rule Runtime v1 Paper Monitor</h1>
-<div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_positions'])}</b></div><div class=\"stat\">Rejected<br><b>{len(payload['rejected_entries'])}</b></div><div class=\"stat\">Paper buys<br><b>{payload['paper_buys']}</b></div><div class=\"stat\">Paper sells<br><b>{payload['paper_sells']}</b></div></div>
+	<div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open value<br><b>${payload.get('open_position_value_usd')}</b></div><div class=\"stat\">Realized P/L<br><b>${payload.get('realized_paper_pl_usd')}</b></div><div class=\"stat\">Unrealized P/L<br><b>${payload.get('unrealized_paper_pl_usd')}</b></div><div class=\"stat\">15% buy size<br><b>${payload.get('current_buy_size_usd')}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_positions'])}</b></div><div class=\"stat\">Rejected<br><b>{len(payload['rejected_entries'])}</b></div><div class=\"stat\">Paper buys<br><b>{payload['paper_buys']}</b></div><div class=\"stat\">Paper sells<br><b>{payload['paper_sells']}</b></div></div>
 <p class=\"guard\">Paper-only monitor. Live trading, wallet execution, signing, swaps, and routing are disabled.</p>
 <p id=\"copy-status\"><small>Click any CA to copy it.</small></p>
 <h2>Latency</h2>
