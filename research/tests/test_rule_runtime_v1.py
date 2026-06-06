@@ -1149,7 +1149,9 @@ def test_unsupported_token_program_rejects_paper_buy(tmp_path: Path) -> None:
     assert decision["decision"] == "paper_rejected_entry"
     assert decision["rejection_reason"] == "unsupported_token_program"
     assert "unsupported_token_program" in decision["risk_labels"]
-    assert rule_runtime_status(config)["paper_buys"] == 0
+    status = rule_runtime_status(config)
+    assert status["paper_buys"] == 0
+    assert status["unsupported_token_program_reject_count"] == 1
 
 
 def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(tmp_path: Path) -> None:
@@ -1170,7 +1172,11 @@ def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(
     assert "dev_pump_suspect" in decision["risk_labels"]
     assert "fake_volume_suspect" in decision["risk_labels"]
     assert "missing_holder_depth" in decision["risk_labels"]
-    assert rule_runtime_status(config)["paper_buys"] == 0
+    status = rule_runtime_status(config)
+    assert status["paper_buys"] == 0
+    assert status["dev_pump_suspect_count"] >= 1
+    assert status["fake_volume_suspect_count"] >= 1
+    assert status["missing_holder_depth_label_count"] >= 1
 
 
 def test_holder_gate_and_mayhem_labels_are_entry_safe(tmp_path: Path) -> None:

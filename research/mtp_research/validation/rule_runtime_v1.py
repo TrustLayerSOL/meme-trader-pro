@@ -1967,11 +1967,13 @@ def _runtime_safety_patch_summary(config: RuleRuntimeConfig, *, status: dict[str
         "stagnation_exit_added": True,
         "status": {
             "duplicate_same_state_confirmation_reject_count": status.get("duplicate_same_state_confirmation_reject_count"),
+            "unsupported_token_program_reject_count": status.get("unsupported_token_program_reject_count"),
             "chase_guard_reject_count": status.get("chase_guard_reject_count"),
             "holder_count_lte_1_reject_count": status.get("holder_count_lte_1_reject_count"),
             "mayhem_label_count": status.get("mayhem_label_count"),
             "fake_volume_suspect_count": status.get("fake_volume_suspect_count"),
             "dev_pump_suspect_count": status.get("dev_pump_suspect_count"),
+            "missing_holder_depth_label_count": status.get("missing_holder_depth_label_count"),
             "stagnation_exit_count": status.get("stagnation_exit_count"),
             "valid_paper_buys": status.get("valid_paper_buys"),
             "voided_paper_buys": status.get("voided_paper_buys"),
@@ -2002,11 +2004,13 @@ def _runtime_safety_patch_summary_md(summary: dict[str, Any]) -> str:
             f"- Mayhem label-only: `{summary.get('mayhem_label_only')}`",
             f"- Stagnation exit added: `{summary.get('stagnation_exit_added')}`",
             f"- Duplicate same-state rejects: `{status.get('duplicate_same_state_confirmation_reject_count')}`",
+            f"- Unsupported token-program rejects: `{status.get('unsupported_token_program_reject_count')}`",
             f"- Chase guard rejects: `{status.get('chase_guard_reject_count')}`",
             f"- Holder <=1 rejects: `{status.get('holder_count_lte_1_reject_count')}`",
             f"- Mayhem labels: `{status.get('mayhem_label_count')}`",
             f"- Dev-pump suspect labels: `{status.get('dev_pump_suspect_count')}`",
             f"- Fake-volume suspect labels: `{status.get('fake_volume_suspect_count')}`",
+            f"- Missing holder-depth labels: `{status.get('missing_holder_depth_label_count')}`",
             f"- Stagnation exits: `{status.get('stagnation_exit_count')}`",
             f"- Valid/voided/rejected paper buys: `{status.get('valid_paper_buys')}` / `{status.get('voided_paper_buys')}` / `{status.get('rejected_paper_entries')}`",
             f"- Paper cash/wallet: `${status.get('cash_usd')}` / `${status.get('wallet_usd')}`",
@@ -4015,12 +4019,15 @@ def _runtime_safety_counts(
     )
     return {
         "duplicate_same_state_confirmation_reject_count": len(duplicate_confirmation_mints),
+        "unsupported_token_program_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "unsupported_token_program")
+        + sum(1 for row in void_rows if row.get("void_reason") == "unsupported_token_program"),
         "chase_guard_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "chase_guard_exceeded")
         + sum(1 for row in void_rows if row.get("void_reason") == "chase_guard_exceeded"),
         "holder_count_lte_1_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "holder_count_lte_1_hard_reject"),
         "mayhem_label_count": len(mayhem_mints),
         "fake_volume_suspect_count": labels.count("fake_volume_suspect"),
         "dev_pump_suspect_count": labels.count("dev_pump_suspect"),
+        "missing_holder_depth_label_count": labels.count("missing_holder_depth"),
         "low_holder_depth_label_count": labels.count("low_holder_depth_2_to_4"),
         "stagnation_exit_watch_count": sum(1 for row in (state.get("open_positions") or {}).values() if _num(row.get("runup_from_entry_pct")) and (_num(row.get("runup_from_entry_pct")) or 0) >= STAGNATION_RUNUP_PCT),
         "mayhem_stagnation_watch_count": sum(1 for row in (state.get("open_positions") or {}).values() if "mayhem_mode" in (row.get("risk_labels") or []) and _num(row.get("runup_from_entry_pct")) and (_num(row.get("runup_from_entry_pct")) or 0) >= STAGNATION_RUNUP_PCT),
@@ -4055,12 +4062,14 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         f"Rejected entries: {len(payload['rejected_entries'])}",
         f"Valid paper buys: {payload.get('valid_paper_buys')}",
         f"Voided paper buys: {payload.get('voided_paper_buys')}",
+        f"Unsupported token-program rejects: {payload.get('unsupported_token_program_reject_count')}",
         f"Chase guard rejects: {payload.get('chase_guard_reject_count')}",
         f"Duplicate confirmation rejects: {payload.get('duplicate_same_state_confirmation_reject_count')}",
         f"Holder <=1 rejects: {payload.get('holder_count_lte_1_reject_count')}",
         f"Mayhem labels: {payload.get('mayhem_label_count')}",
         f"Dev-pump suspect labels: {payload.get('dev_pump_suspect_count')}",
         f"Fake-volume suspect labels: {payload.get('fake_volume_suspect_count')}",
+        f"Missing holder-depth labels: {payload.get('missing_holder_depth_label_count')}",
         f"Stagnation exits: {payload.get('stagnation_exit_count')}",
         "",
         "## Rule Runtime v1 Variants",
@@ -4223,7 +4232,7 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 </script></head><body>
 <h1>Rule Runtime v1 Paper Monitor</h1>
 	<div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open value<br><b>${payload.get('open_position_value_usd')}</b></div><div class=\"stat\">Realized P/L<br><b>${payload.get('realized_paper_pl_usd')}</b></div><div class=\"stat\">Unrealized P/L<br><b>${payload.get('unrealized_paper_pl_usd')}</b></div><div class=\"stat\">15% buy size<br><b>${payload.get('current_buy_size_usd')}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_positions'])}</b></div><div class=\"stat\">Rejected<br><b>{len(payload['rejected_entries'])}</b></div><div class=\"stat\">Paper buys<br><b>{payload['paper_buys']}</b></div><div class=\"stat\">Paper sells<br><b>{payload['paper_sells']}</b></div></div>
-<div class=\"stats\"><div class=\"stat\">Valid buys<br><b>{payload.get('valid_paper_buys')}</b></div><div class=\"stat\">Voided buys<br><b>{payload.get('voided_paper_buys')}</b></div><div class=\"stat\">Chase rejects<br><b>{payload.get('chase_guard_reject_count')}</b></div><div class=\"stat\">Duplicate confirms<br><b>{payload.get('duplicate_same_state_confirmation_reject_count')}</b></div><div class=\"stat\">Holder <=1 rejects<br><b>{payload.get('holder_count_lte_1_reject_count')}</b></div><div class=\"stat\">Mayhem labels<br><b>{payload.get('mayhem_label_count')}</b></div><div class=\"stat\">Dev-pump labels<br><b>{payload.get('dev_pump_suspect_count')}</b></div><div class=\"stat\">Fake-volume labels<br><b>{payload.get('fake_volume_suspect_count')}</b></div><div class=\"stat\">Stagnation exits<br><b>{payload.get('stagnation_exit_count')}</b></div></div>
+<div class=\"stats\"><div class=\"stat\">Valid buys<br><b>{payload.get('valid_paper_buys')}</b></div><div class=\"stat\">Voided buys<br><b>{payload.get('voided_paper_buys')}</b></div><div class=\"stat\">Unsupported token rejects<br><b>{payload.get('unsupported_token_program_reject_count')}</b></div><div class=\"stat\">Chase rejects<br><b>{payload.get('chase_guard_reject_count')}</b></div><div class=\"stat\">Duplicate confirms<br><b>{payload.get('duplicate_same_state_confirmation_reject_count')}</b></div><div class=\"stat\">Holder <=1 rejects<br><b>{payload.get('holder_count_lte_1_reject_count')}</b></div><div class=\"stat\">Mayhem labels<br><b>{payload.get('mayhem_label_count')}</b></div><div class=\"stat\">Dev-pump labels<br><b>{payload.get('dev_pump_suspect_count')}</b></div><div class=\"stat\">Fake-volume labels<br><b>{payload.get('fake_volume_suspect_count')}</b></div><div class=\"stat\">Missing holder-depth labels<br><b>{payload.get('missing_holder_depth_label_count')}</b></div><div class=\"stat\">Stagnation exits<br><b>{payload.get('stagnation_exit_count')}</b></div></div>
 <p class=\"guard\">Paper-only monitor. Live trading, wallet execution, signing, swaps, and routing are disabled.</p>
 <p id=\"copy-status\"><small>Click any CA to copy it.</small></p>
 <h2>Paper Buy FDV Reconciliation Warnings</h2>
