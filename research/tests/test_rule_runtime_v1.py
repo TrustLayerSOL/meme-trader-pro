@@ -1200,6 +1200,11 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
             "observed_to_probe_started_ms": 10.0,
             "probe_started_to_first_curve_state_ms": 10.0,
             "observed_to_first_fdv_emitted_ms": 20.0,
+            "probe_attempt_count": 2,
+            "account_not_found_retry_count": 1,
+            "account_not_found_recovered_by_retry": True,
+            "first_failure_reason": "account_not_found",
+            "retry_delays_ms": [100.0],
             "winning_probe_source": "getAccountInfo_processed",
             "probe_status": "success",
             "probe_scheduled_during_stream": create.get("probe_scheduled_during_stream"),
@@ -1242,6 +1247,8 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
 
     assert probe_started_during_stream == [True]
     assert summary["probes_started_during_stream"] == 1
+    assert summary["account_not_found_retries"] == 1
+    assert summary["account_not_found_recovered_by_retry"] == 1
     assert summary["observed_to_probe_started_p50_p90_p99"] == {"p50": 10.0, "p90": 10.0, "p99": 10.0}
     assert summary["observed_to_first_fdv_p50_p90_p99"] == {"p50": 20.0, "p90": 20.0, "p99": 20.0}
 

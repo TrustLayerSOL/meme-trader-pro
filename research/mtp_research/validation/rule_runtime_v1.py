@@ -1571,6 +1571,18 @@ def _copy_first_fdv_probe_fields(source: dict[str, Any], target: dict[str, Any])
         "decode_latency_ms",
         "observed_to_first_fdv_account_state_ms",
         "first_fdv_source",
+        "create_observed_at",
+        "probe_started_at",
+        "first_curve_state_at",
+        "first_fdv_emitted_at",
+        "observed_to_probe_started_ms",
+        "probe_started_to_first_curve_state_ms",
+        "observed_to_first_fdv_emitted_ms",
+        "probe_attempt_count",
+        "account_not_found_retry_count",
+        "account_not_found_recovered_by_retry",
+        "first_failure_reason",
+        "retry_delays_ms",
     ]:
         if key in source:
             target[key] = source.get(key)
@@ -2475,6 +2487,9 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         warnings.append("transactionSubscribe_unsupported_fallback_to_logs")
     if probe_failures:
         warnings.append("bonding_curve_account_probe_failures_present")
+    account_not_found_retries = int(sum(_num(row.get("account_not_found_retry_count")) or 0 for row in probe_rows))
+    account_not_found_recovered = sum(1 for row in probe_rows if row.get("account_not_found_recovered_by_retry") is True)
+    account_not_found_final_failures = sum(1 for row in probe_rows if row.get("account_not_found_final_failure") is True)
     return {
         "transactionSubscribe_supported": bool(recommended.get("transactionSubscribe_supported")),
         "endpoint_used": recommended.get("name"),
@@ -2484,6 +2499,11 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "probes_started_during_stream": sum(1 for row in probe_rows if row.get("probe_scheduled_during_stream") is True),
         "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
+        "first_attempt_successes": sum(1 for row in probe_rows if row.get("probe_status") == "success" and int(_num(row.get("probe_attempt_count")) or 1) == 1),
+        "account_not_found_retries": account_not_found_retries,
+        "account_not_found_recovered_by_retry": account_not_found_recovered,
+        "account_not_found_final_failures": account_not_found_final_failures,
+        "account_not_found_retry_recovery_rate": _round_num(account_not_found_recovered / max(1, account_not_found_recovered + account_not_found_final_failures)),
         "first_fdv_from_bonding_curve_account_state": int(source_summary.get("bonding_curve_account_state_successes") or 0),
         "first_fdv_from_transaction_delta": int(source_summary.get("transaction_delta_successes") or 0),
         "first_fdv_from_unknown": int(source_summary.get("unknown_successes") or 0),
@@ -2632,6 +2652,11 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- probes started during stream: {txsub.get('probes_started_during_stream')}",
             f"- curve account probes succeeded: {txsub.get('curve_account_probes_succeeded')}",
             f"- curve account probes failed: {txsub.get('curve_account_probes_failed')}",
+            f"- first-attempt successes: {txsub.get('first_attempt_successes')}",
+            f"- account-not-found retries: {txsub.get('account_not_found_retries')}",
+            f"- account-not-found recovered by retry: {txsub.get('account_not_found_recovered_by_retry')}",
+            f"- account-not-found final failures: {txsub.get('account_not_found_final_failures')}",
+            f"- account-not-found retry recovery rate: {txsub.get('account_not_found_retry_recovery_rate')}",
             f"- first FDV from bonding curve account-state: {txsub.get('first_fdv_from_bonding_curve_account_state')}",
             f"- first FDV from transaction delta: {txsub.get('first_fdv_from_transaction_delta')}",
             f"- observed to probe started p50/p90/p99: {txsub.get('observed_to_probe_started_p50_p90_p99')}",
@@ -2744,6 +2769,8 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 <p>transactionSubscribe supported: {html.escape(str(txsub.get('transactionSubscribe_supported')))}; endpoint used: {html.escape(str(txsub.get('endpoint_used')))}</p>
 <p>Create events decoded: {html.escape(str(txsub.get('create_events_decoded')))}; curve PDA verified: {html.escape(str(txsub.get('curve_pda_verified')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
+	<p>First-attempt successes: {html.escape(str(txsub.get('first_attempt_successes')))}; account-not-found retries: {html.escape(str(txsub.get('account_not_found_retries')))}</p>
+	<p>Account-not-found recovered by retry: {html.escape(str(txsub.get('account_not_found_recovered_by_retry')))}; final failures: {html.escape(str(txsub.get('account_not_found_final_failures')))}; recovery rate: {html.escape(str(txsub.get('account_not_found_retry_recovery_rate')))}</p>
 	<p>First FDV source counts: account-state {html.escape(str(txsub.get('first_fdv_from_bonding_curve_account_state')))}, transaction-delta {html.escape(str(txsub.get('first_fdv_from_transaction_delta')))}, unknown {html.escape(str(txsub.get('first_fdv_from_unknown')))}</p>
 	<p>Observed to probe started p50/p90/p99: {html.escape(str(txsub.get('observed_to_probe_started_p50_p90_p99')))}</p>
 	<p>Probe started to first curve state p50/p90/p99: {html.escape(str(txsub.get('probe_started_to_first_curve_state_p50_p90_p99')))}</p>
@@ -2995,6 +3022,11 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "probes_started_during_stream": int(txsub.get("probes_started_during_stream") or 0),
         "bonding_curve_probes_succeeded": int(txsub.get("curve_account_probes_succeeded") or 0),
         "bonding_curve_probes_failed": int(txsub.get("curve_account_probes_failed") or 0),
+        "first_attempt_successes": int(txsub.get("first_attempt_successes") or 0),
+        "account_not_found_retries": int(txsub.get("account_not_found_retries") or 0),
+        "account_not_found_recovered_by_retry": int(txsub.get("account_not_found_recovered_by_retry") or 0),
+        "account_not_found_final_failures": int(txsub.get("account_not_found_final_failures") or 0),
+        "account_not_found_retry_recovery_rate": txsub.get("account_not_found_retry_recovery_rate"),
         "first_fdv_source_mix": (status.get("first_fdv_probe_sources") or {}).get("source_mix") or {},
         "observed_to_probe_started_p50_p90_p99": txsub.get("observed_to_probe_started_p50_p90_p99"),
         "probe_started_to_first_curve_state_p50_p90_p99": txsub.get("probe_started_to_first_curve_state_p50_p90_p99"),
@@ -3056,6 +3088,11 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary_md(summary: dict[s
             f"- Decoded create events: `{summary['decoded_create_events']}`",
             f"- Accepted births: `{summary['accepted_births']}`",
             f"- Bonding curve probes started/during-stream/succeeded/failed: `{summary['bonding_curve_probes_started']}` / `{summary['probes_started_during_stream']}` / `{summary['bonding_curve_probes_succeeded']}` / `{summary['bonding_curve_probes_failed']}`",
+            f"- First-attempt successes: `{summary['first_attempt_successes']}`",
+            f"- Account-not-found retries: `{summary['account_not_found_retries']}`",
+            f"- Account-not-found recovered by retry: `{summary['account_not_found_recovered_by_retry']}`",
+            f"- Account-not-found final failures: `{summary['account_not_found_final_failures']}`",
+            f"- Account-not-found retry recovery rate: `{summary['account_not_found_retry_recovery_rate']}`",
             f"- First FDV source mix: `{summary['first_fdv_source_mix']}`",
             f"- Observed to probe started p50/p90/p99: `{summary['observed_to_probe_started_p50_p90_p99']}`",
             f"- Probe started to first curve state p50/p90/p99: `{summary['probe_started_to_first_curve_state_p50_p90_p99']}`",
@@ -3198,6 +3235,11 @@ def _status_md(summary: dict[str, Any]) -> str:
                 f"- probes started during stream: `{txsub.get('probes_started_during_stream')}`",
                 f"- curve account probes succeeded: `{txsub.get('curve_account_probes_succeeded')}`",
                 f"- curve account probes failed: `{txsub.get('curve_account_probes_failed')}`",
+                f"- first-attempt successes: `{txsub.get('first_attempt_successes')}`",
+                f"- account-not-found retries: `{txsub.get('account_not_found_retries')}`",
+                f"- account-not-found recovered by retry: `{txsub.get('account_not_found_recovered_by_retry')}`",
+                f"- account-not-found final failures: `{txsub.get('account_not_found_final_failures')}`",
+                f"- account-not-found retry recovery rate: `{txsub.get('account_not_found_retry_recovery_rate')}`",
                 f"- first FDV from bonding curve account-state: `{txsub.get('first_fdv_from_bonding_curve_account_state')}`",
                 f"- first FDV from transaction delta: `{txsub.get('first_fdv_from_transaction_delta')}`",
                 f"- first FDV from unknown: `{txsub.get('first_fdv_from_unknown')}`",

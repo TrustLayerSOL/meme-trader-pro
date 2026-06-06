@@ -309,3 +309,93 @@ def test_get_account_info_probe_row_uses_min_context_slot_and_emits_runtime_even
     assert row["observed_to_first_fdv_emitted_ms"] == 700.0
     assert emitted[0]["source_adapter"] == "helius_transaction_subscribe_bonding_curve_probe"
     assert json.loads(config.bonding_curve_account_probe_events_path.read_text(encoding="utf-8").splitlines()[0])["probe_status"] == "success"
+
+
+def test_account_not_found_retry_recovers_fast_first_fdv(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    seen_payloads: list[dict] = []
+
+    class FakeProbe:
+        requests_used = 2
+        http_429_count = 0
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def probe_create_event(self, create_event: dict, *, now_fn: object) -> object:
+            self.calls += 1
+            seen_payloads.append(create_event)
+
+            if self.calls == 1:
+                class MissingResult:
+                    probe_status = "failed"
+                    failure_reason = "account_not_found"
+                    getAccountInfo_latency_ms = 5.0
+                    accountSubscribe_latency_ms = None
+                    helius_rpc_request_count = 1
+                    http_429_count = 0
+
+                return MissingResult()
+
+            class SuccessResult:
+                probe_status = "success"
+                failure_reason = None
+                getAccountInfo_latency_ms = 8.0
+                accountSubscribe_latency_ms = None
+                decode_finished_at = 100.22
+                helius_rpc_request_count = 2
+                http_429_count = 0
+
+                def to_runtime_event(self, timestamp: float | None = None) -> dict:
+                    return {
+                        "event_id": "fdv-retry",
+                        "mint": create_event["mint"],
+                        "timestamp": timestamp or 100.22,
+                        "event_observed_at": create_event["observed_at"],
+                        "fdv_proxy": 9_500.0,
+                        "source_event_type": "fdv_path_update",
+                        "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                        "fdv_source": "bonding_curve_account_state",
+                        "fdv_source_confidence": "high",
+                    }
+
+            return SuccessResult()
+
+    emitted: list[dict] = []
+    sleep_calls: list[float] = []
+    probe = FakeProbe()
+    create_event = {
+        "event_id": "txsub_sig-retry_123_0",
+        "signature": "sig-retry",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "mint-retry",
+        "bonding_curve": "curve-retry",
+    }
+
+    row = run_bonding_curve_account_probe_for_create_event(
+        config,
+        create_event,
+        probe=probe,
+        event_callback=emitted.append,
+        now_fn=iter([100.0, 100.01, 100.11, 100.22]).__next__,
+        sleep_fn=sleep_calls.append,
+        account_not_found_retry_delays=(0.1, 0.25),
+    )
+
+    assert probe.calls == 2
+    assert sleep_calls == [0.1]
+    assert seen_payloads[0]["min_context_slot"] == 123
+    assert seen_payloads[1]["min_context_slot"] == 123
+    assert row["probe_status"] == "success"
+    assert row["probe_attempt_count"] == 2
+    assert row["account_not_found_retry_count"] == 1
+    assert row["account_not_found_recovered_by_retry"] is True
+    assert row["first_failure_reason"] == "account_not_found"
+    assert row["retry_delays_ms"] == [100.0]
+    assert row["observed_to_probe_started_ms"] == 0.0
+    assert row["probe_started_to_first_curve_state_ms"] == 220.0
+    assert row["observed_to_first_fdv_emitted_ms"] == 220.0
+    assert emitted[0]["account_not_found_recovered_by_retry"] is True
+    assert json.loads(config.bonding_curve_account_probe_events_path.read_text(encoding="utf-8").splitlines()[0])["account_not_found_recovered_by_retry"] is True

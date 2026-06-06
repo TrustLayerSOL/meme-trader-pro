@@ -29,6 +29,7 @@ TRANSACTION_SUBSCRIBE_REQUEST_ID = "mtp-pumpfun-transaction-subscribe"
 CAPABILITY_TRANSACTION_ID = "mtp-transaction-subscribe-capability"
 CAPABILITY_ACCOUNT_ID = "mtp-account-subscribe-capability"
 CAPABILITY_GET_ACCOUNT_ID = "mtp-get-account-info-capability"
+ACCOUNT_NOT_FOUND_RETRY_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
 _JSONL_WRITE_LOCK = threading.Lock()
 
 
@@ -226,20 +227,54 @@ def run_bonding_curve_account_probe_for_create_event(
     probe: Any,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
     now_fn: Callable[[], float] = time.time,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    account_not_found_retry_delays: tuple[float, ...] = ACCOUNT_NOT_FOUND_RETRY_DELAYS_SECONDS,
 ) -> dict[str, Any]:
     started = now_fn()
     create_observed_at = _num(create_event.get("observed_at") or create_event.get("create_log_observed_at") or create_event.get("timestamp"))
+    attempt_started_at = started
     probe_input = {
         **create_event,
         "observed_time": create_event.get("observed_at"),
         "create_log_observed_at": create_event.get("observed_at"),
         "min_context_slot": create_event.get("slot"),
     }
-    result = probe.probe_create_event(probe_input, now_fn=now_fn)
-    first_response = now_fn()
+    attempts: list[dict[str, Any]] = []
+    retry_delays_ms: list[float] = []
+    result: Any | None = None
+    first_response = attempt_started_at
+    for retry_index in range(len(tuple(account_not_found_retry_delays)) + 1):
+        result = probe.probe_create_event(probe_input, now_fn=now_fn)
+        first_response = now_fn()
+        status = str(getattr(result, "probe_status", "failed") or "failed")
+        failure_reason = getattr(result, "failure_reason", None)
+        attempts.append(
+            {
+                "attempt_index": retry_index,
+                "started_at": attempt_started_at,
+                "finished_at": first_response,
+                "probe_status": status,
+                "failure_reason": failure_reason,
+            }
+        )
+        if status == "success" or failure_reason != "account_not_found":
+            break
+        if retry_index >= len(tuple(account_not_found_retry_delays)):
+            break
+        delay = float(tuple(account_not_found_retry_delays)[retry_index])
+        retry_delays_ms.append(_round_ms(delay * 1000.0))
+        sleep_fn(delay)
+        attempt_started_at = now_fn()
     status = str(getattr(result, "probe_status", "failed") or "failed")
+    first_failure_reason = attempts[0].get("failure_reason") if attempts else None
+    account_not_found_retry_count = len(retry_delays_ms)
+    recovered_by_retry = bool(status == "success" and first_failure_reason == "account_not_found" and account_not_found_retry_count > 0)
     runtime_event = result.to_runtime_event(timestamp=first_response) if status == "success" else None
-    first_curve_state_at = _num(getattr(result, "decode_finished_at", None)) or _num(getattr(result, "get_account_info_finished_at", None)) or first_response
+    first_curve_state_at = (
+        _num(getattr(result, "decode_finished_at", None)) or _num(getattr(result, "get_account_info_finished_at", None)) or first_response
+        if status == "success"
+        else None
+    )
     first_fdv_emitted_at = first_curve_state_at if runtime_event is not None else None
     if runtime_event is not None:
         runtime_event["event_id"] = f"fdv_{create_event.get('event_id') or create_event.get('signature')}_{int(first_response * 1000)}"
@@ -254,6 +289,11 @@ def run_bonding_curve_account_probe_for_create_event(
         runtime_event["observed_to_probe_started_ms"] = _duration_ms(create_observed_at, started)
         runtime_event["probe_started_to_first_curve_state_ms"] = _duration_ms(started, first_curve_state_at)
         runtime_event["observed_to_first_fdv_emitted_ms"] = _duration_ms(create_observed_at, first_fdv_emitted_at)
+        runtime_event["probe_attempt_count"] = len(attempts)
+        runtime_event["account_not_found_retry_count"] = account_not_found_retry_count
+        runtime_event["account_not_found_recovered_by_retry"] = recovered_by_retry
+        runtime_event["first_failure_reason"] = first_failure_reason
+        runtime_event["retry_delays_ms"] = retry_delays_ms
     winning = "getAccountInfo_processed" if status == "success" else "none"
     row = {
         "event_id": f"probe_{create_event.get('event_id') or create_event.get('signature')}_{int(started * 1000)}",
@@ -270,6 +310,14 @@ def run_bonding_curve_account_probe_for_create_event(
         "first_fdv_emitted_at": first_fdv_emitted_at,
         "first_response_at": first_response,
         "winning_probe_source": winning,
+        "probe_attempt_count": len(attempts),
+        "account_not_found_retry_count": account_not_found_retry_count,
+        "account_not_found_recovered_by_retry": recovered_by_retry,
+        "account_not_found_final_failure": bool(status != "success" and getattr(result, "failure_reason", None) == "account_not_found"),
+        "first_failure_reason": first_failure_reason,
+        "final_failure_reason": None if status == "success" else getattr(result, "failure_reason", None),
+        "retry_delays_ms": retry_delays_ms,
+        "attempts": attempts,
         "observed_to_probe_started_ms": _duration_ms(create_observed_at, started),
         "probe_started_to_first_curve_state_ms": _duration_ms(started, first_curve_state_at),
         "observed_to_first_fdv_emitted_ms": _duration_ms(create_observed_at, first_fdv_emitted_at),
@@ -473,6 +521,12 @@ def _duration_ms(start: float | int | str | None, end: float | int | str | None)
     if started is None or ended is None:
         return None
     return round((ended - started) * 1000.0, 3)
+
+
+def _round_ms(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 3)
 
 
 def _num(value: Any) -> float | None:
