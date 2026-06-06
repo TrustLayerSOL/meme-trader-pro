@@ -479,6 +479,7 @@ def run_no_laserstream_lifecycle_smoke(
     enable_public_uri_fetch: bool = True,
     enable_dexscreener_metadata: bool = False,
     hot_path_event_callback: Any | None = None,
+    first_fdv_probe: Any | None = None,
 ) -> dict[str, Any]:
     initialize_official_lifecycle_namespace(config, reset=execute and _row_count(config.births_path) == 0)
     write_no_laserstream_bottleneck_audit(config)
@@ -547,9 +548,17 @@ def run_no_laserstream_lifecycle_smoke(
     post_target_deadline: float | None = None
     new_birth_collection_stopped_after_target = False
     warnings: list[str] = []
+    first_fdv_probe_stats: dict[str, Any] = {
+        "enabled": first_fdv_probe is not None,
+        "successes": 0,
+        "failures": 0,
+        "failures_by_reason": {},
+        "requests_used": 0,
+        "http_429_count": 0,
+    }
     try:
         while time.monotonic() < deadline:
-            if _requests_used(source, hydrator, fetcher, metadata_resolver) >= int(config.max_helius_credits_per_run):
+            if _requests_used(source, hydrator, fetcher, metadata_resolver, first_fdv_probe) >= int(config.max_helius_credits_per_run):
                 warnings.append("max_helius_credits_per_run_reached")
                 break
             crossed_20k_count = _current_crossed_20k_count(config)
@@ -614,6 +623,32 @@ def run_no_laserstream_lifecycle_smoke(
                     counters.stale_or_quarantined_births += 1
                     _append_jsonl(config.stale_births_path, [_stale_from_hydration(hydration, reason="missing_mint_after_hydration")])
                     continue
+                if first_fdv_probe is not None:
+                    probe_birth = {
+                        "mint": mint,
+                        "creator": candidate.get("creator") or hydration.get("creator"),
+                        "pool_address": candidate.get("pool_address") or candidate.get("bonding_curve") or hydration.get("bonding_curve"),
+                        "bonding_curve": candidate.get("bonding_curve") or candidate.get("pool_address") or hydration.get("bonding_curve"),
+                        "associated_bonding_curve": candidate.get("associated_bonding_curve") or hydration.get("associated_bonding_curve"),
+                        "observed_time": hydration.get("log_observed_at"),
+                        "create_log_observed_at": hydration.get("log_observed_at"),
+                        "create_time": candidate.get("launch_time") or candidate.get("block_time") or hydration.get("block_time"),
+                        "create_signature": hydration.get("signature"),
+                    }
+                    probe_result = first_fdv_probe.probe_birth(probe_birth, now_fn=now_fn)
+                    first_fdv_probe_stats["requests_used"] = int(getattr(first_fdv_probe, "requests_used", 0) or 0)
+                    first_fdv_probe_stats["http_429_count"] = int(getattr(first_fdv_probe, "http_429_count", 0) or 0)
+                    if getattr(probe_result, "probe_status", None) == "success":
+                        first_fdv_probe_stats["successes"] += 1
+                        if hot_path_event_callback is not None:
+                            event = probe_result.to_runtime_event(timestamp=now_fn())
+                            if event is not None:
+                                hot_path_event_callback(event)
+                    else:
+                        reason = str(getattr(probe_result, "failure_reason", None) or "unknown")
+                        first_fdv_probe_stats["failures"] += 1
+                        reasons = first_fdv_probe_stats["failures_by_reason"]
+                        reasons[reason] = int(reasons.get(reason) or 0) + 1
                 try:
                     events = fetcher.fetch_for_mint(
                         mint,
@@ -712,7 +747,7 @@ def run_no_laserstream_lifecycle_smoke(
     metadata_credits = int(getattr(getattr(metadata_queue, "resolver", None), "requests_used", 0) or 0) if metadata_queue is not None else 0
     critical_path_latency = _critical_path_latency_summary(config)
     metadata_status = _read_json(config.metadata_status_path)
-    credits = _requests_used(source, hydrator, fetcher, metadata_resolver) + metadata_credits
+    credits = _requests_used(source, hydrator, fetcher, metadata_resolver, first_fdv_probe) + metadata_credits
     _write_json(
         config.status_path,
         {
@@ -768,6 +803,7 @@ def run_no_laserstream_lifecycle_smoke(
         "fdv_path_before_20k": status.get("fdv_path_before_20k", 0),
         "metadata_rows_written": counters.metadata_rows_written,
         "holder_snapshots_written": counters.holder_snapshots_written,
+        "bonding_curve_account_state_probe": first_fdv_probe_stats,
         "estimated_helius_credits_used": credits,
         "network_calls_made": credits,
         "quality_audit_result": audit,

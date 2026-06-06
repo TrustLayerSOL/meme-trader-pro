@@ -11,9 +11,12 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     FROZEN_EXIT_RULE_ID,
     RuleRuntimeConfig,
     RuleRuntimeLiveAdapterConfig,
+    birth_coverage_audit,
+    bonding_curve_resolution_audit,
     first_fdv_queue_triage_audit,
     initialize_rule_runtime,
     rule_runtime_status,
+    run_helius_transaction_subscribe_bonding_curve_probe_smoke,
     run_first_fdv_queue_triage_smoke,
     run_rule_runtime_live_bus_collector_smoke,
     run_rule_runtime_mock_live_bus_smoke,
@@ -21,6 +24,7 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     run_rule_runtime_once,
     run_rule_runtime_smoke,
 )
+from research.mtp_research.validation.helius_transaction_subscribe_source import helius_transaction_subscribe_capability_audit
 
 
 def main() -> int:
@@ -168,6 +172,91 @@ def main() -> int:
         print(f"first_path_latency={queue.get('first_path_latency_p50_p90_p99')}")
         print(f"monitor_path={result['monitor_path']}")
         return 0
+    if args.mode == "birth-coverage-audit":
+        result = birth_coverage_audit(
+            config,
+            source_root=Path(args.collector_data_root).expanduser() if args.collector_data_root else None,
+        )
+        print("## Birth Coverage Audit")
+        print(f"provisional_birth_logs={result['provisional_birth_logs']}")
+        print(f"confirmed_create_parses={result['confirmed_create_parses']}")
+        print(f"fresh_accepted_births={result['fresh_accepted_births']}")
+        print(f"stale_quarantined_births={result['stale_quarantined_births']}")
+        print(f"parser_failures={result['parser_failures']}")
+        print(f"hydration_failures={result['hydration_failures']}")
+        print(f"duplicate_births={result['duplicate_births']}")
+        print(f"unrecognized_layouts={result['unrecognized_layouts']}")
+        print(f"accepted_birth_rate={result['accepted_birth_rate']}")
+        print(f"rejected_stale_rate={result['rejected_stale_rate']}")
+        print(f"report_path={config.birth_coverage_audit_json_path}")
+        return 0
+    if args.mode == "bonding-curve-resolution-audit":
+        result = bonding_curve_resolution_audit(
+            config,
+            source_root=Path(args.collector_data_root).expanduser() if args.collector_data_root else None,
+        )
+        print("## Bonding Curve Resolution Audit")
+        print(f"pumpfun_create_rows={result['pumpfun_create_rows']}")
+        print(f"mint_available={result['mint_available']}")
+        print(f"bonding_curve_available={result['bonding_curve_available']}")
+        print(f"associated_bonding_curve_available={result['associated_bonding_curve_available']}")
+        print(f"creator_available={result['creator_available']}")
+        print(f"bonding_curve_pda_derivable={result['bonding_curve_pda_derivable']}")
+        print(f"bonding_curve_pda_matches_known={result['bonding_curve_pda_matches_known']}")
+        print(f"path_rows_with_curve_or_pool_fields={result['path_rows_with_curve_or_pool_fields']}")
+        print(f"report_path={config.bonding_curve_resolution_audit_json_path}")
+        return 0
+    if args.mode == "transaction-subscribe-capability-audit":
+        result = helius_transaction_subscribe_capability_audit(config)
+        recommended = result.get("recommended_endpoint") or {}
+        print("## Helius transactionSubscribe Capability Audit")
+        print(f"recommended_endpoint={recommended.get('name')}")
+        for row in result.get("endpoints") or []:
+            print(
+                f"endpoint={row.get('name')} transactionSubscribe={row.get('transactionSubscribe_supported')} "
+                f"accountSubscribe={row.get('accountSubscribe_supported')} getAccountInfo={row.get('getAccountInfo_processed_supported')}"
+            )
+        print(f"report_path={config.helius_transaction_subscribe_capability_audit_json_path}")
+        return 0
+    if args.mode == "transaction-subscribe-smoke":
+        if args.reset:
+            initialize_rule_runtime(config, reset=True)
+        collector_root = Path(args.collector_data_root).expanduser() if args.collector_data_root else (
+            config.runtime_root / "live_collector_roots" / "latest_transaction_subscribe_smoke"
+        )
+        result = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+            config,
+            collector_data_root=collector_root,
+            target_births=args.target_births,
+            target_crossed_20k=args.target_crossed_20k,
+            max_runtime_seconds=args.max_seconds,
+            max_helius_credits=args.max_helius_credits,
+            signatures_per_mint=args.signatures_per_mint,
+            transactions_per_mint=args.transactions_per_mint,
+        )
+        print("## Helius transactionSubscribe Bonding-Curve Probe Smoke")
+        print(f"transactionSubscribe_supported={result['transactionSubscribe_supported']}")
+        print(f"transactionSubscribe_used={result['transactionSubscribe_used']}")
+        print(f"endpoint_used={result.get('endpoint_used')}")
+        print(f"decoded_create_events={result['decoded_create_events']}")
+        print(f"accepted_births={result['accepted_births']}")
+        print(f"bonding_curve_probes={result['bonding_curve_probes_started']}/{result['bonding_curve_probes_succeeded']}/{result['bonding_curve_probes_failed']}")
+        print(f"probes_started_during_stream={result['probes_started_during_stream']}")
+        print(f"observed_to_probe_started={result['observed_to_probe_started_p50_p90_p99']}")
+        print(f"probe_started_to_first_curve_state={result['probe_started_to_first_curve_state_p50_p90_p99']}")
+        print(f"observed_to_first_fdv={result['observed_to_first_fdv_p50_p90_p99']}")
+        print(f"first_fdv_source_mix={result['first_fdv_source_mix']}")
+        print(f"observed_to_first_fdv_account_state={result['observed_to_first_fdv_account_state_p50_p90_p99']}")
+        print(f"first_path_latency={result['first_path_latency_p50_p90_p99']}")
+        print(f"queue_total={result['first_fdv_queue_total']}")
+        print(f"tier_1_depth={result['tier_1_depth']}")
+        print(f"confirmed_10k_watches={result['confirmed_10k_watches']}")
+        print(f"confirmed_20k_candidates={result['confirmed_20k_candidates']}")
+        print(f"paper_buys={result['paper_buys']}")
+        print(f"paper_sells={result['paper_sells']}")
+        print(f"http_429={result['http_429']}")
+        print(f"monitor_path={result['monitor_path']}")
+        return 0
     print_status(rule_runtime_status(config))
     return 0
 
@@ -212,6 +301,14 @@ def print_status(status: dict) -> None:
     print(f"Queue depth by tier: {queue.get('queue_depth_by_tier')}")
     print(f"Oldest queued age by tier: {queue.get('oldest_queued_age_seconds_by_tier')}")
     print(f"Average queued age by tier: {queue.get('average_queued_age_seconds_by_tier')}")
+    print(f"Tier 1 depth: {queue.get('tier_1_depth')}")
+    print(f"Tier 1 oldest age: {queue.get('tier_1_oldest_age_seconds')}")
+    print(f"Tier 1 p50/p90 age: {queue.get('tier_1_age_p50_p90')}")
+    print(f"Tier 1 processed count: {queue.get('tier_1_processed_count')}")
+    print(f"Tier 1 archive count: {queue.get('tier_1_archive_count')}")
+    print(f"Tier 1 promotion count: {queue.get('tier_1_promotion_count')}")
+    print(f"Tier 1 retry count: {queue.get('tier_1_retry_count')}")
+    print(f"Tier 1 pressure mode: {queue.get('tier_1_pressure_mode')}")
     print(f"Archived no activity: {queue.get('archived_no_activity')}")
     print(f"Archived no FDV path timeout: {queue.get('archived_no_fdv_path_timeout')}")
     print(f"Archived parser failure: {queue.get('archived_parser_failure')}")
@@ -222,10 +319,44 @@ def print_status(status: dict) -> None:
     print(f"Promoted to confirmed 10k: {queue.get('promoted_to_confirmed_10k')}")
     print(f"Promoted to paper position: {queue.get('promoted_to_paper_position')}")
     print(f"First path success rate: {queue.get('first_path_success_rate')}")
+    print(f"First-FDV success rate: {queue.get('first_fdv_success_rate')}")
+    print(f"First-FDV timeout rate: {queue.get('first_fdv_timeout_rate')}")
+    print(f"First-FDV median latency: {queue.get('first_fdv_median_latency_ms')}")
     print(f"First path latency p50/p90/p99: {queue.get('first_path_latency_p50_p90_p99')}")
     print(f"Downgrade count: {queue.get('downgrade_count')}")
     print(f"Reactivation count: {queue.get('reactivation_count')}")
     print(f"HTTP 429 count: {queue.get('http_429_count')}")
+    sources = status.get("first_fdv_probe_sources") or {}
+    print("## First-FDV Probe Sources")
+    print(f"Bonding curve account-state successes: {sources.get('bonding_curve_account_state_successes')}")
+    print(f"Bonding curve account-state failures: {sources.get('bonding_curve_account_state_failures')}")
+    print(f"Transaction delta successes: {sources.get('transaction_delta_successes')}")
+    print(f"Confirmed path-state successes: {sources.get('confirmed_path_state_successes')}")
+    print(f"Unknown successes: {sources.get('unknown_successes')}")
+    print(f"Source mix: {sources.get('source_mix')}")
+    print(f"getAccountInfo p50/p90/p99: {sources.get('getAccountInfo_p50_p90_p99')}")
+    print(f"Decode p50/p90/p99: {sources.get('decode_p50_p90_p99')}")
+    print(f"Observed to account-state FDV p50/p90/p99: {sources.get('observed_to_first_fdv_account_state_p50_p90_p99')}")
+    print(f"accountSubscribe status: {sources.get('accountSubscribe_bonding_curve_status')}")
+    print(f"Active account subscriptions: {sources.get('active_account_subscriptions')}")
+    txsub = status.get("helius_transaction_subscribe_first_fdv") or {}
+    print("## Helius transactionSubscribe First-FDV")
+    print(f"transactionSubscribe supported: {txsub.get('transactionSubscribe_supported')}")
+    print(f"endpoint used: {txsub.get('endpoint_used')}")
+    print(f"create events decoded: {txsub.get('create_events_decoded')}")
+    print(f"curve PDA verified: {txsub.get('curve_pda_verified')}")
+    print(f"curve account probes started: {txsub.get('curve_account_probes_started')}")
+    print(f"curve account probes succeeded: {txsub.get('curve_account_probes_succeeded')}")
+    print(f"curve account probes failed: {txsub.get('curve_account_probes_failed')}")
+    print(f"first FDV from bonding_curve_account_state: {txsub.get('first_fdv_from_bonding_curve_account_state')}")
+    print(f"first FDV from transaction_delta: {txsub.get('first_fdv_from_transaction_delta')}")
+    print(f"first FDV from unknown: {txsub.get('first_fdv_from_unknown')}")
+    print(f"getAccountInfo p50/p90/p99: {txsub.get('getAccountInfo_p50_p90_p99')}")
+    print(f"accountSubscribe p50/p90/p99: {txsub.get('accountSubscribe_p50_p90_p99')}")
+    print(f"decode failures: {txsub.get('decode_failures')}")
+    print(f"probe failures by reason: {txsub.get('probe_failures_by_reason')}")
+    print(f"HTTP 429: {txsub.get('http_429')}")
+    print(f"warnings: {txsub.get('warnings')}")
     print("Metadata hot path blocked: true")
     print("No real trade flag: true")
     print(f"Monitor path: {status['monitor_html_path']}")
@@ -239,7 +370,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run or inspect the Rule Runtime v1 paper-only observer.")
     parser.add_argument(
         "--mode",
-        choices=["init", "status", "once", "smoke", "smoke-file-adapter", "replay-file", "smoke-live-bus", "triage-audit", "triage-smoke"],
+        choices=[
+            "init",
+            "status",
+            "once",
+            "smoke",
+            "smoke-file-adapter",
+            "replay-file",
+            "smoke-live-bus",
+            "triage-audit",
+            "triage-smoke",
+            "birth-coverage-audit",
+            "bonding-curve-resolution-audit",
+            "transaction-subscribe-capability-audit",
+            "transaction-subscribe-smoke",
+        ],
         default="status",
     )
     parser.add_argument("--data-root", default=None)

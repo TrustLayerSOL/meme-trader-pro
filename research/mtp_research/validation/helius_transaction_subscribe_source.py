@@ -1,0 +1,526 @@
+"""Helius Developer transactionSubscribe source for Pump.fun create events."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Callable
+import json
+import os
+import threading
+import time
+import urllib.error
+
+from research.mtp_research.validation.forward_birth_watch_followup_collector import rpc_url_to_websocket_url
+from research.mtp_research.validation.forward_efficient_mover_observer import (
+    _post_json_rpc,
+    resolve_helius_api_key,
+    resolve_helius_rpc_url,
+    resolve_helius_ws_url,
+)
+from research.mtp_research.validation.pumpfun_bonding_curve import (
+    PUMP_FUN_PROGRAM_ID,
+    bonding_curve_pda,
+    is_pumpfun_create_discriminator,
+    mint_authority_pda,
+)
+
+
+TRANSACTION_SUBSCRIBE_REQUEST_ID = "mtp-pumpfun-transaction-subscribe"
+CAPABILITY_TRANSACTION_ID = "mtp-transaction-subscribe-capability"
+CAPABILITY_ACCOUNT_ID = "mtp-account-subscribe-capability"
+CAPABILITY_GET_ACCOUNT_ID = "mtp-get-account-info-capability"
+_JSONL_WRITE_LOCK = threading.Lock()
+
+
+def build_transaction_subscribe_request(*, request_id: str = TRANSACTION_SUBSCRIBE_REQUEST_ID) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "transactionSubscribe",
+        "params": [
+            {
+                "failed": False,
+                "accountRequired": [PUMP_FUN_PROGRAM_ID, mint_authority_pda()],
+            },
+            {
+                "commitment": "processed",
+                "transactionDetails": "full",
+                "showRewards": False,
+                "maxSupportedTransactionVersion": 0,
+                "encoding": "jsonParsed",
+            },
+        ],
+    }
+
+
+class HeliusTransactionSubscribeCreateSource:
+    source_adapter = "helius_transaction_subscribe_pumpfun_create"
+
+    def __init__(
+        self,
+        *,
+        config: Any,
+        websocket_url: str | None = None,
+        ws_connect: Any | None = None,
+        now_fn: Callable[[], float] = time.time,
+        timeout_seconds: float = 2.0,
+    ) -> None:
+        self.config = config
+        self.websocket_url = websocket_url or resolve_helius_ws_url()
+        self._ws_connect = ws_connect or _websocket_connect
+        self.now_fn = now_fn
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.requests_used = 0
+
+    def availability(self) -> dict[str, Any]:
+        if not self.websocket_url:
+            return {
+                "source": self.source_adapter,
+                "available": False,
+                "missing_reason": "missing_helius_websocket_url",
+                "transactionSubscribe": False,
+            }
+        return {
+            "source": self.source_adapter,
+            "available": True,
+            "transactionSubscribe": True,
+            "websocket_url": _mask_endpoint(self.websocket_url),
+        }
+
+    def fetch_create_events(
+        self,
+        *,
+        max_events: int = 25,
+        max_seconds: float = 30.0,
+        on_create_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        deadline = time.monotonic() + max(0.1, float(max_seconds))
+        with self._ws_connect(self.websocket_url, open_timeout=min(5.0, self.timeout_seconds), close_timeout=1.0) as websocket:
+            request = build_transaction_subscribe_request()
+            websocket.send(json.dumps(request))
+            self.requests_used += 1
+            while len(rows) < max(0, int(max_events)) and time.monotonic() < deadline:
+                try:
+                    message = websocket.recv(timeout=min(1.0, max(0.1, deadline - time.monotonic())))
+                except TimeoutError:
+                    continue
+                raw = json.loads(message) if isinstance(message, str) else message
+                if not isinstance(raw, dict):
+                    continue
+                _append_jsonl(self.config.pumpfun_transaction_subscribe_raw_path, {**raw, "source": "transactionSubscribe"})
+                if raw.get("id") == TRANSACTION_SUBSCRIBE_REQUEST_ID:
+                    continue
+                decoded = decode_pumpfun_transaction_subscribe_notification(raw, observed_at=self.now_fn())
+                if not decoded:
+                    continue
+                for row in decoded:
+                    _append_jsonl(self.config.pumpfun_create_stream_events_path, row)
+                    rows.append(row)
+                    if on_create_event is not None:
+                        on_create_event(row)
+                    if len(rows) >= max(0, int(max_events)):
+                        break
+        return rows
+
+
+def decode_pumpfun_transaction_subscribe_notification(payload: dict[str, Any], *, observed_at: float | None = None) -> list[dict[str, Any]]:
+    result = _find_result(payload)
+    if not isinstance(result, dict):
+        return []
+    slot = _slot(result)
+    signature = _signature(result)
+    tx = _transaction_payload(result)
+    message = ((tx.get("transaction") or {}).get("message") or tx.get("message") or {}) if isinstance(tx, dict) else {}
+    observed = float(observed_at if observed_at is not None else time.time())
+    rows: list[dict[str, Any]] = []
+    for index, instruction in enumerate(message.get("instructions") or []):
+        if not isinstance(instruction, dict):
+            continue
+        program_id = instruction.get("programId") or instruction.get("program_id")
+        if program_id != PUMP_FUN_PROGRAM_ID:
+            continue
+        data = _instruction_data_bytes(instruction.get("data"))
+        instruction_type = is_pumpfun_create_discriminator(data)
+        if instruction_type is None:
+            continue
+        accounts = instruction.get("accounts") or []
+        if not isinstance(accounts, list):
+            accounts = []
+        mint = _account_string(accounts, 0)
+        curve_from_ix = _account_string(accounts, 2)
+        creator = _account_string(accounts, 5)
+        curve_pda = bonding_curve_pda(mint)
+        bonding_curve = curve_from_ix if curve_from_ix and curve_from_ix == curve_pda else curve_pda
+        parser_error = None
+        parser_status = "decoded"
+        if not mint:
+            parser_status = "decode_failed"
+            parser_error = "missing_mint_account"
+        elif not bonding_curve:
+            parser_status = "decode_failed"
+            parser_error = "missing_bonding_curve"
+        rows.append(
+            {
+                "event_id": f"txsub_{signature}_{slot}_{index}",
+                "signature": signature,
+                "slot": slot,
+                "observed_at": observed,
+                "mint": mint,
+                "bonding_curve": bonding_curve,
+                "bonding_curve_from_ix": curve_from_ix,
+                "bonding_curve_pda": curve_pda,
+                "bonding_curve_verified": bool(curve_from_ix and curve_pda and curve_from_ix == curve_pda),
+                "creator": creator,
+                "instruction_type": instruction_type,
+                "parser_status": parser_status,
+                "parser_error": parser_error,
+                "source": "transactionSubscribe",
+                "getTransaction_used": False,
+            }
+        )
+    return rows
+
+
+def helius_transaction_subscribe_capability_audit(
+    config: Any,
+    *,
+    endpoints: list[dict[str, str | None]] | None = None,
+    ws_connect: Any | None = None,
+    rpc_post: Any | None = None,
+    timeout_seconds: int = 5,
+) -> dict[str, Any]:
+    endpoints = endpoints or _default_capability_endpoints()
+    ws_connect = ws_connect or _websocket_connect
+    rpc_post = rpc_post or _post_json_rpc
+    results: list[dict[str, Any]] = []
+    for endpoint in endpoints:
+        result = _audit_endpoint(endpoint, ws_connect=ws_connect, rpc_post=rpc_post, timeout_seconds=timeout_seconds)
+        results.append(result)
+    recommended = next(
+        (
+            row
+            for row in results
+            if row.get("transactionSubscribe_supported")
+            and row.get("getAccountInfo_processed_supported")
+        ),
+        results[0] if results else {},
+    )
+    audit = {
+        "report_id": "helius_transaction_subscribe_capability_audit",
+        "updated_at": _utc_now(),
+        "endpoints": results,
+        "recommended_endpoint": recommended,
+        "paper_only": True,
+        "no_new_paid_source": True,
+    }
+    _write_json(config.helius_transaction_subscribe_capability_audit_json_path, audit)
+    config.helius_transaction_subscribe_capability_audit_md_path.write_text(_capability_audit_md(audit), encoding="utf-8")
+    return audit
+
+
+def run_bonding_curve_account_probe_for_create_event(
+    config: Any,
+    create_event: dict[str, Any],
+    *,
+    probe: Any,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
+    now_fn: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    started = now_fn()
+    create_observed_at = _num(create_event.get("observed_at") or create_event.get("create_log_observed_at") or create_event.get("timestamp"))
+    probe_input = {
+        **create_event,
+        "observed_time": create_event.get("observed_at"),
+        "create_log_observed_at": create_event.get("observed_at"),
+        "min_context_slot": create_event.get("slot"),
+    }
+    result = probe.probe_create_event(probe_input, now_fn=now_fn)
+    first_response = now_fn()
+    status = str(getattr(result, "probe_status", "failed") or "failed")
+    runtime_event = result.to_runtime_event(timestamp=first_response) if status == "success" else None
+    first_curve_state_at = _num(getattr(result, "decode_finished_at", None)) or _num(getattr(result, "get_account_info_finished_at", None)) or first_response
+    first_fdv_emitted_at = first_curve_state_at if runtime_event is not None else None
+    if runtime_event is not None:
+        runtime_event["event_id"] = f"fdv_{create_event.get('event_id') or create_event.get('signature')}_{int(first_response * 1000)}"
+        runtime_event["source_event_type"] = "fdv_path_update"
+        runtime_event["source_adapter"] = "helius_transaction_subscribe_bonding_curve_probe"
+        runtime_event["source_provenance"] = "helius_transaction_subscribe_bonding_curve_probe"
+        runtime_event["path_evidence_count"] = int(runtime_event.get("path_evidence_count") or 1)
+        runtime_event["create_observed_at"] = create_observed_at
+        runtime_event["probe_started_at"] = started
+        runtime_event["first_curve_state_at"] = first_curve_state_at
+        runtime_event["first_fdv_emitted_at"] = first_fdv_emitted_at
+        runtime_event["observed_to_probe_started_ms"] = _duration_ms(create_observed_at, started)
+        runtime_event["probe_started_to_first_curve_state_ms"] = _duration_ms(started, first_curve_state_at)
+        runtime_event["observed_to_first_fdv_emitted_ms"] = _duration_ms(create_observed_at, first_fdv_emitted_at)
+    winning = "getAccountInfo_processed" if status == "success" else "none"
+    row = {
+        "event_id": f"probe_{create_event.get('event_id') or create_event.get('signature')}_{int(started * 1000)}",
+        "mint": create_event.get("mint"),
+        "bonding_curve": create_event.get("bonding_curve"),
+        "source_create_signature": create_event.get("signature"),
+        "create_slot": create_event.get("slot"),
+        "create_observed_at": create_observed_at,
+        "probe_scheduled_during_stream": bool(create_event.get("probe_scheduled_during_stream")),
+        "probe_started_at": started,
+        "account_subscribe_started_at": None,
+        "get_account_info_started_at": started,
+        "first_curve_state_at": first_curve_state_at,
+        "first_fdv_emitted_at": first_fdv_emitted_at,
+        "first_response_at": first_response,
+        "winning_probe_source": winning,
+        "observed_to_probe_started_ms": _duration_ms(create_observed_at, started),
+        "probe_started_to_first_curve_state_ms": _duration_ms(started, first_curve_state_at),
+        "observed_to_first_fdv_emitted_ms": _duration_ms(create_observed_at, first_fdv_emitted_at),
+        "getAccountInfo_latency_ms": getattr(result, "getAccountInfo_latency_ms", None),
+        "accountSubscribe_latency_ms": getattr(result, "accountSubscribe_latency_ms", None),
+        "account_data_slot": getattr(result, "account_data_slot", None),
+        "account_data_encoding": "base64",
+        "probe_status": status,
+        "probe_error": None if status == "success" else getattr(result, "failure_reason", None),
+        "helius_rpc_request_count": int(getattr(result, "helius_rpc_request_count", None) or getattr(probe, "requests_used", 0) or 0),
+        "http_429_count": int(getattr(result, "http_429_count", None) or getattr(probe, "http_429_count", 0) or 0),
+    }
+    _append_jsonl(config.bonding_curve_account_probe_events_path, row)
+    if runtime_event is not None and event_callback is not None:
+        event_callback(runtime_event)
+    return row
+
+
+def _audit_endpoint(endpoint: dict[str, str | None], *, ws_connect: Any, rpc_post: Any, timeout_seconds: int) -> dict[str, Any]:
+    websocket_url = endpoint.get("websocket_url")
+    rpc_url = endpoint.get("rpc_url")
+    row: dict[str, Any] = {
+        "name": endpoint.get("name"),
+        "websocket_url": _mask_endpoint(websocket_url),
+        "rpc_url": _mask_endpoint(rpc_url),
+        "transactionSubscribe_supported": False,
+        "accountSubscribe_supported": False,
+        "getAccountInfo_processed_supported": False,
+        "errors": [],
+    }
+    if websocket_url:
+        try:
+            with ws_connect(websocket_url, open_timeout=min(5.0, timeout_seconds), close_timeout=1.0) as websocket:
+                websocket.send(json.dumps(build_transaction_subscribe_request(request_id=CAPABILITY_TRANSACTION_ID)))
+                tx_response = _recv_matching(websocket, CAPABILITY_TRANSACTION_ID, timeout_seconds=timeout_seconds)
+                row["transactionSubscribe_supported"] = "result" in tx_response and "error" not in tx_response
+                if tx_response.get("error"):
+                    row["errors"].append(f"transactionSubscribe:{tx_response.get('error')}")
+                websocket.send(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": CAPABILITY_ACCOUNT_ID,
+                            "method": "accountSubscribe",
+                            "params": [
+                                mint_authority_pda(),
+                                {"commitment": "processed", "encoding": "base64"},
+                            ],
+                        }
+                    )
+                )
+                account_response = _recv_matching(websocket, CAPABILITY_ACCOUNT_ID, timeout_seconds=timeout_seconds)
+                row["accountSubscribe_supported"] = "result" in account_response and "error" not in account_response
+                if account_response.get("error"):
+                    row["errors"].append(f"accountSubscribe:{account_response.get('error')}")
+        except Exception as exc:
+            row["errors"].append(f"websocket:{type(exc).__name__}:{exc}")
+    if rpc_url:
+        try:
+            response = rpc_post(
+                rpc_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": CAPABILITY_GET_ACCOUNT_ID,
+                    "method": "getAccountInfo",
+                    "params": [
+                        mint_authority_pda(),
+                        {"commitment": "processed", "encoding": "base64"},
+                    ],
+                },
+                timeout_seconds,
+            )
+            row["getAccountInfo_processed_supported"] = isinstance(response, dict) and "error" not in response
+            if isinstance(response, dict) and response.get("error"):
+                row["errors"].append(f"getAccountInfo:{response.get('error')}")
+        except Exception as exc:
+            row["errors"].append(f"getAccountInfo:{type(exc).__name__}:{exc}")
+    return row
+
+
+def _default_capability_endpoints() -> list[dict[str, str | None]]:
+    api_key = resolve_helius_api_key(load_project_dotenv=True)
+    endpoints: list[dict[str, str | None]] = []
+    if api_key:
+        endpoints.append(
+            {
+                "name": "helius_beta",
+                "websocket_url": f"wss://beta.helius-rpc.com/?api-key={api_key}",
+                "rpc_url": f"https://beta.helius-rpc.com/?api-key={api_key}",
+            }
+        )
+    rpc_url = resolve_helius_rpc_url(load_project_dotenv=True)
+    endpoints.append(
+        {
+            "name": "configured",
+            "websocket_url": resolve_helius_ws_url(load_project_dotenv=False) or rpc_url_to_websocket_url(rpc_url),
+            "rpc_url": rpc_url,
+        }
+    )
+    return endpoints
+
+
+def _recv_matching(websocket: Any, request_id: str, *, timeout_seconds: int) -> dict[str, Any]:
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        message = websocket.recv(timeout=min(1.0, max(0.1, deadline - time.monotonic())))
+        payload = json.loads(message) if isinstance(message, str) else message
+        if isinstance(payload, dict) and payload.get("id") == request_id:
+            return payload
+    return {"error": "capability_timeout"}
+
+
+def _find_result(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if isinstance(payload.get("result"), dict):
+        return payload.get("result")
+    params = payload.get("params")
+    if isinstance(params, dict) and isinstance(params.get("result"), dict):
+        return params.get("result")
+    return None
+
+
+def _slot(result: dict[str, Any]) -> int | None:
+    if result.get("slot") is not None:
+        return int(result.get("slot"))
+    context = result.get("context")
+    if isinstance(context, dict) and context.get("slot") is not None:
+        return int(context.get("slot"))
+    return None
+
+
+def _signature(result: dict[str, Any]) -> str:
+    if result.get("signature"):
+        return str(result.get("signature"))
+    tx = _transaction_payload(result)
+    signatures = ((tx.get("transaction") or {}).get("signatures") or tx.get("signatures") or []) if isinstance(tx, dict) else []
+    return str(signatures[0]) if signatures else ""
+
+
+def _transaction_payload(result: dict[str, Any]) -> dict[str, Any]:
+    tx = result.get("transaction")
+    if isinstance(tx, dict):
+        return tx
+    value = result.get("value")
+    if isinstance(value, dict) and isinstance(value.get("transaction"), dict):
+        return value["transaction"]
+    return result
+
+
+def _instruction_data_bytes(data: Any) -> bytes | None:
+    if data is None:
+        return None
+    if isinstance(data, list):
+        try:
+            return bytes(int(item) & 0xFF for item in data)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(data, str):
+        return _base58_decode(data)
+    return None
+
+
+def _account_string(accounts: list[Any], index: int) -> str | None:
+    if index >= len(accounts):
+        return None
+    value = accounts[index]
+    if isinstance(value, dict):
+        value = value.get("pubkey") or value.get("account") or value.get("address")
+    value = str(value or "")
+    return value or None
+
+
+def _base58_decode(value: str) -> bytes | None:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    decoded = 0
+    try:
+        for char in value:
+            decoded = decoded * 58 + alphabet.index(char)
+    except ValueError:
+        return None
+    leading_zeroes = len(value) - len(value.lstrip("1"))
+    payload = decoded.to_bytes((decoded.bit_length() + 7) // 8, "big") if decoded else b""
+    return b"\x00" * leading_zeroes + payload
+
+
+def _websocket_connect(*args: Any, **kwargs: Any) -> Any:
+    from websockets.sync.client import connect
+
+    return connect(*args, **kwargs)
+
+
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _JSONL_WRITE_LOCK:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _duration_ms(start: float | int | str | None, end: float | int | str | None) -> float | None:
+    started = _num(start)
+    ended = _num(end)
+    if started is None or ended is None:
+        return None
+    return round((ended - started) * 1000.0, 3)
+
+
+def _num(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _capability_audit_md(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Helius transactionSubscribe Capability Audit",
+        "",
+        f"- Updated: `{audit['updated_at']}`",
+        f"- Recommended endpoint: `{(audit.get('recommended_endpoint') or {}).get('name')}`",
+        "",
+        "| Endpoint | transactionSubscribe | accountSubscribe | getAccountInfo processed | Errors |",
+        "|---|---:|---:|---:|---|",
+    ]
+    for row in audit.get("endpoints") or []:
+        lines.append(
+            f"| `{row.get('name')}` | `{row.get('transactionSubscribe_supported')}` | `{row.get('accountSubscribe_supported')}` | `{row.get('getAccountInfo_processed_supported')}` | `{row.get('errors')}` |"
+        )
+    lines.append("")
+    lines.append("Read-only capability audit using existing Helius Developer RPC/WebSocket access.")
+    return "\n".join(lines) + "\n"
+
+
+def _mask_endpoint(endpoint: str | None) -> str | None:
+    if not endpoint:
+        return endpoint
+    api_key = os.getenv("HELIUS_API_KEY")
+    masked = endpoint
+    if api_key:
+        masked = masked.replace(api_key, "***")
+    if "api-key=" in masked:
+        return masked.split("api-key=", 1)[0] + "api-key=***"
+    return masked
+
+
+def _utc_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()

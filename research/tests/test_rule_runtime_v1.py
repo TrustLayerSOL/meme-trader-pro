@@ -10,14 +10,24 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     RuleRuntimeLiveAdapterConfig,
     RuleRuntimePriorityScheduler,
     archive_runtime_queue_candidates,
+    birth_coverage_audit,
     first_fdv_queue_triage_audit,
     initialize_rule_runtime,
     load_historical_rule_config,
     normalize_live_path_row_for_rule_runtime,
+    run_helius_transaction_subscribe_bonding_curve_probe_smoke,
     run_rule_runtime_live_adapter_once,
     run_first_fdv_queue_triage_smoke,
     run_rule_runtime_smoke,
     rule_runtime_status,
+)
+from research.mtp_research.validation.bonding_curve_account_state import (
+    BondingCurveState,
+    BondingCurveAccountStateProbe,
+    bonding_curve_pda,
+    bonding_curve_resolution_audit,
+    compute_fdv_from_bonding_curve_state,
+    decode_pump_bonding_curve_account,
 )
 from research.mtp_research.validation.official_lifecycle_watch import OfficialLifecycleV2Config, OfficialLifecycleStateMachine
 
@@ -41,6 +51,25 @@ def _event(mint: str, ts: float, fdv: float, *, events: int = 10, buys: int = 5,
     }
     row.update(extra)
     return row
+
+
+def _classic_curve_bytes(
+    *,
+    virtual_token_reserves: int = 1_000_000_000,
+    virtual_sol_reserves: int = 30_000_000_000,
+    real_token_reserves: int = 900_000_000,
+    real_sol_reserves: int = 10_000_000_000,
+    token_total_supply: int = 1_000_000_000,
+    complete: bool = False,
+) -> bytes:
+    fields = [
+        virtual_token_reserves,
+        virtual_sol_reserves,
+        real_token_reserves,
+        real_sol_reserves,
+        token_total_supply,
+    ]
+    return b"pumpacct" + b"".join(value.to_bytes(8, "little") for value in fields) + bytes([int(complete)])
 
 
 def test_load_historical_rule_config_prefers_refined_config_and_writes_audit(tmp_path: Path) -> None:
@@ -111,6 +140,234 @@ def test_initializes_manifest_ledgers_and_monitor_under_rule_runtime_namespace(t
     assert config.paper_rule_variant_exits_path.exists()
     assert config.latency_events_path.exists()
     assert 'content="10"' in config.monitor_html_path.read_text(encoding="utf-8")
+
+
+def test_bonding_curve_pda_derives_known_live_curve_and_handles_missing_mint() -> None:
+    assert (
+        bonding_curve_pda("2wubx5DrRJG1Ki25gSefzQEYtJegDUwVtMb7MR8ypump")
+        == "3eafeBvZDXbqqNdNP4NDWdWn7kD6KSn22rtNHNeTAKVK"
+    )
+    assert bonding_curve_pda("") is None
+
+
+def test_decode_pump_bonding_curve_account_classic_layout_and_compute_fdv() -> None:
+    state = decode_pump_bonding_curve_account(_classic_curve_bytes())
+
+    assert state.decode_status == "decoded"
+    assert state.layout_version == "pumpfun_classic_v1"
+    assert state.virtual_token_reserves == 1_000_000_000
+    assert state.virtual_sol_reserves == 30_000_000_000
+    assert state.real_token_reserves == 900_000_000
+    assert state.real_sol_reserves == 10_000_000_000
+    assert state.token_total_supply == 1_000_000_000
+    assert state.complete is False
+    assert state.quote_type == "sol"
+
+    result = compute_fdv_from_bonding_curve_state(state, sol_usd=150.0)
+
+    assert result.probe_status == "success"
+    assert result.fdv_source == "bonding_curve_account_state"
+    assert result.fdv_source_confidence == "high"
+    assert result.fdv_probe_method == "getAccountInfo_processed_bonding_curve"
+    assert result.price_sol == 0.03
+    assert result.fdv_sol == 30.0
+    assert result.fdv_usd == 4_500.0
+
+
+def test_compute_fdv_from_quote_reserves_when_quote_layout_is_supplied() -> None:
+    state = BondingCurveState(
+        decode_status="decoded",
+        layout_version="pumpfun_quote_token_v1",
+        virtual_token_reserves=1_000_000_000,
+        virtual_quote_reserves=2_000_000_000,
+        token_total_supply=1_000_000_000,
+        token_decimals=6,
+        quote_decimals=6,
+        quote_mint="quote-mint",
+        quote_type="quote_token",
+    )
+
+    result = compute_fdv_from_bonding_curve_state(state)
+
+    assert result.probe_status == "success"
+    assert result.price_quote == 2.0
+    assert result.fdv_quote == 2_000.0
+    assert result.fdv_usd is None
+    assert result.calculation_error == "fdv_usd_unavailable"
+
+
+def test_decoder_failure_does_not_fake_fdv() -> None:
+    state = decode_pump_bonding_curve_account(b"too-short")
+    result = compute_fdv_from_bonding_curve_state(state, sol_usd=150.0)
+
+    assert state.decode_status == "decode_failed"
+    assert state.decode_error == "account_data_too_short"
+    assert result.probe_status == "failed"
+    assert result.fdv_usd is None
+    assert result.calculation_error == "decode_failed:account_data_too_short"
+
+
+def test_account_state_probe_builds_first_fdv_event_from_mocked_get_account_info() -> None:
+    payload_data = _classic_curve_bytes(virtual_sol_reserves=1_000_000, token_total_supply=1_000_000_000)
+
+    def rpc_post(_rpc_url: str, payload: dict, _timeout: int) -> dict:
+        assert payload["method"] == "getAccountInfo"
+        assert payload["params"][1]["commitment"] == "processed"
+        assert payload["params"][1]["encoding"] == "base64"
+        import base64
+
+        return {
+            "result": {
+                "value": {
+                    "data": [base64.b64encode(payload_data).decode("ascii"), "base64"],
+                }
+            }
+        }
+
+    probe = BondingCurveAccountStateProbe(rpc_url="https://helius.invalid", rpc_post=rpc_post, sol_usd=100.0)
+    result = probe.probe_birth(
+        {
+            "mint": "2wubx5DrRJG1Ki25gSefzQEYtJegDUwVtMb7MR8ypump",
+            "observed_time": 100.0,
+            "bonding_curve": "3eafeBvZDXbqqNdNP4NDWdWn7kD6KSn22rtNHNeTAKVK",
+        },
+        now_fn=iter([100.010, 100.025, 100.030]).__next__,
+    )
+    event = result.to_runtime_event(timestamp=100.030)
+
+    assert result.probe_status == "success"
+    assert result.failure_reason is None
+    assert result.bonding_curve == "3eafeBvZDXbqqNdNP4NDWdWn7kD6KSn22rtNHNeTAKVK"
+    assert event is not None
+    assert event["mint"] == "2wubx5DrRJG1Ki25gSefzQEYtJegDUwVtMb7MR8ypump"
+    assert event["fdv_source"] == "bonding_curve_account_state"
+    assert event["fdv_source_confidence"] == "high"
+    assert event["fdv_probe_method"] == "getAccountInfo_processed_bonding_curve"
+    assert event["source_event_type"] == "first_fdv_account_state"
+    assert event["observed_to_bonding_curve_resolved_ms"] == 10.0
+    assert event["bonding_curve_resolved_to_getAccountInfo_ms"] == 15.0
+    assert event["getAccountInfo_latency_ms"] == 15.0
+    assert event["decode_latency_ms"] == 5.0
+    assert event["observed_to_first_fdv_account_state_ms"] == 30.0
+
+
+def test_transaction_delta_source_confirmation_cannot_create_single_row_paper_buy(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    result = engine.process_path_event(
+        _event(
+            "delta-only",
+            100,
+            25_000,
+            fdv_source="transaction_delta",
+            fdv_source_confidence="low",
+            confirmed_crossed_10k=True,
+            confirmed_crossed_20k=True,
+        )
+    )
+
+    assert result["paper_buy_created"] is False
+    assert result["confirmed_crossed_10k"] is False
+    assert result["confirmed_crossed_20k"] is False
+    assert _rows(config.paper_trades_path) == []
+
+
+def test_account_state_single_raw_row_does_not_buy_but_two_confirmed_rows_can_promote(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    first = engine.process_path_event(
+        _event("acct", 100, 22_000, fdv_source="bonding_curve_account_state", fdv_source_confidence="high")
+    )
+    assert first["paper_buy_created"] is False
+    assert _rows(config.paper_trades_path) == []
+
+    for row in [
+        _event("acct-ok", 100, 10_500, fdv_source="bonding_curve_account_state", fdv_source_confidence="high"),
+        _event("acct-ok", 120, 11_000, fdv_source="bonding_curve_account_state", fdv_source_confidence="high"),
+        _event("acct-ok", 150, 20_500, fdv_source="bonding_curve_account_state", fdv_source_confidence="high"),
+        _event("acct-ok", 170, 22_000, fdv_source="bonding_curve_account_state", fdv_source_confidence="high"),
+    ]:
+        result = engine.process_path_event(row)
+
+    assert result["confirmed_crossed_10k"] is True
+    assert result["confirmed_crossed_20k"] is True
+    assert result["paper_buy_created"] is True
+    assert len([row for row in _rows(config.paper_trades_path) if row["side"] == "paper_buy"]) == 1
+
+
+def test_first_fdv_source_metrics_and_latency_decomposition_are_reported(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(
+        _event(
+            "acct",
+            100,
+            9_000,
+            fdv_source="bonding_curve_account_state",
+            fdv_source_confidence="high",
+            fdv_probe_method="getAccountInfo_processed_bonding_curve",
+            observed_to_bonding_curve_resolved_ms=5.0,
+            bonding_curve_resolved_to_getAccountInfo_ms=7.0,
+            getAccountInfo_latency_ms=7.0,
+            decode_latency_ms=2.0,
+            observed_to_first_fdv_account_state_ms=14.0,
+        )
+    )
+    engine.process_path_event(_event("delta", 110, 4_000, fdv_source="transaction_delta", fdv_source_confidence="low"))
+
+    status = rule_runtime_status(config)
+    sources = status["first_fdv_probe_sources"]
+    latency = _rows(config.latency_events_path)[0]
+
+    assert sources["bonding_curve_account_state_successes"] == 1
+    assert sources["transaction_delta_successes"] == 1
+    assert sources["getAccountInfo_p50_p90_p99"] == {"p50": 7.0, "p90": 7.0, "p99": 7.0}
+    assert sources["decode_p50_p90_p99"] == {"p50": 2.0, "p90": 2.0, "p99": 2.0}
+    assert sources["observed_to_first_fdv_account_state_p50_p90_p99"] == {"p50": 14.0, "p90": 14.0, "p99": 14.0}
+    assert latency["first_fdv_source"] == "bonding_curve_account_state"
+    assert latency["observed_to_first_fdv_account_state_ms"] == 14.0
+
+
+def test_bonding_curve_resolution_audit_writes_resolution_fields(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    collector_root = tmp_path / "collector"
+    collector_root.mkdir()
+    (collector_root / "hydration_results.jsonl").write_text(
+        json.dumps(
+            {
+                "signature": "sig-a",
+                "hydration_status": "hydrated_create_confirmed",
+                "mint": "2wubx5DrRJG1Ki25gSefzQEYtJegDUwVtMb7MR8ypump",
+                "bonding_curve": "3eafeBvZDXbqqNdNP4NDWdWn7kD6KSn22rtNHNeTAKVK",
+                "associated_bonding_curve": "assoc-a",
+                "creator": "creator-a",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (collector_root / "births.jsonl").write_text("", encoding="utf-8")
+    (collector_root / "followup_paths.jsonl").write_text(json.dumps({"mint": "m", "pool_address": "pool-a"}) + "\n", encoding="utf-8")
+
+    audit = bonding_curve_resolution_audit(config, source_root=collector_root)
+
+    assert audit["pumpfun_create_rows"] == 1
+    assert audit["mint_available"] == 1
+    assert audit["bonding_curve_available"] == 1
+    assert audit["associated_bonding_curve_available"] == 1
+    assert audit["creator_available"] == 1
+    assert audit["bonding_curve_pda_derivable"] == 1
+    assert audit["bonding_curve_pda_matches_known"] == 1
+    assert audit["path_rows_with_curve_or_pool_fields"] == 1
+    assert config.bonding_curve_resolution_audit_json_path.exists()
+    assert "Bonding Curve Resolution Audit" in config.bonding_curve_resolution_audit_md_path.read_text(encoding="utf-8")
 
 
 def test_confirmed_10k_promotes_to_watch_and_logs_latency(tmp_path: Path) -> None:
@@ -444,6 +701,58 @@ def test_runtime_aging_downgrades_and_archives_stale_first_path_candidates(tmp_p
     assert status["queue_sizes"]["first_fdv_path"] == 0
 
 
+def test_tier_1_pressure_reports_oldest_first_retry_budget_and_rates(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    for index in range(6):
+        engine.process_path_event(_event(f"tier-one-{index}", 100 + index, 1_200, events=1, buys=0, wallets=1))
+
+    first_archive = archive_runtime_queue_candidates(
+        config,
+        now=121,
+        first_path_fast_attempt_window_seconds=15,
+        no_activity_archive_seconds=120,
+        tier_1_pressure_threshold=5,
+        tier_1_max_age_seconds=120,
+        tier_1_retry_interval_seconds=10,
+        tier_1_retry_budget=2,
+    )
+    second_archive = archive_runtime_queue_candidates(
+        config,
+        now=132,
+        first_path_fast_attempt_window_seconds=15,
+        no_activity_archive_seconds=120,
+        tier_1_pressure_threshold=5,
+        tier_1_max_age_seconds=120,
+        tier_1_retry_interval_seconds=10,
+        tier_1_retry_budget=2,
+    )
+
+    status = rule_runtime_status(config)
+    queue = status["first_fdv_queue"]
+    assert first_archive["tier_1_retry_scheduled"] == 6
+    assert second_archive["archived_no_activity"] == 6
+    assert queue["tier_1_depth"] == 0
+    assert queue["tier_1_oldest_age_seconds"] is None
+    assert queue["tier_1_age_p50_p90"] == {"p50": None, "p90": None}
+    assert queue["tier_1_processed_count"] == 6
+    assert queue["tier_1_archive_count"] == 6
+    assert queue["tier_1_promotion_count"] == 6
+    assert queue["tier_1_retry_count"] == 12
+    assert queue["tier_1_retry_budget"] == 2
+    assert queue["tier_1_pressure_mode"] is True
+    assert queue["tier_1_next_mints_oldest_first"] == []
+    assert queue["promotion_rate"] == 1.0
+    assert queue["archive_rate"] == 1.0
+    assert queue["first_fdv_success_rate"] == 1.0
+    assert queue["first_fdv_timeout_rate"] == 0.0
+    assert queue["first_fdv_median_latency_ms"] == 0.0
+    assert queue["metadata_hot_path_allowed"] is False
+    assert queue["metadata_enrichment_in_first_fdv"] is False
+
+
 def test_runtime_archives_birth_without_fdv_path_after_timeout(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
@@ -466,6 +775,72 @@ def test_runtime_archives_birth_without_fdv_path_after_timeout(tmp_path: Path) -
     state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
     assert archived["archived_no_fdv_path_timeout"] == 1
     assert state["candidates"]["birth-only"]["state"] == "archived_no_fdv_path_timeout"
+
+
+def test_birth_coverage_audit_reports_birth_parse_and_rejection_counts(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    collector_root = tmp_path / "data" / "forward_observation" / "official_lifecycle_watch_v2"
+    collector_root.mkdir(parents=True)
+    (collector_root / "provisional_births.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"signature": "s1", "mint": "m1"}),
+                json.dumps({"signature": "s2", "mint": "m2"}),
+                json.dumps({"signature": "s2", "mint": "m2"}),
+                json.dumps({"signature": "s3", "layout_status": "unrecognized"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (collector_root / "hydration_results.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"signature": "s1", "hydration_status": "confirmed", "candidate": {"mint": "m1"}}),
+                json.dumps({"signature": "s2", "hydration_status": "failed", "missing_reason": "parser_failure"}),
+                json.dumps({"signature": "s3", "hydration_status": "unrecognized_layout"}),
+                json.dumps({"signature": "s4", "hydration_status": "official", "candidate": {"mint": "m4"}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (collector_root / "births.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"signature": "s1", "mint": "m1"}),
+                json.dumps({"signature": "s4", "mint": "m4"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (collector_root / "stale_births.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"signature": "s2", "missing_reason": "parser_failure"}),
+                json.dumps({"signature": "s3", "missing_reason": "unrecognized_layout"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    audit = birth_coverage_audit(config)
+
+    assert audit["provisional_birth_logs"] == 4
+    assert audit["confirmed_create_parses"] == 2
+    assert audit["fresh_accepted_births"] == 2
+    assert audit["stale_quarantined_births"] == 2
+    assert audit["parser_failures"] == 1
+    assert audit["hydration_failures"] == 1
+    assert audit["duplicate_births"] == 1
+    assert audit["unrecognized_layouts"] == 1
+    assert audit["accepted_birth_rate"] == 0.5
+    assert audit["rejected_stale_rate"] == 0.5
+    assert config.birth_coverage_audit_json_path.exists()
+    assert "Birth Coverage Audit" in config.birth_coverage_audit_md_path.read_text(encoding="utf-8")
 
 
 def test_first_fdv_queue_triage_audit_writes_reports(tmp_path: Path) -> None:
@@ -515,6 +890,20 @@ def test_runtime_contains_no_live_execution_logic() -> None:
         "secretkey",
         "sign_transaction",
         "build_transaction",
+    ]
+    assert not any(term in text for term in forbidden)
+
+
+def test_bonding_curve_probe_uses_existing_helius_only_without_paid_provider_dependency() -> None:
+    text = Path("research/mtp_research/validation/bonding_curve_account_state.py").read_text(encoding="utf-8").lower()
+    forbidden = [
+        "laserstream",
+        "yellowstone",
+        "geyser",
+        "pumpportal",
+        "birdeye",
+        "bitquery",
+        "jupiter",
     ]
     assert not any(term in text for term in forbidden)
 
@@ -691,6 +1080,170 @@ def test_smoke_summary_writes_required_report_fields(tmp_path: Path) -> None:
         assert key in summary
     assert "Rule Runtime v1 Smoke Summary" in md
     assert "RULE_RUNTIME_V1_STATUS" in status_md
+
+
+def test_transaction_subscribe_smoke_resolves_beta_endpoint_before_stream(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+
+    captured: dict[str, object] = {}
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            captured["config"] = config
+            captured["websocket_url"] = websocket_url
+            captured["timeout_seconds"] = timeout_seconds
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+            captured["max_events"] = max_events
+            captured["max_seconds"] = max_seconds
+            captured["on_create_event"] = on_create_event
+            return []
+
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=3,
+        max_runtime_seconds=2.0,
+    )
+
+    assert captured["websocket_url"] == "wss://beta.helius-rpc.com/?api-key=test-key"
+    assert captured["timeout_seconds"] == 2.0
+    assert captured["max_events"] == 3
+    assert captured["max_seconds"] == 2.0
+    assert summary["transactionSubscribe_used"] is True
+
+
+def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-a_123_0",
+        "signature": "sig-a",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "mint-a",
+        "bonding_curve": "curve-a",
+        "parser_status": "decoded",
+    }
+    stream_active = {"value": False}
+    probe_started_during_stream: list[bool] = []
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+            assert on_create_event is not None
+            stream_active["value"] = True
+            append_row(self.config.pumpfun_create_stream_events_path, create_event)
+            on_create_event(dict(create_event))
+            for _ in range(100):
+                if probe_started_during_stream:
+                    break
+                import time
+
+                time.sleep(0.01)
+            stream_active["value"] = False
+            return [create_event]
+
+    def fake_probe_runner(config: RuleRuntimeConfig, create: dict, *, probe: object, event_callback=None, now_fn=None) -> dict:
+        probe_started_during_stream.append(stream_active["value"])
+        row = {
+            "event_id": "probe-a",
+            "mint": create["mint"],
+            "bonding_curve": create["bonding_curve"],
+            "source_create_signature": create["signature"],
+            "create_observed_at": create["observed_at"],
+            "probe_started_at": 100.01,
+            "first_curve_state_at": 100.02,
+            "first_fdv_emitted_at": 100.02,
+            "observed_to_probe_started_ms": 10.0,
+            "probe_started_to_first_curve_state_ms": 10.0,
+            "observed_to_first_fdv_emitted_ms": 20.0,
+            "winning_probe_source": "getAccountInfo_processed",
+            "probe_status": "success",
+            "probe_scheduled_during_stream": create.get("probe_scheduled_during_stream"),
+            "helius_rpc_request_count": 1,
+            "http_429_count": 0,
+        }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        if event_callback is not None:
+            event_callback(
+                {
+                    "event_id": "fdv-a",
+                    "mint": create["mint"],
+                    "timestamp": 100.02,
+                    "observed_at": create["observed_at"],
+                    "event_observed_at": create["observed_at"],
+                    "fdv_proxy": 9_000.0,
+                    "source_event_type": "fdv_path_update",
+                    "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                    "fdv_source": "bonding_curve_account_state",
+                    "fdv_source_confidence": "high",
+                    "observed_to_first_fdv_account_state_ms": 20.0,
+                }
+            )
+        return row
+
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=2.0,
+    )
+
+    assert probe_started_during_stream == [True]
+    assert summary["probes_started_during_stream"] == 1
+    assert summary["observed_to_probe_started_p50_p90_p99"] == {"p50": 10.0, "p90": 10.0, "p99": 10.0}
+    assert summary["observed_to_first_fdv_p50_p90_p99"] == {"p50": 20.0, "p90": 20.0, "p99": 20.0}
 
 
 def test_normalize_live_path_row_rejects_missing_path_evidence() -> None:

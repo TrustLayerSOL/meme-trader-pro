@@ -18,6 +18,11 @@ import json
 import time
 
 from research.mtp_research.data_paths import data_lake_root
+from research.mtp_research.validation.bonding_curve_account_state import (
+    BondingCurveAccountStateProbe,
+    bonding_curve_resolution_audit,
+    write_bonding_curve_first_fdv_probe_summary,
+)
 from research.mtp_research.validation.rule_runtime_event_bus import RuleRuntimeEventBus
 
 
@@ -69,6 +74,8 @@ NO_ACTIVITY_ARCHIVE_SECONDS = 120.0
 NO_FDV_PATH_ARCHIVE_SECONDS = 120.0
 STALE_RETRY_INTERVAL_SECONDS = 30.0
 MAX_STALE_RETRIES = 2
+TIER_1_MAX_AGE_SECONDS = 600.0
+TIER_1_PRESSURE_THRESHOLD = 25
 SCHEDULER_MODE = "priority_single_worker"
 ARCHIVE_STATES = {
     "archived_no_activity",
@@ -141,6 +148,18 @@ class RuleRuntimeConfig:
         return self.runtime_root / "latency_events.jsonl"
 
     @property
+    def pumpfun_create_stream_events_path(self) -> Path:
+        return self.runtime_root / "pumpfun_create_stream_events.jsonl"
+
+    @property
+    def bonding_curve_account_probe_events_path(self) -> Path:
+        return self.runtime_root / "bonding_curve_account_probe_events.jsonl"
+
+    @property
+    def pumpfun_transaction_subscribe_raw_path(self) -> Path:
+        return self.raw_root / "pumpfun_transaction_subscribe_raw.jsonl"
+
+    @property
     def monitor_json_path(self) -> Path:
         return self.report_root / "rule_runtime_v1_monitor.json"
 
@@ -207,6 +226,46 @@ class RuleRuntimeConfig:
     @property
     def first_fdv_queue_triage_smoke_summary_md_path(self) -> Path:
         return self.report_root / "first_fdv_queue_triage_smoke_summary.md"
+
+    @property
+    def birth_coverage_audit_json_path(self) -> Path:
+        return self.report_root / "birth_coverage_audit.json"
+
+    @property
+    def birth_coverage_audit_md_path(self) -> Path:
+        return self.report_root / "birth_coverage_audit.md"
+
+    @property
+    def bonding_curve_resolution_audit_json_path(self) -> Path:
+        return self.report_root / "bonding_curve_resolution_audit.json"
+
+    @property
+    def bonding_curve_resolution_audit_md_path(self) -> Path:
+        return self.report_root / "bonding_curve_resolution_audit.md"
+
+    @property
+    def bonding_curve_first_fdv_probe_summary_json_path(self) -> Path:
+        return self.report_root / "bonding_curve_first_fdv_probe_summary.json"
+
+    @property
+    def bonding_curve_first_fdv_probe_summary_md_path(self) -> Path:
+        return self.report_root / "bonding_curve_first_fdv_probe_summary.md"
+
+    @property
+    def helius_transaction_subscribe_capability_audit_json_path(self) -> Path:
+        return self.report_root / "helius_transaction_subscribe_capability_audit.json"
+
+    @property
+    def helius_transaction_subscribe_capability_audit_md_path(self) -> Path:
+        return self.report_root / "helius_transaction_subscribe_capability_audit.md"
+
+    @property
+    def helius_transaction_subscribe_bonding_curve_probe_summary_json_path(self) -> Path:
+        return self.report_root / "helius_transaction_subscribe_bonding_curve_probe_summary.json"
+
+    @property
+    def helius_transaction_subscribe_bonding_curve_probe_summary_md_path(self) -> Path:
+        return self.report_root / "helius_transaction_subscribe_bonding_curve_probe_summary.md"
 
     @property
     def hot_path_gap_analysis_path(self) -> Path:
@@ -291,7 +350,18 @@ class RuleRuntimePriorityScheduler:
     def add_job(self, job_type: str, payload: dict[str, Any]) -> None:
         if job_type not in self._queues:
             raise ValueError(f"unknown rule runtime job type: {job_type}")
-        self._queues[job_type].append(dict(payload))
+        row = dict(payload)
+        self._queues[job_type].append(row)
+        if job_type == "first_fdv_path":
+            self._queues[job_type] = deque(
+                sorted(
+                    self._queues[job_type],
+                    key=lambda item: (
+                        _num(item.get("first_seen_at") or item.get("queued_at") or item.get("timestamp")) or float("inf"),
+                        str(item.get("mint") or ""),
+                    ),
+                )
+            )
 
     def pop_next_job(self) -> dict[str, Any]:
         for job_type in self.priority_order:
@@ -455,6 +525,9 @@ def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -
             config.paper_rule_variant_decisions_path,
             config.paper_rule_variant_exits_path,
             config.latency_events_path,
+            config.pumpfun_create_stream_events_path,
+            config.bonding_curve_account_probe_events_path,
+            config.pumpfun_transaction_subscribe_raw_path,
         ]:
             path.write_text("", encoding="utf-8")
         if config.live_adapter_cursor_path.exists():
@@ -467,6 +540,9 @@ def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -
             config.paper_rule_variant_decisions_path,
             config.paper_rule_variant_exits_path,
             config.latency_events_path,
+            config.pumpfun_create_stream_events_path,
+            config.bonding_curve_account_probe_events_path,
+            config.pumpfun_transaction_subscribe_raw_path,
         ]:
             path.touch(exist_ok=True)
     state = _load_state(config)
@@ -661,6 +737,8 @@ def first_fdv_queue_triage_audit(config: RuleRuntimeConfig) -> dict[str, Any]:
             "light_watch_timeout_seconds": LIGHT_WATCH_TIMEOUT_SECONDS,
             "no_activity_archive_seconds": NO_ACTIVITY_ARCHIVE_SECONDS,
             "no_fdv_path_archive_seconds": NO_FDV_PATH_ARCHIVE_SECONDS,
+            "tier_1_max_age_seconds": TIER_1_MAX_AGE_SECONDS,
+            "tier_1_pressure_threshold": TIER_1_PRESSURE_THRESHOLD,
             "stale_retry_interval_seconds": STALE_RETRY_INTERVAL_SECONDS,
             "max_stale_retries": MAX_STALE_RETRIES,
         },
@@ -680,6 +758,56 @@ def first_fdv_queue_triage_audit(config: RuleRuntimeConfig) -> dict[str, Any]:
     }
     _write_json(config.first_fdv_queue_triage_audit_json_path, audit)
     config.first_fdv_queue_triage_audit_md_path.write_text(_first_fdv_queue_triage_audit_md(audit), encoding="utf-8")
+    return audit
+
+
+def birth_coverage_audit(config: RuleRuntimeConfig, *, source_root: Path | str | None = None) -> dict[str, Any]:
+    root = Path(source_root).expanduser() if source_root is not None else config.root / "data" / "forward_observation" / "official_lifecycle_watch_v2"
+    provisional = _read_jsonl(root / "provisional_births.jsonl")
+    hydration = _read_jsonl(root / "hydration_results.jsonl")
+    births = _read_jsonl(root / "births.jsonl")
+    stale = _read_jsonl(root / "stale_births.jsonl")
+    provisional_count = len(provisional)
+    accepted_count = len(births)
+    stale_count = len(stale)
+    confirmed_create_parses = len(
+        _unique_row_ids(
+            row
+            for row in hydration
+            if str(row.get("hydration_status") or row.get("status") or "").lower()
+            in {"confirmed", "official", "hydration_confirmed", "hydrated_create_confirmed", "official_accepted"}
+        )
+    )
+    parser_failures = len(_unique_row_ids(row for row in [*hydration, *stale] if _row_has_token(row, ["parser_failure", "parse_failure", "parser"])))
+    hydration_failures = len(
+        _unique_row_ids(
+            row
+            for row in hydration
+            if _row_has_token(row, ["hydration_failed", "hydration_failure", "failed"])
+            and not _row_has_token(row, ["unrecognized_layout", "unrecognized"])
+        )
+    )
+    unrecognized_layouts = len(_unique_row_ids(row for row in [*provisional, *hydration, *stale] if _row_has_token(row, ["unrecognized_layout", "unrecognized"])))
+    audit = {
+        "report_id": "birth_coverage_audit",
+        "updated_at": _utc_now(),
+        "source_root": str(root),
+        "provisional_birth_logs": provisional_count,
+        "confirmed_create_parses": confirmed_create_parses,
+        "fresh_accepted_births": accepted_count,
+        "stale_quarantined_births": stale_count,
+        "parser_failures": parser_failures,
+        "hydration_failures": hydration_failures,
+        "duplicate_births": _duplicate_row_count(provisional) + _duplicate_row_count(births),
+        "unrecognized_layouts": unrecognized_layouts,
+        "accepted_birth_rate": _round_num(accepted_count / max(1, provisional_count)),
+        "rejected_stale_rate": _round_num(stale_count / max(1, provisional_count)),
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "metadata_hot_path_allowed": False,
+    }
+    _write_json(config.birth_coverage_audit_json_path, audit)
+    config.birth_coverage_audit_md_path.write_text(_birth_coverage_audit_md(audit), encoding="utf-8")
     return audit
 
 
@@ -738,6 +866,8 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
     runtime_stats = state.get("runtime_stats") or {}
     variants = _variant_status(config, state)
     first_fdv_queue = _first_fdv_queue_summary(config, state, latency)
+    first_fdv_probe_sources = _first_fdv_probe_source_summary(state, latency)
+    helius_txsub_first_fdv = _helius_transaction_subscribe_first_fdv_status(config, first_fdv_probe_sources)
     warnings = list(state.get("warnings") or [])
     for warning in first_fdv_queue.get("warnings") or []:
         if warning not in warnings:
@@ -759,6 +889,8 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "paper_sells": len(sells),
         "variants": variants,
         "first_fdv_queue": first_fdv_queue,
+        "first_fdv_probe_sources": first_fdv_probe_sources,
+        "helius_transaction_subscribe_first_fdv": helius_txsub_first_fdv,
         "confirmed_20k_variant_candidates": len({row.get("mint") for row in _read_jsonl(config.paper_rule_variant_decisions_path) if row.get("variant_id") == VARIANT_A_ID}),
         "rejected_spike_candidates": sum(1 for row in candidates.values() if row.get("state") == "rejected_spike"),
         "rejected_same_timestamp_jumps": sum(1 for row in candidates.values() if row.get("state") == "rejected_same_timestamp_jump"),
@@ -772,6 +904,9 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "queue_sizes": queue_sizes,
         "bus_queue_depth": int(runtime_stats.get("bus_queue_depth") or 0),
         "metadata_hot_path_blocked": True,
+        "metadata_enrichment_in_first_fdv": False,
+        "accountSubscribe_bonding_curve_status": first_fdv_probe_sources.get("accountSubscribe_bonding_curve_status"),
+        "active_account_subscriptions": first_fdv_probe_sources.get("active_account_subscriptions"),
         "no_real_trade_flag": True,
         "wallet_usd": state.get("wallet_usd"),
         "cash_usd": state.get("cash_usd"),
@@ -810,10 +945,16 @@ def run_rule_runtime_live_bus_collector_smoke(
 ) -> dict[str, Any]:
     from research.mtp_research.validation.no_laserstream_lifecycle_collector import run_no_laserstream_lifecycle_smoke
     from research.mtp_research.validation.official_lifecycle_watch import OfficialLifecycleV2Config
+    from research.mtp_research.validation.forward_efficient_mover_observer import (
+        resolve_forward_sol_usd_price,
+        resolve_helius_api_key,
+        resolve_helius_ws_url,
+    )
 
     initialize_rule_runtime(config, reset=not config.runtime_state_path.exists())
     bus = RuleRuntimeEventBus(max_queue_size=10_000)
     engine = RuleRuntimeEngine(config)
+    first_fdv_probe = BondingCurveAccountStateProbe(sol_usd=resolve_forward_sol_usd_price(config.root))
     collector_config = OfficialLifecycleV2Config(
         data_root=Path(collector_data_root).expanduser(),
         max_helius_credits_per_run=max_helius_credits,
@@ -845,10 +986,128 @@ def run_rule_runtime_live_bus_collector_smoke(
         post_target_followup_minutes=2,
         rate_limit_backoff_seconds=10,
         hot_path_event_callback=on_hot_event,
+        first_fdv_probe=first_fdv_probe,
     )
     final = engine.consume_event_bus(bus, max_events=10_000)
-    summary = _live_bus_smoke_summary(config, rule_runtime_status(config), collector_result=collector_result, bus_metrics=final.get("bus_metrics") or bus.metrics())
+    status = rule_runtime_status(config)
+    _record_bonding_curve_probe_stats(config, collector_result.get("bonding_curve_account_state_probe") or first_fdv_probe.metrics())
+    status = rule_runtime_status(config)
+    summary = _live_bus_smoke_summary(config, status, collector_result=collector_result, bus_metrics=final.get("bus_metrics") or bus.metrics())
     _write_live_bus_smoke_reports(config, summary)
+    write_bonding_curve_first_fdv_probe_summary(config, status=status, collector_result=collector_result)
+    write_hot_path_gap_analysis(config)
+    return summary
+
+
+def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+    config: RuleRuntimeConfig,
+    *,
+    collector_data_root: Path | str,
+    max_runtime_seconds: float = 600.0,
+    target_births: int = 1000,
+    target_crossed_20k: int = 999,
+    max_helius_credits: int = 10_000,
+    signatures_per_mint: int = 7,
+    transactions_per_mint: int = 7,
+) -> dict[str, Any]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from threading import Lock
+
+    from research.mtp_research.validation.forward_efficient_mover_observer import (
+        resolve_forward_sol_usd_price,
+        resolve_helius_api_key,
+        resolve_helius_ws_url,
+    )
+    from research.mtp_research.validation.helius_transaction_subscribe_source import (
+        HeliusTransactionSubscribeCreateSource,
+        helius_transaction_subscribe_capability_audit,
+        run_bonding_curve_account_probe_for_create_event,
+    )
+
+    initialize_rule_runtime(config, reset=not config.runtime_state_path.exists())
+    capability = helius_transaction_subscribe_capability_audit(config)
+    recommended = capability.get("recommended_endpoint") if isinstance(capability.get("recommended_endpoint"), dict) else {}
+    if not recommended.get("transactionSubscribe_supported"):
+        fallback = run_rule_runtime_live_bus_collector_smoke(
+            config,
+            collector_data_root=collector_data_root,
+            target_births=target_births,
+            target_crossed_20k=target_crossed_20k,
+            max_runtime_seconds=max_runtime_seconds,
+            max_helius_credits=max_helius_credits,
+            signatures_per_mint=signatures_per_mint,
+            transactions_per_mint=transactions_per_mint,
+        )
+        status = rule_runtime_status(config)
+        summary = _helius_transaction_subscribe_bonding_curve_probe_summary(
+            config,
+            status,
+            capability_audit=capability,
+            create_events_decoded=0,
+            transaction_subscribe_used=False,
+            fallback_summary=fallback,
+        )
+        _write_helius_transaction_subscribe_bonding_curve_probe_reports(config, summary)
+        return summary
+
+    bus = RuleRuntimeEventBus(max_queue_size=10_000)
+    engine = RuleRuntimeEngine(config)
+    runtime_lock = Lock()
+
+    def on_hot_event(event: dict[str, Any]) -> None:
+        with runtime_lock:
+            if bus.emit(event, block=False):
+                result = engine.consume_event_bus(bus, max_events=100)
+                _update_runtime_bus_depth(config, int((result.get("bus_metrics") or {}).get("queue_depth") or 0))
+
+    source = HeliusTransactionSubscribeCreateSource(
+        config=config,
+        websocket_url=_transaction_subscribe_runtime_ws_url(recommended, resolve_helius_api_key=resolve_helius_api_key, resolve_helius_ws_url=resolve_helius_ws_url),
+        timeout_seconds=2.0,
+    )
+    sol_usd = resolve_forward_sol_usd_price(config.root)
+    probe_futures = []
+    probe_errors: list[dict[str, Any]] = []
+
+    def run_probe(event: dict[str, Any]) -> dict[str, Any]:
+        probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
+        return run_bonding_curve_account_probe_for_create_event(config, event, probe=probe, event_callback=on_hot_event)
+
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor:
+        def on_create_event(event: dict[str, Any]) -> None:
+            event["probe_scheduled_during_stream"] = True
+            probe_futures.append(executor.submit(run_probe, dict(event)))
+
+        create_events = source.fetch_create_events(
+            max_events=target_births,
+            max_seconds=max_runtime_seconds,
+            on_create_event=on_create_event,
+        )
+        for future in as_completed(probe_futures):
+            try:
+                future.result()
+            except Exception as exc:
+                probe_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+    with runtime_lock:
+        final = engine.consume_event_bus(bus, max_events=10_000)
+    status = rule_runtime_status(config)
+    probe_stats = _bonding_curve_probe_stats_from_rows(config)
+    if probe_errors:
+        failures = probe_stats.setdefault("failures_by_reason", {})
+        failures["probe_worker_exception"] = int(failures.get("probe_worker_exception") or 0) + len(probe_errors)
+        probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(probe_errors)
+    _record_bonding_curve_probe_stats(config, probe_stats)
+    status = rule_runtime_status(config)
+    summary = _helius_transaction_subscribe_bonding_curve_probe_summary(
+        config,
+        status,
+        capability_audit=capability,
+        create_events_decoded=len(create_events),
+        transaction_subscribe_used=True,
+        fallback_summary={},
+        bus_metrics=final.get("bus_metrics") or bus.metrics(),
+    )
+    _write_helius_transaction_subscribe_bonding_curve_probe_reports(config, summary)
     write_hot_path_gap_analysis(config)
     return summary
 
@@ -903,6 +1162,10 @@ def archive_runtime_queue_candidates(
     light_watch_timeout_seconds: float = LIGHT_WATCH_TIMEOUT_SECONDS,
     no_activity_archive_seconds: float = NO_ACTIVITY_ARCHIVE_SECONDS,
     no_fdv_path_archive_seconds: float = NO_FDV_PATH_ARCHIVE_SECONDS,
+    tier_1_max_age_seconds: float = TIER_1_MAX_AGE_SECONDS,
+    tier_1_retry_interval_seconds: float = STALE_RETRY_INTERVAL_SECONDS,
+    tier_1_retry_budget: int = MAX_STALE_RETRIES,
+    tier_1_pressure_threshold: int = TIER_1_PRESSURE_THRESHOLD,
 ) -> dict[str, Any]:
     state = _load_state(config)
     now = float(now if now is not None else time.time())
@@ -911,8 +1174,25 @@ def archive_runtime_queue_candidates(
         "downgrade_count": 0,
         "archived_no_activity": 0,
         "archived_no_fdv_path_timeout": 0,
+        "tier_1_retry_scheduled": 0,
+        "tier_1_pressure_mode": False,
     }
-    for candidate in (state.get("candidates") or {}).values():
+    active_tier_1 = [
+        candidate
+        for candidate in (state.get("candidates") or {}).values()
+        if candidate.get("state") == "fdv_path_seen" and int(candidate.get("tier") or 0) == 1
+    ]
+    if len(active_tier_1) >= int(tier_1_pressure_threshold):
+        stats["tier_1_pressure_mode"] = True
+        result["tier_1_pressure_mode"] = True
+    candidates_oldest_first = sorted(
+        (state.get("candidates") or {}).values(),
+        key=lambda candidate: (
+            _num(candidate.get("first_seen_at")) or now,
+            str(candidate.get("mint") or ""),
+        ),
+    )
+    for candidate in candidates_oldest_first:
         state_name = candidate.get("state")
         if state_name in ARCHIVE_STATES or state_name in {"paper_position_open", "paper_position_closed", "confirmed_10k_watch", "confirmed_20k_entry_candidate"}:
             continue
@@ -926,11 +1206,31 @@ def archive_runtime_queue_candidates(
             stats["archived_no_fdv_path_timeout"] = int(stats.get("archived_no_fdv_path_timeout") or 0) + 1
             result["archived_no_fdv_path_timeout"] += 1
             continue
+        if state_name == "fdv_path_seen" and candidate.get("path_rows"):
+            tier_1_age = now - first_seen
+            retry_count = int(candidate.get("tier_1_retry_count") or 0)
+            last_retry = _num(candidate.get("tier_1_last_retry_at")) or first_seen
+            retry_due = tier_1_age >= first_path_fast_attempt_window_seconds and now - last_retry >= tier_1_retry_interval_seconds
+            if retry_due and retry_count < int(tier_1_retry_budget):
+                retry_count += 1
+                candidate["tier_1_retry_count"] = retry_count
+                candidate["tier_1_last_retry_at"] = now
+                stats["tier_1_retry_count"] = int(stats.get("tier_1_retry_count") or 0) + 1
+                result["tier_1_retry_scheduled"] += 1
+            if tier_1_age >= float(tier_1_max_age_seconds) or retry_count >= int(tier_1_retry_budget):
+                candidate["state"] = "archived_no_activity"
+                candidate["tier"] = -1
+                candidate["archive_reason"] = "tier_1_retry_budget_exhausted" if retry_count >= int(tier_1_retry_budget) else "tier_1_max_age"
+                stats["archived_no_activity"] = int(stats.get("archived_no_activity") or 0) + 1
+                stats["tier_1_archive_count"] = int(stats.get("tier_1_archive_count") or 0) + 1
+                result["archived_no_activity"] += 1
+                continue
         if state_name == "fdv_path_seen" and now - first_seen >= first_path_fast_attempt_window_seconds and last_activity is None:
             candidate["state"] = "light_watch"
             candidate["tier"] = 0
             candidate["downgraded_at"] = now
             candidate["downgrade_reason"] = "no_activity_after_fast_attempt_window"
+            candidate["downgraded_from_tier_1"] = True
             stats["downgrade_count"] = int(stats.get("downgrade_count") or 0) + 1
             result["downgrade_count"] += 1
             state_name = "light_watch"
@@ -940,6 +1240,8 @@ def archive_runtime_queue_candidates(
             candidate["tier"] = -1
             candidate["archive_reason"] = "no_activity"
             stats["archived_no_activity"] = int(stats.get("archived_no_activity") or 0) + 1
+            if state_name == "fdv_path_seen" or candidate.get("downgraded_from_tier_1"):
+                stats["tier_1_archive_count"] = int(stats.get("tier_1_archive_count") or 0) + 1
             result["archived_no_activity"] += 1
     state["queue_sizes"] = _queue_sizes_from_state(state)
     state["updated_at"] = _utc_now()
@@ -984,6 +1286,7 @@ def normalize_live_path_row_for_rule_runtime(
         "milestone_provenance": provenance,
         "data_source": source_label,
     }
+    _copy_first_fdv_probe_fields(row, normalized)
     _copy_optional_live_fields(row, normalized)
     return normalized
 
@@ -1058,9 +1361,14 @@ def _first_fdv_queue_triage_audit_md(audit: dict[str, Any]) -> str:
             f"- Priority order: `{audit['priority_order']}`",
             f"- Queue sizes: `{audit.get('queue_sizes')}`",
             f"- Queue depth by tier: `{queue.get('queue_depth_by_tier')}`",
+            f"- Tier 1 depth: `{queue.get('tier_1_depth')}`",
+            f"- Tier 1 oldest age: `{queue.get('tier_1_oldest_age_seconds')}`",
+            f"- Tier 1 p50/p90 age: `{queue.get('tier_1_age_p50_p90')}`",
+            f"- Tier 1 processed/archive/promotion/retry: `{queue.get('tier_1_processed_count')}` / `{queue.get('tier_1_archive_count')}` / `{queue.get('tier_1_promotion_count')}` / `{queue.get('tier_1_retry_count')}`",
             f"- Archive counts: no_activity `{queue.get('archived_no_activity')}`, no_fdv_path `{queue.get('archived_no_fdv_path_timeout')}`",
             f"- Promotion counts: fdv_path `{queue.get('promoted_to_fdv_path')}`, near_threshold `{queue.get('promoted_to_near_threshold')}`, confirmed_10k `{queue.get('promoted_to_confirmed_10k')}`, paper_position `{queue.get('promoted_to_paper_position')}`",
             f"- First path success rate: `{queue.get('first_path_success_rate')}`",
+            f"- First-FDV success/timeout/median latency: `{queue.get('first_fdv_success_rate')}` / `{queue.get('first_fdv_timeout_rate')}` / `{queue.get('first_fdv_median_latency_ms')}`",
             f"- First path latency p50/p90/p99: `{queue.get('first_path_latency_p50_p90_p99')}`",
             "",
             "Paper-only runtime triage audit. No private keys, swaps, routing, or live execution.",
@@ -1083,14 +1391,42 @@ def _first_fdv_queue_triage_smoke_summary_md(summary: dict[str, Any]) -> str:
             f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
             f"- Paper buys/sells: `{summary['paper_buys']}` / `{summary['paper_sells']}`",
             f"- Queue depth by tier: `{queue.get('queue_depth_by_tier')}`",
+            f"- Tier 1 depth: `{queue.get('tier_1_depth')}`",
+            f"- Tier 1 oldest age: `{queue.get('tier_1_oldest_age_seconds')}`",
+            f"- Tier 1 p50/p90 age: `{queue.get('tier_1_age_p50_p90')}`",
+            f"- Tier 1 processed/archive/promotion/retry: `{queue.get('tier_1_processed_count')}` / `{queue.get('tier_1_archive_count')}` / `{queue.get('tier_1_promotion_count')}` / `{queue.get('tier_1_retry_count')}`",
             f"- Archived no activity: `{queue.get('archived_no_activity')}`",
             f"- Archived no FDV path timeout: `{queue.get('archived_no_fdv_path_timeout')}`",
             f"- Promotions: fdv_path `{queue.get('promoted_to_fdv_path')}`, near_threshold `{queue.get('promoted_to_near_threshold')}`, confirmed_10k `{queue.get('promoted_to_confirmed_10k')}`, paper_position `{queue.get('promoted_to_paper_position')}`",
             f"- Latency p50/p90/p99: `{summary.get('latency_p50_p90_p99')}`",
+            f"- First-FDV success/timeout/median latency: `{queue.get('first_fdv_success_rate')}` / `{queue.get('first_fdv_timeout_rate')}` / `{queue.get('first_fdv_median_latency_ms')}`",
             f"- First path latency p50/p90/p99: `{queue.get('first_path_latency_p50_p90_p99')}`",
             f"- Monitor path: `{summary.get('monitor_path')}`",
             "",
             "Paper-only. Live trading, private keys, transaction building, swaps, and routing remain disabled.",
+        ]
+    ) + "\n"
+
+
+def _birth_coverage_audit_md(audit: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Birth Coverage Audit",
+            "",
+            f"- Updated: `{audit['updated_at']}`",
+            f"- Source root: `{audit['source_root']}`",
+            f"- Provisional birth logs: `{audit['provisional_birth_logs']}`",
+            f"- Confirmed create parses: `{audit['confirmed_create_parses']}`",
+            f"- Fresh accepted births: `{audit['fresh_accepted_births']}`",
+            f"- Stale/quarantined births: `{audit['stale_quarantined_births']}`",
+            f"- Parser failures: `{audit['parser_failures']}`",
+            f"- Hydration failures: `{audit['hydration_failures']}`",
+            f"- Duplicate births: `{audit['duplicate_births']}`",
+            f"- Unrecognized layouts: `{audit['unrecognized_layouts']}`",
+            f"- Accepted birth rate: `{audit['accepted_birth_rate']}`",
+            f"- Rejected/stale rate: `{audit['rejected_stale_rate']}`",
+            "",
+            "Paper-only coverage audit. Metadata and enrichment stay outside the first-FDV hot path.",
         ]
     ) + "\n"
 
@@ -1168,8 +1504,17 @@ def _default_scheduler_stats() -> dict[str, Any]:
         "promoted_to_near_threshold": 0,
         "promoted_to_confirmed_10k": 0,
         "promoted_to_paper_position": 0,
+        "tier_1_processed_count": 0,
+        "tier_1_archive_count": 0,
+        "tier_1_promotion_count": 0,
+        "tier_1_retry_count": 0,
+        "tier_1_pressure_mode": False,
         "http_429_count": 0,
         "helius_rpc_request_count": None,
+        "bonding_curve_account_state_failures": 0,
+        "bonding_curve_account_state_failure_reasons": {},
+        "account_subscribe_bonding_curve_status": "accountSubscribe_bonding_curve_not_implemented",
+        "active_account_subscriptions": 0,
     }
 
 
@@ -1209,8 +1554,28 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
         "milestone_provenance": event.get("milestone_provenance"),
         "recorded_at": _utc_now(),
     }
+    _copy_first_fdv_probe_fields(event, normalized)
     _copy_optional_live_fields(event, normalized)
     return normalized
+
+
+def _copy_first_fdv_probe_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
+    for key in [
+        "fdv_source",
+        "fdv_source_confidence",
+        "fdv_probe_method",
+        "bonding_curve",
+        "observed_to_bonding_curve_resolved_ms",
+        "bonding_curve_resolved_to_getAccountInfo_ms",
+        "getAccountInfo_latency_ms",
+        "decode_latency_ms",
+        "observed_to_first_fdv_account_state_ms",
+        "first_fdv_source",
+    ]:
+        if key in source:
+            target[key] = source.get(key)
+    if target.get("first_fdv_source") is None and target.get("fdv_source"):
+        target["first_fdv_source"] = target.get("fdv_source")
 
 
 def _copy_optional_live_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
@@ -1264,6 +1629,8 @@ def _update_confirmed_milestones(candidate: dict[str, Any], window_seconds: floa
 
 
 def _apply_source_confirmations(candidate: dict[str, Any], row: dict[str, Any]) -> None:
+    if not _source_allows_confirmed_milestone_flags(row):
+        return
     timestamp = float(row["timestamp"])
     if row.get("confirmed_crossed_10k_from_source") is True:
         candidate["confirmed_milestones"]["confirmed_crossed_10k"] = True
@@ -1273,6 +1640,16 @@ def _apply_source_confirmations(candidate: dict[str, Any], row: dict[str, Any]) 
         candidate["confirmed_milestones"]["confirmed_crossed_20k"] = True
         candidate["confirmed_milestone_times"].setdefault("20k", timestamp)
         candidate["confirmed_crossed_20k"] = True
+
+
+def _source_allows_confirmed_milestone_flags(row: dict[str, Any]) -> bool:
+    source = str(row.get("fdv_source") or "").lower()
+    confidence = str(row.get("fdv_source_confidence") or "").lower()
+    if source == "transaction_delta":
+        return False
+    if confidence in {"low", "none"}:
+        return False
+    return True
 
 
 def _update_rejection_flags(candidate: dict[str, Any]) -> None:
@@ -1826,6 +2203,15 @@ def _latency_row(candidate: dict[str, Any], row: dict[str, Any], started: float,
         "rule_eval_latency_ms": runtime_eval_ms,
         "source_event_type": row.get("source_event_type"),
         "data_source": row.get("data_source"),
+        "fdv_source": row.get("fdv_source") or row.get("data_source"),
+        "fdv_source_confidence": row.get("fdv_source_confidence"),
+        "fdv_probe_method": row.get("fdv_probe_method"),
+        "first_fdv_source": row.get("first_fdv_source") or row.get("fdv_source") or row.get("data_source"),
+        "observed_to_bonding_curve_resolved_ms": row.get("observed_to_bonding_curve_resolved_ms"),
+        "bonding_curve_resolved_to_getAccountInfo_ms": row.get("bonding_curve_resolved_to_getAccountInfo_ms"),
+        "getAccountInfo_latency_ms": row.get("getAccountInfo_latency_ms"),
+        "decode_latency_ms": row.get("decode_latency_ms"),
+        "observed_to_first_fdv_account_state_ms": row.get("observed_to_first_fdv_account_state_ms"),
         "path_row_count": len(candidate.get("path_rows") or []),
         "confirmation_row_count": sum(1 for item in candidate.get("path_rows") or [] if float(item.get("fdv_proxy") or 0.0) >= ENTRY_THRESHOLD_FDV),
         "previous_state": previous_state,
@@ -1864,6 +2250,8 @@ def _record_promotions(state: dict[str, Any], candidate: dict[str, Any], previou
     if candidate.get("path_rows") and "fdv_path_seen" not in promotions:
         promotions.append("fdv_path_seen")
         stats["promoted_to_fdv_path"] = int(stats.get("promoted_to_fdv_path") or 0) + 1
+        stats["tier_1_processed_count"] = int(stats.get("tier_1_processed_count") or 0) + 1
+        stats["tier_1_promotion_count"] = int(stats.get("tier_1_promotion_count") or 0) + 1
     if tier >= 2 and "near_threshold_watch" not in promotions:
         promotions.append("near_threshold_watch")
         stats["promoted_to_near_threshold"] = int(stats.get("promoted_to_near_threshold") or 0) + 1
@@ -1927,29 +2315,55 @@ def _first_fdv_queue_summary(config: RuleRuntimeConfig, state: dict[str, Any], l
     }
     depth_by_tier = {name: 0 for name in tier_names.values()}
     ages_by_tier: dict[str, list[float]] = {name: [] for name in tier_names.values()}
-    active_with_path = 0
+    with_first_fdv_path = 0
     first_path_latencies: list[float | None] = []
+    active_candidates = []
     for candidate in candidates.values():
-        state_name = candidate.get("state")
-        if state_name in ARCHIVE_STATES:
-            continue
-        tier = int(candidate.get("tier") or 0)
-        name = tier_names.get(tier, "tier_0_light_watch")
-        depth_by_tier[name] += 1
         first_seen = _num(candidate.get("first_seen_at")) or now
-        ages_by_tier[name].append(max(0.0, now - first_seen))
         if candidate.get("path_rows"):
-            active_with_path += 1
+            with_first_fdv_path += 1
             first_path = _num(candidate.get("first_fdv_path_time"))
             if first_path is not None:
                 first_path_latencies.append(max(0.0, (first_path - first_seen) * 1000.0))
+        state_name = candidate.get("state")
+        if state_name in ARCHIVE_STATES:
+            continue
+        active_candidates.append(candidate)
+        tier = int(candidate.get("tier") or 0)
+        name = tier_names.get(tier, "tier_0_light_watch")
+        depth_by_tier[name] += 1
+        ages_by_tier[name].append(max(0.0, now - first_seen))
+    tier_1_rows = [
+        row
+        for row in active_candidates
+        if int(row.get("tier") or 0) == 1 and row.get("state") == "fdv_path_seen"
+    ]
+    tier_1_rows_oldest_first = sorted(
+        tier_1_rows,
+        key=lambda row: (
+            _num(row.get("first_seen_at")) or now,
+            str(row.get("mint") or ""),
+        ),
+    )
+    tier_1_ages = [max(0.0, now - (_num(row.get("first_seen_at")) or now)) for row in tier_1_rows_oldest_first]
+    tier_1_age_percentiles = _percentiles(tier_1_ages)
+    tier_1_depth = len(tier_1_rows_oldest_first)
+    tier_1_processed_count = int(stats.get("tier_1_processed_count") or stats.get("promoted_to_fdv_path") or 0)
+    tier_1_archive_count = int(stats.get("tier_1_archive_count") or 0)
+    tier_1_promotion_count = int(stats.get("tier_1_promotion_count") or stats.get("promoted_to_fdv_path") or 0)
+    tier_1_retry_count = int(stats.get("tier_1_retry_count") or 0)
+    no_path_timeouts = int(stats.get("archived_no_fdv_path_timeout") or 0)
+    first_fdv_latency = _percentiles(first_path_latencies)
+    first_fdv_success_rate = _round_num(with_first_fdv_path / max(1, len(candidates))) if candidates else 0.0
+    first_fdv_timeout_rate = _round_num(no_path_timeouts / max(1, with_first_fdv_path + no_path_timeouts))
+    tier_1_pressure_mode = bool(stats.get("tier_1_pressure_mode")) or tier_1_depth >= TIER_1_PRESSURE_THRESHOLD
     total_active = sum(depth_by_tier.values())
     oldest_by_tier = {tier: (_round_seconds(max(values)) if values else None) for tier, values in ages_by_tier.items()}
     avg_by_tier = {tier: (_round_seconds(sum(values) / len(values)) if values else None) for tier, values in ages_by_tier.items()}
     warnings: list[str] = []
-    if depth_by_tier["tier_1_fdv_path_seen"] >= 50:
+    if tier_1_pressure_mode:
         warnings.append("first_fdv_queue_growth_warning")
-    if any((value or 0) > NO_FDV_PATH_ARCHIVE_SECONDS for value in oldest_by_tier.values()):
+    if (oldest_by_tier["tier_1_fdv_path_seen"] or 0) > TIER_1_MAX_AGE_SECONDS:
         warnings.append("oldest_first_fdv_job_above_timeout")
     if depth_by_tier["tier_2_near_threshold_watch"] > 0 and depth_by_tier["tier_1_fdv_path_seen"] > 100:
         warnings.append("near_threshold_starvation_warning")
@@ -1970,12 +2384,121 @@ def _first_fdv_queue_summary(config: RuleRuntimeConfig, state: dict[str, Any], l
         "promoted_to_near_threshold": int(stats.get("promoted_to_near_threshold") or 0),
         "promoted_to_confirmed_10k": int(stats.get("promoted_to_confirmed_10k") or 0),
         "promoted_to_paper_position": int(stats.get("promoted_to_paper_position") or 0),
-        "first_path_success_rate": _round_num(active_with_path / max(1, len(candidates))) if candidates else 0.0,
+        "tier_1_depth": tier_1_depth,
+        "tier_1_oldest_age_seconds": _round_seconds(max(tier_1_ages)) if tier_1_ages else None,
+        "tier_1_age_p50_p90": {
+            "p50": tier_1_age_percentiles.get("p50"),
+            "p90": tier_1_age_percentiles.get("p90"),
+        },
+        "tier_1_processed_count": tier_1_processed_count,
+        "tier_1_archive_count": tier_1_archive_count,
+        "tier_1_promotion_count": tier_1_promotion_count,
+        "tier_1_retry_count": tier_1_retry_count,
+        "tier_1_retry_budget": MAX_STALE_RETRIES,
+        "tier_1_max_age_seconds": TIER_1_MAX_AGE_SECONDS,
+        "tier_1_pressure_threshold": TIER_1_PRESSURE_THRESHOLD,
+        "tier_1_pressure_mode": tier_1_pressure_mode,
+        "tier_1_next_mints_oldest_first": [str(row.get("mint") or "") for row in tier_1_rows_oldest_first[:10]],
+        "promotion_rate": _round_num(tier_1_promotion_count / max(1, tier_1_processed_count)),
+        "archive_rate": _round_num(tier_1_archive_count / max(1, tier_1_processed_count)),
+        "first_path_success_rate": first_fdv_success_rate,
+        "first_fdv_success_rate": first_fdv_success_rate,
+        "first_fdv_timeout_rate": first_fdv_timeout_rate,
+        "first_fdv_median_latency_ms": first_fdv_latency.get("p50"),
         "first_path_latency_p50_p90_p99": _percentiles(first_path_latencies),
         "downgrade_count": int(stats.get("downgrade_count") or 0),
         "reactivation_count": int(stats.get("reactivation_count") or 0),
         "helius_rpc_request_count": stats.get("helius_rpc_request_count"),
         "http_429_count": int(stats.get("http_429_count") or 0),
+        "metadata_hot_path_allowed": False,
+        "metadata_enrichment_in_first_fdv": False,
+        "warnings": warnings,
+    }
+
+
+def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    stats = _scheduler_stats(state)
+    source_rows = [
+        row
+        for row in latency_rows
+        if row.get("fdv_source") or row.get("first_fdv_source") or row.get("source_event_type")
+    ]
+    source_mix: dict[str, int] = {}
+    for row in source_rows:
+        source = str(row.get("first_fdv_source") or row.get("fdv_source") or row.get("data_source") or "unknown")
+        source_mix[source] = int(source_mix.get(source) or 0) + 1
+    account_state_successes = sum(1 for row in source_rows if (row.get("first_fdv_source") or row.get("fdv_source")) == "bonding_curve_account_state")
+    transaction_delta_successes = sum(1 for row in source_rows if (row.get("first_fdv_source") or row.get("fdv_source")) == "transaction_delta")
+    confirmed_path_state_successes = sum(1 for row in source_rows if (row.get("first_fdv_source") or row.get("fdv_source")) == "confirmed_path_state")
+    unknown_successes = sum(
+        1
+        for row in source_rows
+        if str(row.get("first_fdv_source") or row.get("fdv_source") or row.get("data_source") or "unknown") in {"", "unknown"}
+    )
+    return {
+        "bonding_curve_account_state_successes": account_state_successes,
+        "bonding_curve_account_state_failures": int(stats.get("bonding_curve_account_state_failures") or 0),
+        "bonding_curve_account_state_failure_reasons": stats.get("bonding_curve_account_state_failure_reasons") or {},
+        "transaction_delta_successes": transaction_delta_successes,
+        "confirmed_path_state_successes": confirmed_path_state_successes,
+        "unknown_successes": unknown_successes,
+        "source_mix": dict(sorted(source_mix.items())),
+        "getAccountInfo_p50_p90_p99": _percentiles([_num(row.get("getAccountInfo_latency_ms")) for row in source_rows]),
+        "decode_p50_p90_p99": _percentiles([_num(row.get("decode_latency_ms")) for row in source_rows]),
+        "observed_to_first_fdv_account_state_p50_p90_p99": _percentiles(
+            [_num(row.get("observed_to_first_fdv_account_state_ms")) for row in source_rows]
+        ),
+        "observed_to_bonding_curve_resolved_p50_p90_p99": _percentiles(
+            [_num(row.get("observed_to_bonding_curve_resolved_ms")) for row in source_rows]
+        ),
+        "bonding_curve_resolved_to_getAccountInfo_p50_p90_p99": _percentiles(
+            [_num(row.get("bonding_curve_resolved_to_getAccountInfo_ms")) for row in source_rows]
+        ),
+        "accountSubscribe_bonding_curve_status": stats.get("account_subscribe_bonding_curve_status") or "accountSubscribe_bonding_curve_not_implemented",
+        "active_account_subscriptions": int(stats.get("active_account_subscriptions") or 0),
+        "metadata_hot_path_allowed": False,
+    }
+
+
+def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, source_summary: dict[str, Any]) -> dict[str, Any]:
+    create_rows = _read_jsonl(config.pumpfun_create_stream_events_path)
+    probe_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
+    audit = _read_json(config.helius_transaction_subscribe_capability_audit_json_path)
+    recommended = audit.get("recommended_endpoint") if isinstance(audit.get("recommended_endpoint"), dict) else {}
+    probe_failures = [row for row in probe_rows if row.get("probe_status") != "success"]
+    failure_reasons: dict[str, int] = {}
+    for row in probe_failures:
+        reason = str(row.get("probe_error") or "unknown")
+        failure_reasons[reason] = int(failure_reasons.get(reason) or 0) + 1
+    warnings: list[str] = []
+    if audit and not recommended.get("transactionSubscribe_supported"):
+        warnings.append("transactionSubscribe_unsupported_fallback_to_logs")
+    if probe_failures:
+        warnings.append("bonding_curve_account_probe_failures_present")
+    return {
+        "transactionSubscribe_supported": bool(recommended.get("transactionSubscribe_supported")),
+        "endpoint_used": recommended.get("name"),
+        "create_events_decoded": sum(1 for row in create_rows if row.get("parser_status") == "decoded"),
+        "curve_pda_verified": sum(1 for row in create_rows if row.get("bonding_curve_verified") is True),
+        "curve_account_probes_started": len(probe_rows),
+        "probes_started_during_stream": sum(1 for row in probe_rows if row.get("probe_scheduled_during_stream") is True),
+        "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
+        "curve_account_probes_failed": len(probe_failures),
+        "first_fdv_from_bonding_curve_account_state": int(source_summary.get("bonding_curve_account_state_successes") or 0),
+        "first_fdv_from_transaction_delta": int(source_summary.get("transaction_delta_successes") or 0),
+        "first_fdv_from_unknown": int(source_summary.get("unknown_successes") or 0),
+        "getAccountInfo_p50_p90_p99": _percentiles([_num(row.get("getAccountInfo_latency_ms")) for row in probe_rows]),
+        "accountSubscribe_p50_p90_p99": _percentiles([_num(row.get("accountSubscribe_latency_ms")) for row in probe_rows]),
+        "observed_to_probe_started_p50_p90_p99": _percentiles([_num(row.get("observed_to_probe_started_ms")) for row in probe_rows]),
+        "probe_started_to_first_curve_state_p50_p90_p99": _percentiles(
+            [_num(row.get("probe_started_to_first_curve_state_ms")) for row in probe_rows]
+        ),
+        "observed_to_first_fdv_p50_p90_p99": _percentiles([_num(row.get("observed_to_first_fdv_emitted_ms")) for row in probe_rows]),
+        "observed_to_first_fdv_account_state_p50_p90_p99": source_summary.get("observed_to_first_fdv_account_state_p50_p90_p99"),
+        "decode_failures": failure_reasons.get("decode_failed", 0),
+        "probe_failures_by_reason": failure_reasons,
+        "http_429": int(source_summary.get("http_429_count") or 0),
+        "accountSubscribe_bonding_curve_status": source_summary.get("accountSubscribe_bonding_curve_status"),
         "warnings": warnings,
     }
 
@@ -2008,6 +2531,11 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
         "paper_sells": len([row for row in trades if row.get("side") == "paper_sell"]),
         "variants": _variant_status(config, state, variant_decisions=variant_decisions, variant_exits=variant_exits),
         "first_fdv_queue": _first_fdv_queue_summary(config, state, latency),
+        "first_fdv_probe_sources": _first_fdv_probe_source_summary(state, latency),
+        "helius_transaction_subscribe_first_fdv": _helius_transaction_subscribe_first_fdv_status(
+            config,
+            _first_fdv_probe_source_summary(state, latency),
+        ),
         "variant_decisions": variant_decisions,
         "variant_exits": variant_exits,
         "live_bus_events": int((state.get("runtime_stats") or {}).get("live_bus_events") or 0),
@@ -2056,12 +2584,64 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         f"- Queue depth total: {queue.get('queue_depth_total')}",
         f"- Queue depth by tier: {queue.get('queue_depth_by_tier')}",
         f"- Oldest queued age by tier: {queue.get('oldest_queued_age_seconds_by_tier')}",
+        f"- Tier 1 depth: {queue.get('tier_1_depth')}",
+        f"- Tier 1 oldest age: {queue.get('tier_1_oldest_age_seconds')}",
+        f"- Tier 1 p50/p90 age: {queue.get('tier_1_age_p50_p90')}",
+        f"- Tier 1 processed count: {queue.get('tier_1_processed_count')}",
+        f"- Tier 1 archive count: {queue.get('tier_1_archive_count')}",
+        f"- Tier 1 promotion count: {queue.get('tier_1_promotion_count')}",
+        f"- Tier 1 retry count: {queue.get('tier_1_retry_count')}",
+        f"- Tier 1 pressure mode: {queue.get('tier_1_pressure_mode')}",
         f"- Archived no activity: {queue.get('archived_no_activity')}",
         f"- Archived no FDV path timeout: {queue.get('archived_no_fdv_path_timeout')}",
         f"- Promotions: fdv_path={queue.get('promoted_to_fdv_path')}, near_threshold={queue.get('promoted_to_near_threshold')}, confirmed_10k={queue.get('promoted_to_confirmed_10k')}, paper_position={queue.get('promoted_to_paper_position')}",
         f"- First path success rate: {queue.get('first_path_success_rate')}",
+        f"- First-FDV success rate: {queue.get('first_fdv_success_rate')}",
+        f"- First-FDV timeout rate: {queue.get('first_fdv_timeout_rate')}",
+        f"- First-FDV median latency: {queue.get('first_fdv_median_latency_ms')}",
         f"- First path latency p50/p90/p99: {queue.get('first_path_latency_p50_p90_p99')}",
     ])
+    sources = payload.get("first_fdv_probe_sources") or {}
+    txsub = payload.get("helius_transaction_subscribe_first_fdv") or {}
+    lines.extend(
+        [
+            "",
+            "## First-FDV Probe Sources",
+            f"- Bonding curve account-state successes: {sources.get('bonding_curve_account_state_successes')}",
+            f"- Bonding curve account-state failures: {sources.get('bonding_curve_account_state_failures')}",
+            f"- Transaction delta successes: {sources.get('transaction_delta_successes')}",
+            f"- Confirmed path-state successes: {sources.get('confirmed_path_state_successes')}",
+            f"- Unknown successes: {sources.get('unknown_successes')}",
+            f"- Source mix: {sources.get('source_mix')}",
+            f"- getAccountInfo p50/p90/p99: {sources.get('getAccountInfo_p50_p90_p99')}",
+            f"- Decode p50/p90/p99: {sources.get('decode_p50_p90_p99')}",
+            f"- Observed to account-state FDV p50/p90/p99: {sources.get('observed_to_first_fdv_account_state_p50_p90_p99')}",
+            f"- accountSubscribe status: {sources.get('accountSubscribe_bonding_curve_status')}",
+            f"- Active account subscriptions: {sources.get('active_account_subscriptions')}",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Helius transactionSubscribe First-FDV",
+            f"- transactionSubscribe supported: {txsub.get('transactionSubscribe_supported')}",
+            f"- endpoint used: {txsub.get('endpoint_used')}",
+            f"- create events decoded: {txsub.get('create_events_decoded')}",
+            f"- curve PDA verified: {txsub.get('curve_pda_verified')}",
+            f"- curve account probes started: {txsub.get('curve_account_probes_started')}",
+            f"- probes started during stream: {txsub.get('probes_started_during_stream')}",
+            f"- curve account probes succeeded: {txsub.get('curve_account_probes_succeeded')}",
+            f"- curve account probes failed: {txsub.get('curve_account_probes_failed')}",
+            f"- first FDV from bonding curve account-state: {txsub.get('first_fdv_from_bonding_curve_account_state')}",
+            f"- first FDV from transaction delta: {txsub.get('first_fdv_from_transaction_delta')}",
+            f"- observed to probe started p50/p90/p99: {txsub.get('observed_to_probe_started_p50_p90_p99')}",
+            f"- probe started to first curve state p50/p90/p99: {txsub.get('probe_started_to_first_curve_state_p50_p90_p99')}",
+            f"- observed to first FDV p50/p90/p99: {txsub.get('observed_to_first_fdv_p50_p90_p99')}",
+            f"- getAccountInfo p50/p90/p99: {txsub.get('getAccountInfo_p50_p90_p99')}",
+            f"- accountSubscribe p50/p90/p99: {txsub.get('accountSubscribe_p50_p90_p99')}",
+            f"- warnings: {txsub.get('warnings')}",
+        ]
+    )
     lines.extend([
         "",
         "Paper-only accounting. Live trading is disabled.",
@@ -2096,6 +2676,8 @@ def _monitor_html(payload: dict[str, Any]) -> str:
         for variant_id, row in (payload.get("variants") or {}).items()
     )
     queue = payload.get("first_fdv_queue") or {}
+    sources = payload.get("first_fdv_probe_sources") or {}
+    txsub = payload.get("helius_transaction_subscribe_first_fdv") or {}
     queue_cards = "\n".join(
         f"<div class=\"stat\">{html.escape(str(tier))}<br><b>{html.escape(str(depth))}</b></div>"
         for tier, depth in (queue.get("queue_depth_by_tier") or {}).items()
@@ -2145,9 +2727,28 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 <div class=\"stats\">{queue_cards}</div>
 <p>Scheduler mode: {html.escape(str(queue.get('scheduler_mode')))}; total depth: {html.escape(str(queue.get('queue_depth_total')))}</p>
 <p>Oldest age by tier: {html.escape(str(queue.get('oldest_queued_age_seconds_by_tier')))}</p>
+<p>Tier 1 depth: {html.escape(str(queue.get('tier_1_depth')))}; oldest age: {html.escape(str(queue.get('tier_1_oldest_age_seconds')))}; p50/p90 age: {html.escape(str(queue.get('tier_1_age_p50_p90')))}</p>
+<p>Tier 1 processed: {html.escape(str(queue.get('tier_1_processed_count')))}; archives: {html.escape(str(queue.get('tier_1_archive_count')))}; promotions: {html.escape(str(queue.get('tier_1_promotion_count')))}; retries: {html.escape(str(queue.get('tier_1_retry_count')))}; pressure mode: {html.escape(str(queue.get('tier_1_pressure_mode')))}</p>
 <p>Archived no activity: {html.escape(str(queue.get('archived_no_activity')))}; archived no FDV path timeout: {html.escape(str(queue.get('archived_no_fdv_path_timeout')))}</p>
 <p>Promotions: FDV path {html.escape(str(queue.get('promoted_to_fdv_path')))}, near-threshold {html.escape(str(queue.get('promoted_to_near_threshold')))}, confirmed 10k {html.escape(str(queue.get('promoted_to_confirmed_10k')))}, paper position {html.escape(str(queue.get('promoted_to_paper_position')))}</p>
+<p>First-FDV success rate: {html.escape(str(queue.get('first_fdv_success_rate')))}; timeout rate: {html.escape(str(queue.get('first_fdv_timeout_rate')))}; median latency ms: {html.escape(str(queue.get('first_fdv_median_latency_ms')))}</p>
 <p>First path success rate: {html.escape(str(queue.get('first_path_success_rate')))}; first path latency p50/p90/p99: {html.escape(str(queue.get('first_path_latency_p50_p90_p99')))}</p>
+<h2>First-FDV Probe Sources</h2>
+<p>Bonding curve account-state successes: {html.escape(str(sources.get('bonding_curve_account_state_successes')))}; failures: {html.escape(str(sources.get('bonding_curve_account_state_failures')))}</p>
+<p>Source mix: {html.escape(str(sources.get('source_mix')))}</p>
+<p>getAccountInfo p50/p90/p99: {html.escape(str(sources.get('getAccountInfo_p50_p90_p99')))}</p>
+<p>Decode p50/p90/p99: {html.escape(str(sources.get('decode_p50_p90_p99')))}</p>
+<p>Observed to account-state FDV p50/p90/p99: {html.escape(str(sources.get('observed_to_first_fdv_account_state_p50_p90_p99')))}</p>
+<p>accountSubscribe status: {html.escape(str(sources.get('accountSubscribe_bonding_curve_status')))}; active subscriptions: {html.escape(str(sources.get('active_account_subscriptions')))}</p>
+<h2>Helius transactionSubscribe First-FDV</h2>
+<p>transactionSubscribe supported: {html.escape(str(txsub.get('transactionSubscribe_supported')))}; endpoint used: {html.escape(str(txsub.get('endpoint_used')))}</p>
+<p>Create events decoded: {html.escape(str(txsub.get('create_events_decoded')))}; curve PDA verified: {html.escape(str(txsub.get('curve_pda_verified')))}</p>
+	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
+	<p>First FDV source counts: account-state {html.escape(str(txsub.get('first_fdv_from_bonding_curve_account_state')))}, transaction-delta {html.escape(str(txsub.get('first_fdv_from_transaction_delta')))}, unknown {html.escape(str(txsub.get('first_fdv_from_unknown')))}</p>
+	<p>Observed to probe started p50/p90/p99: {html.escape(str(txsub.get('observed_to_probe_started_p50_p90_p99')))}</p>
+	<p>Probe started to first curve state p50/p90/p99: {html.escape(str(txsub.get('probe_started_to_first_curve_state_p50_p90_p99')))}</p>
+	<p>Observed to first FDV p50/p90/p99: {html.escape(str(txsub.get('observed_to_first_fdv_p50_p90_p99')))}</p>
+	<p>accountSubscribe p50/p90/p99: {html.escape(str(txsub.get('accountSubscribe_p50_p90_p99')))}; warnings: {html.escape(str(txsub.get('warnings')))}</p>
 <h2>Trades and Rejections</h2>
 <table><thead><tr><th>CA</th><th>Status</th><th>Buy FDV</th><th>Current FDV</th><th>Sell FDV</th><th>Local High</th><th>Drawdown</th><th>10k Confirmed</th><th>20k Confirmed</th><th>Why</th></tr></thead><tbody>{table}</tbody></table>
 <p><small>Updated {payload['updated_at']}. Auto-refreshes every 10 seconds.</small></p>
@@ -2262,6 +2863,9 @@ def _smoke_summary(
         "paper_sells": int(status.get("paper_sells") or 0),
         "variants": status.get("variants") or {},
         "first_fdv_queue": status.get("first_fdv_queue") or {},
+        "first_fdv_probe_sources": status.get("first_fdv_probe_sources") or {},
+        "helius_transaction_subscribe_first_fdv": status.get("helius_transaction_subscribe_first_fdv") or {},
+        "helius_transaction_subscribe_first_fdv": status.get("helius_transaction_subscribe_first_fdv") or {},
         "variant_a_paper_buys": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_buys") or 0),
         "variant_a_paper_sells": int((status.get("variants") or {}).get(VARIANT_A_ID, {}).get("paper_sells") or 0),
         "variant_b_paper_buys": int((status.get("variants") or {}).get(VARIANT_B_ID, {}).get("paper_buys") or 0),
@@ -2365,6 +2969,115 @@ def _write_live_bus_smoke_reports(config: RuleRuntimeConfig, summary: dict[str, 
     config.status_md_path.write_text(_status_md(summary), encoding="utf-8")
 
 
+def _helius_transaction_subscribe_bonding_curve_probe_summary(
+    config: RuleRuntimeConfig,
+    status: dict[str, Any],
+    *,
+    capability_audit: dict[str, Any],
+    create_events_decoded: int,
+    transaction_subscribe_used: bool,
+    fallback_summary: dict[str, Any],
+    bus_metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    txsub = status.get("helius_transaction_subscribe_first_fdv") or {}
+    queue = status.get("first_fdv_queue") or {}
+    return {
+        "report_id": "helius_transaction_subscribe_bonding_curve_probe_summary",
+        "runtime_label": RUNTIME_LABEL,
+        "updated_at": _utc_now(),
+        "transactionSubscribe_supported": bool(txsub.get("transactionSubscribe_supported")),
+        "transactionSubscribe_used": bool(transaction_subscribe_used),
+        "endpoint_used": txsub.get("endpoint_used"),
+        "decoded_create_events": int(create_events_decoded),
+        "events_processed": int(status.get("events_processed") or 0),
+        "accepted_births": int(create_events_decoded) if transaction_subscribe_used else int((fallback_summary.get("collector_result") or {}).get("official_accepted_births") or 0),
+        "bonding_curve_probes_started": int(txsub.get("curve_account_probes_started") or 0),
+        "probes_started_during_stream": int(txsub.get("probes_started_during_stream") or 0),
+        "bonding_curve_probes_succeeded": int(txsub.get("curve_account_probes_succeeded") or 0),
+        "bonding_curve_probes_failed": int(txsub.get("curve_account_probes_failed") or 0),
+        "first_fdv_source_mix": (status.get("first_fdv_probe_sources") or {}).get("source_mix") or {},
+        "observed_to_probe_started_p50_p90_p99": txsub.get("observed_to_probe_started_p50_p90_p99"),
+        "probe_started_to_first_curve_state_p50_p90_p99": txsub.get("probe_started_to_first_curve_state_p50_p90_p99"),
+        "observed_to_first_fdv_p50_p90_p99": txsub.get("observed_to_first_fdv_p50_p90_p99"),
+        "observed_to_first_fdv_account_state_p50_p90_p99": txsub.get("observed_to_first_fdv_account_state_p50_p90_p99"),
+        "first_path_latency_p50_p90_p99": queue.get("first_path_latency_p50_p90_p99"),
+        "first_fdv_queue_total": queue.get("queue_depth_total"),
+        "tier_1_depth": queue.get("tier_1_depth"),
+        "confirmed_10k_watches": int(status.get("confirmed_10k_watches") or 0),
+        "confirmed_20k_candidates": int(status.get("confirmed_20k_entry_candidates") or 0),
+        "confirmed_20k_entry_candidates": int(status.get("confirmed_20k_entry_candidates") or 0),
+        "paper_buys": int(status.get("paper_buys") or 0),
+        "paper_sells": int(status.get("paper_sells") or 0),
+        "rejected_spikes": int(status.get("rejected_spike_candidates") or 0),
+        "rejected_same_timestamp_jumps": int(status.get("rejected_same_timestamp_jumps") or 0),
+        "rejected_fdv_anomalies": int(status.get("rejected_fdv_anomalies") or 0),
+        "http_429": int(queue.get("http_429_count") or 0),
+        "helius_calls_or_credits": queue.get("helius_rpc_request_count"),
+        "accountSubscribe_implemented": False,
+        "accountSubscribe_status": txsub.get("accountSubscribe_bonding_curve_status"),
+        "getAccountInfo_probe_implemented": True,
+        "getAccountInfo_p50_p90_p99": txsub.get("getAccountInfo_p50_p90_p99"),
+        "accountSubscribe_p50_p90_p99": txsub.get("accountSubscribe_p50_p90_p99"),
+        "capability_audit": capability_audit,
+        "fallback_summary": fallback_summary,
+        "bus_metrics": bus_metrics or {},
+        "monitor_path": str(config.monitor_html_path),
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "no_new_paid_source": True,
+        "warnings": txsub.get("warnings") or [],
+        "helius_transaction_subscribe_first_fdv": txsub,
+        "first_fdv_queue": queue,
+        "first_fdv_probe_sources": status.get("first_fdv_probe_sources") or {},
+        "variants": status.get("variants") or {},
+        "threshold_status": "baseline-label-mode" if "fdv_efficiency_threshold_unfrozen" in (status.get("warnings") or []) else "frozen",
+    }
+
+
+def _write_helius_transaction_subscribe_bonding_curve_probe_reports(config: RuleRuntimeConfig, summary: dict[str, Any]) -> None:
+    _write_json(config.helius_transaction_subscribe_bonding_curve_probe_summary_json_path, summary)
+    config.helius_transaction_subscribe_bonding_curve_probe_summary_md_path.write_text(
+        _helius_transaction_subscribe_bonding_curve_probe_summary_md(summary),
+        encoding="utf-8",
+    )
+    config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
+    config.status_md_path.write_text(_status_md(summary), encoding="utf-8")
+
+
+def _helius_transaction_subscribe_bonding_curve_probe_summary_md(summary: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "# Helius transactionSubscribe Bonding-Curve Probe Summary",
+            "",
+            f"- Updated: `{summary['updated_at']}`",
+            f"- transactionSubscribe supported: `{summary['transactionSubscribe_supported']}`",
+            f"- transactionSubscribe used: `{summary['transactionSubscribe_used']}`",
+            f"- Endpoint used: `{summary.get('endpoint_used')}`",
+            f"- Decoded create events: `{summary['decoded_create_events']}`",
+            f"- Accepted births: `{summary['accepted_births']}`",
+            f"- Bonding curve probes started/during-stream/succeeded/failed: `{summary['bonding_curve_probes_started']}` / `{summary['probes_started_during_stream']}` / `{summary['bonding_curve_probes_succeeded']}` / `{summary['bonding_curve_probes_failed']}`",
+            f"- First FDV source mix: `{summary['first_fdv_source_mix']}`",
+            f"- Observed to probe started p50/p90/p99: `{summary['observed_to_probe_started_p50_p90_p99']}`",
+            f"- Probe started to first curve state p50/p90/p99: `{summary['probe_started_to_first_curve_state_p50_p90_p99']}`",
+            f"- Observed to first FDV p50/p90/p99: `{summary['observed_to_first_fdv_p50_p90_p99']}`",
+            f"- Observed to account-state FDV p50/p90/p99: `{summary['observed_to_first_fdv_account_state_p50_p90_p99']}`",
+            f"- First path latency p50/p90/p99: `{summary['first_path_latency_p50_p90_p99']}`",
+            f"- Queue total / Tier 1 depth: `{summary['first_fdv_queue_total']}` / `{summary['tier_1_depth']}`",
+            f"- Confirmed 10k watches: `{summary['confirmed_10k_watches']}`",
+            f"- Confirmed 20k candidates: `{summary['confirmed_20k_candidates']}`",
+            f"- Paper buys/sells: `{summary['paper_buys']}` / `{summary['paper_sells']}`",
+            f"- Rejections spike/jump/anomaly: `{summary['rejected_spikes']}` / `{summary['rejected_same_timestamp_jumps']}` / `{summary['rejected_fdv_anomalies']}`",
+            f"- HTTP 429: `{summary['http_429']}`",
+            f"- accountSubscribe implemented: `{summary['accountSubscribe_implemented']}`",
+            f"- getAccountInfo probe implemented: `{summary['getAccountInfo_probe_implemented']}`",
+            f"- Monitor path: `{summary['monitor_path']}`",
+            f"- Warnings: `{summary['warnings']}`",
+            "",
+            "Paper-only. Live trading, private keys, transaction building, swaps, and routing remain disabled.",
+        ]
+    ) + "\n"
+
+
 def _live_bus_smoke_summary_md(summary: dict[str, Any]) -> str:
     return "\n".join(
         [
@@ -2389,6 +3102,7 @@ def _live_bus_smoke_summary_md(summary: dict[str, Any]) -> str:
             f"- Bus-to-runtime p50/p90/p99: `{summary['bus_to_runtime_latency_p50_p90_p99']}`",
             f"- Runtime eval p50/p90/p99: `{summary['runtime_eval_latency_p50_p90_p99']}`",
             f"- Bus queue depth: `{summary['bus_queue_depth']}`",
+            f"- First-FDV probe sources: `{summary.get('first_fdv_probe_sources')}`",
             f"- Threshold status: `{summary['threshold_status']}`",
             f"- Monitor path: `{summary['monitor_path']}`",
             "",
@@ -2430,6 +3144,14 @@ def _status_md(summary: dict[str, Any]) -> str:
                 f"- Scheduler mode: `{queue.get('scheduler_mode')}`",
                 f"- Queue depth total: `{queue.get('queue_depth_total')}`",
                 f"- Queue depth by tier: `{queue.get('queue_depth_by_tier')}`",
+                f"- Tier 1 depth: `{queue.get('tier_1_depth')}`",
+                f"- Tier 1 oldest age: `{queue.get('tier_1_oldest_age_seconds')}`",
+                f"- Tier 1 p50/p90 age: `{queue.get('tier_1_age_p50_p90')}`",
+                f"- Tier 1 processed count: `{queue.get('tier_1_processed_count')}`",
+                f"- Tier 1 archive count: `{queue.get('tier_1_archive_count')}`",
+                f"- Tier 1 promotion count: `{queue.get('tier_1_promotion_count')}`",
+                f"- Tier 1 retry count: `{queue.get('tier_1_retry_count')}`",
+                f"- Tier 1 pressure mode: `{queue.get('tier_1_pressure_mode')}`",
                 f"- Archived no activity: `{queue.get('archived_no_activity')}`",
                 f"- Archived no FDV path timeout: `{queue.get('archived_no_fdv_path_timeout')}`",
                 f"- Promoted to FDV path: `{queue.get('promoted_to_fdv_path')}`",
@@ -2437,7 +3159,54 @@ def _status_md(summary: dict[str, Any]) -> str:
                 f"- Promoted to confirmed 10k: `{queue.get('promoted_to_confirmed_10k')}`",
                 f"- Promoted to paper position: `{queue.get('promoted_to_paper_position')}`",
                 f"- First path success rate: `{queue.get('first_path_success_rate')}`",
+                f"- First-FDV success rate: `{queue.get('first_fdv_success_rate')}`",
+                f"- First-FDV timeout rate: `{queue.get('first_fdv_timeout_rate')}`",
+                f"- First-FDV median latency: `{queue.get('first_fdv_median_latency_ms')}`",
                 f"- First path latency p50/p90/p99: `{queue.get('first_path_latency_p50_p90_p99')}`",
+            ]
+        )
+    sources = summary.get("first_fdv_probe_sources") or {}
+    if sources:
+        lines.extend(
+            [
+                "",
+                "## First-FDV Probe Sources",
+                f"- Bonding curve account-state successes: `{sources.get('bonding_curve_account_state_successes')}`",
+                f"- Bonding curve account-state failures: `{sources.get('bonding_curve_account_state_failures')}`",
+                f"- Transaction delta successes: `{sources.get('transaction_delta_successes')}`",
+                f"- Confirmed path-state successes: `{sources.get('confirmed_path_state_successes')}`",
+                f"- Unknown successes: `{sources.get('unknown_successes')}`",
+                f"- Source mix: `{sources.get('source_mix')}`",
+                f"- getAccountInfo p50/p90/p99: `{sources.get('getAccountInfo_p50_p90_p99')}`",
+                f"- Decode p50/p90/p99: `{sources.get('decode_p50_p90_p99')}`",
+                f"- Observed to account-state FDV p50/p90/p99: `{sources.get('observed_to_first_fdv_account_state_p50_p90_p99')}`",
+                f"- accountSubscribe status: `{sources.get('accountSubscribe_bonding_curve_status')}`",
+                f"- Active account subscriptions: `{sources.get('active_account_subscriptions')}`",
+            ]
+        )
+    txsub = summary.get("helius_transaction_subscribe_first_fdv") or {}
+    if txsub:
+        lines.extend(
+            [
+                "",
+                "## Helius transactionSubscribe First-FDV",
+                f"- transactionSubscribe supported: `{txsub.get('transactionSubscribe_supported')}`",
+                f"- endpoint used: `{txsub.get('endpoint_used')}`",
+                f"- create events decoded: `{txsub.get('create_events_decoded')}`",
+                f"- curve PDA verified: `{txsub.get('curve_pda_verified')}`",
+                f"- curve account probes started: `{txsub.get('curve_account_probes_started')}`",
+                f"- probes started during stream: `{txsub.get('probes_started_during_stream')}`",
+                f"- curve account probes succeeded: `{txsub.get('curve_account_probes_succeeded')}`",
+                f"- curve account probes failed: `{txsub.get('curve_account_probes_failed')}`",
+                f"- first FDV from bonding curve account-state: `{txsub.get('first_fdv_from_bonding_curve_account_state')}`",
+                f"- first FDV from transaction delta: `{txsub.get('first_fdv_from_transaction_delta')}`",
+                f"- first FDV from unknown: `{txsub.get('first_fdv_from_unknown')}`",
+                f"- observed to probe started p50/p90/p99: `{txsub.get('observed_to_probe_started_p50_p90_p99')}`",
+                f"- probe started to first curve state p50/p90/p99: `{txsub.get('probe_started_to_first_curve_state_p50_p90_p99')}`",
+                f"- observed to first FDV p50/p90/p99: `{txsub.get('observed_to_first_fdv_p50_p90_p99')}`",
+                f"- getAccountInfo p50/p90/p99: `{txsub.get('getAccountInfo_p50_p90_p99')}`",
+                f"- accountSubscribe p50/p90/p99: `{txsub.get('accountSubscribe_p50_p90_p99')}`",
+                f"- warnings: `{txsub.get('warnings')}`",
             ]
         )
     return "\n".join(lines) + "\n"
@@ -2448,6 +3217,50 @@ def _update_runtime_bus_depth(config: RuleRuntimeConfig, depth: int) -> None:
     stats = state.setdefault("runtime_stats", {})
     stats["bus_queue_depth"] = int(depth)
     _write_json(config.runtime_state_path, state)
+
+
+def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str, Any]:
+    rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
+    failures_by_reason: dict[str, int] = {}
+    for row in rows:
+        if row.get("probe_status") == "success":
+            continue
+        reason = str(row.get("probe_error") or "unknown")
+        failures_by_reason[reason] = int(failures_by_reason.get(reason) or 0) + 1
+    return {
+        "successes": sum(1 for row in rows if row.get("probe_status") == "success"),
+        "failures": sum(1 for row in rows if row.get("probe_status") != "success"),
+        "failures_by_reason": dict(sorted(failures_by_reason.items())),
+        "requests_used": int(sum(_num(row.get("helius_rpc_request_count")) or 0 for row in rows)),
+        "http_429_count": int(sum(_num(row.get("http_429_count")) or 0 for row in rows)),
+    }
+
+
+def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: dict[str, Any]) -> None:
+    state = _load_state(config)
+    stats = _scheduler_stats(state)
+    failures = int(probe_stats.get("failures") or 0)
+    stats["bonding_curve_account_state_failures"] = failures
+    stats["bonding_curve_account_state_failure_reasons"] = probe_stats.get("failures_by_reason") or {}
+    requests_used = probe_stats.get("requests_used")
+    if requests_used is not None:
+        current = _num(stats.get("helius_rpc_request_count")) or 0
+        stats["helius_rpc_request_count"] = int(max(current, int(requests_used or 0)))
+    stats["http_429_count"] = int(stats.get("http_429_count") or 0) + int(probe_stats.get("http_429_count") or 0)
+    _write_json(config.runtime_state_path, state)
+
+
+def _transaction_subscribe_runtime_ws_url(
+    recommended: dict[str, Any],
+    *,
+    resolve_helius_api_key: Any,
+    resolve_helius_ws_url: Any,
+) -> str:
+    if recommended.get("name") == "helius_beta":
+        api_key = resolve_helius_api_key(load_project_dotenv=True)
+        if api_key:
+            return f"wss://beta.helius-rpc.com/?api-key={api_key}"
+    return resolve_helius_ws_url(load_project_dotenv=True)
 
 
 def _rejection_flags(candidate: dict[str, Any]) -> dict[str, bool]:
@@ -2530,6 +3343,44 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _row_id(row: dict[str, Any], fallback: int) -> str:
+    for key in ["signature", "observation_id", "mint", "ca"]:
+        value = row.get(key)
+        if value:
+            return str(value)
+    candidate = row.get("candidate") if isinstance(row.get("candidate"), dict) else {}
+    for key in ["signature", "observation_id", "mint", "ca"]:
+        value = candidate.get(key)
+        if value:
+            return str(value)
+    return f"row-{fallback}"
+
+
+def _unique_row_ids(rows: Any) -> set[str]:
+    return {_row_id(row, index) for index, row in enumerate(rows) if isinstance(row, dict)}
+
+
+def _duplicate_row_count(rows: list[dict[str, Any]]) -> int:
+    ids = [_row_id(row, index) for index, row in enumerate(rows)]
+    return max(0, len(ids) - len(set(ids)))
+
+
+def _row_has_token(row: dict[str, Any], tokens: list[str]) -> bool:
+    haystack = " ".join(
+        str(value).lower()
+        for value in [
+            row.get("hydration_status"),
+            row.get("status"),
+            row.get("missing_reason"),
+            row.get("reason"),
+            row.get("layout_status"),
+            row.get("error"),
+        ]
+        if value is not None
+    )
+    return any(token in haystack for token in tokens)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

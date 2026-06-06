@@ -99,6 +99,42 @@ class RateLimitFetcher(FakeFetcher):
         raise urllib.error.HTTPError("https://helius.invalid", 429, "Too Many Requests", hdrs=None, fp=None)
 
 
+class FakeFirstFdvProbe:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+        self.requests_used = 0
+        self.results: list[dict] = []
+
+    def probe_birth(self, birth: dict, *, now_fn=time.time) -> object:
+        self.requests_used += 1
+        self.calls.append(f"probe:{birth.get('mint')}")
+
+        class Result:
+            probe_status = "success"
+            failure_reason = None
+
+            def to_runtime_event(self, timestamp: float | None = None) -> dict:
+                return {
+                    "mint": birth["mint"],
+                    "timestamp": timestamp or now_fn(),
+                    "event_observed_at": birth.get("observed_time") or birth.get("create_log_observed_at") or timestamp or now_fn(),
+                    "fdv_proxy": 9_500.0,
+                    "event_count": 1,
+                    "buy_count": 0,
+                    "sell_count": 0,
+                    "active_wallet_count": 1,
+                    "source_event_type": "first_fdv_account_state",
+                    "fdv_source": "bonding_curve_account_state",
+                    "fdv_source_confidence": "high",
+                    "fdv_probe_method": "getAccountInfo_processed_bonding_curve",
+                    "observed_to_first_fdv_account_state_ms": 20.0,
+                    "getAccountInfo_latency_ms": 10.0,
+                    "decode_latency_ms": 2.0,
+                }
+
+        return Result()
+
+
 class CountingMetadataResolver:
     def __init__(self) -> None:
         self.requests_used = 0
@@ -177,6 +213,53 @@ def test_writes_provisional_birth_before_hydration_result(tmp_path: Path) -> Non
     assert births[0]["fdv_path_before_10k"] is True
     assert births[0]["fdv_path_before_20k"] is True
     assert births[0]["observed_to_first_followup_seconds"] <= 5.0
+
+
+def test_immediate_account_state_probe_emits_hot_path_event_before_followup_polling(tmp_path: Path) -> None:
+    config = OfficialLifecycleConfig(data_root=tmp_path, max_birth_to_first_followup_seconds=5.0)
+    calls: list[str] = []
+    seen_events: list[dict] = []
+    source = FakeLogSource([{"signature": "sig-a", "program_id": "pumpfun", "log_observed_at": 100.0}])
+    hydrator = FakeHydrator(
+        {
+            "sig-a": {
+                "mint": "mint-a",
+                "creator": "creator-a",
+                "bonding_curve": "curve-a",
+                "associated_bonding_curve": "assoc-a",
+                "launch_time": 99.5,
+            }
+        }
+    )
+
+    class OrderedFetcher(FakeFetcher):
+        def fetch_for_mint(self, mint: str, *, signatures_per_mint: int, transactions_per_mint: int, followup_addresses: list[str] | None = None) -> list[dict]:
+            calls.append(f"followup:{mint}")
+            return super().fetch_for_mint(
+                mint,
+                signatures_per_mint=signatures_per_mint,
+                transactions_per_mint=transactions_per_mint,
+                followup_addresses=followup_addresses,
+            )
+
+    result = run_no_laserstream_lifecycle_smoke(
+        config,
+        target_births=1,
+        execute=True,
+        source=source,
+        hydrator=hydrator,
+        fetcher=OrderedFetcher({"mint-a": [{"mint": "mint-a", "timestamp": 101.0, "fdv_proxy": 10_500.0}]}),
+        first_fdv_probe=FakeFirstFdvProbe(calls),
+        hot_path_event_callback=seen_events.append,
+        now_fn=iter([100.5, 101.0, 101.1, 101.2, 101.3, 101.4]).__next__,
+        max_runtime_seconds=2,
+    )
+
+    assert result["bonding_curve_account_state_probe"]["successes"] == 1
+    assert calls[:2] == ["probe:mint-a", "followup:mint-a"]
+    assert seen_events[0]["source_event_type"] == "first_fdv_account_state"
+    assert seen_events[0]["fdv_source"] == "bonding_curve_account_state"
+    assert seen_events[1]["source_event_type"] == "fdv_path_update"
 
 
 def test_metadata_is_not_touched_until_token_reaches_10k(tmp_path: Path) -> None:
