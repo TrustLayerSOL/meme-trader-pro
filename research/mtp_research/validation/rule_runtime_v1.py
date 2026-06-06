@@ -13,6 +13,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 import csv
+import hashlib
 import html
 import json
 import time
@@ -29,6 +30,7 @@ from research.mtp_research.validation.rule_runtime_event_bus import RuleRuntimeE
 RUNTIME_LABEL = "rule_runtime_v1"
 FROZEN_BUY_RULE_ID = "RULE_D_20K_EFFICIENCY_CREATOR_HOLDER_RISK_FILTER"
 FROZEN_EXIT_RULE_ID = "EXIT_NO_RECLAIM_AFTER_30PCT_10M"
+STAGNATION_EXIT_RULE_ID = "EXIT_STAGNATION_AFTER_RUNUP"
 VARIANT_A_ID = "FDV_BASELINE_20K"
 VARIANT_B_ID = "FDV_CREATOR_HOLDER_AVAILABLE_FILTER"
 VARIANT_C_ID = "FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"
@@ -58,6 +60,12 @@ OPTIONAL_LIVE_FIELDS = sorted(set(AVAILABLE_RISK_FIELDS + FULL_RISK_FIELDS + [
     "website_url",
     "top_holder_share_proxy",
     "creator_funder",
+    "mayhem_mode",
+    "mayhem",
+    "mayhem_assisted_momentum",
+    "dev_pump_suspect",
+    "fake_volume_suspect",
+    "concentrated_buying_suspect",
 ]))
 FDV_UNIT_FIELDS = [
     "fdv_usd",
@@ -97,12 +105,72 @@ TIER_1_FLAT_DELTA_PCT = 0.05
 TIER_1_PRESSURE_THRESHOLD = 20
 ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 SCHEDULER_MODE = "priority_single_worker"
+ENTRY_CHASE_TRIGGER_FDV_USD = 20_000.0
+MAX_ENTRY_ABOVE_TRIGGER_PCT = 0.15
+MAX_ALLOWED_PAPER_ENTRY_FDV_USD = ENTRY_CHASE_TRIGGER_FDV_USD * (1.0 + MAX_ENTRY_ABOVE_TRIGGER_PCT)
+STAGNATION_RUNUP_PCT = 0.50
+STAGNATION_NO_HIGH_SECONDS = 120.0
+DEFAULT_HOLDER_GATE_CONFIG = {
+    "absolute_reject_holder_count_lte": 1,
+    "min_acceptable_holder_count": 2,
+    "low_holder_depth_label_min": 2,
+    "low_holder_depth_label_max": 4,
+    "min_5_is_not_hard_reject": True,
+    "holder_growth_required": False,
+    "concentration_label_only": True,
+    "mayhem_mode_hard_reject": False,
+    "mayhem_mode_label_only": True,
+    "missing_holder_depth_variant_a_allowed": True,
+}
 ARCHIVE_STATES = {
     "archived_no_activity",
     "archived_no_fdv_path_timeout",
     "archived_parser_failure",
     "archived_duplicate",
     "archived_provenance_failure",
+}
+PAPER_BUY_FDV_RECONCILIATION_TARGET_MINTS = [
+    "DNAtTgzVBrR2hwKrRNqG8Y1ECuuGxLLxEme5KAMGpump",
+    "BhooE6fGh6eqK3h2Tj6MBiEayjv26ah4A2oDUjqrpump",
+    "G7ezsywkeKqbW57MiZNQWb6UKmYwpAoe7KfBkVEgpump",
+]
+PAPER_BUY_MANUAL_AXIOM_EVIDENCE = {
+    "DNAtTgzVBrR2hwKrRNqG8Y1ECuuGxLLxEme5KAMGpump": {
+        "ticker": "1111/1234",
+        "manual_visible_market_cap_usd": 20_100.0,
+        "manual_visible_high_usd": 20_500.0,
+        "mayhem_mode": True,
+        "holder_depth": False,
+        "concentrated_dev_or_linked_buying": True,
+        "kept_making_highs": False,
+        "stalled": True,
+        "rugged": False,
+        "evidence_note": "Axiom screenshot showed Mayhem Mode, holder count 0, Mayhem Bot/LP dominance, and visible market cap near $20K-$20.5K.",
+    },
+    "BhooE6fGh6eqK3h2Tj6MBiEayjv26ah4A2oDUjqrpump": {
+        "ticker": "UPP/TOPG",
+        "manual_visible_market_cap_usd": 80_900.0,
+        "manual_visible_high_usd": 81_300.0,
+        "mayhem_mode": True,
+        "holder_depth": False,
+        "concentrated_dev_or_linked_buying": True,
+        "kept_making_highs": True,
+        "stalled": False,
+        "rugged": False,
+        "evidence_note": "Axiom screenshot showed Mayhem Mode, holder count 1, Mayhem Bot/LP dominance, and price continuing well above the paper buy FDV.",
+    },
+    "G7ezsywkeKqbW57MiZNQWb6UKmYwpAoe7KfBkVEgpump": {
+        "ticker": "TWP/TREMP",
+        "manual_visible_market_cap_usd": 1_140.0,
+        "manual_visible_high_usd": 31_000.0,
+        "mayhem_mode": False,
+        "holder_depth": True,
+        "concentrated_dev_or_linked_buying": False,
+        "kept_making_highs": True,
+        "stalled": False,
+        "rugged": True,
+        "evidence_note": "Axiom screenshot showed a move toward roughly $31K followed by a hard drop near $1.14K; no Mayhem Mode was visible.",
+    },
 }
 
 
@@ -286,6 +354,34 @@ class RuleRuntimeConfig:
     @property
     def helius_transaction_subscribe_bonding_curve_probe_summary_md_path(self) -> Path:
         return self.report_root / "helius_transaction_subscribe_bonding_curve_probe_summary.md"
+
+    @property
+    def paper_buy_fdv_reconciliation_audit_json_path(self) -> Path:
+        return self.report_root / "paper_buy_fdv_reconciliation_audit.json"
+
+    @property
+    def paper_buy_fdv_reconciliation_audit_md_path(self) -> Path:
+        return self.report_root / "paper_buy_fdv_reconciliation_audit.md"
+
+    @property
+    def paper_buy_fdv_reconciliation_rows_csv_path(self) -> Path:
+        return self.report_root / "paper_buy_fdv_reconciliation_rows.csv"
+
+    @property
+    def retroactive_paper_buy_safety_review_json_path(self) -> Path:
+        return self.report_root / "retroactive_paper_buy_safety_review.json"
+
+    @property
+    def retroactive_paper_buy_safety_review_md_path(self) -> Path:
+        return self.report_root / "retroactive_paper_buy_safety_review.md"
+
+    @property
+    def runtime_safety_patch_summary_json_path(self) -> Path:
+        return self.report_root / "runtime_safety_patch_summary.json"
+
+    @property
+    def runtime_safety_patch_summary_md_path(self) -> Path:
+        return self.report_root / "runtime_safety_patch_summary.md"
 
     @property
     def hot_path_gap_analysis_path(self) -> Path:
@@ -483,12 +579,13 @@ class RuleRuntimeEngine:
                 result["paper_buy_created"] = True
             result["variant_paper_buys_created"] = variant_buys
         elif fdv >= ENTRY_THRESHOLD_FDV and not candidate.get("confirmed_crossed_20k"):
+            reason = "duplicate_same_state_confirmation" if candidate.get("duplicate_same_state_confirmation_reject") else "insufficient_path_evidence_for_confirmed_20k"
             _record_rejection(
                 self.config,
                 candidate,
                 normalized,
                 candidate.get("state") or "fdv_path_seen",
-                "insufficient_path_evidence_for_confirmed_20k",
+                reason,
             )
 
         if candidate.get("paper_buy_created") and not candidate.get("paper_closed"):
@@ -832,6 +929,263 @@ def birth_coverage_audit(config: RuleRuntimeConfig, *, source_root: Path | str |
     return audit
 
 
+def paper_buy_fdv_reconciliation_audit(
+    config: RuleRuntimeConfig,
+    *,
+    target_mints: list[str] | None = None,
+    manual_axiom_evidence: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    trades = _read_jsonl(config.paper_trades_path)
+    path_rows = _read_jsonl(config.path_events_path)
+    probe_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
+    variant_exits = _read_jsonl(config.paper_rule_variant_exits_path)
+    targets = target_mints or PAPER_BUY_FDV_RECONCILIATION_TARGET_MINTS
+    manual = manual_axiom_evidence or PAPER_BUY_MANUAL_AXIOM_EVIDENCE
+    buys_by_mint = {
+        row.get("mint"): row
+        for row in trades
+        if row.get("side") == "paper_buy" and (not targets or row.get("mint") in targets)
+    }
+    rows = []
+    for mint in targets:
+        buy = buys_by_mint.get(mint)
+        mint_path_rows = sorted([row for row in path_rows if row.get("mint") == mint], key=lambda row: _event_timestamp(row) or 0.0)
+        mint_probe_rows = sorted([row for row in probe_rows if row.get("mint") == mint], key=lambda row: _event_timestamp(row) or 0.0)
+        evidence = dict(manual.get(mint) or {})
+        if not buy:
+            rows.append(
+                {
+                    "mint": mint,
+                    "paper_buy_found": False,
+                    "manual_axiom_evidence": evidence,
+                    "warnings": ["paper_buy_missing_from_runtime"],
+                    "paper_labels": [],
+                }
+            )
+            continue
+        buy_ts = _event_timestamp(buy)
+        buy_fdv = _num(buy.get("paper_buy_fdv") or buy.get("buy_fdv"))
+        trigger_row = _closest_runtime_row(mint_path_rows, timestamp=buy_ts, fdv=buy_fdv)
+        trigger_probe = _closest_runtime_row(mint_probe_rows, timestamp=buy_ts, fdv=buy_fdv)
+        confirming_rows = _confirming_fdv_rows(mint_path_rows, buy_ts=buy_ts, threshold=20_000.0, window_seconds=config.confirmation_window_seconds)
+        confirming_probe_rows = [_closest_runtime_row(mint_probe_rows, timestamp=_event_timestamp(row), fdv=_num(row.get("fdv_usd") or row.get("fdv_proxy"))) for row in confirming_rows]
+        confirming_probe_rows = [row for row in confirming_probe_rows if row]
+        state = (trigger_row.get("account_state") if isinstance(trigger_row, dict) else None) or (
+            trigger_probe.get("account_state") if isinstance(trigger_probe, dict) else {}
+        )
+        fdv_units = _first_present(trigger_row, trigger_probe, keys=["fdv_units"])
+        fdv_source = _first_present(trigger_row, trigger_probe, buy, keys=["data_source", "fdv_source", "source"])
+        sol_usd = _num(_first_present(trigger_row, trigger_probe, keys=["sol_usd", "sol_usd_used"]))
+        fdv_usd = _num(_first_present(trigger_row, trigger_probe, buy, keys=["fdv_usd", "paper_buy_fdv", "fdv_proxy"]))
+        fdv_sol = _num(_first_present(trigger_row, trigger_probe, keys=["fdv_sol"]))
+        supply = _num((state or {}).get("token_total_supply"))
+        token_decimals = int(_num((state or {}).get("token_decimals")) or 0)
+        display_supply = supply / (10**token_decimals) if supply is not None and token_decimals >= 0 else None
+        computed_price_usd = fdv_usd / display_supply if fdv_usd is not None and display_supply else None
+        computed_price_sol = fdv_sol / display_supply if fdv_sol is not None and display_supply else None
+        duplicate_state = _has_duplicate_account_state(confirming_probe_rows)
+        same_slot_or_signature = _has_same_slot_or_signature(confirming_probe_rows)
+        trigger_fdv = _num((confirming_rows[0] if confirming_rows else trigger_row or {}).get("fdv_usd") or (confirming_rows[0] if confirming_rows else trigger_row or {}).get("fdv_proxy"))
+        manual_high = _num(evidence.get("manual_visible_high_usd"))
+        buy_over_trigger_pct = _pct_above(buy_fdv, trigger_fdv)
+        buy_over_manual_pct = _pct_above(buy_fdv, manual_high)
+        nearby_fdvs = [_num(row.get("fdv_usd") or row.get("fdv_proxy")) for row in mint_path_rows if _near_timestamp(row, buy_ts, 5.0)]
+        nearby_fdvs = [value for value in nearby_fdvs if value is not None]
+        nearby_median = median(nearby_fdvs) if nearby_fdvs else None
+        warnings = []
+        if buy_over_trigger_pct is not None and buy_over_trigger_pct > 0.15:
+            warnings.append("paper_buy_fdv_more_than_15pct_above_trigger_without_chase_approval")
+        if nearby_median is not None and buy_fdv is not None and buy_fdv > nearby_median * 1.15:
+            warnings.append("paper_buy_fdv_inconsistent_with_nearby_account_state_rows")
+        if duplicate_state:
+            warnings.append("confirming_rows_duplicate_same_state")
+        elif same_slot_or_signature:
+            warnings.append("confirming_rows_same_slot_or_create_signature")
+        if not fdv_units:
+            warnings.append("fdv_source_units_missing")
+        if buy_over_manual_pct is not None and buy_over_manual_pct > 0.15:
+            warnings.append("manual_axiom_market_cap_materially_below_runtime_fdv")
+        labels = _paper_buy_labels(buy, evidence, duplicate_state=duplicate_state, variant_exits=variant_exits)
+        row = {
+            "mint": mint,
+            "paper_buy_found": True,
+            "paper_buy_fdv": _round_optional(buy_fdv),
+            "paper_buy_timestamp": buy_ts,
+            "source_row_event_id": _source_row_id(trigger_row, trigger_probe),
+            "paper_event_id": buy.get("paper_event_id"),
+            "fdv_source": fdv_source,
+            "fdv_usd": _round_optional(fdv_usd),
+            "fdv_sol": _round_optional(fdv_sol),
+            "fdv_quote": _round_optional(_num(_first_present(trigger_row, trigger_probe, keys=["fdv_quote"]))),
+            "fdv_units": fdv_units,
+            "sol_usd_used": _round_optional(sol_usd),
+            "price_sol": _round_optional_precise(_num(_first_present(trigger_row, trigger_probe, keys=["price_sol"])) or computed_price_sol),
+            "price_usd": _round_optional_precise(_num(_first_present(trigger_row, trigger_probe, keys=["price_usd"])) or computed_price_usd),
+            "virtual_token_reserves": (state or {}).get("virtual_token_reserves"),
+            "virtual_sol_reserves": (state or {}).get("virtual_sol_reserves"),
+            "virtual_quote_reserves": (state or {}).get("virtual_quote_reserves") or (state or {}).get("virtual_sol_reserves"),
+            "real_token_reserves": (state or {}).get("real_token_reserves"),
+            "real_sol_reserves": (state or {}).get("real_sol_reserves"),
+            "real_quote_reserves": (state or {}).get("real_quote_reserves") or (state or {}).get("real_sol_reserves"),
+            "token_total_supply": (state or {}).get("token_total_supply"),
+            "token_decimals": (state or {}).get("token_decimals"),
+            "quote_decimals": (state or {}).get("quote_decimals"),
+            "complete": (state or {}).get("complete"),
+            "bonding_curve": _first_present(trigger_row, trigger_probe, keys=["bonding_curve", "bonding_curve_account"]),
+            "slot": _first_present(trigger_probe, trigger_row, keys=["account_data_slot", "slot", "create_slot"]),
+            "signature": _first_present(trigger_probe, trigger_row, keys=["signature", "source_create_signature"]),
+            "row_source_type": _source_type(fdv_source),
+            "buy_based_on": "confirmed_20k" if len(confirming_rows) >= 2 else "raw_20k_or_unconfirmed",
+            "number_of_confirming_rows_used": len(confirming_rows[:2]),
+            "confirming_row_timestamps": [_event_timestamp(row) for row in confirming_rows[:2]],
+            "confirming_row_fdv_values": [_round_optional(_num(row.get("fdv_usd") or row.get("fdv_proxy"))) for row in confirming_rows[:2]],
+            "confirming_row_event_ids": [row.get("event_id") for row in confirming_rows[:2]],
+            "confirming_rows_above_visible_axiom_high": _confirming_rows_above_manual_high(confirming_rows, manual_high),
+            "duplicate_or_same_state_confirmations": bool(duplicate_state),
+            "same_slot_or_signature_confirmations": bool(same_slot_or_signature),
+            "paper_buy_fdv_above_trigger_pct": _round_optional(buy_over_trigger_pct),
+            "paper_buy_fdv_above_manual_axiom_high_pct": _round_optional(buy_over_manual_pct),
+            "nearby_account_state_fdv_median": _round_optional(nearby_median),
+            "unit_conversion_or_formula_issue_suspected": bool(not fdv_units or fdv_units != "usd"),
+            "basis_or_manual_mismatch_suspected": "manual_axiom_market_cap_materially_below_runtime_fdv" in warnings,
+            "fdv_formula_basis": "virtual_reserve_price_times_full_token_total_supply",
+            "runtime_value_assessment": _paper_buy_runtime_assessment(warnings, evidence),
+            "mayhem_mode": bool(evidence.get("mayhem_mode")),
+            "holder_depth": bool(evidence.get("holder_depth")),
+            "concentrated_dev_or_linked_buying": bool(evidence.get("concentrated_dev_or_linked_buying")),
+            "kept_making_highs": bool(evidence.get("kept_making_highs")),
+            "stalled": bool(evidence.get("stalled")),
+            "rugged": bool(evidence.get("rugged")),
+            "manual_axiom_evidence": evidence,
+            "paper_labels": labels,
+            "warnings": warnings,
+        }
+        rows.append(row)
+    summary = {
+        "report_id": "paper_buy_fdv_reconciliation_audit",
+        "updated_at": _utc_now(),
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "rule_logic_changed": False,
+        "target_mints": targets,
+        "rows": rows,
+        "summary": {
+            "paper_buys_checked": sum(1 for row in rows if row.get("paper_buy_found")),
+            "mayhem_count": sum(1 for row in rows if row.get("mayhem_mode")),
+            "manual_axiom_mismatch_count": sum(1 for row in rows if "manual_axiom_market_cap_materially_below_runtime_fdv" in (row.get("warnings") or [])),
+            "duplicate_confirmation_count": sum(1 for row in rows if row.get("duplicate_or_same_state_confirmations")),
+            "same_slot_or_signature_confirmation_count": sum(1 for row in rows if row.get("same_slot_or_signature_confirmations")),
+            "rugged_count": sum(1 for row in rows if row.get("rugged")),
+        },
+        "exact_patch_needed": [
+            "Require distinct account-state fingerprints or distinct executable transaction evidence for confirmed 20k; do not count repeated unchanged account reads as independent confirmations.",
+            "Add a chase guard so paper_buy_fdv cannot exceed the trigger FDV by more than 15% unless explicitly approved.",
+            "Keep Mayhem Mode as a paper label/risk feature, not a hard reject; add Mayhem stagnation/no-reclaim exit labels before changing exits.",
+            "Reconcile runtime FDV proxy against Axiom market-cap basis before treating manual Axiom mismatches as formula bugs.",
+        ],
+    }
+    _write_json(config.paper_buy_fdv_reconciliation_audit_json_path, summary)
+    config.paper_buy_fdv_reconciliation_audit_md_path.write_text(_paper_buy_fdv_reconciliation_audit_md(summary), encoding="utf-8")
+    _write_paper_buy_reconciliation_csv(config.paper_buy_fdv_reconciliation_rows_csv_path, rows)
+    return summary
+
+
+def run_rule_runtime_safety_patch_review(config: RuleRuntimeConfig, *, apply_voids: bool = True) -> dict[str, Any]:
+    if not config.runtime_state_path.exists():
+        initialize_rule_runtime(config)
+    if not config.paper_buy_fdv_reconciliation_audit_json_path.exists():
+        paper_buy_fdv_reconciliation_audit(config)
+    audit = json.loads(config.paper_buy_fdv_reconciliation_audit_json_path.read_text(encoding="utf-8"))
+    state = _load_state(config)
+    state.setdefault("voided_paper_positions", {})
+    rows = []
+    for row in audit.get("rows") or []:
+        if not row.get("paper_buy_found", True):
+            continue
+        mint = row.get("mint")
+        warnings = row.get("warnings") or []
+        void_reason = None
+        if "confirming_rows_duplicate_same_state" in warnings:
+            void_reason = "duplicate_same_state_confirmation_bug"
+        elif "paper_buy_fdv_more_than_15pct_above_trigger_without_chase_approval" in warnings or (
+            (_num(row.get("paper_buy_fdv")) or 0.0) > MAX_ALLOWED_PAPER_ENTRY_FDV_USD
+        ):
+            void_reason = "chase_guard_exceeded"
+        labels = list(row.get("paper_labels") or [])
+        if row.get("mayhem_mode"):
+            labels.append("mayhem_mode")
+        if row.get("mayhem_mode") and row.get("kept_making_highs"):
+            labels.append("mayhem_assisted_momentum")
+        if "manual_axiom_market_cap_materially_below_runtime_fdv" in warnings:
+            labels.append("manual_axiom_runtime_fdv_mismatch")
+        action = "voided" if void_reason else "kept"
+        position = (state.get("open_positions") or {}).get(mint) or {}
+        void_row = {
+            "mint": mint,
+            "action": action,
+            "void_reason": void_reason,
+            "paper_buy_fdv": row.get("paper_buy_fdv"),
+            "warnings": warnings,
+            "paper_labels": sorted(set(labels)),
+            "paper_wallet_adjustment_usd": 0.0,
+            "no_real_trade": True,
+        }
+        if apply_voids and void_reason and mint not in state["voided_paper_positions"]:
+            allocation = _num(position.get("allocation_usd")) or 0.0
+            void_row["paper_wallet_adjustment_usd"] = _round_money(allocation)
+            void_row["voided_at"] = _utc_now()
+            void_row["side"] = "paper_void"
+            state["cash_usd"] = _round_money((_num(state.get("cash_usd")) or 0.0) + allocation)
+            state["wallet_usd"] = _round_money(_num(state.get("cash_usd")) or 0.0)
+            state["voided_paper_positions"][mint] = void_row
+            if mint in state.get("open_positions", {}):
+                del state["open_positions"][mint]
+            candidate = (state.get("candidates") or {}).get(mint)
+            if candidate:
+                candidate["paper_buy_voided"] = True
+                candidate["void_reason"] = void_reason
+                candidate["paper_buy_created"] = False
+                candidate["state"] = "paper_buy_voided"
+            _append_jsonl(config.paper_trades_path, void_row)
+        elif mint in state["voided_paper_positions"]:
+            existing_void = state["voided_paper_positions"][mint]
+            void_row = {
+                **existing_void,
+                **void_row,
+                "paper_wallet_adjustment_usd": existing_void.get("paper_wallet_adjustment_usd", void_row.get("paper_wallet_adjustment_usd")),
+                "voided_at": existing_void.get("voided_at"),
+                "side": existing_void.get("side", "paper_void"),
+            }
+            state["voided_paper_positions"][mint] = void_row
+        rows.append(void_row)
+    state["updated_at"] = _utc_now()
+    state["queue_sizes"] = _queue_sizes_from_state(state)
+    _write_json(config.runtime_state_path, state)
+    status = rule_runtime_status(config)
+    review = {
+        "report_id": "retroactive_paper_buy_safety_review",
+        "updated_at": _utc_now(),
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "apply_voids": apply_voids,
+        "rows": rows,
+        "retroactive_review": {
+            "valid_paper_buys": status.get("valid_paper_buys"),
+            "voided_paper_buys": status.get("voided_paper_buys"),
+            "paper_wallet_cash_after_voids": status.get("cash_usd"),
+            "paper_wallet_value_after_voids": status.get("wallet_usd"),
+        },
+    }
+    _write_json(config.retroactive_paper_buy_safety_review_json_path, review)
+    config.retroactive_paper_buy_safety_review_md_path.write_text(_retroactive_paper_buy_safety_review_md(review), encoding="utf-8")
+    summary = _runtime_safety_patch_summary(config, status=status, review=review)
+    _write_json(config.runtime_safety_patch_summary_json_path, summary)
+    config.runtime_safety_patch_summary_md_path.write_text(_runtime_safety_patch_summary_md(summary), encoding="utf-8")
+    config.status_md_path.parent.mkdir(parents=True, exist_ok=True)
+    config.status_md_path.write_text(_runtime_safety_patch_summary_md(summary), encoding="utf-8")
+    return {**summary, "retroactive_review": review["retroactive_review"]}
+
+
 def run_first_fdv_queue_triage_smoke(config: RuleRuntimeConfig, *, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     initialize_rule_runtime(config, reset=not config.runtime_state_path.exists())
     bus = RuleRuntimeEventBus()
@@ -889,8 +1243,12 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
     first_fdv_queue = _first_fdv_queue_summary(config, state, latency)
     first_fdv_probe_sources = _first_fdv_probe_source_summary(state, latency)
     helius_txsub_first_fdv = _helius_transaction_subscribe_first_fdv_status(config, first_fdv_probe_sources)
+    safety = _runtime_safety_counts(config, state, trades=trades)
     warnings = list(state.get("warnings") or [])
     for warning in first_fdv_queue.get("warnings") or []:
+        if warning not in warnings:
+            warnings.append(warning)
+    for warning in _paper_buy_reconciliation_warnings(config):
         if warning not in warnings:
             warnings.append(warning)
     status = {
@@ -937,6 +1295,7 @@ def rule_runtime_status(config: RuleRuntimeConfig) -> dict[str, Any]:
         "paper_rule_variant_exits_path": str(config.paper_rule_variant_exits_path),
         "latency_events_path": str(config.latency_events_path),
         "warnings": warnings,
+        **safety,
     }
     _write_monitor(config, state)
     return status
@@ -1485,6 +1844,537 @@ def _birth_coverage_audit_md(audit: dict[str, Any]) -> str:
     ) + "\n"
 
 
+def _paper_buy_fdv_reconciliation_audit_md(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Paper Buy FDV Reconciliation Audit",
+        "",
+        f"Updated: {audit.get('updated_at')}",
+        "Paper-only. Live trading is disabled.",
+        f"Rule logic changed: {audit.get('rule_logic_changed')}",
+        "",
+        "## Summary",
+    ]
+    summary = audit.get("summary") or {}
+    for key in [
+        "paper_buys_checked",
+        "mayhem_count",
+        "manual_axiom_mismatch_count",
+        "duplicate_confirmation_count",
+        "same_slot_or_signature_confirmation_count",
+        "rugged_count",
+    ]:
+        lines.append(f"- {key}: `{summary.get(key)}`")
+    lines.extend(["", "## Paper Buys"])
+    for row in audit.get("rows") or []:
+        lines.extend(
+            [
+                f"### {row.get('mint')}",
+                f"- Paper buy FDV: `${row.get('paper_buy_fdv')}`",
+                f"- Paper buy timestamp: `{row.get('paper_buy_timestamp')}`",
+                f"- Source row/event id: `{row.get('source_row_event_id')}` / `{row.get('paper_event_id')}`",
+                f"- FDV source/units: `{row.get('fdv_source')}` / `{row.get('fdv_units')}`",
+                f"- FDV USD/SOL/quote: `{row.get('fdv_usd')}` / `{row.get('fdv_sol')}` / `{row.get('fdv_quote')}`",
+                f"- SOL/USD used: `{row.get('sol_usd_used')}`",
+                f"- Price USD/SOL: `{row.get('price_usd')}` / `{row.get('price_sol')}`",
+                f"- Bonding curve: `{row.get('bonding_curve')}`",
+                f"- Slot/signature: `{row.get('slot')}` / `{row.get('signature')}`",
+                f"- Confirming rows: `{row.get('number_of_confirming_rows_used')}`",
+                f"- Confirming row timestamps: `{row.get('confirming_row_timestamps')}`",
+                f"- Confirming row FDVs: `{row.get('confirming_row_fdv_values')}`",
+                f"- Above visible Axiom high: `{row.get('confirming_rows_above_visible_axiom_high')}`",
+                f"- Duplicate/same-state confirmations: `{row.get('duplicate_or_same_state_confirmations')}`",
+                f"- Same-slot/signature confirmations: `{row.get('same_slot_or_signature_confirmations')}`",
+                f"- Manual Axiom high mismatch pct: `{row.get('paper_buy_fdv_above_manual_axiom_high_pct')}`",
+                f"- Mayhem/holder depth/concentrated: `{row.get('mayhem_mode')}` / `{row.get('holder_depth')}` / `{row.get('concentrated_dev_or_linked_buying')}`",
+                f"- Kept making highs/stalled/rugged: `{row.get('kept_making_highs')}` / `{row.get('stalled')}` / `{row.get('rugged')}`",
+                f"- Paper labels: `{row.get('paper_labels')}`",
+                f"- Warnings: `{row.get('warnings')}`",
+                f"- Assessment: `{row.get('runtime_value_assessment')}`",
+                "",
+            ]
+        )
+    lines.extend(["## Exact Patch Needed"])
+    for item in audit.get("exact_patch_needed") or []:
+        lines.append(f"- {item}")
+    return "\n".join(lines) + "\n"
+
+
+def _retroactive_paper_buy_safety_review_md(review: dict[str, Any]) -> str:
+    lines = [
+        "# Retroactive Paper Buy Safety Review",
+        "",
+        f"Updated: {review.get('updated_at')}",
+        "Paper-only. Original paper buy records are preserved; void entries are additive audit trail rows.",
+        "",
+        "## Summary",
+    ]
+    summary = review.get("retroactive_review") or {}
+    for key in ["valid_paper_buys", "voided_paper_buys", "paper_wallet_cash_after_voids", "paper_wallet_value_after_voids"]:
+        lines.append(f"- {key}: `{summary.get(key)}`")
+    lines.extend(["", "## Rows"])
+    for row in review.get("rows") or []:
+        lines.append(f"- {row.get('mint')}: action `{row.get('action')}`, void_reason `{row.get('void_reason')}`, labels `{row.get('paper_labels')}`")
+    return "\n".join(lines) + "\n"
+
+
+def _runtime_safety_patch_summary(config: RuleRuntimeConfig, *, status: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "report_id": "runtime_safety_patch_summary",
+        "updated_at": _utc_now(),
+        "paper_only": True,
+        "live_trading_enabled": False,
+        "duplicate_confirmation_patch": True,
+        "chase_guard_threshold": {
+            "trigger_fdv_usd": ENTRY_CHASE_TRIGGER_FDV_USD,
+            "max_entry_above_trigger_pct": MAX_ENTRY_ABOVE_TRIGGER_PCT,
+            "max_allowed_paper_entry_fdv_usd": MAX_ALLOWED_PAPER_ENTRY_FDV_USD,
+        },
+        "fdv_provenance_persistence": True,
+        "holder_gate_applied": True,
+        "mayhem_label_only": True,
+        "stagnation_exit_added": True,
+        "status": {
+            "duplicate_same_state_confirmation_reject_count": status.get("duplicate_same_state_confirmation_reject_count"),
+            "chase_guard_reject_count": status.get("chase_guard_reject_count"),
+            "holder_count_lte_1_reject_count": status.get("holder_count_lte_1_reject_count"),
+            "mayhem_label_count": status.get("mayhem_label_count"),
+            "fake_volume_suspect_count": status.get("fake_volume_suspect_count"),
+            "dev_pump_suspect_count": status.get("dev_pump_suspect_count"),
+            "stagnation_exit_count": status.get("stagnation_exit_count"),
+            "valid_paper_buys": status.get("valid_paper_buys"),
+            "voided_paper_buys": status.get("voided_paper_buys"),
+            "rejected_paper_entries": status.get("rejected_paper_entries"),
+            "cash_usd": status.get("cash_usd"),
+            "wallet_usd": status.get("wallet_usd"),
+        },
+        "retroactive_review": review.get("retroactive_review") or {},
+        "monitor_path": str(config.monitor_html_path),
+        "retroactive_review_path": str(config.retroactive_paper_buy_safety_review_json_path),
+    }
+
+
+def _runtime_safety_patch_summary_md(summary: dict[str, Any]) -> str:
+    status = summary.get("status") or {}
+    chase = summary.get("chase_guard_threshold") or {}
+    return "\n".join(
+        [
+            "# Rule Runtime v1 Safety Patch Summary",
+            "",
+            f"Updated: {summary.get('updated_at')}",
+            "Paper-only. Live trading, private keys, signing, swaps, and routing remain disabled.",
+            "",
+            f"- Duplicate confirmation patch: `{summary.get('duplicate_confirmation_patch')}`",
+            f"- Chase guard threshold: trigger `${chase.get('trigger_fdv_usd')}`, max pct `{chase.get('max_entry_above_trigger_pct')}`, max entry `${chase.get('max_allowed_paper_entry_fdv_usd')}`",
+            f"- FDV provenance persistence: `{summary.get('fdv_provenance_persistence')}`",
+            f"- Holder gate applied: `{summary.get('holder_gate_applied')}`",
+            f"- Mayhem label-only: `{summary.get('mayhem_label_only')}`",
+            f"- Stagnation exit added: `{summary.get('stagnation_exit_added')}`",
+            f"- Duplicate same-state rejects: `{status.get('duplicate_same_state_confirmation_reject_count')}`",
+            f"- Chase guard rejects: `{status.get('chase_guard_reject_count')}`",
+            f"- Holder <=1 rejects: `{status.get('holder_count_lte_1_reject_count')}`",
+            f"- Mayhem labels: `{status.get('mayhem_label_count')}`",
+            f"- Dev-pump suspect labels: `{status.get('dev_pump_suspect_count')}`",
+            f"- Fake-volume suspect labels: `{status.get('fake_volume_suspect_count')}`",
+            f"- Stagnation exits: `{status.get('stagnation_exit_count')}`",
+            f"- Valid/voided/rejected paper buys: `{status.get('valid_paper_buys')}` / `{status.get('voided_paper_buys')}` / `{status.get('rejected_paper_entries')}`",
+            f"- Paper cash/wallet: `${status.get('cash_usd')}` / `${status.get('wallet_usd')}`",
+            f"- Monitor path: `{summary.get('monitor_path')}`",
+            f"- Retroactive review path: `{summary.get('retroactive_review_path')}`",
+        ]
+    ) + "\n"
+
+
+def _write_paper_buy_reconciliation_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "mint",
+        "paper_buy_fdv",
+        "paper_buy_timestamp",
+        "source_row_event_id",
+        "paper_event_id",
+        "fdv_source",
+        "fdv_usd",
+        "fdv_sol",
+        "fdv_quote",
+        "fdv_units",
+        "sol_usd_used",
+        "price_sol",
+        "price_usd",
+        "bonding_curve",
+        "slot",
+        "signature",
+        "row_source_type",
+        "buy_based_on",
+        "number_of_confirming_rows_used",
+        "confirming_row_timestamps",
+        "confirming_row_fdv_values",
+        "confirming_rows_above_visible_axiom_high",
+        "duplicate_or_same_state_confirmations",
+        "same_slot_or_signature_confirmations",
+        "paper_buy_fdv_above_trigger_pct",
+        "paper_buy_fdv_above_manual_axiom_high_pct",
+        "unit_conversion_or_formula_issue_suspected",
+        "basis_or_manual_mismatch_suspected",
+        "mayhem_mode",
+        "holder_depth",
+        "concentrated_dev_or_linked_buying",
+        "kept_making_highs",
+        "stalled",
+        "rugged",
+        "paper_labels",
+        "warnings",
+        "runtime_value_assessment",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key) for key in fields})
+
+
+def _event_timestamp(row: dict[str, Any] | None) -> float | None:
+    if not row:
+        return None
+    for key in ["timestamp", "first_fdv_emitted_at", "first_response_at", "probe_completed_at", "probe_started_at", "observed_at"]:
+        value = _num(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _closest_runtime_row(rows: list[dict[str, Any]], *, timestamp: float | None, fdv: float | None) -> dict[str, Any]:
+    if not rows:
+        return {}
+
+    def score(row: dict[str, Any]) -> float:
+        row_ts = _event_timestamp(row)
+        row_fdv = _num(row.get("fdv_usd") or row.get("fdv_proxy") or row.get("paper_buy_fdv"))
+        ts_score = abs((row_ts or timestamp or 0.0) - (timestamp or row_ts or 0.0))
+        fdv_score = abs((row_fdv or fdv or 0.0) - (fdv or row_fdv or 0.0)) / 100.0
+        return ts_score + fdv_score
+
+    return min(rows, key=score)
+
+
+def _confirming_fdv_rows(rows: list[dict[str, Any]], *, buy_ts: float | None, threshold: float, window_seconds: float) -> list[dict[str, Any]]:
+    crossing = []
+    for row in rows:
+        ts = _event_timestamp(row)
+        if buy_ts is not None and ts is not None and ts > buy_ts + 0.001:
+            continue
+        fdv = _num(row.get("fdv_usd") or row.get("fdv_proxy"))
+        if fdv is not None and fdv >= threshold:
+            crossing.append(row)
+    if not crossing:
+        return []
+    first_ts = _event_timestamp(crossing[0])
+    if first_ts is None:
+        return crossing[:2]
+    return [row for row in crossing if (_event_timestamp(row) or first_ts) <= first_ts + window_seconds][:2]
+
+
+def _first_present(*rows: dict[str, Any] | None, keys: list[str]) -> Any:
+    for row in rows:
+        if not row:
+            continue
+        for key in keys:
+            value = row.get(key)
+            if value is not None and value != "":
+                return value
+    return None
+
+
+def _source_row_id(*rows: dict[str, Any] | None) -> str | None:
+    for row in rows:
+        if not row:
+            continue
+        for key in ["event_id", "paper_event_id", "signature", "source_create_signature"]:
+            value = row.get(key)
+            if value:
+                return str(value)
+    for row in rows:
+        if not row:
+            continue
+        mint = row.get("mint")
+        source = row.get("data_source") or row.get("fdv_source") or row.get("source")
+        timestamp = _event_timestamp(row)
+        if mint and source and timestamp is not None:
+            return f"{mint}:{source}:{timestamp}"
+    return None
+
+
+def _near_timestamp(row: dict[str, Any], timestamp: float | None, window_seconds: float) -> bool:
+    row_ts = _event_timestamp(row)
+    if row_ts is None or timestamp is None:
+        return False
+    return abs(row_ts - timestamp) <= window_seconds
+
+
+def _account_state_fingerprint(row: dict[str, Any]) -> str:
+    state = row.get("account_state") if isinstance(row.get("account_state"), dict) else {}
+    fields = {
+        key: state.get(key)
+        for key in [
+            "virtual_token_reserves",
+            "virtual_sol_reserves",
+            "virtual_quote_reserves",
+            "real_token_reserves",
+            "real_sol_reserves",
+            "real_quote_reserves",
+            "token_total_supply",
+            "token_decimals",
+            "quote_decimals",
+            "complete",
+        ]
+    }
+    return json.dumps(fields, sort_keys=True)
+
+
+def _has_duplicate_account_state(rows: list[dict[str, Any]]) -> bool:
+    fingerprints = [_account_state_fingerprint(row) for row in rows if row.get("account_state")]
+    return len(fingerprints) >= 2 and len(set(fingerprints)) < len(fingerprints)
+
+
+def _has_same_slot_or_signature(rows: list[dict[str, Any]]) -> bool:
+    if len(rows) < 2:
+        return False
+    slot_values = [row.get("account_data_slot") or row.get("slot") or row.get("create_slot") for row in rows]
+    sig_values = [row.get("signature") or row.get("source_create_signature") for row in rows]
+    return bool(slot_values[0] and len(set(slot_values)) == 1) or bool(sig_values[0] and len(set(sig_values)) == 1)
+
+
+def _pct_above(value: float | None, base: float | None) -> float | None:
+    if value is None or base is None or base <= 0:
+        return None
+    return (value - base) / base
+
+
+def _source_type(source: Any) -> str:
+    source_text = str(source or "").lower()
+    if "account_state" in source_text:
+        return "account_state"
+    if "transaction" in source_text or "delta" in source_text:
+        return "transaction_delta"
+    return "other"
+
+
+def _confirming_rows_above_manual_high(rows: list[dict[str, Any]], manual_high: float | None) -> bool:
+    if manual_high is None:
+        return False
+    return any((_num(row.get("fdv_usd") or row.get("fdv_proxy")) or 0.0) > manual_high for row in rows)
+
+
+def _paper_buy_labels(
+    buy: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    duplicate_state: bool,
+    variant_exits: list[dict[str, Any]],
+) -> list[str]:
+    labels = []
+    if evidence.get("mayhem_mode") and evidence.get("kept_making_highs"):
+        labels.append("mayhem_assisted_momentum")
+    event_count = _num(buy.get("event_count_at_20k"))
+    buy_count = _num(buy.get("buy_count_at_20k"))
+    active_wallets = _num(buy.get("active_wallet_count_at_20k"))
+    if evidence.get("concentrated_dev_or_linked_buying") or (active_wallets is not None and active_wallets <= 1):
+        labels.append("dev_pump_suspect")
+    if duplicate_state or (buy_count is not None and buy_count <= 0) or (event_count is not None and event_count <= 1):
+        labels.append("fake_volume_suspect")
+    mint = buy.get("mint")
+    exit_reasons = [str(row.get("exit_reason") or "").lower() for row in variant_exits if row.get("mint") == mint]
+    if any("stagnation" in reason for reason in exit_reasons):
+        labels.append("stagnation_exit_triggered")
+    if any("no_reclaim" in reason for reason in exit_reasons):
+        labels.append("no_reclaim_exit_triggered")
+    return sorted(set(labels))
+
+
+def _paper_buy_runtime_assessment(warnings: list[str], evidence: dict[str, Any]) -> str:
+    if "manual_axiom_market_cap_materially_below_runtime_fdv" in warnings:
+        return "difference_between_manual_axiom_market_cap_and_runtime_fdv_proxy_or_basis_mismatch"
+    if "confirming_rows_duplicate_same_state" in warnings:
+        return "wrong_due_to_confirmation_quality_bug"
+    if "fdv_source_units_missing" in warnings:
+        return "wrong_or_unverifiable_due_to_missing_fdv_units"
+    if evidence.get("rugged"):
+        return "runtime_fdv_buy_was_valid_but_candidate_rugged_afterward"
+    return "correct_under_current_runtime_fdv_definition"
+
+
+def _entry_chase_guard(candidate: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    trigger = _trigger_fdv_usd(candidate) or ENTRY_CHASE_TRIGGER_FDV_USD
+    buy_fdv = _num(row.get("fdv_usd") or row.get("fdv_proxy"))
+    pct = _pct_above(buy_fdv, trigger)
+    max_allowed = min(trigger * (1.0 + MAX_ENTRY_ABOVE_TRIGGER_PCT), MAX_ALLOWED_PAPER_ENTRY_FDV_USD)
+    rejected = buy_fdv is not None and buy_fdv > max_allowed
+    return {
+        "trigger_fdv_usd": _round_optional(trigger),
+        "paper_buy_fdv_usd": _round_optional(buy_fdv),
+        "entry_above_trigger_pct": _round_optional(pct),
+        "max_entry_above_trigger_pct": MAX_ENTRY_ABOVE_TRIGGER_PCT,
+        "max_allowed_paper_entry_fdv_usd": _round_optional(max_allowed),
+        "chase_guard_result": "rejected" if rejected else "pass",
+        "chase_guard_rejection_reason": "chase_guard_exceeded" if rejected else None,
+    }
+
+
+def _trigger_fdv_usd(candidate: dict[str, Any]) -> float | None:
+    rows = [
+        row
+        for row in candidate.get("path_rows") or []
+        if (_milestone_fdv_usd(row) or 0.0) >= ENTRY_THRESHOLD_FDV and _row_valid_for_confirmation(row)
+    ]
+    if not rows:
+        return ENTRY_CHASE_TRIGGER_FDV_USD
+    return _milestone_fdv_usd(rows[0])
+
+
+def _holder_gate_status(config: RuleRuntimeConfig, row: dict[str, Any]) -> dict[str, Any]:
+    holder_config = _holder_gate_config(config)
+    holder_count = _entry_holder_count(row)
+    labels = []
+    if holder_count is None:
+        return {"holder_count": None, "holder_depth_status": "missing", "risk_labels": ["missing_holder_depth"], "rejection_reason": None}
+    if holder_count <= int(holder_config["absolute_reject_holder_count_lte"]):
+        return {
+            "holder_count": holder_count,
+            "holder_depth_status": "hard_reject",
+            "risk_labels": ["holder_count_lte_1_hard_reject"],
+            "rejection_reason": "holder_count_lte_1_hard_reject",
+        }
+    if int(holder_config["low_holder_depth_label_min"]) <= holder_count <= int(holder_config["low_holder_depth_label_max"]):
+        labels.append("low_holder_depth_2_to_4")
+        status = "low_label"
+    else:
+        status = "pass"
+    return {"holder_count": holder_count, "holder_depth_status": status, "risk_labels": labels, "rejection_reason": None}
+
+
+def _holder_gate_config(config: RuleRuntimeConfig) -> dict[str, Any]:
+    path = config.root / "data" / "backtests" / "diagnostics" / "reports" / "historical_holder_depth_scan" / "suggested_holder_gate_runtime_config.json"
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            return {**DEFAULT_HOLDER_GATE_CONFIG, **loaded}
+        except (OSError, json.JSONDecodeError):
+            return dict(DEFAULT_HOLDER_GATE_CONFIG)
+    return dict(DEFAULT_HOLDER_GATE_CONFIG)
+
+
+def _entry_holder_count(row: dict[str, Any]) -> int | None:
+    for key in ["holder_count_at_10k_proxy", "holder_count_at_10k", "holder_count_at_entry", "holder_count", "holders"]:
+        value = _num(row.get(key))
+        if value is not None:
+            return int(value)
+    return None
+
+
+def _entry_risk_labels(row: dict[str, Any]) -> list[str]:
+    labels = []
+    if _truthy(row.get("mayhem_mode") or row.get("mayhem")):
+        labels.append("mayhem_mode")
+    if _truthy(row.get("mayhem_assisted_momentum")):
+        labels.append("mayhem_assisted_momentum")
+    if _truthy(row.get("concentrated_buying_suspect")):
+        labels.append("concentrated_buying_suspect")
+    if _truthy(row.get("dev_pump_suspect")):
+        labels.append("dev_pump_suspect")
+    if _truthy(row.get("fake_volume_suspect")):
+        labels.append("fake_volume_suspect")
+    return labels
+
+
+def _volume_risk_labels(row: dict[str, Any], features: dict[str, Any]) -> list[str]:
+    labels = []
+    if int(row.get("active_wallet_count") or 0) <= 1:
+        labels.append("dev_pump_suspect")
+    if int(row.get("buy_count") or 0) <= 0 or int(row.get("event_count") or 0) <= 1:
+        labels.append("fake_volume_suspect")
+    if (_num(row.get("repeated_buyer_count")) or 0) >= 2:
+        labels.append("concentrated_buying_suspect")
+    buckets = _efficiency_bucket_labels(features)
+    if "very_high" in set(buckets.values()):
+        labels.append("fake_volume_suspect")
+    return labels
+
+
+def _primary_rejection_reason(reasons: list[str]) -> str | None:
+    if not reasons:
+        return None
+    priority = [
+        "duplicate_same_state_confirmation",
+        "missing_fdv_units",
+        "missing_fdv_usd_for_usd_threshold",
+        "holder_count_lte_1_hard_reject",
+        "chase_guard_exceeded",
+        "single_row_spike",
+        "same_timestamp_major_jump",
+        "fdv_anomaly",
+    ]
+    for reason in priority:
+        if reason in reasons:
+            return reason
+    return reasons[0]
+
+
+def _fdv_provenance_fields(row: dict[str, Any]) -> dict[str, Any]:
+    state = row.get("account_state") if isinstance(row.get("account_state"), dict) else {}
+    keys = [
+        "fdv_usd",
+        "fdv_sol",
+        "fdv_quote",
+        "fdv_units",
+        "sol_usd",
+        "price_sol",
+        "price_quote",
+        "virtual_token_reserves",
+        "virtual_sol_reserves",
+        "virtual_quote_reserves",
+        "real_token_reserves",
+        "real_sol_reserves",
+        "real_quote_reserves",
+        "token_total_supply",
+        "token_decimals",
+        "quote_decimals",
+        "quote_type",
+        "calculation_status",
+        "fdv_source",
+        "fdv_source_confidence",
+        "account_data_hash",
+        "reserve_state_fingerprint",
+    ]
+    fields = {}
+    for key in keys:
+        if row.get(key) is not None:
+            fields[key] = row.get(key)
+        elif state.get(key) is not None:
+            fields[key] = state.get(key)
+    return fields
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "mayhem", "on"}
+    return bool(value)
+
+
+def _paper_buy_reconciliation_warnings(config: RuleRuntimeConfig) -> list[str]:
+    if not config.paper_buy_fdv_reconciliation_audit_json_path.exists():
+        return []
+    try:
+        audit = json.loads(config.paper_buy_fdv_reconciliation_audit_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ["paper_buy_fdv_reconciliation_audit_unreadable"]
+    warnings = []
+    for row in audit.get("rows") or []:
+        for warning in row.get("warnings") or []:
+            warning_id = f"paper_buy_fdv_reconciliation:{row.get('mint')}:{warning}"
+            if warning_id not in warnings:
+                warnings.append(warning_id)
+    return warnings
+
+
 def _initial_state(config: RuleRuntimeConfig) -> dict[str, Any]:
     wallet = _round_money(config.starting_wallet_usd)
     return {
@@ -1611,8 +2501,10 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
     _copy_fdv_unit_fields(event, normalized)
     _copy_first_fdv_probe_fields(event, normalized)
     _copy_optional_live_fields(event, normalized)
+    _copy_account_state_provenance(event, normalized)
     if _num(event.get("fdv_usd")) is not None:
-        normalized["fdv_units"] = "usd"
+        if event.get("fdv_units") is not None:
+            normalized["fdv_units"] = "usd"
         normalized["fdv_usd"] = float(_num(event.get("fdv_usd")) or 0.0)
     milestone_fdv = _milestone_fdv_usd(normalized)
     if normalized.get("raw_crossed_10k") is None:
@@ -1673,6 +2565,10 @@ def _copy_first_fdv_probe_fields(source: dict[str, Any], target: dict[str, Any])
         "account_not_found_recovered_by_retry",
         "first_failure_reason",
         "retry_delays_ms",
+        "account_data_hash",
+        "reserve_state_fingerprint",
+        "slot",
+        "source_event_id",
         *FDV_UNIT_FIELDS,
     ]:
         if key in source:
@@ -1699,6 +2595,39 @@ def _copy_optional_live_fields(source: dict[str, Any], target: dict[str, Any]) -
         )
 
 
+def _copy_account_state_provenance(source: dict[str, Any], target: dict[str, Any]) -> None:
+    account_state = source.get("account_state") if isinstance(source.get("account_state"), dict) else {}
+    if account_state:
+        target["account_state"] = account_state
+    for key in [
+        "virtual_token_reserves",
+        "virtual_sol_reserves",
+        "virtual_quote_reserves",
+        "real_token_reserves",
+        "real_sol_reserves",
+        "real_quote_reserves",
+        "token_total_supply",
+        "token_decimals",
+        "quote_decimals",
+        "quote_type",
+        "calculation_status",
+        "price_sol",
+        "price_quote",
+    ]:
+        if key in source and source.get(key) is not None:
+            target[key] = source.get(key)
+        elif key in account_state and account_state.get(key) is not None:
+            target[key] = account_state.get(key)
+    target.setdefault("source_event_id", source.get("source_event_id") or source.get("event_id") or source.get("signature"))
+    target.setdefault("slot", source.get("slot") or source.get("account_data_slot") or source.get("create_slot"))
+    fingerprint = source.get("reserve_state_fingerprint") or _reserve_state_fingerprint(target)
+    if fingerprint:
+        target["reserve_state_fingerprint"] = fingerprint
+    account_hash = source.get("account_data_hash") or source.get("account_data_sha256") or fingerprint
+    if account_hash:
+        target["account_data_hash"] = str(account_hash)
+
+
 def _update_raw_milestones(candidate: dict[str, Any], row: dict[str, Any]) -> None:
     fdv = _milestone_fdv_usd(row)
     if fdv is None:
@@ -1717,7 +2646,12 @@ def _update_confirmed_milestones(candidate: dict[str, Any], window_seconds: floa
         key = _level_key(level)
         if candidate["confirmed_milestones"].get(f"confirmed_crossed_{key}"):
             continue
-        crossing_rows = [row for row in rows if (_milestone_fdv_usd(row) or 0.0) >= level]
+        crossing_rows = [
+            row
+            for row in rows
+            if (_milestone_fdv_usd(row) or 0.0) >= level and _row_valid_for_confirmation(row)
+        ]
+        duplicate_same_state_seen = False
         for first in crossing_rows:
             first_ts = float(first["timestamp"])
             confirmations = [
@@ -1725,12 +2659,17 @@ def _update_confirmed_milestones(candidate: dict[str, Any], window_seconds: floa
                 for row in crossing_rows
                 if 0 <= float(row["timestamp"]) - first_ts <= window_seconds
             ]
-            if len(confirmations) >= 2:
+            distinct = _distinct_confirmation_rows(confirmations)
+            duplicate_same_state_seen = duplicate_same_state_seen or (len(confirmations) >= 2 and len(distinct) < 2)
+            if len(distinct) >= 2:
                 candidate["confirmed_milestones"][f"confirmed_crossed_{key}"] = True
-                candidate["confirmed_milestone_times"][key] = float(confirmations[1]["timestamp"])
+                candidate["confirmed_milestone_times"][key] = float(distinct[1]["timestamp"])
+                candidate.setdefault("confirmed_milestone_rows", {})[key] = distinct[:2]
                 if key in {"10k", "20k"}:
                     candidate[f"confirmed_crossed_{key}"] = True
                 break
+        if key == "20k" and duplicate_same_state_seen and not candidate["confirmed_milestones"].get("confirmed_crossed_20k"):
+            candidate["duplicate_same_state_confirmation_reject"] = True
 
 
 def _apply_source_confirmations(candidate: dict[str, Any], row: dict[str, Any]) -> None:
@@ -1738,13 +2677,15 @@ def _apply_source_confirmations(candidate: dict[str, Any], row: dict[str, Any]) 
         return
     timestamp = float(row["timestamp"])
     if row.get("confirmed_crossed_10k_from_source") is True:
-        candidate["confirmed_milestones"]["confirmed_crossed_10k"] = True
-        candidate["confirmed_milestone_times"].setdefault("10k", timestamp)
-        candidate["confirmed_crossed_10k"] = True
+        if _has_valid_confirmations(candidate, 10_000.0, CONFIRMATION_WINDOW_SECONDS):
+            candidate["confirmed_milestones"]["confirmed_crossed_10k"] = True
+            candidate["confirmed_milestone_times"].setdefault("10k", timestamp)
+            candidate["confirmed_crossed_10k"] = True
     if row.get("confirmed_crossed_20k_from_source") is True:
-        candidate["confirmed_milestones"]["confirmed_crossed_20k"] = True
-        candidate["confirmed_milestone_times"].setdefault("20k", timestamp)
-        candidate["confirmed_crossed_20k"] = True
+        if _has_valid_confirmations(candidate, 20_000.0, CONFIRMATION_WINDOW_SECONDS):
+            candidate["confirmed_milestones"]["confirmed_crossed_20k"] = True
+            candidate["confirmed_milestone_times"].setdefault("20k", timestamp)
+            candidate["confirmed_crossed_20k"] = True
 
 
 def _source_allows_confirmed_milestone_flags(row: dict[str, Any]) -> bool:
@@ -1755,6 +2696,83 @@ def _source_allows_confirmed_milestone_flags(row: dict[str, Any]) -> bool:
     if confidence in {"low", "none"}:
         return False
     return True
+
+
+def _row_valid_for_confirmation(row: dict[str, Any]) -> bool:
+    return not (
+        row.get("fdv_anomaly_flag_from_source") is True
+        or row.get("same_timestamp_major_jump_flag_from_source") is True
+        or row.get("single_row_spike_flag_from_source") is True
+    )
+
+
+def _has_valid_confirmations(candidate: dict[str, Any], threshold: float, window_seconds: float) -> bool:
+    rows = [
+        row
+        for row in candidate.get("path_rows") or []
+        if (_milestone_fdv_usd(row) or 0.0) >= threshold and _row_valid_for_confirmation(row)
+    ]
+    for first in rows:
+        first_ts = float(first["timestamp"])
+        confirmations = [row for row in rows if 0 <= float(row["timestamp"]) - first_ts <= window_seconds]
+        if len(_distinct_confirmation_rows(confirmations)) >= 2:
+            return True
+    return False
+
+
+def _distinct_confirmation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    distinct = []
+    seen: set[str] = set()
+    for row in rows:
+        key = _confirmation_evidence_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        distinct.append(row)
+    return distinct
+
+
+def _confirmation_evidence_key(row: dict[str, Any]) -> str:
+    for key in ["account_data_hash", "reserve_state_fingerprint"]:
+        value = row.get(key)
+        if value:
+            return f"{key}:{value}"
+    account_state = row.get("account_state") if isinstance(row.get("account_state"), dict) else None
+    if account_state:
+        return f"account_state:{_reserve_state_fingerprint(row)}"
+    for key in ["source_event_id", "event_id", "signature"]:
+        value = row.get(key)
+        if value:
+            return f"{key}:{value}"
+    slot = row.get("slot") or row.get("account_data_slot")
+    timestamp = row.get("timestamp")
+    fdv = _milestone_fdv_usd(row)
+    source = row.get("data_source") or row.get("fdv_source")
+    return f"fallback:{source}:{slot}:{timestamp}:{fdv}"
+
+
+def _reserve_state_fingerprint(row: dict[str, Any]) -> str | None:
+    state = row.get("account_state") if isinstance(row.get("account_state"), dict) else {}
+    fields = {
+        key: row.get(key, state.get(key))
+        for key in [
+            "virtual_token_reserves",
+            "virtual_sol_reserves",
+            "virtual_quote_reserves",
+            "real_token_reserves",
+            "real_sol_reserves",
+            "real_quote_reserves",
+            "token_total_supply",
+            "token_decimals",
+            "quote_decimals",
+            "complete",
+        ]
+        if row.get(key, state.get(key)) is not None
+    }
+    if not fields:
+        return None
+    encoded = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _update_rejection_flags(candidate: dict[str, Any]) -> None:
@@ -1905,10 +2923,13 @@ def _evaluate_entry(
     row: dict[str, Any],
 ) -> dict[str, Any]:
     reasons = []
+    labels = _entry_risk_labels(row)
     if not candidate.get("confirmed_milestones", {}).get("confirmed_crossed_10k"):
         reasons.append("missing_confirmed_10k")
     if not candidate.get("confirmed_milestones", {}).get("confirmed_crossed_20k"):
         reasons.append("missing_confirmed_20k")
+    if candidate.get("duplicate_same_state_confirmation_reject"):
+        reasons.append("duplicate_same_state_confirmation")
     for flag, reason in [
         ("single_row_spike_flag", "single_row_spike"),
         ("same_timestamp_major_jump_flag", "same_timestamp_major_jump"),
@@ -1916,11 +2937,27 @@ def _evaluate_entry(
     ]:
         if candidate.get(flag):
             reasons.append(reason)
+    fdv_units = str(row.get("fdv_units") or "").strip().lower()
+    if not fdv_units:
+        reasons.append("missing_fdv_units")
+    fdv_usd = _num(row.get("fdv_usd"))
+    if fdv_units == "usd" and fdv_usd is None:
+        reasons.append("missing_fdv_usd_for_usd_threshold")
+    holder_status = _holder_gate_status(config, row)
+    labels.extend(holder_status.get("risk_labels") or [])
+    if holder_status.get("rejection_reason"):
+        reasons.append(holder_status["rejection_reason"])
+    chase = _entry_chase_guard(candidate, row)
+    if chase["chase_guard_result"] == "rejected":
+        reasons.append("chase_guard_exceeded")
     if not config.allow_unfrozen_efficiency_baseline:
         reasons.append("fdv_efficiency_threshold_unfrozen")
     if candidate["mint"] in state.get("open_positions", {}) or candidate.get("paper_buy_created") or candidate.get("paper_closed"):
         reasons.append("duplicate_or_closed_position")
     features = _efficiency_features(row)
+    labels.extend(_volume_risk_labels(row, features))
+    labels = sorted(set(labels))
+    primary_reason = _primary_rejection_reason(reasons)
     decision = "paper_rejected_entry" if reasons else "paper_buy"
     return {
         "paper_event_id": f"decision_{candidate['mint']}_{int(float(row['timestamp']) * 1000)}",
@@ -1931,16 +2968,23 @@ def _evaluate_entry(
         "rule_id": FROZEN_BUY_RULE_ID,
         "buy_rule_version": "rule_runtime_v1",
         "paper_buy_fdv": row["fdv_proxy"],
+        "paper_buy_fdv_usd": row.get("fdv_usd"),
         "confirmed_10k_time": candidate.get("confirmed_milestone_times", {}).get("10k"),
         "confirmed_20k_time": candidate.get("confirmed_milestone_times", {}).get("20k"),
         "rejection_flags": _rejection_flags(candidate),
-        "rejection_reason": ",".join(reasons) if reasons else None,
+        "rejection_reason": primary_reason,
+        "rejection_reasons": reasons,
+        "risk_labels": labels,
+        "holder_depth_status": holder_status.get("holder_depth_status"),
+        "holder_count_at_entry": holder_status.get("holder_count"),
         "efficiency_threshold_status": "efficiency_unfrozen",
         "threshold_status": "baseline_label_mode" if not reasons else "rejected",
         "efficiency_threshold_warning": "fdv_efficiency_threshold_unfrozen_baseline_mode" if not reasons else None,
         "fdv_efficiency_bucket_labels": _efficiency_bucket_labels(features),
         "data_source": row.get("data_source"),
         "milestone_provenance": row.get("milestone_provenance"),
+        **chase,
+        **_fdv_provenance_fields(row),
         "no_real_trade": True,
         **features,
     }
@@ -1967,6 +3011,7 @@ def _create_paper_buy(
         "rule_id": FROZEN_BUY_RULE_ID,
         "buy_rule_version": "rule_runtime_v1",
         "paper_buy_fdv": fdv,
+        "paper_buy_fdv_usd": row.get("fdv_usd"),
         "buy_fdv": fdv,
         "confirmed_10k_time": decision.get("confirmed_10k_time"),
         "confirmed_20k_time": decision.get("confirmed_20k_time"),
@@ -1980,7 +3025,13 @@ def _create_paper_buy(
         "threshold_status": "baseline_label_mode",
         "efficiency_threshold_warning": "fdv_efficiency_threshold_unfrozen_baseline_mode",
         "fdv_efficiency_bucket_labels": _efficiency_bucket_labels(_efficiency_features(row)),
+        "risk_labels": decision.get("risk_labels") or [],
+        "trigger_fdv_usd": decision.get("trigger_fdv_usd"),
+        "entry_above_trigger_pct": decision.get("entry_above_trigger_pct"),
+        "max_entry_above_trigger_pct": decision.get("max_entry_above_trigger_pct"),
+        "chase_guard_result": decision.get("chase_guard_result"),
         "no_real_trade": True,
+        **_fdv_provenance_fields(row),
         **_efficiency_features(row),
     }
     state["cash_usd"] = _round_money(float(state["cash_usd"]) - allocation)
@@ -2005,10 +3056,14 @@ def _evaluate_exit(
         return None
     fdv = float(row["fdv_proxy"])
     timestamp = float(row["timestamp"])
-    local_high = max(float(candidate.get("local_high_fdv") or position.get("local_high_fdv") or 0.0), fdv)
+    previous_high = float(candidate.get("local_high_fdv") or position.get("local_high_fdv") or 0.0)
+    local_high = max(previous_high, fdv)
     candidate["local_high_fdv"] = local_high
     position["local_high_fdv"] = local_high
     position["current_fdv"] = fdv
+    if fdv >= previous_high:
+        candidate["last_new_high_at"] = timestamp
+        position["last_new_high_at"] = timestamp
     drawdown_pct = 0.0 if local_high <= 0 else max(0.0, (local_high - fdv) / local_high)
     position["drawdown_pct"] = _round_pct(drawdown_pct)
     candidate["drawdowns"]["current_drawdown_pct"] = _round_pct(drawdown_pct)
@@ -2037,7 +3092,63 @@ def _evaluate_exit(
             "reclaimed_prior_high": False,
             "no_real_trade": True,
         }
+    stagnation = _stagnation_exit_decision(candidate, position, row, fdv=fdv, timestamp=timestamp, local_high=local_high, drawdown_pct=drawdown_pct)
+    if stagnation:
+        return stagnation
     return None
+
+
+def _stagnation_exit_decision(
+    candidate: dict[str, Any],
+    position: dict[str, Any],
+    row: dict[str, Any],
+    *,
+    fdv: float,
+    timestamp: float,
+    local_high: float,
+    drawdown_pct: float,
+) -> dict[str, Any] | None:
+    buy_fdv = _num(position.get("paper_buy_fdv") or position.get("buy_fdv")) or 0.0
+    if buy_fdv <= 0:
+        return None
+    runup = (local_high - buy_fdv) / buy_fdv
+    last_high_at = _num(position.get("last_new_high_at") or candidate.get("last_new_high_at") or position.get("entry_time") or candidate.get("paper_opened_at"))
+    seconds_since_high = None if last_high_at is None else timestamp - last_high_at
+    slope = _recent_fdv_slope(candidate, row)
+    if runup < STAGNATION_RUNUP_PCT or seconds_since_high is None or seconds_since_high < STAGNATION_NO_HIGH_SECONDS or slope > 0:
+        return None
+    return {
+        "paper_event_id": f"paper_sell_{candidate['mint']}_{int(timestamp * 1000)}",
+        "mint": candidate["mint"],
+        "timestamp": timestamp,
+        "decision": "paper_sell",
+        "exit_rule_id": STAGNATION_EXIT_RULE_ID,
+        "exit_reason": "stagnation_after_runup",
+        "paper_sell_fdv": fdv,
+        "local_high_fdv": local_high,
+        "drawdown_pct": _round_pct(drawdown_pct),
+        "time_since_entry_seconds": _round_seconds(timestamp - float(candidate.get("paper_opened_at") or position.get("entry_time") or timestamp)),
+        "seconds_since_last_new_high": _round_seconds(seconds_since_high),
+        "fdv_slope_recent": _round_num(slope),
+        "runup_from_entry_pct": _round_pct(runup),
+        "stagnation_exit_triggered": True,
+        "stagnation_exit_reason": "no_new_high_after_runup_flat_or_negative_fdv_slope",
+        "reclaimed_prior_high": False,
+        "no_real_trade": True,
+    }
+
+
+def _recent_fdv_slope(candidate: dict[str, Any], row: dict[str, Any]) -> float:
+    rows = candidate.get("path_rows") or []
+    if len(rows) < 2:
+        return 0.0
+    previous = rows[-2]
+    prev_fdv = _num(previous.get("fdv_proxy")) or 0.0
+    prev_ts = _num(previous.get("timestamp")) or _num(row.get("timestamp")) or 0.0
+    current_fdv = _num(row.get("fdv_proxy")) or 0.0
+    current_ts = _num(row.get("timestamp")) or prev_ts
+    elapsed = max(1e-6, current_ts - prev_ts)
+    return (current_fdv - prev_fdv) / elapsed
 
 
 def _create_paper_sell(
@@ -2057,15 +3168,20 @@ def _create_paper_sell(
         "paper_event_id": decision["paper_event_id"],
         "timestamp": decision["timestamp"],
         "side": "paper_sell",
-        "exit_rule_id": FROZEN_EXIT_RULE_ID,
+        "exit_rule_id": decision.get("exit_rule_id") or FROZEN_EXIT_RULE_ID,
         "exit_reason": decision["exit_reason"],
         "paper_sell_fdv": sell_fdv,
         "sell_fdv": sell_fdv,
         "local_high_fdv": decision["local_high_fdv"],
         "drawdown_pct": decision["drawdown_pct"],
         "time_since_entry_seconds": decision["time_since_entry_seconds"],
-        "time_since_drawdown_seconds": decision["time_since_drawdown_seconds"],
-        "reclaimed_prior_high": decision["reclaimed_prior_high"],
+        "time_since_drawdown_seconds": decision.get("time_since_drawdown_seconds"),
+        "reclaimed_prior_high": decision.get("reclaimed_prior_high"),
+        "seconds_since_last_new_high": decision.get("seconds_since_last_new_high"),
+        "fdv_slope_recent": decision.get("fdv_slope_recent"),
+        "runup_from_entry_pct": decision.get("runup_from_entry_pct"),
+        "stagnation_exit_triggered": decision.get("stagnation_exit_triggered", False),
+        "stagnation_exit_reason": decision.get("stagnation_exit_reason"),
         "paper_profit_loss_usd": paper_pl,
         "no_real_trade": True,
     }
@@ -2128,12 +3244,15 @@ def _record_variant_rejections(
             "confirmed_10k_time": candidate.get("confirmed_milestone_times", {}).get("10k"),
             "confirmed_20k_time": candidate.get("confirmed_milestone_times", {}).get("20k"),
             "paper_buy_fdv": row.get("fdv_proxy"),
+            "paper_buy_fdv_usd": row.get("fdv_usd"),
             "fdv_efficiency_bucket": _overall_efficiency_bucket(features),
             "fdv_efficiency_threshold_status": "fdv_threshold_unfrozen",
             "risk_filter_status": "rejected",
             "missing_required_fields": [],
             "rejection_reason": reason,
+            "risk_labels": _entry_risk_labels(row),
             "no_real_trade": True,
+            **_fdv_provenance_fields(row),
             **features,
             **_risk_field_values(row),
         }
@@ -2203,12 +3322,19 @@ def _variant_decision_row(
         "confirmed_10k_time": candidate.get("confirmed_milestone_times", {}).get("10k"),
         "confirmed_20k_time": candidate.get("confirmed_milestone_times", {}).get("20k"),
         "paper_buy_fdv": row.get("fdv_proxy"),
+        "paper_buy_fdv_usd": row.get("fdv_usd"),
         "fdv_efficiency_bucket": _overall_efficiency_bucket(features),
         "fdv_efficiency_threshold_status": "fdv_threshold_unfrozen",
         "risk_filter_status": risk_status,
         "missing_required_fields": missing,
         "rejection_reason": rejection_reason,
+        "risk_labels": base_decision.get("risk_labels") or _entry_risk_labels(row),
+        "trigger_fdv_usd": base_decision.get("trigger_fdv_usd"),
+        "entry_above_trigger_pct": base_decision.get("entry_above_trigger_pct"),
+        "max_entry_above_trigger_pct": base_decision.get("max_entry_above_trigger_pct"),
+        "chase_guard_result": base_decision.get("chase_guard_result"),
         "no_real_trade": True,
+        **_fdv_provenance_fields(row),
         **features,
         **_risk_field_values(row),
     }
@@ -2234,7 +3360,9 @@ def _create_variant_position(
         "ca": candidate["mint"],
         "entry_time": row["timestamp"],
         "paper_buy_fdv": fdv,
+        "paper_buy_fdv_usd": row.get("fdv_usd"),
         "local_high_fdv": fdv,
+        "last_new_high_at": row["timestamp"],
         "drawdown_pct": 0.0,
         "first_30pct_drawdown_time": None,
         "reclaim_timer_started_at": None,
@@ -2243,6 +3371,7 @@ def _create_variant_position(
         "base_rule_id": FROZEN_BUY_RULE_ID,
         "exit_rule_id": FROZEN_EXIT_RULE_ID,
         "no_real_trade": True,
+        **_fdv_provenance_fields(row),
     }
 
 
@@ -2260,9 +3389,12 @@ def _evaluate_variant_exits(
     for key, position in list(state["variant_open_positions"].items()):
         if position.get("mint") != candidate["mint"]:
             continue
-        local_high = max(float(position.get("local_high_fdv") or 0.0), fdv)
+        previous_high = float(position.get("local_high_fdv") or 0.0)
+        local_high = max(previous_high, fdv)
         position["local_high_fdv"] = local_high
         position["current_fdv"] = fdv
+        if fdv >= previous_high:
+            position["last_new_high_at"] = timestamp
         drawdown_pct = 0.0 if local_high <= 0 else max(0.0, (local_high - fdv) / local_high)
         position["drawdown_pct"] = _round_pct(drawdown_pct)
         if fdv >= local_high:
@@ -2412,7 +3544,7 @@ def _queue_sizes_from_state(state: dict[str, Any]) -> dict[str, int]:
     sizes = RuleRuntimePriorityScheduler().queue_sizes()
     for row in (state.get("candidates") or {}).values():
         state_name = row.get("state")
-        if state_name in ARCHIVE_STATES:
+        if state_name in ARCHIVE_STATES or state_name == "paper_buy_voided":
             continue
         if state_name == "paper_position_open":
             sizes["paper_position_open"] += 1
@@ -2514,7 +3646,7 @@ def _first_fdv_queue_summary(config: RuleRuntimeConfig, state: dict[str, Any], l
             if first_path is not None:
                 first_path_latencies.append(max(0.0, (first_path - first_seen) * 1000.0))
         state_name = candidate.get("state")
-        if state_name in ARCHIVE_STATES:
+        if state_name in ARCHIVE_STATES or state_name == "paper_buy_voided":
             continue
         active_candidates.append(candidate)
         tier = int(candidate.get("tier") or 0)
@@ -2713,6 +3845,7 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
     open_positions = list((state.get("open_positions") or {}).values())
     closed_positions = list((state.get("closed_positions") or {}).values())
     paper_accounting = _monitor_paper_accounting(config, state, trades)
+    safety = _runtime_safety_counts(config, state, trades=trades, decisions=decisions, variant_exits=variant_exits)
     payload = {
         "updated_at": _utc_now(),
         "runtime_label": RUNTIME_LABEL,
@@ -2753,6 +3886,8 @@ def _write_monitor(config: RuleRuntimeConfig, state: dict[str, Any]) -> None:
         "bus_queue_depth": int((state.get("runtime_stats") or {}).get("bus_queue_depth") or 0),
         "last_paper_decision": decisions[-1] if decisions else None,
         "last_rejection_reason": next((row.get("rejection_reason") for row in reversed(decisions) if row.get("rejection_reason")), None),
+        "paper_buy_fdv_reconciliation_warnings": _paper_buy_reconciliation_warnings(config),
+        **safety,
         "no_real_trade": True,
     }
     _write_json(config.monitor_json_path, payload)
@@ -2782,6 +3917,69 @@ def _monitor_paper_accounting(config: RuleRuntimeConfig, state: dict[str, Any], 
     }
 
 
+def _runtime_safety_counts(
+    config: RuleRuntimeConfig,
+    state: dict[str, Any],
+    *,
+    trades: list[dict[str, Any]] | None = None,
+    decisions: list[dict[str, Any]] | None = None,
+    variant_exits: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    trades = trades if trades is not None else _read_jsonl(config.paper_trades_path)
+    decisions = decisions if decisions is not None else _read_jsonl(config.paper_decisions_path)
+    variant_exits = variant_exits if variant_exits is not None else _read_jsonl(config.paper_rule_variant_exits_path)
+    voided = state.get("voided_paper_positions") or {}
+    buy_rows = [row for row in trades if row.get("side") == "paper_buy"]
+    decision_rows = [row for row in decisions if row.get("decision") in {"paper_buy", "paper_rejected_entry"}]
+    void_rows = list((state.get("voided_paper_positions") or {}).values())
+    label_rows = [*decision_rows, *buy_rows, *void_rows]
+    labels = [label for row in label_rows for label in (row.get("risk_labels") or row.get("paper_labels") or [])]
+    mayhem_mints = {
+        str(row.get("mint"))
+        for row in label_rows
+        if row.get("mint") and ({"mayhem_mode", "mayhem_assisted_momentum"} & set(row.get("risk_labels") or row.get("paper_labels") or []))
+    }
+    entry_pcts = [_num(row.get("entry_above_trigger_pct")) for row in decision_rows if _num(row.get("entry_above_trigger_pct")) is not None]
+    exits = [row for row in trades if row.get("side") == "paper_sell"]
+    duplicate_confirmation_mints = {
+        str(row.get("mint"))
+        for row in (state.get("candidates") or {}).values()
+        if row.get("duplicate_same_state_confirmation_reject") and row.get("mint")
+    }
+    duplicate_confirmation_mints.update(
+        str(row.get("mint"))
+        for row in decisions
+        if row.get("rejection_reason") == "duplicate_same_state_confirmation" and row.get("mint")
+    )
+    duplicate_confirmation_mints.update(
+        str(row.get("mint"))
+        for row in void_rows
+        if row.get("void_reason") == "duplicate_same_state_confirmation_bug" and row.get("mint")
+    )
+    return {
+        "duplicate_same_state_confirmation_reject_count": len(duplicate_confirmation_mints),
+        "chase_guard_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "chase_guard_exceeded")
+        + sum(1 for row in void_rows if row.get("void_reason") == "chase_guard_exceeded"),
+        "holder_count_lte_1_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "holder_count_lte_1_hard_reject"),
+        "mayhem_label_count": len(mayhem_mints),
+        "fake_volume_suspect_count": labels.count("fake_volume_suspect"),
+        "dev_pump_suspect_count": labels.count("dev_pump_suspect"),
+        "low_holder_depth_label_count": labels.count("low_holder_depth_2_to_4"),
+        "stagnation_exit_watch_count": sum(1 for row in (state.get("open_positions") or {}).values() if _num(row.get("runup_from_entry_pct")) and (_num(row.get("runup_from_entry_pct")) or 0) >= STAGNATION_RUNUP_PCT),
+        "mayhem_stagnation_watch_count": sum(1 for row in (state.get("open_positions") or {}).values() if "mayhem_mode" in (row.get("risk_labels") or []) and _num(row.get("runup_from_entry_pct")) and (_num(row.get("runup_from_entry_pct")) or 0) >= STAGNATION_RUNUP_PCT),
+        "stagnation_exit_count": sum(1 for row in exits if row.get("exit_reason") == "stagnation_after_runup") + sum(1 for row in variant_exits if row.get("exit_reason") == "stagnation_after_runup"),
+        "mayhem_stagnation_exit_count": sum(1 for row in exits if row.get("exit_reason") == "stagnation_after_runup" and "mayhem_mode" in (row.get("risk_labels") or [])),
+        "no_reclaim_exit_count": sum(1 for row in exits if row.get("exit_reason") == "no_reclaim_after_10m_30pct_drawdown")
+        + sum(1 for row in variant_exits if row.get("exit_reason") == "no_reclaim_after_10m_30pct_drawdown"),
+        "valid_paper_buys": sum(1 for row in buy_rows if row.get("mint") not in voided),
+        "voided_paper_buys": len(voided),
+        "rejected_paper_entries": sum(1 for row in decisions if row.get("decision") == "paper_rejected_entry"),
+        "avg_entry_above_trigger_pct": _round_optional(sum(entry_pcts) / len(entry_pcts)) if entry_pcts else None,
+        "max_entry_above_trigger_pct_seen": _round_optional(max(entry_pcts)) if entry_pcts else None,
+        "voided_paper_positions": list(voided.values()),
+    }
+
+
 def _monitor_md(payload: dict[str, Any]) -> str:
     lines = [
         "# Rule Runtime v1 Paper Monitor",
@@ -2798,6 +3996,15 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         f"Live bus events: {payload.get('live_bus_events')}",
         f"Closed paper positions: {len(payload['closed_positions'])}",
         f"Rejected entries: {len(payload['rejected_entries'])}",
+        f"Valid paper buys: {payload.get('valid_paper_buys')}",
+        f"Voided paper buys: {payload.get('voided_paper_buys')}",
+        f"Chase guard rejects: {payload.get('chase_guard_reject_count')}",
+        f"Duplicate confirmation rejects: {payload.get('duplicate_same_state_confirmation_reject_count')}",
+        f"Holder <=1 rejects: {payload.get('holder_count_lte_1_reject_count')}",
+        f"Mayhem labels: {payload.get('mayhem_label_count')}",
+        f"Dev-pump suspect labels: {payload.get('dev_pump_suspect_count')}",
+        f"Fake-volume suspect labels: {payload.get('fake_volume_suspect_count')}",
+        f"Stagnation exits: {payload.get('stagnation_exit_count')}",
         "",
         "## Rule Runtime v1 Variants",
     ]
@@ -2876,6 +4083,14 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- warnings: {txsub.get('warnings')}",
         ]
     )
+    reconciliation_warnings = payload.get("paper_buy_fdv_reconciliation_warnings") or []
+    lines.extend(
+        [
+            "",
+            "## Paper Buy FDV Reconciliation Warnings",
+            f"- Warnings: {reconciliation_warnings}",
+        ]
+    )
     lines.extend([
         "",
         "Paper-only accounting. Live trading is disabled.",
@@ -2912,6 +4127,11 @@ def _monitor_html(payload: dict[str, Any]) -> str:
     queue = payload.get("first_fdv_queue") or {}
     sources = payload.get("first_fdv_probe_sources") or {}
     txsub = payload.get("helius_transaction_subscribe_first_fdv") or {}
+    reconciliation_warnings = payload.get("paper_buy_fdv_reconciliation_warnings") or []
+    warning_cards = "\n".join(
+        f"<div class=\"stat\">Warning<br><b>{html.escape(str(warning))}</b></div>"
+        for warning in reconciliation_warnings
+    )
     queue_cards = "\n".join(
         f"<div class=\"stat\">{html.escape(str(tier))}<br><b>{html.escape(str(depth))}</b></div>"
         for tier, depth in (queue.get("queue_depth_by_tier") or {}).items()
@@ -2946,8 +4166,11 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 </script></head><body>
 <h1>Rule Runtime v1 Paper Monitor</h1>
 	<div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open value<br><b>${payload.get('open_position_value_usd')}</b></div><div class=\"stat\">Realized P/L<br><b>${payload.get('realized_paper_pl_usd')}</b></div><div class=\"stat\">Unrealized P/L<br><b>${payload.get('unrealized_paper_pl_usd')}</b></div><div class=\"stat\">15% buy size<br><b>${payload.get('current_buy_size_usd')}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_positions'])}</b></div><div class=\"stat\">Rejected<br><b>{len(payload['rejected_entries'])}</b></div><div class=\"stat\">Paper buys<br><b>{payload['paper_buys']}</b></div><div class=\"stat\">Paper sells<br><b>{payload['paper_sells']}</b></div></div>
+<div class=\"stats\"><div class=\"stat\">Valid buys<br><b>{payload.get('valid_paper_buys')}</b></div><div class=\"stat\">Voided buys<br><b>{payload.get('voided_paper_buys')}</b></div><div class=\"stat\">Chase rejects<br><b>{payload.get('chase_guard_reject_count')}</b></div><div class=\"stat\">Duplicate confirms<br><b>{payload.get('duplicate_same_state_confirmation_reject_count')}</b></div><div class=\"stat\">Holder <=1 rejects<br><b>{payload.get('holder_count_lte_1_reject_count')}</b></div><div class=\"stat\">Mayhem labels<br><b>{payload.get('mayhem_label_count')}</b></div><div class=\"stat\">Dev-pump labels<br><b>{payload.get('dev_pump_suspect_count')}</b></div><div class=\"stat\">Fake-volume labels<br><b>{payload.get('fake_volume_suspect_count')}</b></div><div class=\"stat\">Stagnation exits<br><b>{payload.get('stagnation_exit_count')}</b></div></div>
 <p class=\"guard\">Paper-only monitor. Live trading, wallet execution, signing, swaps, and routing are disabled.</p>
 <p id=\"copy-status\"><small>Click any CA to copy it.</small></p>
+<h2>Paper Buy FDV Reconciliation Warnings</h2>
+<div class=\"stats\">{warning_cards or '<div class=\"stat\">Warnings<br><b>None</b></div>'}</div>
 <h2>Latency</h2>
 <p>Runtime mode: {html.escape(str(payload['runtime_mode']))}</p>
 <p>Live bus events: {html.escape(str(payload['live_bus_events']))}; file adapter events: {html.escape(str(payload['file_adapter_events']))}; bus queue depth: {html.escape(str(payload['bus_queue_depth']))}</p>
@@ -3718,6 +4941,14 @@ def _round_money(value: float) -> float:
 
 def _round_num(value: float) -> float:
     return round(float(value), 6)
+
+
+def _round_optional(value: float | None) -> float | None:
+    return None if value is None else _round_num(value)
+
+
+def _round_optional_precise(value: float | None) -> float | None:
+    return None if value is None else round(float(value), 12)
 
 
 def _round_pct(value: float) -> float:

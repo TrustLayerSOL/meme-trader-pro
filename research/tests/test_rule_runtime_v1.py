@@ -15,6 +15,8 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     initialize_rule_runtime,
     load_historical_rule_config,
     normalize_live_path_row_for_rule_runtime,
+    paper_buy_fdv_reconciliation_audit,
+    run_rule_runtime_safety_patch_review,
     run_helius_transaction_subscribe_bonding_curve_probe_smoke,
     run_rule_runtime_live_adapter_once,
     run_first_fdv_queue_triage_smoke,
@@ -44,6 +46,14 @@ def _event(mint: str, ts: float, fdv: float, *, events: int = 10, buys: int = 5,
         "timestamp": ts,
         "event_observed_at": ts + 0.25,
         "fdv_proxy": fdv,
+        "fdv_usd": fdv,
+        "fdv_sol": fdv / 80.0,
+        "fdv_units": "usd",
+        "sol_usd": 80.0,
+        "fdv_source": "bonding_curve_account_state",
+        "fdv_source_confidence": "high",
+        "account_data_hash": f"hash-{mint}-{ts}-{fdv}",
+        "reserve_state_fingerprint": f"reserve-{mint}-{ts}-{fdv}",
         "event_count": events,
         "buy_count": buys,
         "active_wallet_count": wallets,
@@ -931,6 +941,245 @@ def test_first_fdv_queue_triage_audit_writes_reports(tmp_path: Path) -> None:
     assert audit["queue_entries_created_from"] == "candidate_state"
     assert config.first_fdv_queue_triage_audit_json_path.exists()
     assert "First FDV Queue Triage Audit" in config.first_fdv_queue_triage_audit_md_path.read_text(encoding="utf-8")
+
+
+def test_paper_buy_fdv_reconciliation_audit_flags_duplicate_confirmations(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    mint = "G7ezsywkeKqbW57MiZNQWb6UKmYwpAoe7KfBkVEgpump"
+    curve = "F4DzVCL6eC2h9i6xv8twEpmd2Bc8yh859dfHCKF2Qmmk"
+    state = {
+        "virtual_token_reserves": 333321305707295,
+        "virtual_sol_reserves": 96573484665,
+        "real_token_reserves": 53421305707295,
+        "real_sol_reserves": 66573484665,
+        "token_total_supply": 1000000000000000,
+        "token_decimals": 6,
+        "quote_decimals": 9,
+        "complete": False,
+    }
+    path_rows = [
+        {
+            "mint": mint,
+            "timestamp": 100.0,
+            "event_id": "path_1",
+            "data_source": "bonding_curve_account_state",
+            "fdv_proxy": 23394.22,
+            "fdv_usd": 23394.22,
+            "fdv_sol": 289.74,
+            "fdv_units": "usd",
+            "sol_usd": 80.74,
+            "bonding_curve": curve,
+        },
+        {
+            "mint": mint,
+            "timestamp": 101.0,
+            "event_id": "path_2",
+            "data_source": "bonding_curve_account_state",
+            "fdv_proxy": 23394.22,
+            "fdv_usd": 23394.22,
+            "fdv_sol": 289.74,
+            "fdv_units": "usd",
+            "sol_usd": 80.74,
+            "bonding_curve": curve,
+        },
+    ]
+    probe_rows = [
+        {
+            "mint": mint,
+            "event_id": "probe_1",
+            "probe_status": "success",
+            "fdv_proxy": 23394.22,
+            "fdv_usd": 23394.22,
+            "fdv_sol": 289.74,
+            "fdv_units": "usd",
+            "sol_usd": 80.74,
+            "bonding_curve": curve,
+            "source_create_signature": "sig",
+            "create_slot": 123,
+            "first_fdv_emitted_at": 100.0,
+            "account_state": state,
+        },
+        {
+            "mint": mint,
+            "event_id": "probe_2",
+            "probe_status": "success",
+            "fdv_proxy": 23394.22,
+            "fdv_usd": 23394.22,
+            "fdv_sol": 289.74,
+            "fdv_units": "usd",
+            "sol_usd": 80.74,
+            "bonding_curve": curve,
+            "source_create_signature": "sig",
+            "create_slot": 123,
+            "first_fdv_emitted_at": 101.0,
+            "account_state": state,
+        },
+    ]
+    trade = {
+        "side": "paper_buy",
+        "mint": mint,
+        "timestamp": 101.0,
+        "paper_event_id": "paper_buy_g7",
+        "paper_buy_fdv": 23394.22,
+        "data_source": "bonding_curve_account_state",
+    }
+    config.path_events_path.write_text("\n".join(json.dumps(row) for row in path_rows) + "\n", encoding="utf-8")
+    config.bonding_curve_account_probe_events_path.write_text("\n".join(json.dumps(row) for row in probe_rows) + "\n", encoding="utf-8")
+    config.paper_trades_path.write_text(json.dumps(trade) + "\n", encoding="utf-8")
+
+    audit = paper_buy_fdv_reconciliation_audit(config)
+    row = next(row for row in audit["rows"] if row["mint"] == mint)
+
+    assert row["duplicate_or_same_state_confirmations"] is True
+    assert "confirming_rows_duplicate_same_state" in row["warnings"]
+    assert "fake_volume_suspect" in row["paper_labels"]
+    assert config.paper_buy_fdv_reconciliation_audit_json_path.exists()
+    assert "Paper Buy FDV Reconciliation Audit" in config.paper_buy_fdv_reconciliation_audit_md_path.read_text(encoding="utf-8")
+    assert config.paper_buy_fdv_reconciliation_rows_csv_path.exists()
+
+
+def test_duplicate_same_state_rows_do_not_confirm_20k_or_buy(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+    common = {
+        "data_source": "bonding_curve_account_state",
+        "fdv_source": "bonding_curve_account_state",
+        "fdv_source_confidence": "high",
+        "fdv_units": "usd",
+        "fdv_usd": 23_394.22,
+        "fdv_sol": 292.43,
+        "reserve_state_fingerprint": "same-state",
+        "account_data_hash": "same-hash",
+        "slot": 424711168,
+    }
+
+    first = engine.process_path_event(_event("g7-style", 100, 23_394.22, **common))
+    second = engine.process_path_event(_event("g7-style", 101, 23_394.22, **common))
+    status = rule_runtime_status(config)
+
+    assert first["confirmed_crossed_20k"] is False
+    assert second["confirmed_crossed_20k"] is False
+    assert status["paper_buys"] == 0
+    assert status["duplicate_same_state_confirmation_reject_count"] == 1
+    decisions = _rows(config.paper_decisions_path)
+    assert any(row["rejection_reason"] == "duplicate_same_state_confirmation" for row in decisions)
+
+
+def test_distinct_account_state_rows_can_confirm_20k(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("distinct", 100, 20_500, reserve_state_fingerprint="state-a", account_data_hash="hash-a", slot=1))
+    result = engine.process_path_event(_event("distinct", 110, 21_000, reserve_state_fingerprint="state-b", account_data_hash="hash-b", slot=2))
+    status = rule_runtime_status(config)
+
+    assert result["confirmed_crossed_20k"] is True
+    assert status["confirmed_20k_entry_candidates"] == 1
+
+
+def test_chase_guard_rejects_paper_entry_above_15pct_over_trigger(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("chase", 100, 22_486.83, reserve_state_fingerprint="chase-a", account_data_hash="chase-a", slot=1))
+    result = engine.process_path_event(_event("chase", 111, 27_876.00, reserve_state_fingerprint="chase-b", account_data_hash="chase-b", slot=2))
+    decisions = _rows(config.paper_decisions_path)
+    decision = next(row for row in decisions if row["mint"] == "chase" and row["paper_event_id"].startswith("decision_"))
+
+    assert result["paper_buy_created"] is False
+    assert decision["decision"] == "paper_rejected_entry"
+    assert decision["rejection_reason"] == "chase_guard_exceeded"
+    assert decision["trigger_fdv_usd"] == 22486.83
+    assert decision["max_entry_above_trigger_pct"] == 0.15
+    assert decision["chase_guard_result"] == "rejected"
+    assert rule_runtime_status(config)["chase_guard_reject_count"] == 1
+
+
+def test_missing_fdv_units_or_usd_rejects_paper_buy(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("missing-units", 100, 20_100, fdv_units=None, fdv_usd=20_100, reserve_state_fingerprint="a", account_data_hash="a"))
+    engine.process_path_event(_event("missing-units", 110, 20_200, fdv_units=None, fdv_usd=20_200, reserve_state_fingerprint="b", account_data_hash="b"))
+    decisions = _rows(config.paper_decisions_path)
+
+    assert any(row.get("rejection_reason") == "missing_fdv_units" for row in decisions)
+    assert rule_runtime_status(config)["paper_buys"] == 0
+
+
+def test_holder_gate_and_mayhem_labels_are_entry_safe(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("holder-one", 100, 20_100, holder_count_at_10k_proxy=1, mayhem_mode=True, reserve_state_fingerprint="h1a", account_data_hash="h1a"))
+    engine.process_path_event(_event("holder-one", 110, 20_200, holder_count_at_10k_proxy=1, mayhem_mode=True, reserve_state_fingerprint="h1b", account_data_hash="h1b"))
+    engine.process_path_event(_event("holder-three", 200, 20_100, holder_count_at_10k_proxy=3, mayhem_mode=True, reserve_state_fingerprint="h3a", account_data_hash="h3a"))
+    engine.process_path_event(_event("holder-three", 210, 20_200, holder_count_at_10k_proxy=3, mayhem_mode=True, reserve_state_fingerprint="h3b", account_data_hash="h3b"))
+    decisions = _rows(config.paper_decisions_path)
+    holder_one = next(row for row in decisions if row["mint"] == "holder-one" and row["paper_event_id"].startswith("decision_"))
+    holder_three = next(row for row in decisions if row["mint"] == "holder-three" and row["paper_event_id"].startswith("decision_"))
+
+    assert holder_one["decision"] == "paper_rejected_entry"
+    assert holder_one["rejection_reason"] == "holder_count_lte_1_hard_reject"
+    assert "mayhem_mode" in holder_one["risk_labels"]
+    assert holder_three["decision"] == "paper_buy"
+    assert "low_holder_depth_2_to_4" in holder_three["risk_labels"]
+    assert "mayhem_mode" in holder_three["risk_labels"]
+    assert "holder_count_lte_1_hard_reject" not in holder_three["risk_labels"]
+
+
+def test_stagnation_after_runup_triggers_paper_sell(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("stagnate", 100, 20_100, reserve_state_fingerprint="s-a", account_data_hash="s-a"))
+    engine.process_path_event(_event("stagnate", 110, 20_200, reserve_state_fingerprint="s-b", account_data_hash="s-b"))
+    engine.process_path_event(_event("stagnate", 130, 31_000, reserve_state_fingerprint="s-c", account_data_hash="s-c"))
+    result = engine.process_path_event(_event("stagnate", 260, 30_500, reserve_state_fingerprint="s-d", account_data_hash="s-d"))
+    sells = [row for row in _rows(config.paper_trades_path) if row.get("side") == "paper_sell"]
+
+    assert result["paper_sell_created"] is True
+    assert sells[-1]["exit_reason"] == "stagnation_after_runup"
+    assert sells[-1]["stagnation_exit_triggered"] is True
+    assert rule_runtime_status(config)["stagnation_exit_count"] == 1
+
+
+def test_retroactive_safety_review_voids_bugged_and_chased_buys(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    state["cash_usd"] = 171.75
+    state["wallet_usd"] = 300.0
+    for mint, fdv, allocation in [
+        ("DNAtTgzVBrR2hwKrRNqG8Y1ECuuGxLLxEme5KAMGpump", 26_210.75, 45.0),
+        ("BhooE6fGh6eqK3h2Tj6MBiEayjv26ah4A2oDUjqrpump", 27_876.00, 45.0),
+        ("G7ezsywkeKqbW57MiZNQWb6UKmYwpAoe7KfBkVEgpump", 23_394.22, 38.25),
+    ]:
+        state["open_positions"][mint] = {"mint": mint, "paper_buy_fdv": fdv, "allocation_usd": allocation, "paper_units": allocation / fdv, "side": "paper_buy"}
+    config.runtime_state_path.write_text(json.dumps(state), encoding="utf-8")
+    audit_rows = [
+        {"mint": "DNAtTgzVBrR2hwKrRNqG8Y1ECuuGxLLxEme5KAMGpump", "paper_buy_fdv": 26_210.75, "paper_buy_found": True, "warnings": ["manual_axiom_market_cap_materially_below_runtime_fdv"], "paper_buy_fdv_above_trigger_pct": 0.3105375},
+        {"mint": "BhooE6fGh6eqK3h2Tj6MBiEayjv26ah4A2oDUjqrpump", "paper_buy_fdv": 27_876.00, "paper_buy_found": True, "warnings": ["paper_buy_fdv_more_than_15pct_above_trigger_without_chase_approval"], "paper_buy_fdv_above_trigger_pct": 0.239659},
+        {"mint": "G7ezsywkeKqbW57MiZNQWb6UKmYwpAoe7KfBkVEgpump", "paper_buy_fdv": 23_394.22, "paper_buy_found": True, "warnings": ["confirming_rows_duplicate_same_state"], "paper_buy_fdv_above_trigger_pct": 0.0},
+    ]
+    config.paper_buy_fdv_reconciliation_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+    config.paper_buy_fdv_reconciliation_audit_json_path.write_text(json.dumps({"rows": audit_rows}), encoding="utf-8")
+
+    review = run_rule_runtime_safety_patch_review(config)
+    status = rule_runtime_status(config)
+
+    assert review["retroactive_review"]["voided_paper_buys"] == 3
+    assert status["voided_paper_buys"] == 3
+    assert status["valid_paper_buys"] == 0
+    assert status["cash_usd"] == 300.0
+    assert config.retroactive_paper_buy_safety_review_json_path.exists()
 
 
 def test_first_fdv_queue_triage_smoke_writes_summary(tmp_path: Path) -> None:

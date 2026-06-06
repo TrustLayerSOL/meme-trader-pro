@@ -15,6 +15,8 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     bonding_curve_resolution_audit,
     first_fdv_queue_triage_audit,
     initialize_rule_runtime,
+    paper_buy_fdv_reconciliation_audit,
+    run_rule_runtime_safety_patch_review,
     rule_runtime_status,
     run_helius_transaction_subscribe_bonding_curve_probe_smoke,
     run_first_fdv_queue_triage_smoke,
@@ -189,6 +191,30 @@ def main() -> int:
         print(f"accepted_birth_rate={result['accepted_birth_rate']}")
         print(f"rejected_stale_rate={result['rejected_stale_rate']}")
         print(f"report_path={config.birth_coverage_audit_json_path}")
+        return 0
+    if args.mode == "paper-buy-fdv-audit":
+        result = paper_buy_fdv_reconciliation_audit(config)
+        summary = result.get("summary") or {}
+        print("## Paper Buy FDV Reconciliation Audit")
+        print(f"paper_buys_checked={summary.get('paper_buys_checked')}")
+        print(f"manual_axiom_mismatch_count={summary.get('manual_axiom_mismatch_count')}")
+        print(f"duplicate_confirmation_count={summary.get('duplicate_confirmation_count')}")
+        print(f"same_slot_or_signature_confirmation_count={summary.get('same_slot_or_signature_confirmation_count')}")
+        print(f"rugged_count={summary.get('rugged_count')}")
+        print(f"report_path={config.paper_buy_fdv_reconciliation_audit_json_path}")
+        print(f"rows_path={config.paper_buy_fdv_reconciliation_rows_csv_path}")
+        return 0
+    if args.mode == "runtime-safety-patch-review":
+        result = run_rule_runtime_safety_patch_review(config, apply_voids=not args.no_apply_voids)
+        retro = result.get("retroactive_review") or {}
+        print("## Rule Runtime v1 Safety Patch Review")
+        print(f"duplicate_confirmation_patch={result.get('duplicate_confirmation_patch')}")
+        print(f"max_entry_above_trigger_pct={(result.get('chase_guard_threshold') or {}).get('max_entry_above_trigger_pct')}")
+        print(f"valid_paper_buys={retro.get('valid_paper_buys')}")
+        print(f"voided_paper_buys={retro.get('voided_paper_buys')}")
+        print(f"paper_wallet_cash_after_voids={retro.get('paper_wallet_cash_after_voids')}")
+        print(f"report_path={config.runtime_safety_patch_summary_json_path}")
+        print(f"retroactive_review_path={config.retroactive_paper_buy_safety_review_json_path}")
         return 0
     if args.mode == "bonding-curve-resolution-audit":
         result = bonding_curve_resolution_audit(
@@ -386,6 +412,8 @@ def parse_args() -> argparse.Namespace:
             "triage-audit",
             "triage-smoke",
             "birth-coverage-audit",
+            "paper-buy-fdv-audit",
+            "runtime-safety-patch-review",
             "bonding-curve-resolution-audit",
             "transaction-subscribe-capability-audit",
             "transaction-subscribe-smoke",
@@ -410,6 +438,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-helius-credits", type=int, default=10_000)
     parser.add_argument("--signatures-per-mint", type=int, default=7)
     parser.add_argument("--transactions-per-mint", type=int, default=7)
+    parser.add_argument("--no-apply-voids", action="store_true")
     return parser.parse_args()
 
 
