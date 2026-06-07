@@ -130,6 +130,7 @@ CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
 CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 2
 WATCH_FOLLOW_UP_MAX_WORKERS = 2
+TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS = 30.0
 SCHEDULER_MODE = "priority_single_worker"
 SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
@@ -1446,7 +1447,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     signatures_per_mint: int = 7,
     transactions_per_mint: int = 7,
 ) -> dict[str, Any]:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor, wait
     from threading import Lock
 
     from research.mtp_research.validation.forward_efficient_mover_observer import (
@@ -1679,13 +1680,62 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             )
         return len(due)
 
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor, ThreadPoolExecutor(
+    def wait_for_futures(
+        futures: list[Any],
+        errors: list[dict[str, Any]],
+        *,
+        failure_key: str,
+        cleanup_deadline: float,
+        drain_after_done: bool = False,
+        watch_executor: ThreadPoolExecutor | None = None,
+        confirmation_executor: ThreadPoolExecutor | None = None,
+        live_watch_executor: ThreadPoolExecutor | None = None,
+    ) -> int:
+        pending = {future for future in futures}
+        cancelled = 0
+        while pending:
+            remaining = cleanup_deadline - time.monotonic()
+            if remaining <= 0:
+                for future in pending:
+                    if future.cancel():
+                        cancelled += 1
+                return cancelled + sum(1 for future in pending if not future.done())
+            done, pending = wait(pending, timeout=remaining)
+            if not done:
+                for future in pending:
+                    if future.cancel():
+                        cancelled += 1
+                return cancelled + sum(1 for future in pending if not future.done())
+            for future in done:
+                try:
+                    future.result()
+                    if (
+                        drain_after_done
+                        and watch_executor is not None
+                        and confirmation_executor is not None
+                        and live_watch_executor is not None
+                        and time.monotonic() < cleanup_deadline
+                    ):
+                        drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
+                except Exception as exc:
+                    errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        return cancelled
+
+    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe")
+    confirmation_executor = ThreadPoolExecutor(
         max_workers=CONFIRMATION_FOLLOW_UP_MAX_WORKERS,
         thread_name_prefix="txsub-confirm-probe",
-    ) as confirmation_executor, ThreadPoolExecutor(
+    )
+    watch_executor = ThreadPoolExecutor(
         max_workers=WATCH_FOLLOW_UP_MAX_WORKERS,
         thread_name_prefix="txsub-watch-follow-up",
-    ) as watch_executor, ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-live-watch") as live_watch_executor:
+    )
+    live_watch_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-live-watch")
+    cancelled_probe_futures = 0
+    cancelled_watch_follow_up_futures = 0
+    cancelled_live_watch_futures = 0
+    cancelled_confirmation_futures = 0
+    try:
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
             drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
@@ -1728,32 +1778,46 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             on_create_event=on_create_event,
             on_idle=on_idle,
         )
-        for future in as_completed(probe_futures):
-            try:
-                future.result()
-                drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
-            except Exception as exc:
-                probe_errors.append({"error": f"{type(exc).__name__}:{exc}"})
-        drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
-        for future in as_completed(list(watch_follow_up_futures)):
-            try:
-                future.result()
-            except Exception as exc:
-                watch_follow_up_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        cleanup_deadline = time.monotonic() + TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS
+        cancelled_probe_futures = wait_for_futures(
+            probe_futures,
+            probe_errors,
+            failure_key="probe_cleanup_timeout",
+            cleanup_deadline=cleanup_deadline,
+            drain_after_done=True,
+            watch_executor=watch_executor,
+            confirmation_executor=confirmation_executor,
+            live_watch_executor=live_watch_executor,
+        )
+        if time.monotonic() < cleanup_deadline:
+            drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
+        cancelled_watch_follow_up_futures = wait_for_futures(
+            list(watch_follow_up_futures),
+            watch_follow_up_errors,
+            failure_key="watch_follow_up_cleanup_timeout",
+            cleanup_deadline=cleanup_deadline,
+        )
         with live_watch_lock:
             pending_live_watch_futures = list(live_watch_futures)
-        for future in as_completed(pending_live_watch_futures):
-            try:
-                future.result()
-            except Exception as exc:
-                live_watch_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        cancelled_live_watch_futures = wait_for_futures(
+            pending_live_watch_futures,
+            live_watch_errors,
+            failure_key="near_entry_live_watch_cleanup_timeout",
+            cleanup_deadline=cleanup_deadline,
+        )
         with confirmation_future_lock:
             pending_confirmation_futures = list(confirmation_futures)
-        for future in as_completed(pending_confirmation_futures):
-            try:
-                future.result()
-            except Exception as exc:
-                confirmation_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        cancelled_confirmation_futures = wait_for_futures(
+            pending_confirmation_futures,
+            confirmation_errors,
+            failure_key="confirmation_cleanup_timeout",
+            cleanup_deadline=cleanup_deadline,
+        )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        watch_executor.shutdown(wait=False, cancel_futures=True)
+        live_watch_executor.shutdown(wait=False, cancel_futures=True)
+        confirmation_executor.shutdown(wait=False, cancel_futures=True)
     with runtime_lock:
         final = engine.consume_event_bus(bus, max_events=10_000)
         archive_runtime_queue_candidates(config, now=time.time())
@@ -1780,6 +1844,10 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     probe_stats["post_birth_watch_follow_up_futures"] = post_birth_watch_follow_up_scheduled_count
     probe_stats["hot_watch_follow_up_futures"] = hot_watch_follow_up_scheduled_count
     probe_stats["near_entry_live_watch_futures"] = near_entry_live_watch_scheduled_count
+    probe_stats["shutdown_cancelled_probe_futures"] = int(cancelled_probe_futures)
+    probe_stats["shutdown_cancelled_watch_follow_up_futures"] = int(cancelled_watch_follow_up_futures)
+    probe_stats["shutdown_cancelled_live_watch_futures"] = int(cancelled_live_watch_futures)
+    probe_stats["shutdown_cancelled_confirmation_futures"] = int(cancelled_confirmation_futures)
     probe_stats["post_birth_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if item.get("probe_phase_override") == "post_birth_watch_follow_up")
     probe_stats["hot_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if str(item.get("probe_phase_override") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"})
     _record_bonding_curve_probe_stats(config, probe_stats)
@@ -2976,6 +3044,10 @@ def _default_scheduler_stats() -> dict[str, Any]:
         "active_account_subscriptions": 0,
         "hot_watch_follow_up_futures": 0,
         "hot_watch_follow_up_pending": 0,
+        "shutdown_cancelled_probe_futures": 0,
+        "shutdown_cancelled_watch_follow_up_futures": 0,
+        "shutdown_cancelled_live_watch_futures": 0,
+        "shutdown_cancelled_confirmation_futures": 0,
         "hot_watch_probe_count": 0,
         "near_threshold_hot_watch_probe_count": 0,
         "entry_zone_watch_probe_count": 0,
@@ -4392,6 +4464,10 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "near_entry_live_watch_futures": int(stats.get("near_entry_live_watch_futures") or 0),
         "near_entry_live_watch_probe_rows": int(stats.get("near_entry_live_watch_probe_rows") or 0),
         "near_entry_live_watch_successes": int(stats.get("near_entry_live_watch_successes") or 0),
+        "shutdown_cancelled_probe_futures": int(stats.get("shutdown_cancelled_probe_futures") or 0),
+        "shutdown_cancelled_watch_follow_up_futures": int(stats.get("shutdown_cancelled_watch_follow_up_futures") or 0),
+        "shutdown_cancelled_live_watch_futures": int(stats.get("shutdown_cancelled_live_watch_futures") or 0),
+        "shutdown_cancelled_confirmation_futures": int(stats.get("shutdown_cancelled_confirmation_futures") or 0),
         "post_birth_watch_follow_up_probe_rows": int(stats.get("post_birth_watch_follow_up_probe_rows") or 0),
         "post_birth_watch_follow_up_successes": int(stats.get("post_birth_watch_follow_up_successes") or 0),
         "accountSubscribe_bonding_curve_status": stats.get("account_subscribe_bonding_curve_status") or "accountSubscribe_bonding_curve_live_watch_enabled",
@@ -4498,6 +4574,10 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "probe_failures_by_reason": failure_reasons,
         "http_429": int(source_summary.get("http_429_count") or 0),
         "accountSubscribe_bonding_curve_status": source_summary.get("accountSubscribe_bonding_curve_status"),
+        "shutdown_cancelled_probe_futures": int(source_summary.get("shutdown_cancelled_probe_futures") or 0),
+        "shutdown_cancelled_watch_follow_up_futures": int(source_summary.get("shutdown_cancelled_watch_follow_up_futures") or 0),
+        "shutdown_cancelled_live_watch_futures": int(source_summary.get("shutdown_cancelled_live_watch_futures") or 0),
+        "shutdown_cancelled_confirmation_futures": int(source_summary.get("shutdown_cancelled_confirmation_futures") or 0),
         "warnings": warnings,
     }
 
@@ -5244,6 +5324,10 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "near_entry_live_watch_futures": int(txsub.get("near_entry_live_watch_futures") or 0),
         "near_entry_live_watch_probe_rows": int(txsub.get("near_entry_live_watch_probe_rows") or 0),
         "near_entry_live_watch_successes": int(txsub.get("near_entry_live_watch_successes") or 0),
+        "shutdown_cancelled_probe_futures": int(txsub.get("shutdown_cancelled_probe_futures") or 0),
+        "shutdown_cancelled_watch_follow_up_futures": int(txsub.get("shutdown_cancelled_watch_follow_up_futures") or 0),
+        "shutdown_cancelled_live_watch_futures": int(txsub.get("shutdown_cancelled_live_watch_futures") or 0),
+        "shutdown_cancelled_confirmation_futures": int(txsub.get("shutdown_cancelled_confirmation_futures") or 0),
         "post_birth_watch_follow_up_futures": int(txsub.get("post_birth_watch_follow_up_futures") or 0),
         "post_birth_watch_follow_up_pending": int(txsub.get("post_birth_watch_follow_up_pending") or 0),
         "hot_watch_follow_up_futures": int(txsub.get("hot_watch_follow_up_futures") or 0),
@@ -5594,6 +5678,10 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["near_entry_live_watch_futures"] = int(probe_stats.get("near_entry_live_watch_futures") or 0)
     stats["near_entry_live_watch_probe_rows"] = int(probe_stats.get("near_entry_live_watch_probe_rows") or 0)
     stats["near_entry_live_watch_successes"] = int(probe_stats.get("near_entry_live_watch_successes") or 0)
+    stats["shutdown_cancelled_probe_futures"] = int(probe_stats.get("shutdown_cancelled_probe_futures") or 0)
+    stats["shutdown_cancelled_watch_follow_up_futures"] = int(probe_stats.get("shutdown_cancelled_watch_follow_up_futures") or 0)
+    stats["shutdown_cancelled_live_watch_futures"] = int(probe_stats.get("shutdown_cancelled_live_watch_futures") or 0)
+    stats["shutdown_cancelled_confirmation_futures"] = int(probe_stats.get("shutdown_cancelled_confirmation_futures") or 0)
     stats["account_subscribe_bonding_curve_status"] = "accountSubscribe_bonding_curve_live_watch_enabled"
     stats["active_account_subscriptions"] = int(probe_stats.get("near_entry_live_watch_futures") or 0)
     stats["post_birth_watch_follow_up_probe_rows"] = int(probe_stats.get("post_birth_watch_follow_up_probe_rows") or 0)
