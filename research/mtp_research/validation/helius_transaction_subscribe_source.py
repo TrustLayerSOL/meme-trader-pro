@@ -339,10 +339,18 @@ def run_bonding_curve_account_probe_for_create_event(
     sleep_fn: Callable[[float], None] = time.sleep,
     account_not_found_retry_delays: tuple[float, ...] = ACCOUNT_NOT_FOUND_RETRY_DELAYS_SECONDS,
     follow_up_probe_delays: tuple[float, ...] = (),
+    include_mint_account_owner: bool = True,
 ) -> dict[str, Any]:
     started = now_fn()
     create_observed_at = _num(create_event.get("observed_at") or create_event.get("create_log_observed_at") or create_event.get("timestamp"))
-    mint_owner = _resolve_mint_account_owner(probe, str(create_event.get("mint") or ""), min_context_slot=_optional_int(create_event.get("slot")))
+    if include_mint_account_owner:
+        mint_owner = _resolve_mint_account_owner(probe, str(create_event.get("mint") or ""), min_context_slot=_optional_int(create_event.get("slot")))
+    else:
+        mint_owner = {
+            "mint_account_owner": None,
+            "token_program": None,
+            "mint_account_owner_status": "deferred_first_fdv_hot_path",
+        }
     attempt_started_at = started
     probe_input = {
         **create_event,

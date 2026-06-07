@@ -351,6 +351,71 @@ def test_get_account_info_probe_row_uses_min_context_slot_and_emits_runtime_even
     assert json.loads(config.bonding_curve_account_probe_events_path.read_text(encoding="utf-8").splitlines()[0])["probe_status"] == "success"
 
 
+def test_probe_helper_can_defer_mint_owner_lookup_for_first_fdv_hot_path(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+
+    class FakeProbe:
+        requests_used = 0
+        http_429_count = 0
+        rpc_url = "https://fake-rpc"
+        timeout_seconds = 3
+
+        def _rpc_post(self, _rpc_url: str, payload: dict, _timeout: int) -> dict:
+            raise AssertionError(f"mint owner lookup should be deferred, got {payload}")
+
+        def probe_create_event(self, create_event: dict, *, now_fn: object) -> object:
+            class Result:
+                probe_status = "success"
+                failure_reason = None
+                getAccountInfo_latency_ms = 7.0
+                accountSubscribe_latency_ms = None
+
+                def to_runtime_event(self, timestamp: float | None = None) -> dict:
+                    return {
+                        "event_id": "fdv-a",
+                        "mint": create_event["mint"],
+                        "timestamp": timestamp or 101.0,
+                        "event_observed_at": create_event["observed_at"],
+                        "fdv_proxy": 9_000.0,
+                        "fdv_usd": 9_000.0,
+                        "fdv_units": "usd",
+                        "source_event_type": "fdv_path_update",
+                        "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                        "fdv_source": "bonding_curve_account_state",
+                        "fdv_source_confidence": "high",
+                        "fdv_probe_method": "getAccountInfo_processed_bonding_curve",
+                    }
+
+            return Result()
+
+    emitted: list[dict] = []
+    create_event = {
+        "event_id": "txsub_sig-a_123_0",
+        "signature": "sig-a",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "mint-a",
+        "bonding_curve": "curve-a",
+    }
+
+    row = run_bonding_curve_account_probe_for_create_event(
+        config,
+        create_event,
+        probe=FakeProbe(),
+        event_callback=emitted.append,
+        now_fn=iter([100.5, 100.7]).__next__,
+        include_mint_account_owner=False,
+    )
+
+    assert row["probe_status"] == "success"
+    assert row["observed_to_probe_started_ms"] == 500.0
+    assert row["mint_account_owner"] is None
+    assert row["token_program"] is None
+    assert row["mint_account_owner_status"] == "deferred_first_fdv_hot_path"
+    assert emitted[0]["mint_account_owner_status"] == "deferred_first_fdv_hot_path"
+
+
 def test_probe_helper_emits_follow_up_account_state_rows_for_confirmation(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)

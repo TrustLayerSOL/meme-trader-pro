@@ -128,6 +128,7 @@ HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75, 1.0)
 ENTRY_ZONE_PROBE_DELAYS_SECONDS = (0.1, 0.25, 0.5, 0.75, 1.0)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
+TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS = 16
 CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 2
 WATCH_FOLLOW_UP_MAX_WORKERS = 2
 TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS = 30.0
@@ -1531,7 +1532,12 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     live_watch_errors: list[dict[str, Any]] = []
     watch_follow_up_errors: list[dict[str, Any]] = []
 
-    def run_probe(event: dict[str, Any], *, follow_up_probe_delays: tuple[float, ...] = ()) -> dict[str, Any]:
+    def run_probe(
+        event: dict[str, Any],
+        *,
+        follow_up_probe_delays: tuple[float, ...] = (),
+        include_mint_account_owner: bool = True,
+    ) -> dict[str, Any]:
         probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
         try:
             return run_bonding_curve_account_probe_for_create_event(
@@ -1540,16 +1546,19 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 probe=probe,
                 event_callback=on_hot_event,
                 follow_up_probe_delays=follow_up_probe_delays,
+                include_mint_account_owner=include_mint_account_owner,
             )
         except TypeError as exc:
-            if "follow_up_probe_delays" not in str(exc):
+            message = str(exc)
+            if "follow_up_probe_delays" not in message and "include_mint_account_owner" not in message:
                 raise
-            return run_bonding_curve_account_probe_for_create_event(
-                config,
-                event,
-                probe=probe,
-                event_callback=on_hot_event,
-            )
+            kwargs: dict[str, Any] = {
+                "probe": probe,
+                "event_callback": on_hot_event,
+            }
+            if "follow_up_probe_delays" not in message:
+                kwargs["follow_up_probe_delays"] = follow_up_probe_delays
+            return run_bonding_curve_account_probe_for_create_event(config, event, **kwargs)
 
     def run_near_entry_live_watch(event: dict[str, Any]) -> list[dict[str, Any]]:
         probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
@@ -1615,7 +1624,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         confirmation_executor: ThreadPoolExecutor,
         live_watch_executor: ThreadPoolExecutor,
     ) -> dict[str, Any]:
-        row = run_probe(event, follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS)
+        row = run_probe(
+            event,
+            follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS,
+            include_mint_account_owner=False,
+        )
         schedule_post_birth_watch_follow_up(event, row)
         schedule_hot_watch_follow_up(event, row)
         schedule_near_entry_live_watch(event, row, live_watch_executor)
@@ -1797,7 +1810,10 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 cancelled += 1
         return cancelled
 
-    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe")
+    executor = ThreadPoolExecutor(
+        max_workers=TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS,
+        thread_name_prefix="txsub-first-fdv",
+    )
     confirmation_executor = ThreadPoolExecutor(
         max_workers=CONFIRMATION_FOLLOW_UP_MAX_WORKERS,
         thread_name_prefix="txsub-confirm-probe",
@@ -1814,7 +1830,6 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     try:
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
-            drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
             try:
                 probe_futures.append(
                     executor.submit(
@@ -1844,6 +1859,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                     },
                 )
                 raise
+            drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
 
         def on_idle() -> None:
             drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
@@ -1916,6 +1932,8 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         failures["near_entry_live_watch_worker_exception"] = int(failures.get("near_entry_live_watch_worker_exception") or 0) + len(live_watch_errors)
         probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(live_watch_errors)
     probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
+    probe_stats["initial_probe_max_workers"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS
+    probe_stats["initial_probe_metadata_deferred"] = True
     pending_watch_events = [item[2] for item in watch_follow_up_jobs]
     probe_stats["post_birth_watch_follow_up_futures"] = post_birth_watch_follow_up_scheduled_count
     probe_stats["hot_watch_follow_up_futures"] = hot_watch_follow_up_scheduled_count
@@ -4540,6 +4558,8 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "near_entry_live_watch_futures": int(stats.get("near_entry_live_watch_futures") or 0),
         "near_entry_live_watch_probe_rows": int(stats.get("near_entry_live_watch_probe_rows") or 0),
         "near_entry_live_watch_successes": int(stats.get("near_entry_live_watch_successes") or 0),
+        "initial_probe_max_workers": int(stats.get("initial_probe_max_workers") or 0),
+        "initial_probe_metadata_deferred": bool(stats.get("initial_probe_metadata_deferred")),
         "shutdown_cancelled_probe_futures": int(stats.get("shutdown_cancelled_probe_futures") or 0),
         "shutdown_cancelled_watch_follow_up_futures": int(stats.get("shutdown_cancelled_watch_follow_up_futures") or 0),
         "shutdown_cancelled_live_watch_futures": int(stats.get("shutdown_cancelled_live_watch_futures") or 0),
@@ -4635,6 +4655,8 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "hot_watch_success_count": sum(1 for row in hot_watch_rows if row.get("probe_status") == "success"),
         "near_entry_live_watch_probe_rows": len(near_entry_live_watch_rows),
         "near_entry_live_watch_successes": sum(1 for row in near_entry_live_watch_rows if row.get("probe_status") == "success"),
+        "initial_probe_max_workers": int(source_summary.get("initial_probe_max_workers") or 0),
+        "initial_probe_metadata_deferred": bool(source_summary.get("initial_probe_metadata_deferred")),
         **post_birth_watch,
         "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
@@ -5412,6 +5434,8 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "near_entry_live_watch_futures": int(txsub.get("near_entry_live_watch_futures") or 0),
         "near_entry_live_watch_probe_rows": int(txsub.get("near_entry_live_watch_probe_rows") or 0),
         "near_entry_live_watch_successes": int(txsub.get("near_entry_live_watch_successes") or 0),
+        "initial_probe_max_workers": int(txsub.get("initial_probe_max_workers") or 0),
+        "initial_probe_metadata_deferred": bool(txsub.get("initial_probe_metadata_deferred")),
         "shutdown_cancelled_probe_futures": int(txsub.get("shutdown_cancelled_probe_futures") or 0),
         "shutdown_cancelled_watch_follow_up_futures": int(txsub.get("shutdown_cancelled_watch_follow_up_futures") or 0),
         "shutdown_cancelled_live_watch_futures": int(txsub.get("shutdown_cancelled_live_watch_futures") or 0),
@@ -5766,6 +5790,8 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["near_entry_live_watch_futures"] = int(probe_stats.get("near_entry_live_watch_futures") or 0)
     stats["near_entry_live_watch_probe_rows"] = int(probe_stats.get("near_entry_live_watch_probe_rows") or 0)
     stats["near_entry_live_watch_successes"] = int(probe_stats.get("near_entry_live_watch_successes") or 0)
+    stats["initial_probe_max_workers"] = int(probe_stats.get("initial_probe_max_workers") or 0)
+    stats["initial_probe_metadata_deferred"] = bool(probe_stats.get("initial_probe_metadata_deferred"))
     stats["shutdown_cancelled_probe_futures"] = int(probe_stats.get("shutdown_cancelled_probe_futures") or 0)
     stats["shutdown_cancelled_watch_follow_up_futures"] = int(probe_stats.get("shutdown_cancelled_watch_follow_up_futures") or 0)
     stats["shutdown_cancelled_live_watch_futures"] = int(probe_stats.get("shutdown_cancelled_live_watch_futures") or 0)

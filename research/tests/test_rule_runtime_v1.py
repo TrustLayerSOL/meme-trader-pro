@@ -1810,8 +1810,10 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
         event_callback=None,
         now_fn=None,
         follow_up_probe_delays=None,
+        include_mint_account_owner=None,
     ) -> dict:
         assert follow_up_probe_delays == ()
+        assert include_mint_account_owner is False
         probe_started_during_stream.append(stream_active["value"])
         row = {
             "event_id": "probe-a",
@@ -2041,7 +2043,7 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
     assert probe_calls.count("post_birth_watch_follow_up") == 1
     assert probe_calls.count("confirmation_follow_up") == 1
     assert probe_calls.count("entry_zone_hot_watch_follow_up") == 1
-    assert probe_threads["initial"].startswith("txsub-fdv-probe")
+    assert probe_threads["initial"].startswith("txsub-first-fdv")
     assert probe_threads["post_birth_watch_follow_up"].startswith("txsub-watch-follow-up")
     assert summary["post_birth_watch_follow_up_futures"] == 1
     assert summary["post_birth_watch_follow_up_probe_rows"] == 1
