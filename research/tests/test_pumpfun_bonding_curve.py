@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from research.mtp_research.validation.pumpfun_bonding_curve import (
+    BondingCurveState,
     PUMP_FUN_CREATE_DISCRIMINATOR_HEX,
     PUMP_FUN_CREATE_V2_DISCRIMINATOR_HEX,
     PUMP_FUN_PROGRAM_ID,
@@ -100,6 +101,28 @@ def test_bonding_curve_decoder_finds_extended_create_v2_reserve_tuple() -> None:
     assert result.probe_status == "success"
     assert result.fdv_usd is not None
     assert result.fdv_usd > 4_000
+
+
+def test_fdv_math_rejects_implausible_scanned_reserve_state() -> None:
+    state = BondingCurveState(
+        decode_status="decoded",
+        layout_version="pumpfun_extended_scan_v1",
+        virtual_token_reserves=1_000_000_000_000_000,
+        virtual_sol_reserves=16_313_025_951_526_413_825,
+        real_token_reserves=4_590_438_726_375_697_399,
+        real_sol_reserves=16_500_893_545_165_750_764,
+        token_total_supply=18_089_157_691_503_883_781,
+        complete=True,
+        token_decimals=6,
+        quote_type="sol",
+    )
+
+    result = compute_fdv_from_bonding_curve_state(state, sol_usd=80)
+
+    assert result.probe_status == "failed"
+    assert result.calculation_error == "implausible_bonding_curve_state"
+    assert result.fdv_usd is None
+    assert result.fdv_sol is None
 
 
 def test_no_new_paid_provider_dependency_in_bonding_curve_module() -> None:

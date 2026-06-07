@@ -27,6 +27,9 @@ PDA_MARKER = b"ProgramDerivedAddress"
 PUMPFUN_CLASSIC_MIN_ACCOUNT_BYTES = 8 + (5 * 8) + 1
 DEFAULT_TOKEN_DECIMALS = 6
 SOL_DECIMALS = 9
+MAX_PUMPFUN_TOKEN_SUPPLY_RAW = 10_000_000_000_000_000
+MAX_PUMPFUN_TOKEN_RESERVES_RAW = 10_000_000_000_000_000
+MAX_PUMPFUN_SOL_RESERVES_RAW = 10_000_000_000_000_000
 _BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 getcontext().prec = 50
 
@@ -396,6 +399,12 @@ def _plausible_bonding_curve_reserves(
         return False
     if real_token < 0 or real_sol < 0:
         return False
+    if total_supply > MAX_PUMPFUN_TOKEN_SUPPLY_RAW:
+        return False
+    if virtual_token > MAX_PUMPFUN_TOKEN_RESERVES_RAW or real_token > MAX_PUMPFUN_TOKEN_RESERVES_RAW:
+        return False
+    if virtual_sol > MAX_PUMPFUN_SOL_RESERVES_RAW or real_sol > MAX_PUMPFUN_SOL_RESERVES_RAW:
+        return False
     if real_token > total_supply:
         return False
     if virtual_token > total_supply * 10:
@@ -420,6 +429,8 @@ def compute_fdv_from_bonding_curve_state(curve_state: BondingCurveState, *, sol_
     token_supply = curve_state.token_total_supply
     if token_reserves is None or token_reserves <= 0 or token_supply is None or token_supply <= 0:
         return _calculation_failure(curve_state, "missing_token_reserves_or_supply")
+    if _implausible_bonding_curve_state(curve_state):
+        return _calculation_failure(curve_state, "implausible_bonding_curve_state")
     if curve_state.quote_type == "sol":
         sol_reserves = curve_state.virtual_sol_reserves
         if sol_reserves is None or sol_reserves <= 0:
@@ -473,6 +484,25 @@ def compute_fdv_from_bonding_curve_state(curve_state: BondingCurveState, *, sol_
         quote_type=curve_state.quote_type,
         account_state=curve_state.to_dict(),
     )
+
+
+def _implausible_bonding_curve_state(curve_state: BondingCurveState) -> bool:
+    token_supply = curve_state.token_total_supply
+    virtual_token = curve_state.virtual_token_reserves
+    real_token = curve_state.real_token_reserves
+    if token_supply is not None and token_supply > MAX_PUMPFUN_TOKEN_SUPPLY_RAW:
+        return True
+    for token_reserves in [virtual_token, real_token]:
+        if token_reserves is not None and token_reserves > MAX_PUMPFUN_TOKEN_RESERVES_RAW:
+            return True
+    sol_reserves = [curve_state.virtual_sol_reserves, curve_state.real_sol_reserves]
+    if any(reserves is not None and reserves > MAX_PUMPFUN_SOL_RESERVES_RAW for reserves in sol_reserves):
+        return True
+    if token_supply is not None and real_token is not None and real_token > token_supply:
+        return True
+    if token_supply is not None and virtual_token is not None and virtual_token > token_supply * 10:
+        return True
+    return False
 
 
 def bonding_curve_resolution_audit(config: Any, *, source_root: Path | str | None = None) -> dict[str, Any]:
