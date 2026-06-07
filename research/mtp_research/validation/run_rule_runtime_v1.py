@@ -280,6 +280,24 @@ def main() -> int:
             f"{result.get('confirmation_follow_up_probe_rows')}/"
             f"{result.get('confirmation_follow_up_successes')}"
         )
+        print(
+            "post_birth_watch="
+            f"{result.get('post_birth_watch_count')}/"
+            f"{result.get('post_birth_watch_probe_count')}/"
+            f"{result.get('post_birth_watch_success_count')}/"
+            f"{result.get('post_birth_watch_pending_count')}"
+        )
+        print(
+            "post_birth_watch_promotions_5k_10k_20k="
+            f"{result.get('post_birth_watch_promotions_to_5k')}/"
+            f"{result.get('post_birth_watch_promotions_to_10k')}/"
+            f"{result.get('post_birth_watch_promotions_to_20k')}"
+        )
+        print(f"post_birth_watch_archives={result.get('post_birth_watch_archives')}")
+        print(f"missed_runner_recheck_count={result.get('missed_runner_recheck_count')}")
+        print(f"low_fdv_watch_oldest_age={result.get('low_fdv_watch_oldest_age')}")
+        print(f"low_fdv_watch_due_count={result.get('low_fdv_watch_due_count')}")
+        print(f"post_birth_watch_lane_counts={result.get('post_birth_watch_lane_counts')}")
         print(f"first_attempt_successes={result['first_attempt_successes']}")
         print(f"account_not_found_retries={result['account_not_found_retries']}")
         print(f"account_not_found_recovered_by_retry={result['account_not_found_recovered_by_retry']}")

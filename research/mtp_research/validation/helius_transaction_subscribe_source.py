@@ -94,6 +94,7 @@ class HeliusTransactionSubscribeCreateSource:
         max_events: int = 25,
         max_seconds: float = 30.0,
         on_create_event: Callable[[dict[str, Any]], None] | None = None,
+        on_idle: Callable[[], None] | None = None,
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         deadline = time.monotonic() + max(0.1, float(max_seconds))
@@ -105,6 +106,8 @@ class HeliusTransactionSubscribeCreateSource:
                 try:
                     message = websocket.recv(timeout=min(1.0, max(0.1, deadline - time.monotonic())))
                 except TimeoutError:
+                    if on_idle is not None:
+                        on_idle()
                     continue
                 raw = json.loads(message) if isinstance(message, str) else message
                 if not isinstance(raw, dict):
@@ -120,6 +123,8 @@ class HeliusTransactionSubscribeCreateSource:
                     rows.append(row)
                     if on_create_event is not None:
                         on_create_event(row)
+                    if on_idle is not None:
+                        on_idle()
                     if len(rows) >= max(0, int(max_events)):
                         break
         return rows
@@ -300,10 +305,15 @@ def run_bonding_curve_account_probe_for_create_event(
         _copy_fdv_probe_fields(result, runtime_event)
     winning = "getAccountInfo_processed" if status == "success" else "none"
     confirmation_follow_up = bool(create_event.get("confirmation_follow_up_scheduled"))
+    phase_override = str(create_event.get("probe_phase_override") or "").strip()
     row = {
         "event_id": f"probe_{create_event.get('event_id') or create_event.get('signature')}_{int(started * 1000)}",
-        "probe_phase": "confirmation_initial" if confirmation_follow_up else "initial",
+        "probe_phase": phase_override or ("confirmation_initial" if confirmation_follow_up else "initial"),
         "confirmation_follow_up_scheduled": confirmation_follow_up,
+        "post_birth_watch_follow_up_scheduled": bool(create_event.get("post_birth_watch_follow_up_scheduled")),
+        "post_birth_watch_follow_up_index": create_event.get("post_birth_watch_follow_up_index"),
+        "post_birth_watch_due_delay_seconds": create_event.get("post_birth_watch_due_delay_seconds"),
+        "post_birth_watch_lane": create_event.get("post_birth_watch_lane"),
         "mint": create_event.get("mint"),
         "bonding_curve": create_event.get("bonding_curve"),
         "source_create_signature": create_event.get("signature"),

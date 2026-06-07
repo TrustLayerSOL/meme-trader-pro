@@ -14,6 +14,7 @@ from statistics import median
 from typing import Any
 import csv
 import hashlib
+import heapq
 import html
 import json
 import time
@@ -108,6 +109,9 @@ TIER_1_FLAT_DELTA_PCT = 0.05
 TIER_1_PRESSURE_THRESHOLD = 20
 ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS: tuple[float, ...] = ()
+POST_BIRTH_WATCH_TRIGGER_FDV = 1_500.0
+POST_BIRTH_WATCH_MAX_INITIAL_FDV = 5_000.0
+POST_BIRTH_WATCH_PROBE_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0, 180.0, 300.0)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
 CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 2
@@ -1486,8 +1490,13 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     probe_futures = []
     confirmation_futures = []
     confirmation_future_lock = Lock()
+    watch_follow_up_jobs: list[tuple[float, int, dict[str, Any]]] = []
+    watch_follow_up_futures = []
+    watch_follow_up_lock = Lock()
+    watch_follow_up_sequence = 0
     probe_errors: list[dict[str, Any]] = []
     confirmation_errors: list[dict[str, Any]] = []
+    watch_follow_up_errors: list[dict[str, Any]] = []
 
     def run_probe(event: dict[str, Any], *, follow_up_probe_delays: tuple[float, ...] = ()) -> dict[str, Any]:
         probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
@@ -1511,6 +1520,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
 
     def run_first_fdv_probe_and_schedule_confirmation(event: dict[str, Any], confirmation_executor: ThreadPoolExecutor) -> dict[str, Any]:
         row = run_probe(event, follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS)
+        schedule_post_birth_watch_follow_up(event, row)
         if _should_schedule_confirmation_follow_up(row):
             confirmation_event = dict(event)
             confirmation_event["probe_scheduled_during_stream"] = True
@@ -1524,12 +1534,42 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 confirmation_futures.append(future)
         return row
 
+    def schedule_post_birth_watch_follow_up(event: dict[str, Any], row: dict[str, Any]) -> None:
+        nonlocal watch_follow_up_sequence
+        if not _should_schedule_post_birth_watch_follow_up(row):
+            return
+        lane = _post_birth_watch_lane(row)
+        now_monotonic = time.monotonic()
+        with watch_follow_up_lock:
+            for index, delay in enumerate(tuple(POST_BIRTH_WATCH_PROBE_DELAYS_SECONDS), start=1):
+                follow_event = dict(event)
+                follow_event["probe_scheduled_during_stream"] = True
+                follow_event["post_birth_watch_follow_up_scheduled"] = True
+                follow_event["post_birth_watch_follow_up_index"] = index
+                follow_event["post_birth_watch_due_delay_seconds"] = float(delay)
+                follow_event["post_birth_watch_lane"] = lane
+                follow_event["probe_phase_override"] = "post_birth_watch_follow_up"
+                watch_follow_up_sequence += 1
+                heapq.heappush(watch_follow_up_jobs, (now_monotonic + float(delay), watch_follow_up_sequence, follow_event))
+
+    def drain_due_watch_follow_ups(executor: ThreadPoolExecutor) -> int:
+        due: list[dict[str, Any]] = []
+        now_monotonic = time.monotonic()
+        with watch_follow_up_lock:
+            while watch_follow_up_jobs and watch_follow_up_jobs[0][0] <= now_monotonic:
+                _, _, event = heapq.heappop(watch_follow_up_jobs)
+                due.append(event)
+        for event in due:
+            watch_follow_up_futures.append(executor.submit(run_probe, event))
+        return len(due)
+
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor, ThreadPoolExecutor(
         max_workers=CONFIRMATION_FOLLOW_UP_MAX_WORKERS,
         thread_name_prefix="txsub-confirm-probe",
     ) as confirmation_executor:
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
+            drain_due_watch_follow_ups(executor)
             try:
                 probe_futures.append(executor.submit(run_first_fdv_probe_and_schedule_confirmation, dict(event), confirmation_executor))
             except Exception as exc:
@@ -1553,16 +1593,27 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 )
                 raise
 
+        def on_idle() -> None:
+            drain_due_watch_follow_ups(executor)
+
         create_events = source.fetch_create_events(
             max_events=target_births,
             max_seconds=max_runtime_seconds,
             on_create_event=on_create_event,
+            on_idle=on_idle,
         )
         for future in as_completed(probe_futures):
             try:
                 future.result()
+                drain_due_watch_follow_ups(executor)
             except Exception as exc:
                 probe_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        drain_due_watch_follow_ups(executor)
+        for future in as_completed(list(watch_follow_up_futures)):
+            try:
+                future.result()
+            except Exception as exc:
+                watch_follow_up_errors.append({"error": f"{type(exc).__name__}:{exc}"})
         with confirmation_future_lock:
             pending_confirmation_futures = list(confirmation_futures)
         for future in as_completed(pending_confirmation_futures):
@@ -1583,7 +1634,13 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         failures = probe_stats.setdefault("failures_by_reason", {})
         failures["confirmation_probe_worker_exception"] = int(failures.get("confirmation_probe_worker_exception") or 0) + len(confirmation_errors)
         probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(confirmation_errors)
+    if watch_follow_up_errors:
+        failures = probe_stats.setdefault("failures_by_reason", {})
+        failures["post_birth_watch_probe_worker_exception"] = int(failures.get("post_birth_watch_probe_worker_exception") or 0) + len(watch_follow_up_errors)
+        probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(watch_follow_up_errors)
     probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
+    probe_stats["post_birth_watch_follow_up_futures"] = len(watch_follow_up_futures)
+    probe_stats["post_birth_watch_follow_up_pending"] = len(watch_follow_up_jobs)
     _record_bonding_curve_probe_stats(config, probe_stats)
     status = rule_runtime_status(config)
     summary = _helius_transaction_subscribe_bonding_curve_probe_summary(
@@ -2656,6 +2713,28 @@ def _should_schedule_confirmation_follow_up(row: dict[str, Any]) -> bool:
     if fdv is None or fdv <= 0 or fdv >= FDV_ANOMALY_HIGH:
         return False
     return fdv >= CONFIRMATION_FOLLOW_UP_TRIGGER_FDV
+
+
+def _should_schedule_post_birth_watch_follow_up(row: dict[str, Any]) -> bool:
+    if row.get("probe_status") != "success":
+        return False
+    if row.get("fdv_anomaly_flag_from_source") is True:
+        return False
+    fdv = _milestone_fdv_usd(row)
+    if fdv is None or fdv <= 0 or fdv >= FDV_ANOMALY_HIGH:
+        return False
+    return fdv >= POST_BIRTH_WATCH_TRIGGER_FDV
+
+
+def _post_birth_watch_lane(row: dict[str, Any]) -> str:
+    fdv = _milestone_fdv_usd(row)
+    if fdv is None:
+        return "unknown"
+    if fdv < POST_BIRTH_WATCH_MAX_INITIAL_FDV:
+        return "low_fdv"
+    if fdv < WATCH_THRESHOLD_FDV:
+        return "near_threshold"
+    return "confirmed_10k_candidate"
 
 
 def _copy_fdv_unit_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
@@ -3910,6 +3989,10 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "confirmation_follow_up_futures": int(stats.get("confirmation_follow_up_futures") or 0),
         "confirmation_follow_up_probe_rows": int(stats.get("confirmation_follow_up_probe_rows") or 0),
         "confirmation_follow_up_successes": int(stats.get("confirmation_follow_up_successes") or 0),
+        "post_birth_watch_follow_up_futures": int(stats.get("post_birth_watch_follow_up_futures") or 0),
+        "post_birth_watch_follow_up_pending": int(stats.get("post_birth_watch_follow_up_pending") or 0),
+        "post_birth_watch_follow_up_probe_rows": int(stats.get("post_birth_watch_follow_up_probe_rows") or 0),
+        "post_birth_watch_follow_up_successes": int(stats.get("post_birth_watch_follow_up_successes") or 0),
         "accountSubscribe_bonding_curve_status": stats.get("account_subscribe_bonding_curve_status") or "accountSubscribe_bonding_curve_not_implemented",
         "active_account_subscriptions": int(stats.get("active_account_subscriptions") or 0),
         "metadata_hot_path_allowed": False,
@@ -3919,6 +4002,8 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
 def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, source_summary: dict[str, Any]) -> dict[str, Any]:
     create_rows = _read_jsonl(config.pumpfun_create_stream_events_path)
     probe_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
+    state = _read_json(config.runtime_state_path)
+    candidates = state.get("candidates") if isinstance(state.get("candidates"), dict) else {}
     audit = _read_json(config.helius_transaction_subscribe_capability_audit_json_path)
     recommended = audit.get("recommended_endpoint") if isinstance(audit.get("recommended_endpoint"), dict) else {}
     decoded_create_rows = [row for row in create_rows if row.get("parser_status") == "decoded"]
@@ -3940,6 +4025,13 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
     account_not_found_retries = int(sum(_num(row.get("account_not_found_retry_count")) or 0 for row in probe_rows))
     account_not_found_recovered = sum(1 for row in probe_rows if row.get("account_not_found_recovered_by_retry") is True)
     account_not_found_final_failures = sum(1 for row in probe_rows if row.get("account_not_found_final_failure") is True)
+    post_birth_watch = _post_birth_watch_status_metrics(
+        probe_rows,
+        candidates,
+        scheduled_count=int(source_summary.get("post_birth_watch_follow_up_futures") or 0)
+        + int(source_summary.get("post_birth_watch_follow_up_pending") or 0),
+        pending_count=int(source_summary.get("post_birth_watch_follow_up_pending") or 0),
+    )
     return {
         "transactionSubscribe_supported": bool(recommended.get("transactionSubscribe_supported")),
         "endpoint_used": recommended.get("name"),
@@ -3959,6 +4051,15 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
             for row in probe_rows
             if str(row.get("probe_phase") or "").startswith("confirmation") and row.get("probe_status") == "success"
         ),
+        "post_birth_watch_follow_up_futures": int(source_summary.get("post_birth_watch_follow_up_futures") or 0),
+        "post_birth_watch_follow_up_pending": int(source_summary.get("post_birth_watch_follow_up_pending") or 0),
+        "post_birth_watch_follow_up_probe_rows": sum(1 for row in probe_rows if row.get("probe_phase") == "post_birth_watch_follow_up"),
+        "post_birth_watch_follow_up_successes": sum(
+            1
+            for row in probe_rows
+            if row.get("probe_phase") == "post_birth_watch_follow_up" and row.get("probe_status") == "success"
+        ),
+        **post_birth_watch,
         "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
         "first_attempt_successes": sum(1 for row in probe_rows if row.get("probe_status") == "success" and int(_num(row.get("probe_attempt_count")) or 1) == 1),
@@ -3982,6 +4083,61 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "http_429": int(source_summary.get("http_429_count") or 0),
         "accountSubscribe_bonding_curve_status": source_summary.get("accountSubscribe_bonding_curve_status"),
         "warnings": warnings,
+    }
+
+
+def _post_birth_watch_status_metrics(
+    probe_rows: list[dict[str, Any]],
+    candidates: dict[str, Any],
+    *,
+    scheduled_count: int,
+    pending_count: int,
+) -> dict[str, Any]:
+    watch_rows = [row for row in probe_rows if row.get("probe_phase") == "post_birth_watch_follow_up"]
+    success_rows = [row for row in watch_rows if row.get("probe_status") == "success"]
+    watch_mints = {str(row.get("mint")) for row in watch_rows if row.get("mint")}
+    low_fdv_rows = [row for row in watch_rows if row.get("post_birth_watch_lane") == "low_fdv"]
+    lane_counts: dict[str, int] = {}
+    for row in watch_rows:
+        lane = str(row.get("post_birth_watch_lane") or "unknown")
+        lane_counts[lane] = int(lane_counts.get(lane) or 0) + 1
+
+    def crossed_mints(threshold: float) -> int:
+        return len(
+            {
+                str(row.get("mint"))
+                for row in success_rows
+                if row.get("mint") and (_milestone_fdv_usd(row) or 0.0) >= threshold
+            }
+        )
+
+    def row_age_seconds(row: dict[str, Any]) -> float | None:
+        create_at = _num(row.get("create_observed_at"))
+        observed_at = _num(row.get("first_fdv_emitted_at")) or _num(row.get("first_curve_state_at")) or _num(row.get("probe_started_at"))
+        if create_at is None or observed_at is None:
+            return None
+        return max(0.0, observed_at - create_at)
+
+    archive_count = 0
+    for mint in watch_mints:
+        candidate = candidates.get(mint) if isinstance(candidates, dict) else None
+        if isinstance(candidate, dict) and str(candidate.get("state") or "").startswith("archived"):
+            archive_count += 1
+    low_fdv_ages = [age for age in (row_age_seconds(row) for row in low_fdv_rows) if age is not None]
+    oldest_low_fdv_age = max(low_fdv_ages, default=None)
+    return {
+        "post_birth_watch_count": int(scheduled_count),
+        "post_birth_watch_probe_count": len(watch_rows),
+        "post_birth_watch_success_count": len(success_rows),
+        "post_birth_watch_pending_count": int(pending_count),
+        "post_birth_watch_lane_counts": dict(sorted(lane_counts.items())),
+        "post_birth_watch_promotions_to_5k": crossed_mints(5_000.0),
+        "post_birth_watch_promotions_to_10k": crossed_mints(WATCH_THRESHOLD_FDV),
+        "post_birth_watch_promotions_to_20k": crossed_mints(ENTRY_THRESHOLD_FDV),
+        "post_birth_watch_archives": archive_count,
+        "missed_runner_recheck_count": crossed_mints(ENTRY_THRESHOLD_FDV),
+        "low_fdv_watch_oldest_age": _round_num(oldest_low_fdv_age) if oldest_low_fdv_age is not None else None,
+        "low_fdv_watch_due_count": len(low_fdv_rows),
     }
 
 
@@ -4225,6 +4381,11 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- curve account probes started: {txsub.get('curve_account_probes_started')}",
             f"- probes started during stream: {txsub.get('probes_started_during_stream')}",
             f"- confirmation follow-up futures/rows/successes: {txsub.get('confirmation_follow_up_futures')} / {txsub.get('confirmation_follow_up_probe_rows')} / {txsub.get('confirmation_follow_up_successes')}",
+            f"- post-birth watch scheduled/probes/successes/pending: {txsub.get('post_birth_watch_count')} / {txsub.get('post_birth_watch_probe_count')} / {txsub.get('post_birth_watch_success_count')} / {txsub.get('post_birth_watch_pending_count')}",
+            f"- post-birth watch promotions 5k/10k/20k: {txsub.get('post_birth_watch_promotions_to_5k')} / {txsub.get('post_birth_watch_promotions_to_10k')} / {txsub.get('post_birth_watch_promotions_to_20k')}",
+            f"- post-birth watch archives/rechecked runners: {txsub.get('post_birth_watch_archives')} / {txsub.get('missed_runner_recheck_count')}",
+            f"- low-FDV watch oldest age/due count: {txsub.get('low_fdv_watch_oldest_age')} / {txsub.get('low_fdv_watch_due_count')}",
+            f"- post-birth watch lane counts: {txsub.get('post_birth_watch_lane_counts')}",
             f"- curve account probes succeeded: {txsub.get('curve_account_probes_succeeded')}",
             f"- curve account probes failed: {txsub.get('curve_account_probes_failed')}",
             f"- first-attempt successes: {txsub.get('first_attempt_successes')}",
@@ -4363,6 +4524,9 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
 	<p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
+	<p>Post-birth watch scheduled/probes/successes/pending: {html.escape(str(txsub.get('post_birth_watch_count')))} / {html.escape(str(txsub.get('post_birth_watch_probe_count')))} / {html.escape(str(txsub.get('post_birth_watch_success_count')))} / {html.escape(str(txsub.get('post_birth_watch_pending_count')))}</p>
+	<p>Post-birth watch promotions 5k/10k/20k: {html.escape(str(txsub.get('post_birth_watch_promotions_to_5k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_10k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_20k')))}; archives: {html.escape(str(txsub.get('post_birth_watch_archives')))}; rechecked runners: {html.escape(str(txsub.get('missed_runner_recheck_count')))}</p>
+	<p>Low-FDV watch oldest age/due count: {html.escape(str(txsub.get('low_fdv_watch_oldest_age')))} / {html.escape(str(txsub.get('low_fdv_watch_due_count')))}; lane counts: {html.escape(str(txsub.get('post_birth_watch_lane_counts')))}</p>
 	<p>First-attempt successes: {html.escape(str(txsub.get('first_attempt_successes')))}; account-not-found retries: {html.escape(str(txsub.get('account_not_found_retries')))}</p>
 	<p>Account-not-found recovered by retry: {html.escape(str(txsub.get('account_not_found_recovered_by_retry')))}; final failures: {html.escape(str(txsub.get('account_not_found_final_failures')))}; recovery rate: {html.escape(str(txsub.get('account_not_found_retry_recovery_rate')))}</p>
 	<p>First FDV source counts: account-state {html.escape(str(txsub.get('first_fdv_from_bonding_curve_account_state')))}, transaction-delta {html.escape(str(txsub.get('first_fdv_from_transaction_delta')))}, unknown {html.escape(str(txsub.get('first_fdv_from_unknown')))}</p>
@@ -4622,6 +4786,22 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "confirmation_follow_up_futures": int(txsub.get("confirmation_follow_up_futures") or 0),
         "confirmation_follow_up_probe_rows": int(txsub.get("confirmation_follow_up_probe_rows") or 0),
         "confirmation_follow_up_successes": int(txsub.get("confirmation_follow_up_successes") or 0),
+        "post_birth_watch_follow_up_futures": int(txsub.get("post_birth_watch_follow_up_futures") or 0),
+        "post_birth_watch_follow_up_pending": int(txsub.get("post_birth_watch_follow_up_pending") or 0),
+        "post_birth_watch_follow_up_probe_rows": int(txsub.get("post_birth_watch_follow_up_probe_rows") or 0),
+        "post_birth_watch_follow_up_successes": int(txsub.get("post_birth_watch_follow_up_successes") or 0),
+        "post_birth_watch_count": int(txsub.get("post_birth_watch_count") or 0),
+        "post_birth_watch_probe_count": int(txsub.get("post_birth_watch_probe_count") or 0),
+        "post_birth_watch_success_count": int(txsub.get("post_birth_watch_success_count") or 0),
+        "post_birth_watch_pending_count": int(txsub.get("post_birth_watch_pending_count") or 0),
+        "post_birth_watch_lane_counts": txsub.get("post_birth_watch_lane_counts") or {},
+        "post_birth_watch_promotions_to_5k": int(txsub.get("post_birth_watch_promotions_to_5k") or 0),
+        "post_birth_watch_promotions_to_10k": int(txsub.get("post_birth_watch_promotions_to_10k") or 0),
+        "post_birth_watch_promotions_to_20k": int(txsub.get("post_birth_watch_promotions_to_20k") or 0),
+        "post_birth_watch_archives": int(txsub.get("post_birth_watch_archives") or 0),
+        "missed_runner_recheck_count": int(txsub.get("missed_runner_recheck_count") or 0),
+        "low_fdv_watch_oldest_age": txsub.get("low_fdv_watch_oldest_age"),
+        "low_fdv_watch_due_count": int(txsub.get("low_fdv_watch_due_count") or 0),
         "bonding_curve_probes_succeeded": int(txsub.get("curve_account_probes_succeeded") or 0),
         "bonding_curve_probes_failed": int(txsub.get("curve_account_probes_failed") or 0),
         "first_attempt_successes": int(txsub.get("first_attempt_successes") or 0),
@@ -4693,6 +4873,11 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary_md(summary: dict[s
             f"- Accepted births: `{summary['accepted_births']}`",
             f"- Bonding curve probes started/during-stream/succeeded/failed: `{summary['bonding_curve_probes_started']}` / `{summary['probes_started_during_stream']}` / `{summary['bonding_curve_probes_succeeded']}` / `{summary['bonding_curve_probes_failed']}`",
             f"- Confirmation follow-up futures/rows/successes: `{summary['confirmation_follow_up_futures']}` / `{summary['confirmation_follow_up_probe_rows']}` / `{summary['confirmation_follow_up_successes']}`",
+            f"- Post-birth watch scheduled/probes/successes/pending: `{summary['post_birth_watch_count']}` / `{summary['post_birth_watch_probe_count']}` / `{summary['post_birth_watch_success_count']}` / `{summary['post_birth_watch_pending_count']}`",
+            f"- Post-birth watch promotions 5k/10k/20k: `{summary['post_birth_watch_promotions_to_5k']}` / `{summary['post_birth_watch_promotions_to_10k']}` / `{summary['post_birth_watch_promotions_to_20k']}`",
+            f"- Post-birth watch archives/rechecked runners: `{summary['post_birth_watch_archives']}` / `{summary['missed_runner_recheck_count']}`",
+            f"- Low-FDV watch oldest age/due count: `{summary['low_fdv_watch_oldest_age']}` / `{summary['low_fdv_watch_due_count']}`",
+            f"- Post-birth watch lane counts: `{summary['post_birth_watch_lane_counts']}`",
             f"- First-attempt successes: `{summary['first_attempt_successes']}`",
             f"- Account-not-found retries: `{summary['account_not_found_retries']}`",
             f"- Account-not-found recovered by retry: `{summary['account_not_found_recovered_by_retry']}`",
@@ -4838,6 +5023,11 @@ def _status_md(summary: dict[str, Any]) -> str:
                 f"- curve PDA verified: `{txsub.get('curve_pda_verified')}`",
                 f"- curve account probes started: `{txsub.get('curve_account_probes_started')}`",
                 f"- probes started during stream: `{txsub.get('probes_started_during_stream')}`",
+                f"- post-birth watch scheduled/probes/successes/pending: `{txsub.get('post_birth_watch_count')}` / `{txsub.get('post_birth_watch_probe_count')}` / `{txsub.get('post_birth_watch_success_count')}` / `{txsub.get('post_birth_watch_pending_count')}`",
+                f"- post-birth watch promotions 5k/10k/20k: `{txsub.get('post_birth_watch_promotions_to_5k')}` / `{txsub.get('post_birth_watch_promotions_to_10k')}` / `{txsub.get('post_birth_watch_promotions_to_20k')}`",
+                f"- post-birth watch archives/rechecked runners: `{txsub.get('post_birth_watch_archives')}` / `{txsub.get('missed_runner_recheck_count')}`",
+                f"- low-FDV watch oldest age/due count: `{txsub.get('low_fdv_watch_oldest_age')}` / `{txsub.get('low_fdv_watch_due_count')}`",
+                f"- post-birth watch lane counts: `{txsub.get('post_birth_watch_lane_counts')}`",
                 f"- curve account probes succeeded: `{txsub.get('curve_account_probes_succeeded')}`",
                 f"- curve account probes failed: `{txsub.get('curve_account_probes_failed')}`",
                 f"- first-attempt successes: `{txsub.get('first_attempt_successes')}`",
@@ -4886,6 +5076,12 @@ def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str,
             for row in rows
             if str(row.get("probe_phase") or "").startswith("confirmation") and row.get("probe_status") == "success"
         ),
+        "post_birth_watch_follow_up_probe_rows": sum(1 for row in rows if row.get("probe_phase") == "post_birth_watch_follow_up"),
+        "post_birth_watch_follow_up_successes": sum(
+            1
+            for row in rows
+            if row.get("probe_phase") == "post_birth_watch_follow_up" and row.get("probe_status") == "success"
+        ),
     }
 
 
@@ -4903,6 +5099,10 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["confirmation_follow_up_futures"] = int(probe_stats.get("confirmation_follow_up_futures") or 0)
     stats["confirmation_follow_up_probe_rows"] = int(probe_stats.get("confirmation_follow_up_probe_rows") or 0)
     stats["confirmation_follow_up_successes"] = int(probe_stats.get("confirmation_follow_up_successes") or 0)
+    stats["post_birth_watch_follow_up_futures"] = int(probe_stats.get("post_birth_watch_follow_up_futures") or 0)
+    stats["post_birth_watch_follow_up_pending"] = int(probe_stats.get("post_birth_watch_follow_up_pending") or 0)
+    stats["post_birth_watch_follow_up_probe_rows"] = int(probe_stats.get("post_birth_watch_follow_up_probe_rows") or 0)
+    stats["post_birth_watch_follow_up_successes"] = int(probe_stats.get("post_birth_watch_follow_up_successes") or 0)
     _write_json(config.runtime_state_path, state)
 
 

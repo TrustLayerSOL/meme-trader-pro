@@ -1557,7 +1557,7 @@ def test_transaction_subscribe_smoke_resolves_beta_endpoint_before_stream(tmp_pa
             captured["websocket_url"] = websocket_url
             captured["timeout_seconds"] = timeout_seconds
 
-        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
             captured["max_events"] = max_events
             captured["max_seconds"] = max_seconds
             captured["on_create_event"] = on_create_event
@@ -1622,7 +1622,7 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
         def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
             self.config = config
 
-        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
             assert on_create_event is not None
             stream_active["value"] = True
             append_row(self.config.pumpfun_create_stream_events_path, create_event)
@@ -1716,6 +1716,164 @@ def test_transaction_subscribe_smoke_starts_probes_during_stream(tmp_path: Path,
     assert summary["observed_to_first_fdv_p50_p90_p99"] == {"p50": 20.0, "p90": 20.0, "p99": 20.0}
 
 
+def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+    from research.mtp_research.validation import rule_runtime_v1 as runtime
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-low_123_0",
+        "signature": "sig-low",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "late-runner",
+        "bonding_curve": "curve-late",
+        "parser_status": "decoded",
+    }
+    probe_calls: list[str] = []
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
+            assert on_create_event is not None
+            append_row(self.config.pumpfun_create_stream_events_path, create_event)
+            on_create_event(dict(create_event))
+            if on_idle is not None:
+                on_idle()
+            return [create_event]
+
+    def fake_probe_runner(
+        config: RuleRuntimeConfig,
+        create: dict,
+        *,
+        probe: object,
+        event_callback=None,
+        now_fn=None,
+        follow_up_probe_delays=None,
+    ) -> dict:
+        phase = "post_birth_watch_follow_up" if create.get("post_birth_watch_follow_up_scheduled") else "initial"
+        probe_calls.append(phase)
+        fdv = 24_000.0 if phase == "post_birth_watch_follow_up" else 2_400.0
+        row = {
+            "event_id": f"probe-{phase}",
+            "mint": create["mint"],
+            "bonding_curve": create["bonding_curve"],
+            "source_create_signature": create["signature"],
+            "create_observed_at": create["observed_at"],
+            "probe_started_at": 100.01,
+            "first_curve_state_at": 100.02,
+            "first_fdv_emitted_at": 100.02,
+            "observed_to_probe_started_ms": 10.0,
+            "probe_started_to_first_curve_state_ms": 10.0,
+            "observed_to_first_fdv_emitted_ms": 20.0,
+            "probe_attempt_count": 1,
+            "account_not_found_retry_count": 0,
+            "account_not_found_recovered_by_retry": False,
+            "probe_status": "success",
+            "probe_phase": phase,
+            "probe_scheduled_during_stream": create.get("probe_scheduled_during_stream"),
+            "post_birth_watch_follow_up_scheduled": bool(create.get("post_birth_watch_follow_up_scheduled")),
+            "post_birth_watch_lane": create.get("post_birth_watch_lane"),
+            "fdv_proxy": fdv,
+            "fdv_usd": fdv,
+            "fdv_units": "usd",
+            "helius_rpc_request_count": 1,
+            "http_429_count": 0,
+        }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        if event_callback is not None and phase == "post_birth_watch_follow_up":
+            for index, confirm_fdv in enumerate((21_000.0, fdv), start=1):
+                event_callback(
+                    {
+                        "event_id": f"fdv-{phase}-{index}",
+                        "mint": create["mint"],
+                        "timestamp": 125.0 + index,
+                        "observed_at": create["observed_at"],
+                        "event_observed_at": create["observed_at"],
+                        "fdv_proxy": confirm_fdv,
+                        "fdv_usd": confirm_fdv,
+                        "fdv_units": "usd",
+                        "source_event_type": "fdv_path_update",
+                        "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                        "fdv_source": "bonding_curve_account_state",
+                        "fdv_source_confidence": "high",
+                        "account_data_hash": f"hash-{phase}-{index}",
+                        "reserve_state_fingerprint": f"reserve-{phase}-{index}",
+                        "observed_to_first_fdv_account_state_ms": 20.0,
+                    }
+                )
+        elif event_callback is not None:
+            event_callback(
+                {
+                    "event_id": f"fdv-{phase}",
+                    "mint": create["mint"],
+                    "timestamp": 100.02 if phase == "initial" else 125.0,
+                    "observed_at": create["observed_at"],
+                    "event_observed_at": create["observed_at"],
+                    "fdv_proxy": fdv,
+                    "fdv_usd": fdv,
+                    "fdv_units": "usd",
+                    "source_event_type": "fdv_path_update",
+                    "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                    "fdv_source": "bonding_curve_account_state",
+                    "fdv_source_confidence": "high",
+                    "account_data_hash": f"hash-{phase}",
+                    "reserve_state_fingerprint": f"reserve-{phase}",
+                    "observed_to_first_fdv_account_state_ms": 20.0,
+                }
+            )
+        return row
+
+    monkeypatch.setattr(runtime, "POST_BIRTH_WATCH_TRIGGER_FDV", 2_000.0, raising=False)
+    monkeypatch.setattr(runtime, "POST_BIRTH_WATCH_PROBE_DELAYS_SECONDS", (0.0,), raising=False)
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=2.0,
+    )
+
+    assert probe_calls == ["initial", "post_birth_watch_follow_up"]
+    assert summary["post_birth_watch_follow_up_futures"] == 1
+    assert summary["post_birth_watch_follow_up_probe_rows"] == 1
+    assert summary["post_birth_watch_follow_up_successes"] == 1
+    assert summary["post_birth_watch_probe_count"] == 1
+    assert summary["post_birth_watch_success_count"] == 1
+    assert summary["post_birth_watch_promotions_to_5k"] == 1
+    assert summary["post_birth_watch_promotions_to_10k"] == 1
+    assert summary["post_birth_watch_promotions_to_20k"] == 1
+    assert summary["post_birth_watch_lane_counts"] == {"low_fdv": 1}
+    assert summary["confirmed_20k_candidates"] == 1
+
+
 def test_transaction_subscribe_status_reports_decoded_creates_without_probe(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
@@ -1796,7 +1954,7 @@ def test_transaction_subscribe_smoke_schedules_confirmation_followups_for_near_t
         def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
             self.config = config
 
-        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
             assert on_create_event is not None
             append_row(self.config.pumpfun_create_stream_events_path, create_event)
             on_create_event(dict(create_event))
@@ -1922,7 +2080,7 @@ def test_transaction_subscribe_smoke_runs_final_archive_sweep_before_summary(tmp
         def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
             self.config = config
 
-        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
             assert on_create_event is not None
             on_create_event(dict(create_event))
             return [create_event]
