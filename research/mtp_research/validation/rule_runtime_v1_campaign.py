@@ -286,6 +286,13 @@ def campaign_status_payload(
     closed = state.get("closed_positions") or {}
     paper = paper_accounting(config, state, trades)
     credits = helius_credits_used(config, probe_rows=probes)
+    near_entry_live_watch_mints = {
+        str(row.get("mint"))
+        for row in probes
+        if row.get("probe_phase") == "near_entry_live_watch" and row.get("mint")
+    }
+    near_entry_live_watch_futures = int(txsub.get("near_entry_live_watch_futures") or 0)
+    account_subscribe_calls = max(near_entry_live_watch_futures, len(near_entry_live_watch_mints))
     elapsed = max(0.0, time.time() - started_at)
     remaining = max(0.0, float(duration_seconds) - elapsed)
     return {
@@ -316,8 +323,8 @@ def campaign_status_payload(
         "reconnect_count": txsub.get("reconnect_count", 0),
         "transactionSubscribe_endpoint_used": txsub.get("endpoint_used"),
         "getAccountInfo_calls": credits,
-        "accountSubscribe_calls": int(txsub.get("near_entry_live_watch_futures") or 0),
-        "near_entry_live_watch_futures": int(txsub.get("near_entry_live_watch_futures") or 0),
+        "accountSubscribe_calls": account_subscribe_calls,
+        "near_entry_live_watch_futures": near_entry_live_watch_futures,
         "near_entry_live_watch_probe_rows": int(txsub.get("near_entry_live_watch_probe_rows") or 0),
         "near_entry_live_watch_successes": int(txsub.get("near_entry_live_watch_successes") or 0),
         "shutdown_cancelled_live_watch_futures": int(txsub.get("shutdown_cancelled_live_watch_futures") or 0),

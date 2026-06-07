@@ -77,6 +77,7 @@ def test_campaign_status_snapshot_reports_retry_credit_and_paper_metrics(tmp_pat
         _append_jsonl(
             config.bonding_curve_account_probe_events_path,
             {
+                "mint": "mint-a",
                 "probe_phase": "near_entry_live_watch",
                 "probe_status": "success",
                 "probe_attempt_count": 0,
@@ -128,6 +129,37 @@ def test_campaign_status_snapshot_reports_retry_credit_and_paper_metrics(tmp_pat
     snapshot_text = snapshot_md[0].read_text(encoding="utf-8")
     assert "Helius credits used/cap" in snapshot_text
     assert "accountSubscribe calls/live-watch rows/successes" in snapshot_text
+
+
+def test_campaign_status_counts_midrun_account_subscribe_rows_without_final_future_count(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    paths = campaign_paths(tmp_path, "rule_runtime_v1_8hr_locked_rule_test")
+    initialize_rule_runtime(config, reset=True)
+    for index in range(3):
+        _append_jsonl(
+            config.bonding_curve_account_probe_events_path,
+            {
+                "mint": "live-watch-mint",
+                "probe_phase": "near_entry_live_watch",
+                "probe_status": "success",
+                "probe_attempt_count": 0,
+                "helius_rpc_request_count": 0,
+                "accountSubscribe_latency_ms": 5.0 + index,
+            },
+        )
+
+    snapshot = campaign_status_payload(
+        config,
+        paths,
+        started_at=100.0,
+        duration_seconds=28_800,
+        process_pid=None,
+        log_path=paths.log_path,
+    )
+
+    assert snapshot["near_entry_live_watch_futures"] == 0
+    assert snapshot["near_entry_live_watch_probe_rows"] == 3
+    assert snapshot["accountSubscribe_calls"] == 1
 
 
 def test_build_scan_command_uses_caffeinate_and_locked_paper_sizing(tmp_path: Path) -> None:
