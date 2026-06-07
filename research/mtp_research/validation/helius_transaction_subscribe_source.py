@@ -301,6 +301,9 @@ def run_bonding_curve_account_probe_for_create_event(
         runtime_event["account_not_found_recovered_by_retry"] = recovered_by_retry
         runtime_event["first_failure_reason"] = first_failure_reason
         runtime_event["retry_delays_ms"] = retry_delays_ms
+        runtime_event["pumpfun_create_verified"] = str(create_event.get("parser_status") or "") == "decoded"
+        runtime_event["bonding_curve_pda_verified"] = bool(create_event.get("bonding_curve_verified"))
+        runtime_event["bonding_curve_decode_status"] = "success"
         runtime_event.update(mint_owner)
         _copy_fdv_probe_fields(result, runtime_event)
     winning = "getAccountInfo_processed" if status == "success" else "none"
@@ -314,12 +317,19 @@ def run_bonding_curve_account_probe_for_create_event(
         "post_birth_watch_follow_up_index": create_event.get("post_birth_watch_follow_up_index"),
         "post_birth_watch_due_delay_seconds": create_event.get("post_birth_watch_due_delay_seconds"),
         "post_birth_watch_lane": create_event.get("post_birth_watch_lane"),
+        "hot_watch_follow_up_scheduled": bool(create_event.get("hot_watch_follow_up_scheduled")),
+        "hot_watch_follow_up_index": create_event.get("hot_watch_follow_up_index"),
+        "hot_watch_due_delay_seconds": create_event.get("hot_watch_due_delay_seconds"),
+        "hot_watch_mode": create_event.get("hot_watch_mode"),
         "mint": create_event.get("mint"),
         "bonding_curve": create_event.get("bonding_curve"),
         "source_create_signature": create_event.get("signature"),
         "create_slot": create_event.get("slot"),
         "create_observed_at": create_observed_at,
         "probe_scheduled_during_stream": bool(create_event.get("probe_scheduled_during_stream")),
+        "pumpfun_create_verified": str(create_event.get("parser_status") or "") == "decoded",
+        "bonding_curve_pda_verified": bool(create_event.get("bonding_curve_verified")),
+        "bonding_curve_decode_status": "success" if status == "success" else "failed",
         "probe_started_at": started,
         "account_subscribe_started_at": None,
         "get_account_info_started_at": started,
@@ -388,6 +398,9 @@ def run_bonding_curve_account_probe_for_create_event(
                 follow_event["account_not_found_recovered_by_retry"] = False
                 follow_event["first_failure_reason"] = None
                 follow_event["retry_delays_ms"] = []
+                follow_event["pumpfun_create_verified"] = str(create_event.get("parser_status") or "") == "decoded"
+                follow_event["bonding_curve_pda_verified"] = bool(create_event.get("bonding_curve_verified"))
+                follow_event["bonding_curve_decode_status"] = "success"
                 follow_event.update(mint_owner)
                 _copy_fdv_probe_fields(follow_result, follow_event)
             follow_row = {
@@ -402,6 +415,9 @@ def run_bonding_curve_account_probe_for_create_event(
                 "create_slot": create_event.get("slot"),
                 "create_observed_at": create_observed_at,
                 "probe_scheduled_during_stream": bool(create_event.get("probe_scheduled_during_stream")),
+                "pumpfun_create_verified": str(create_event.get("parser_status") or "") == "decoded",
+                "bonding_curve_pda_verified": bool(create_event.get("bonding_curve_verified")),
+                "bonding_curve_decode_status": "success" if follow_status == "success" else "failed",
                 "probe_started_at": follow_started,
                 "account_subscribe_started_at": None,
                 "get_account_info_started_at": follow_started,

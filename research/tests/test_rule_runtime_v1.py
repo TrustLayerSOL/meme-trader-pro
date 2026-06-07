@@ -1113,18 +1113,23 @@ def test_missing_fdv_units_or_usd_rejects_paper_buy(tmp_path: Path) -> None:
     assert rule_runtime_status(config)["paper_buys"] == 0
 
 
-def test_unsupported_token_program_rejects_paper_buy(tmp_path: Path) -> None:
+def test_pumpfun_token2022_with_valid_curve_decode_is_supported_for_paper_entry(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
+    token_2022_program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 
     engine.process_path_event(
         _event(
             "token-2022-pump",
             100,
             20_100,
-            token_program="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-            mint_account_owner="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            token_program=token_2022_program,
+            mint_account_owner=token_2022_program,
+            pumpfun_create_verified=True,
+            bonding_curve_pda_verified=True,
+            bonding_curve_decode_status="success",
+            calculation_status="success",
             reserve_state_fingerprint="token2022-a",
             account_data_hash="token2022-a",
         )
@@ -1134,8 +1139,12 @@ def test_unsupported_token_program_rejects_paper_buy(tmp_path: Path) -> None:
             "token-2022-pump",
             110,
             20_200,
-            token_program="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-            mint_account_owner="TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            token_program=token_2022_program,
+            mint_account_owner=token_2022_program,
+            pumpfun_create_verified=True,
+            bonding_curve_pda_verified=True,
+            bonding_curve_decode_status="success",
+            calculation_status="success",
             reserve_state_fingerprint="token2022-b",
             account_data_hash="token2022-b",
         )
@@ -1146,12 +1155,140 @@ def test_unsupported_token_program_rejects_paper_buy(tmp_path: Path) -> None:
         if row["mint"] == "token-2022-pump" and row["paper_event_id"].startswith("decision_")
     )
 
+    assert decision["token_program_status"] == "pumpfun_token2022_supported"
+    assert decision["pumpfun_token2022_supported"] is True
+    assert decision["token_program_gate_result"] == "pass"
+    assert "unsupported_token_program" not in decision["risk_labels"]
+    assert rule_runtime_status(config)["pumpfun_token2022_supported_count"] == 1
+
+
+def test_token2022_without_valid_pumpfun_curve_decode_rejects_paper_entry(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+    token_2022_program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+
+    engine.process_path_event(
+        _event(
+            "invalid-token-2022",
+            100,
+            20_100,
+            token_program=token_2022_program,
+            mint_account_owner=token_2022_program,
+            pumpfun_create_verified=False,
+            bonding_curve_pda_verified=True,
+            bonding_curve_decode_status="success",
+            calculation_status="success",
+            reserve_state_fingerprint="invalid-token2022-a",
+            account_data_hash="invalid-token2022-a",
+        )
+    )
+    engine.process_path_event(
+        _event(
+            "invalid-token-2022",
+            110,
+            20_200,
+            token_program=token_2022_program,
+            mint_account_owner=token_2022_program,
+            pumpfun_create_verified=False,
+            bonding_curve_pda_verified=True,
+            bonding_curve_decode_status="success",
+            calculation_status="success",
+            reserve_state_fingerprint="invalid-token2022-b",
+            account_data_hash="invalid-token2022-b",
+        )
+    )
+    decision = next(
+        row
+        for row in _rows(config.paper_decisions_path)
+        if row["mint"] == "invalid-token-2022" and row["paper_event_id"].startswith("decision_")
+    )
+
     assert decision["decision"] == "paper_rejected_entry"
     assert decision["rejection_reason"] == "unsupported_token_program"
     assert "unsupported_token_program" in decision["risk_labels"]
+    assert decision["token_program_status"] == "unsupported_token_program"
+    assert decision["pumpfun_token2022_supported"] is False
+    assert decision["token_program_gate_result"] == "reject"
     status = rule_runtime_status(config)
     assert status["paper_buys"] == 0
     assert status["unsupported_token_program_reject_count"] == 1
+
+
+def test_unknown_token_program_rejects_paper_entry(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("unknown-program", 100, 20_100, token_program="unknown111", reserve_state_fingerprint="unknown-a", account_data_hash="unknown-a"))
+    engine.process_path_event(_event("unknown-program", 110, 20_200, token_program="unknown111", reserve_state_fingerprint="unknown-b", account_data_hash="unknown-b"))
+    decision = next(row for row in _rows(config.paper_decisions_path) if row["mint"] == "unknown-program" and row["paper_event_id"].startswith("decision_"))
+
+    assert decision["decision"] == "paper_rejected_entry"
+    assert decision["token_program_status"] == "unknown_token_program"
+    assert decision["token_program_gate_result"] == "reject"
+    assert rule_runtime_status(config)["unknown_token_program_count"] == 1
+
+
+def test_duplicate_state_block_clears_after_later_distinct_confirmation(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+    common = {
+        "data_source": "bonding_curve_account_state",
+        "fdv_source": "bonding_curve_account_state",
+        "fdv_source_confidence": "high",
+        "fdv_units": "usd",
+        "fdv_usd": 20_250,
+        "fdv_sol": 253.125,
+        "reserve_state_fingerprint": "same-state-before-distinct",
+        "account_data_hash": "same-hash-before-distinct",
+        "slot": 7,
+    }
+
+    engine.process_path_event(_event("duplicate-clears", 100, 20_250, **common))
+    second = engine.process_path_event(_event("duplicate-clears", 101, 20_250, **common))
+    third = engine.process_path_event(
+        _event(
+            "duplicate-clears",
+            110,
+            20_600,
+            reserve_state_fingerprint="later-distinct-state",
+            account_data_hash="later-distinct-hash",
+            slot=8,
+        )
+    )
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    candidate = state["candidates"]["duplicate-clears"]
+    final_decision = [row for row in _rows(config.paper_decisions_path) if row["mint"] == "duplicate-clears"][-1]
+
+    assert second["confirmed_crossed_20k"] is False
+    assert third["confirmed_crossed_20k"] is True
+    assert candidate["duplicate_state_seen"] is True
+    assert candidate["duplicate_state_block_active"] is False
+    assert candidate["duplicate_state_block_cleared"] is True
+    assert candidate["duplicate_state_seen_before_distinct_confirmation"] is True
+    assert final_decision["rejection_reason"] != "duplicate_same_state_confirmation"
+
+
+def test_entry_band_rejects_first_observation_above_allowed_entry_zone(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("missed-entry", 100, 12_000, reserve_state_fingerprint="missed-a", account_data_hash="missed-a"))
+    engine.process_path_event(_event("missed-entry", 110, 24_500, reserve_state_fingerprint="missed-b", account_data_hash="missed-b"))
+    result = engine.process_path_event(_event("missed-entry", 111, 24_700, reserve_state_fingerprint="missed-c", account_data_hash="missed-c"))
+    decision = [row for row in _rows(config.paper_decisions_path) if row["mint"] == "missed-entry"][-1]
+
+    assert result["paper_buy_created"] is False
+    assert decision["decision"] == "paper_rejected_entry"
+    assert decision["entry_band_result"] == "reject"
+    assert decision["entry_band_rejection_reason"] == "missed_entry_zone"
+    assert decision["missed_entry_zone"] is True
+    assert decision["chase_guard_exceeded"] is True
+    assert decision["observed_inside_entry_zone"] is False
+    assert rule_runtime_status(config)["missed_entry_zone_count"] == 1
 
 
 def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(tmp_path: Path) -> None:

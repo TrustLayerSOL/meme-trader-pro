@@ -70,6 +70,13 @@ OPTIONAL_LIVE_FIELDS = sorted(set(AVAILABLE_RISK_FIELDS + FULL_RISK_FIELDS + [
     "token_program",
     "mint_account_owner",
     "mint_account_owner_status",
+    "pumpfun_create_verified",
+    "bonding_curve_pda_verified",
+    "bonding_curve_verified",
+    "bonding_curve_decode_status",
+    "bonding_curve",
+    "bonding_curve_pda",
+    "bonding_curve_from_ix",
 ]))
 FDV_UNIT_FIELDS = [
     "fdv_usd",
@@ -112,11 +119,18 @@ TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS: tuple[float, ...] = ()
 POST_BIRTH_WATCH_TRIGGER_FDV = 1_500.0
 POST_BIRTH_WATCH_MAX_INITIAL_FDV = 5_000.0
 POST_BIRTH_WATCH_PROBE_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0, 180.0, 300.0)
+LOW_FDV_WATCH_MIN_USD = 2_000.0
+NEAR_THRESHOLD_HOT_WATCH_USD = 8_000.0
+ENTRY_ZONE_MIN_USD = 18_000.0
+ENTRY_ZONE_MAX_USD = 23_000.0
+HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.0)
+ENTRY_ZONE_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
 CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 2
 SCHEDULER_MODE = "priority_single_worker"
 SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS = {SPL_TOKEN_PROGRAM_ID}
 HARD_REJECT_ENTRY_RISK_LABELS = {
     "dev_pump_suspect",
@@ -1494,6 +1508,8 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     watch_follow_up_futures = []
     watch_follow_up_lock = Lock()
     watch_follow_up_sequence = 0
+    post_birth_watch_follow_up_scheduled_count = 0
+    hot_watch_follow_up_scheduled_count = 0
     probe_errors: list[dict[str, Any]] = []
     confirmation_errors: list[dict[str, Any]] = []
     watch_follow_up_errors: list[dict[str, Any]] = []
@@ -1521,6 +1537,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     def run_first_fdv_probe_and_schedule_confirmation(event: dict[str, Any], confirmation_executor: ThreadPoolExecutor) -> dict[str, Any]:
         row = run_probe(event, follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS)
         schedule_post_birth_watch_follow_up(event, row)
+        schedule_hot_watch_follow_up(event, row)
         if _should_schedule_confirmation_follow_up(row):
             confirmation_event = dict(event)
             confirmation_event["probe_scheduled_during_stream"] = True
@@ -1535,7 +1552,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         return row
 
     def schedule_post_birth_watch_follow_up(event: dict[str, Any], row: dict[str, Any]) -> None:
-        nonlocal watch_follow_up_sequence
+        nonlocal post_birth_watch_follow_up_scheduled_count, watch_follow_up_sequence
         if not _should_schedule_post_birth_watch_follow_up(row):
             return
         lane = _post_birth_watch_lane(row)
@@ -1550,6 +1567,27 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 follow_event["post_birth_watch_lane"] = lane
                 follow_event["probe_phase_override"] = "post_birth_watch_follow_up"
                 watch_follow_up_sequence += 1
+                post_birth_watch_follow_up_scheduled_count += 1
+                heapq.heappush(watch_follow_up_jobs, (now_monotonic + float(delay), watch_follow_up_sequence, follow_event))
+
+    def schedule_hot_watch_follow_up(event: dict[str, Any], row: dict[str, Any]) -> None:
+        nonlocal hot_watch_follow_up_scheduled_count, watch_follow_up_sequence
+        mode = _watch_mode_for_fdv(_milestone_fdv_usd(row))
+        if mode not in {"near_threshold_hot_watch", "confirmed_10k_watch", "entry_zone_watch"}:
+            return
+        delays = ENTRY_ZONE_PROBE_DELAYS_SECONDS if mode == "entry_zone_watch" else HOT_WATCH_PROBE_DELAYS_SECONDS
+        now_monotonic = time.monotonic()
+        with watch_follow_up_lock:
+            for index, delay in enumerate(tuple(delays), start=1):
+                follow_event = dict(event)
+                follow_event["probe_scheduled_during_stream"] = True
+                follow_event["hot_watch_follow_up_scheduled"] = True
+                follow_event["hot_watch_follow_up_index"] = index
+                follow_event["hot_watch_due_delay_seconds"] = float(delay)
+                follow_event["hot_watch_mode"] = mode
+                follow_event["probe_phase_override"] = "entry_zone_hot_watch_follow_up" if mode == "entry_zone_watch" else "near_threshold_hot_watch_follow_up"
+                watch_follow_up_sequence += 1
+                hot_watch_follow_up_scheduled_count += 1
                 heapq.heappush(watch_follow_up_jobs, (now_monotonic + float(delay), watch_follow_up_sequence, follow_event))
 
     def drain_due_watch_follow_ups(executor: ThreadPoolExecutor) -> int:
@@ -1639,8 +1677,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         failures["post_birth_watch_probe_worker_exception"] = int(failures.get("post_birth_watch_probe_worker_exception") or 0) + len(watch_follow_up_errors)
         probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(watch_follow_up_errors)
     probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
-    probe_stats["post_birth_watch_follow_up_futures"] = len(watch_follow_up_futures)
-    probe_stats["post_birth_watch_follow_up_pending"] = len(watch_follow_up_jobs)
+    pending_watch_events = [item[2] for item in watch_follow_up_jobs]
+    probe_stats["post_birth_watch_follow_up_futures"] = post_birth_watch_follow_up_scheduled_count
+    probe_stats["hot_watch_follow_up_futures"] = hot_watch_follow_up_scheduled_count
+    probe_stats["post_birth_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if item.get("probe_phase_override") == "post_birth_watch_follow_up")
+    probe_stats["hot_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if str(item.get("probe_phase_override") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"})
     _record_bonding_curve_probe_stats(config, probe_stats)
     status = rule_runtime_status(config)
     summary = _helius_transaction_subscribe_bonding_curve_probe_summary(
@@ -2370,6 +2411,106 @@ def _entry_chase_guard(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
     }
 
 
+def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    current_fdv = _milestone_fdv_usd(row)
+    previous = _previous_path_row(candidate, row)
+    previous_fdv = _milestone_fdv_usd(previous) if previous else None
+    previous_ts = _num(previous.get("timestamp")) if previous else None
+    observed_inside_entry_zone = _observed_inside_entry_zone(candidate)
+    observed_inside_buy_band = current_fdv is not None and ENTRY_THRESHOLD_FDV <= current_fdv <= ENTRY_ZONE_MAX_USD
+    hot_watch_active = _hot_watch_active_before_entry(candidate, row)
+    chase_exceeded = current_fdv is not None and current_fdv > ENTRY_ZONE_MAX_USD
+    missed_entry = bool(chase_exceeded and not observed_inside_entry_zone)
+    if chase_exceeded and (previous_fdv is None or previous_fdv < WATCH_THRESHOLD_FDV or not hot_watch_active):
+        missed_entry = True
+    if observed_inside_buy_band and hot_watch_active:
+        result = "pass"
+        reason = None
+    elif missed_entry:
+        result = "reject"
+        reason = "missed_entry_zone"
+    elif chase_exceeded:
+        result = "reject"
+        reason = "chase_guard_exceeded"
+    elif current_fdv is None:
+        result = "reject"
+        reason = "missing_fdv_usd_for_usd_threshold"
+    elif current_fdv < ENTRY_THRESHOLD_FDV:
+        result = "reject"
+        reason = "below_entry_trigger"
+    elif not hot_watch_active:
+        result = "reject"
+        reason = "hot_watch_not_active_before_entry"
+    else:
+        result = "reject"
+        reason = "outside_entry_zone"
+    return {
+        "entry_zone_min_usd": ENTRY_ZONE_MIN_USD,
+        "entry_trigger_usd": ENTRY_THRESHOLD_FDV,
+        "entry_zone_max_usd": ENTRY_ZONE_MAX_USD,
+        "current_fdv_usd": _round_optional(current_fdv),
+        "previous_fdv_usd": _round_optional(previous_fdv),
+        "previous_observation_time": previous_ts,
+        "observed_inside_entry_zone": bool(observed_inside_entry_zone),
+        "hot_watch_active_before_entry": bool(hot_watch_active),
+        "missed_entry_zone": bool(missed_entry),
+        "chase_guard_exceeded": bool(chase_exceeded),
+        "same_timestamp_major_jump": bool(candidate.get("same_timestamp_major_jump_flag")),
+        "entry_band_result": result,
+        "entry_band_rejection_reason": reason,
+        "watch_mode": _watch_mode_for_fdv(current_fdv),
+    }
+
+
+def _previous_path_row(candidate: dict[str, Any], row: dict[str, Any]) -> dict[str, Any] | None:
+    rows = candidate.get("path_rows") or []
+    target_ts = _num(row.get("timestamp"))
+    target_key = _confirmation_evidence_key(row)
+    previous = None
+    for item in rows:
+        if item is row:
+            break
+        item_ts = _num(item.get("timestamp"))
+        if item_ts is None or target_ts is None:
+            continue
+        if item_ts < target_ts or (item_ts == target_ts and _confirmation_evidence_key(item) != target_key):
+            previous = item
+    return previous
+
+
+def _observed_inside_entry_zone(candidate: dict[str, Any]) -> bool:
+    return any(
+        fdv is not None and ENTRY_ZONE_MIN_USD <= fdv <= ENTRY_ZONE_MAX_USD
+        for fdv in (_milestone_fdv_usd(row) for row in candidate.get("path_rows") or [])
+    )
+
+
+def _hot_watch_active_before_entry(candidate: dict[str, Any], row: dict[str, Any]) -> bool:
+    row_ts = _num(row.get("timestamp"))
+    for candidate_row in candidate.get("path_rows") or []:
+        ts = _num(candidate_row.get("timestamp"))
+        if row_ts is not None and ts is not None and ts > row_ts:
+            continue
+        fdv = _milestone_fdv_usd(candidate_row)
+        if fdv is not None and fdv >= NEAR_THRESHOLD_HOT_WATCH_USD:
+            return True
+    return False
+
+
+def _watch_mode_for_fdv(fdv: float | None) -> str:
+    if fdv is None:
+        return "unknown"
+    if fdv >= ENTRY_ZONE_MIN_USD:
+        return "entry_zone_watch"
+    if fdv >= WATCH_THRESHOLD_FDV:
+        return "confirmed_10k_watch"
+    if fdv >= NEAR_THRESHOLD_HOT_WATCH_USD:
+        return "near_threshold_hot_watch"
+    if fdv >= LOW_FDV_WATCH_MIN_USD:
+        return "low_fdv_post_birth_watch"
+    return "light_watch"
+
+
 def _trigger_fdv_usd(candidate: dict[str, Any]) -> float | None:
     rows = [
         row
@@ -2455,14 +2596,16 @@ def _primary_rejection_reason(reasons: list[str]) -> str | None:
         return None
     priority = [
         "duplicate_same_state_confirmation",
+        "same_timestamp_major_jump",
+        "missed_entry_zone",
+        "chase_guard_exceeded",
         "unsupported_token_program",
-        "high_risk_label_hard_reject",
+        "unknown_token_program",
         "missing_fdv_units",
         "missing_fdv_usd_for_usd_threshold",
         "holder_count_lte_1_hard_reject",
-        "chase_guard_exceeded",
+        "high_risk_label_hard_reject",
         "single_row_spike",
-        "same_timestamp_major_jump",
         "fdv_anomaly",
     ]
     for reason in priority:
@@ -2472,12 +2615,94 @@ def _primary_rejection_reason(reasons: list[str]) -> str | None:
 
 
 def _token_program_rejection(row: dict[str, Any]) -> tuple[str | None, list[str]]:
+    gate = _token_program_gate(row)
+    if gate["token_program_gate_result"] == "pass":
+        return None, []
+    reason = str(gate.get("token_program_gate_reason") or "unsupported_token_program")
+    label = "unknown_token_program" if reason == "unknown_token_program" else "unsupported_token_program"
+    return reason, [label]
+
+
+def _token_program_gate(row: dict[str, Any]) -> dict[str, Any]:
     token_program = str(row.get("token_program") or row.get("mint_account_owner") or "").strip()
     if not token_program:
-        return None, []
-    if token_program not in SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS:
-        return "unsupported_token_program", ["unsupported_token_program"]
-    return None, []
+        return {
+            "token_program": None,
+            "token_program_status": "token_program_missing",
+            "pumpfun_token2022_supported": False,
+            "bonding_curve_decode_status": _bonding_curve_decode_status(row),
+            "bonding_curve_pda_verified": _bonding_curve_pda_verified(row),
+            "token_program_gate_result": "pass",
+            "token_program_gate_reason": None,
+        }
+    if token_program == SPL_TOKEN_PROGRAM_ID:
+        return {
+            "token_program": token_program,
+            "token_program_status": "spl_token_supported",
+            "pumpfun_token2022_supported": False,
+            "bonding_curve_decode_status": _bonding_curve_decode_status(row),
+            "bonding_curve_pda_verified": _bonding_curve_pda_verified(row),
+            "token_program_gate_result": "pass",
+            "token_program_gate_reason": None,
+        }
+    if token_program == TOKEN_2022_PROGRAM_ID and _pumpfun_token2022_curve_supported(row):
+        return {
+            "token_program": token_program,
+            "token_program_status": "pumpfun_token2022_supported",
+            "pumpfun_token2022_supported": True,
+            "bonding_curve_decode_status": _bonding_curve_decode_status(row),
+            "bonding_curve_pda_verified": _bonding_curve_pda_verified(row),
+            "token_program_gate_result": "pass",
+            "token_program_gate_reason": None,
+        }
+    known_prefix = token_program.startswith("Token")
+    return {
+        "token_program": token_program,
+        "token_program_status": "unsupported_token_program" if known_prefix else "unknown_token_program",
+        "pumpfun_token2022_supported": False,
+        "bonding_curve_decode_status": _bonding_curve_decode_status(row),
+        "bonding_curve_pda_verified": _bonding_curve_pda_verified(row),
+        "token_program_gate_result": "reject",
+        "token_program_gate_reason": "unsupported_token_program" if known_prefix else "unknown_token_program",
+    }
+
+
+def _pumpfun_token2022_curve_supported(row: dict[str, Any]) -> bool:
+    return (
+        _truthy(row.get("pumpfun_create_verified"))
+        and _bonding_curve_pda_verified(row)
+        and _bonding_curve_decode_status(row) == "success"
+        and str(row.get("fdv_source") or "").strip() == "bonding_curve_account_state"
+        and bool(str(row.get("fdv_units") or "").strip())
+        and _calculation_status_success(row)
+    )
+
+
+def _bonding_curve_pda_verified(row: dict[str, Any]) -> bool:
+    return _truthy(row.get("bonding_curve_pda_verified") if row.get("bonding_curve_pda_verified") is not None else row.get("bonding_curve_verified"))
+
+
+def _bonding_curve_decode_status(row: dict[str, Any]) -> str:
+    explicit = str(row.get("bonding_curve_decode_status") or "").strip().lower()
+    if explicit in {"success", "decoded"}:
+        return "success"
+    if explicit:
+        return explicit
+    state = row.get("account_state") if isinstance(row.get("account_state"), dict) else {}
+    decode_status = str(state.get("decode_status") or row.get("decode_status") or "").strip().lower()
+    if decode_status in {"success", "decoded"}:
+        return "success"
+    if _calculation_status_success(row):
+        return "success"
+    return decode_status or "unknown"
+
+
+def _calculation_status_success(row: dict[str, Any]) -> bool:
+    status = str(row.get("calculation_status") or "").strip().lower()
+    if not status:
+        state = row.get("account_state") if isinstance(row.get("account_state"), dict) else {}
+        status = str(state.get("calculation_status") or "").strip().lower()
+    return status in {"success", "ok", "fdv_usd_available", "fdv_available", "calculated"}
 
 
 def _high_risk_label_rejection(labels: list[str]) -> str | None:
@@ -2594,6 +2819,13 @@ def _new_candidate(mint: str, *, first_seen_at: float | None = None) -> dict[str
         "single_row_spike_flag": False,
         "same_timestamp_major_jump_flag": False,
         "fdv_anomaly_flag": False,
+        "duplicate_state_seen": False,
+        "duplicate_state_block_active": False,
+        "duplicate_state_block_cleared": False,
+        "duplicate_state_seen_before_distinct_confirmation": False,
+        "distinct_confirmation_count": 0,
+        "distinct_confirmation_fingerprints": [],
+        "first_distinct_confirmation_at": None,
         "path_order_valid": True,
         "paper_buy_created": False,
         "paper_closed": False,
@@ -2628,6 +2860,12 @@ def _default_scheduler_stats() -> dict[str, Any]:
         "bonding_curve_account_state_failure_reasons": {},
         "account_subscribe_bonding_curve_status": "accountSubscribe_bonding_curve_not_implemented",
         "active_account_subscriptions": 0,
+        "hot_watch_follow_up_futures": 0,
+        "hot_watch_follow_up_pending": 0,
+        "hot_watch_probe_count": 0,
+        "near_threshold_hot_watch_probe_count": 0,
+        "entry_zone_watch_probe_count": 0,
+        "hot_watch_success_count": 0,
     }
 
 
@@ -2869,9 +3107,27 @@ def _update_confirmed_milestones(candidate: dict[str, Any], window_seconds: floa
                 candidate.setdefault("confirmed_milestone_rows", {})[key] = distinct[:2]
                 if key in {"10k", "20k"}:
                     candidate[f"confirmed_crossed_{key}"] = True
+                if key == "20k":
+                    _record_distinct_20k_confirmation_state(candidate, distinct)
                 break
         if key == "20k" and duplicate_same_state_seen and not candidate["confirmed_milestones"].get("confirmed_crossed_20k"):
+            candidate["duplicate_state_seen"] = True
+            candidate["duplicate_state_block_active"] = True
             candidate["duplicate_same_state_confirmation_reject"] = True
+
+
+def _record_distinct_20k_confirmation_state(candidate: dict[str, Any], distinct: list[dict[str, Any]]) -> None:
+    had_duplicate_block = bool(candidate.get("duplicate_same_state_confirmation_reject") or candidate.get("duplicate_state_block_active"))
+    fingerprints = [_confirmation_evidence_key(row) for row in distinct[:2]]
+    candidate["distinct_confirmation_count"] = len(fingerprints)
+    candidate["distinct_confirmation_fingerprints"] = fingerprints
+    candidate["first_distinct_confirmation_at"] = float(distinct[0]["timestamp"])
+    candidate["duplicate_state_block_active"] = False
+    candidate["duplicate_same_state_confirmation_reject"] = False
+    if had_duplicate_block or candidate.get("duplicate_state_seen"):
+        candidate["duplicate_state_seen"] = True
+        candidate["duplicate_state_block_cleared"] = True
+        candidate["duplicate_state_seen_before_distinct_confirmation"] = True
 
 
 def _apply_source_confirmations(candidate: dict[str, Any], row: dict[str, Any]) -> None:
@@ -3130,7 +3386,7 @@ def _evaluate_entry(
         reasons.append("missing_confirmed_10k")
     if not candidate.get("confirmed_milestones", {}).get("confirmed_crossed_20k"):
         reasons.append("missing_confirmed_20k")
-    if candidate.get("duplicate_same_state_confirmation_reject"):
+    if candidate.get("duplicate_state_block_active") or candidate.get("duplicate_same_state_confirmation_reject"):
         reasons.append("duplicate_same_state_confirmation")
     for flag, reason in [
         ("single_row_spike_flag", "single_row_spike"),
@@ -3145,6 +3401,7 @@ def _evaluate_entry(
     fdv_usd = _num(row.get("fdv_usd"))
     if fdv_units == "usd" and fdv_usd is None:
         reasons.append("missing_fdv_usd_for_usd_threshold")
+    token_program_gate = _token_program_gate(row)
     token_program_reason, token_program_labels = _token_program_rejection(row)
     labels.extend(token_program_labels)
     if token_program_reason:
@@ -3156,6 +3413,9 @@ def _evaluate_entry(
     chase = _entry_chase_guard(candidate, row)
     if chase["chase_guard_result"] == "rejected":
         reasons.append("chase_guard_exceeded")
+    entry_band = _entry_band_status(candidate, row)
+    if entry_band["entry_band_result"] == "reject" and entry_band["entry_band_rejection_reason"]:
+        reasons.append(str(entry_band["entry_band_rejection_reason"]))
     if not config.allow_unfrozen_efficiency_baseline:
         reasons.append("fdv_efficiency_threshold_unfrozen")
     if candidate["mint"] in state.get("open_positions", {}) or candidate.get("paper_buy_created") or candidate.get("paper_closed"):
@@ -3193,6 +3453,8 @@ def _evaluate_entry(
         "data_source": row.get("data_source"),
         "milestone_provenance": row.get("milestone_provenance"),
         **chase,
+        **entry_band,
+        **token_program_gate,
         **_fdv_provenance_fields(row),
         "no_real_trade": True,
         **features,
@@ -3239,6 +3501,15 @@ def _create_paper_buy(
         "entry_above_trigger_pct": decision.get("entry_above_trigger_pct"),
         "max_entry_above_trigger_pct": decision.get("max_entry_above_trigger_pct"),
         "chase_guard_result": decision.get("chase_guard_result"),
+        "entry_zone_min_usd": decision.get("entry_zone_min_usd"),
+        "entry_trigger_usd": decision.get("entry_trigger_usd"),
+        "entry_zone_max_usd": decision.get("entry_zone_max_usd"),
+        "entry_band_result": decision.get("entry_band_result"),
+        "observed_inside_entry_zone": decision.get("observed_inside_entry_zone"),
+        "hot_watch_active_before_entry": decision.get("hot_watch_active_before_entry"),
+        "token_program_status": decision.get("token_program_status"),
+        "token_program_gate_result": decision.get("token_program_gate_result"),
+        "pumpfun_token2022_supported": decision.get("pumpfun_token2022_supported"),
         "no_real_trade": True,
         **_fdv_provenance_fields(row),
         **_efficiency_features(row),
@@ -3991,6 +4262,8 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "confirmation_follow_up_successes": int(stats.get("confirmation_follow_up_successes") or 0),
         "post_birth_watch_follow_up_futures": int(stats.get("post_birth_watch_follow_up_futures") or 0),
         "post_birth_watch_follow_up_pending": int(stats.get("post_birth_watch_follow_up_pending") or 0),
+        "hot_watch_follow_up_futures": int(stats.get("hot_watch_follow_up_futures") or 0),
+        "hot_watch_follow_up_pending": int(stats.get("hot_watch_follow_up_pending") or 0),
         "post_birth_watch_follow_up_probe_rows": int(stats.get("post_birth_watch_follow_up_probe_rows") or 0),
         "post_birth_watch_follow_up_successes": int(stats.get("post_birth_watch_follow_up_successes") or 0),
         "accountSubscribe_bonding_curve_status": stats.get("account_subscribe_bonding_curve_status") or "accountSubscribe_bonding_curve_not_implemented",
@@ -4025,6 +4298,11 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
     account_not_found_retries = int(sum(_num(row.get("account_not_found_retry_count")) or 0 for row in probe_rows))
     account_not_found_recovered = sum(1 for row in probe_rows if row.get("account_not_found_recovered_by_retry") is True)
     account_not_found_final_failures = sum(1 for row in probe_rows if row.get("account_not_found_final_failure") is True)
+    hot_watch_rows = [
+        row
+        for row in probe_rows
+        if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
+    ]
     post_birth_watch = _post_birth_watch_status_metrics(
         probe_rows,
         candidates,
@@ -4053,12 +4331,18 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         ),
         "post_birth_watch_follow_up_futures": int(source_summary.get("post_birth_watch_follow_up_futures") or 0),
         "post_birth_watch_follow_up_pending": int(source_summary.get("post_birth_watch_follow_up_pending") or 0),
+        "hot_watch_follow_up_futures": int(source_summary.get("hot_watch_follow_up_futures") or 0),
+        "hot_watch_follow_up_pending": int(source_summary.get("hot_watch_follow_up_pending") or 0),
         "post_birth_watch_follow_up_probe_rows": sum(1 for row in probe_rows if row.get("probe_phase") == "post_birth_watch_follow_up"),
         "post_birth_watch_follow_up_successes": sum(
             1
             for row in probe_rows
             if row.get("probe_phase") == "post_birth_watch_follow_up" and row.get("probe_status") == "success"
         ),
+        "hot_watch_probe_count": len(hot_watch_rows),
+        "near_threshold_hot_watch_probe_count": sum(1 for row in hot_watch_rows if row.get("probe_phase") == "near_threshold_hot_watch_follow_up"),
+        "entry_zone_watch_probe_count": sum(1 for row in hot_watch_rows if row.get("probe_phase") == "entry_zone_hot_watch_follow_up"),
+        "hot_watch_success_count": sum(1 for row in hot_watch_rows if row.get("probe_status") == "success"),
         **post_birth_watch,
         "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
@@ -4263,12 +4547,29 @@ def _runtime_safety_counts(
         for row in void_rows
         if row.get("void_reason") == "duplicate_same_state_confirmation_bug" and row.get("mint")
     )
+    candidates = state.get("candidates") or {}
+    path_rows = [path_row for candidate in candidates.values() for path_row in (candidate.get("path_rows") or [])]
+    token_program_rows = [row for row in decision_rows if row.get("token_program_status")]
     return {
         "duplicate_same_state_confirmation_reject_count": len(duplicate_confirmation_mints),
+        "duplicate_state_block_active_count": sum(1 for row in candidates.values() if row.get("duplicate_state_block_active")),
+        "duplicate_state_block_cleared_count": sum(1 for row in candidates.values() if row.get("duplicate_state_block_cleared")),
+        "spl_token_supported_count": len({row.get("mint") for row in token_program_rows if row.get("token_program_status") == "spl_token_supported" and row.get("mint")}),
+        "pumpfun_token2022_supported_count": len({row.get("mint") for row in token_program_rows if row.get("token_program_status") == "pumpfun_token2022_supported" and row.get("mint")}),
+        "unknown_token_program_count": len({row.get("mint") for row in token_program_rows if row.get("token_program_status") == "unknown_token_program" and row.get("mint")}),
         "unsupported_token_program_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "unsupported_token_program")
         + sum(1 for row in void_rows if row.get("void_reason") == "unsupported_token_program"),
         "chase_guard_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "chase_guard_exceeded")
         + sum(1 for row in void_rows if row.get("void_reason") == "chase_guard_exceeded"),
+        "missed_entry_zone_count": sum(1 for row in decisions if row.get("missed_entry_zone") is True or row.get("rejection_reason") == "missed_entry_zone"),
+        "same_timestamp_major_jump_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "same_timestamp_major_jump")
+        + sum(1 for row in candidates.values() if row.get("same_timestamp_major_jump_flag")),
+        "low_fdv_watch_count": len({row.get("mint") for row in path_rows if _watch_mode_for_fdv(_milestone_fdv_usd(row)) == "low_fdv_post_birth_watch" and row.get("mint")}),
+        "near_threshold_hot_watch_count": len({row.get("mint") for row in path_rows if _watch_mode_for_fdv(_milestone_fdv_usd(row)) == "near_threshold_hot_watch" and row.get("mint")}),
+        "entry_zone_watch_count": len({row.get("mint") for row in path_rows if _watch_mode_for_fdv(_milestone_fdv_usd(row)) == "entry_zone_watch" and row.get("mint")}),
+        "entry_zone_observed_count": len({row.get("mint") for row in decision_rows if row.get("observed_inside_entry_zone") is True and row.get("mint")}),
+        "hot_watch_probe_count": sum(1 for row in path_rows if (_milestone_fdv_usd(row) or 0.0) >= NEAR_THRESHOLD_HOT_WATCH_USD),
+        "hot_watch_backpressure_warning_count": sum(1 for row in decisions if row.get("hot_watch_backpressure_warning")),
         "holder_count_lte_1_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "holder_count_lte_1_hard_reject"),
         "mayhem_label_count": len(mayhem_mints),
         "fake_volume_suspect_count": labels.count("fake_volume_suspect"),
@@ -4309,8 +4610,16 @@ def _monitor_md(payload: dict[str, Any]) -> str:
         f"Valid paper buys: {payload.get('valid_paper_buys')}",
         f"Voided paper buys: {payload.get('voided_paper_buys')}",
         f"Unsupported token-program rejects: {payload.get('unsupported_token_program_reject_count')}",
+        f"SPL token supported: {payload.get('spl_token_supported_count')}",
+        f"Pump.fun Token-2022 supported: {payload.get('pumpfun_token2022_supported_count')}",
+        f"Unknown token programs: {payload.get('unknown_token_program_count')}",
         f"Chase guard rejects: {payload.get('chase_guard_reject_count')}",
+        f"Missed entry-zone rejects: {payload.get('missed_entry_zone_count')}",
+        f"Same-timestamp jump rejects: {payload.get('same_timestamp_major_jump_reject_count')}",
         f"Duplicate confirmation rejects: {payload.get('duplicate_same_state_confirmation_reject_count')}",
+        f"Duplicate-state active/cleared: {payload.get('duplicate_state_block_active_count')} / {payload.get('duplicate_state_block_cleared_count')}",
+        f"Low-FDV / hot-watch / entry-zone watch: {payload.get('low_fdv_watch_count')} / {payload.get('near_threshold_hot_watch_count')} / {payload.get('entry_zone_watch_count')}",
+        f"Hot-watch probes: {payload.get('hot_watch_probe_count')}",
         f"Holder <=1 rejects: {payload.get('holder_count_lte_1_reject_count')}",
         f"Mayhem labels: {payload.get('mayhem_label_count')}",
         f"Dev-pump suspect labels: {payload.get('dev_pump_suspect_count')}",
@@ -4381,6 +4690,8 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- curve account probes started: {txsub.get('curve_account_probes_started')}",
             f"- probes started during stream: {txsub.get('probes_started_during_stream')}",
             f"- confirmation follow-up futures/rows/successes: {txsub.get('confirmation_follow_up_futures')} / {txsub.get('confirmation_follow_up_probe_rows')} / {txsub.get('confirmation_follow_up_successes')}",
+            f"- hot-watch futures/pending/probes/successes: {txsub.get('hot_watch_follow_up_futures')} / {txsub.get('hot_watch_follow_up_pending')} / {txsub.get('hot_watch_probe_count')} / {txsub.get('hot_watch_success_count')}",
+            f"- hot-watch near-threshold/entry-zone probes: {txsub.get('near_threshold_hot_watch_probe_count')} / {txsub.get('entry_zone_watch_probe_count')}",
             f"- post-birth watch scheduled/probes/successes/pending: {txsub.get('post_birth_watch_count')} / {txsub.get('post_birth_watch_probe_count')} / {txsub.get('post_birth_watch_success_count')} / {txsub.get('post_birth_watch_pending_count')}",
             f"- post-birth watch promotions 5k/10k/20k: {txsub.get('post_birth_watch_promotions_to_5k')} / {txsub.get('post_birth_watch_promotions_to_10k')} / {txsub.get('post_birth_watch_promotions_to_20k')}",
             f"- post-birth watch archives/rechecked runners: {txsub.get('post_birth_watch_archives')} / {txsub.get('missed_runner_recheck_count')}",
@@ -4486,7 +4797,7 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 </script></head><body>
 <h1>Rule Runtime v1 Paper Monitor</h1>
 	<div class=\"stats\"><div class=\"stat\">Wallet<br><b>${payload['wallet_usd']}</b></div><div class=\"stat\">Cash<br><b>${payload['cash_usd']}</b></div><div class=\"stat\">Open value<br><b>${payload.get('open_position_value_usd')}</b></div><div class=\"stat\">Realized P/L<br><b>${payload.get('realized_paper_pl_usd')}</b></div><div class=\"stat\">Unrealized P/L<br><b>${payload.get('unrealized_paper_pl_usd')}</b></div><div class=\"stat\">15% buy size<br><b>${payload.get('current_buy_size_usd')}</b></div><div class=\"stat\">Open<br><b>{len(payload['open_positions'])}</b></div><div class=\"stat\">Closed<br><b>{len(payload['closed_positions'])}</b></div><div class=\"stat\">Rejected<br><b>{len(payload['rejected_entries'])}</b></div><div class=\"stat\">Paper buys<br><b>{payload['paper_buys']}</b></div><div class=\"stat\">Paper sells<br><b>{payload['paper_sells']}</b></div></div>
-<div class=\"stats\"><div class=\"stat\">Valid buys<br><b>{payload.get('valid_paper_buys')}</b></div><div class=\"stat\">Voided buys<br><b>{payload.get('voided_paper_buys')}</b></div><div class=\"stat\">Unsupported token rejects<br><b>{payload.get('unsupported_token_program_reject_count')}</b></div><div class=\"stat\">Chase rejects<br><b>{payload.get('chase_guard_reject_count')}</b></div><div class=\"stat\">Duplicate confirms<br><b>{payload.get('duplicate_same_state_confirmation_reject_count')}</b></div><div class=\"stat\">Holder <=1 rejects<br><b>{payload.get('holder_count_lte_1_reject_count')}</b></div><div class=\"stat\">Mayhem labels<br><b>{payload.get('mayhem_label_count')}</b></div><div class=\"stat\">Dev-pump labels<br><b>{payload.get('dev_pump_suspect_count')}</b></div><div class=\"stat\">Fake-volume labels<br><b>{payload.get('fake_volume_suspect_count')}</b></div><div class=\"stat\">Missing holder-depth labels<br><b>{payload.get('missing_holder_depth_label_count')}</b></div><div class=\"stat\">Stagnation exits<br><b>{payload.get('stagnation_exit_count')}</b></div></div>
+<div class=\"stats\"><div class=\"stat\">Valid buys<br><b>{payload.get('valid_paper_buys')}</b></div><div class=\"stat\">Voided buys<br><b>{payload.get('voided_paper_buys')}</b></div><div class=\"stat\">SPL supported<br><b>{payload.get('spl_token_supported_count')}</b></div><div class=\"stat\">Pump.fun Token-2022 supported<br><b>{payload.get('pumpfun_token2022_supported_count')}</b></div><div class=\"stat\">Unsupported token rejects<br><b>{payload.get('unsupported_token_program_reject_count')}</b></div><div class=\"stat\">Unknown token programs<br><b>{payload.get('unknown_token_program_count')}</b></div><div class=\"stat\">Chase rejects<br><b>{payload.get('chase_guard_reject_count')}</b></div><div class=\"stat\">Missed entry zone<br><b>{payload.get('missed_entry_zone_count')}</b></div><div class=\"stat\">Same-timestamp jumps<br><b>{payload.get('same_timestamp_major_jump_reject_count')}</b></div><div class=\"stat\">Duplicate active/cleared<br><b>{payload.get('duplicate_state_block_active_count')} / {payload.get('duplicate_state_block_cleared_count')}</b></div><div class=\"stat\">Low/hot/entry watch<br><b>{payload.get('low_fdv_watch_count')} / {payload.get('near_threshold_hot_watch_count')} / {payload.get('entry_zone_watch_count')}</b></div><div class=\"stat\">Hot-watch probes<br><b>{payload.get('hot_watch_probe_count')}</b></div><div class=\"stat\">Holder <=1 rejects<br><b>{payload.get('holder_count_lte_1_reject_count')}</b></div><div class=\"stat\">Mayhem labels<br><b>{payload.get('mayhem_label_count')}</b></div><div class=\"stat\">Dev-pump labels<br><b>{payload.get('dev_pump_suspect_count')}</b></div><div class=\"stat\">Fake-volume labels<br><b>{payload.get('fake_volume_suspect_count')}</b></div><div class=\"stat\">Missing holder-depth labels<br><b>{payload.get('missing_holder_depth_label_count')}</b></div><div class=\"stat\">Stagnation exits<br><b>{payload.get('stagnation_exit_count')}</b></div></div>
 <p class=\"guard\">Paper-only monitor. Live trading, wallet execution, signing, swaps, and routing are disabled.</p>
 <p id=\"copy-status\"><small>Click any CA to copy it.</small></p>
 <h2>Paper Buy FDV Reconciliation Warnings</h2>
@@ -4524,6 +4835,8 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
 	<p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
+	<p>Hot-watch futures/pending/probes/successes: {html.escape(str(txsub.get('hot_watch_follow_up_futures')))} / {html.escape(str(txsub.get('hot_watch_follow_up_pending')))} / {html.escape(str(txsub.get('hot_watch_probe_count')))} / {html.escape(str(txsub.get('hot_watch_success_count')))}</p>
+	<p>Hot-watch near-threshold/entry-zone probes: {html.escape(str(txsub.get('near_threshold_hot_watch_probe_count')))} / {html.escape(str(txsub.get('entry_zone_watch_probe_count')))}</p>
 	<p>Post-birth watch scheduled/probes/successes/pending: {html.escape(str(txsub.get('post_birth_watch_count')))} / {html.escape(str(txsub.get('post_birth_watch_probe_count')))} / {html.escape(str(txsub.get('post_birth_watch_success_count')))} / {html.escape(str(txsub.get('post_birth_watch_pending_count')))}</p>
 	<p>Post-birth watch promotions 5k/10k/20k: {html.escape(str(txsub.get('post_birth_watch_promotions_to_5k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_10k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_20k')))}; archives: {html.escape(str(txsub.get('post_birth_watch_archives')))}; rechecked runners: {html.escape(str(txsub.get('missed_runner_recheck_count')))}</p>
 	<p>Low-FDV watch oldest age/due count: {html.escape(str(txsub.get('low_fdv_watch_oldest_age')))} / {html.escape(str(txsub.get('low_fdv_watch_due_count')))}; lane counts: {html.escape(str(txsub.get('post_birth_watch_lane_counts')))}</p>
@@ -4786,8 +5099,20 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "confirmation_follow_up_futures": int(txsub.get("confirmation_follow_up_futures") or 0),
         "confirmation_follow_up_probe_rows": int(txsub.get("confirmation_follow_up_probe_rows") or 0),
         "confirmation_follow_up_successes": int(txsub.get("confirmation_follow_up_successes") or 0),
+        "hot_watch_follow_up_futures": int(txsub.get("hot_watch_follow_up_futures") or 0),
+        "hot_watch_follow_up_pending": int(txsub.get("hot_watch_follow_up_pending") or 0),
+        "hot_watch_probe_count": int(txsub.get("hot_watch_probe_count") or 0),
+        "near_threshold_hot_watch_probe_count": int(txsub.get("near_threshold_hot_watch_probe_count") or 0),
+        "entry_zone_watch_probe_count": int(txsub.get("entry_zone_watch_probe_count") or 0),
+        "hot_watch_success_count": int(txsub.get("hot_watch_success_count") or 0),
         "post_birth_watch_follow_up_futures": int(txsub.get("post_birth_watch_follow_up_futures") or 0),
         "post_birth_watch_follow_up_pending": int(txsub.get("post_birth_watch_follow_up_pending") or 0),
+        "hot_watch_follow_up_futures": int(txsub.get("hot_watch_follow_up_futures") or 0),
+        "hot_watch_follow_up_pending": int(txsub.get("hot_watch_follow_up_pending") or 0),
+        "hot_watch_probe_count": int(txsub.get("hot_watch_probe_count") or 0),
+        "near_threshold_hot_watch_probe_count": int(txsub.get("near_threshold_hot_watch_probe_count") or 0),
+        "entry_zone_watch_probe_count": int(txsub.get("entry_zone_watch_probe_count") or 0),
+        "hot_watch_success_count": int(txsub.get("hot_watch_success_count") or 0),
         "post_birth_watch_follow_up_probe_rows": int(txsub.get("post_birth_watch_follow_up_probe_rows") or 0),
         "post_birth_watch_follow_up_successes": int(txsub.get("post_birth_watch_follow_up_successes") or 0),
         "post_birth_watch_count": int(txsub.get("post_birth_watch_count") or 0),
@@ -5082,6 +5407,19 @@ def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str,
             for row in rows
             if row.get("probe_phase") == "post_birth_watch_follow_up" and row.get("probe_status") == "success"
         ),
+        "hot_watch_probe_count": sum(
+            1
+            for row in rows
+            if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
+        ),
+        "near_threshold_hot_watch_probe_count": sum(1 for row in rows if row.get("probe_phase") == "near_threshold_hot_watch_follow_up"),
+        "entry_zone_watch_probe_count": sum(1 for row in rows if row.get("probe_phase") == "entry_zone_hot_watch_follow_up"),
+        "hot_watch_success_count": sum(
+            1
+            for row in rows
+            if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
+            and row.get("probe_status") == "success"
+        ),
     }
 
 
@@ -5101,6 +5439,12 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["confirmation_follow_up_successes"] = int(probe_stats.get("confirmation_follow_up_successes") or 0)
     stats["post_birth_watch_follow_up_futures"] = int(probe_stats.get("post_birth_watch_follow_up_futures") or 0)
     stats["post_birth_watch_follow_up_pending"] = int(probe_stats.get("post_birth_watch_follow_up_pending") or 0)
+    stats["hot_watch_follow_up_futures"] = int(probe_stats.get("hot_watch_follow_up_futures") or 0)
+    stats["hot_watch_follow_up_pending"] = int(probe_stats.get("hot_watch_follow_up_pending") or 0)
+    stats["hot_watch_probe_count"] = int(probe_stats.get("hot_watch_probe_count") or 0)
+    stats["near_threshold_hot_watch_probe_count"] = int(probe_stats.get("near_threshold_hot_watch_probe_count") or 0)
+    stats["entry_zone_watch_probe_count"] = int(probe_stats.get("entry_zone_watch_probe_count") or 0)
+    stats["hot_watch_success_count"] = int(probe_stats.get("hot_watch_success_count") or 0)
     stats["post_birth_watch_follow_up_probe_rows"] = int(probe_stats.get("post_birth_watch_follow_up_probe_rows") or 0)
     stats["post_birth_watch_follow_up_successes"] = int(probe_stats.get("post_birth_watch_follow_up_successes") or 0)
     _write_json(config.runtime_state_path, state)
