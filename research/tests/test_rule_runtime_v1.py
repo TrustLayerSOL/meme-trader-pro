@@ -1757,6 +1757,140 @@ def test_transaction_subscribe_status_reports_decoded_creates_without_probe(tmp_
     assert "decoded_creates_missing_bonding_curve_probe" in txsub["warnings"]
 
 
+def test_transaction_subscribe_smoke_schedules_confirmation_followups_for_near_threshold(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-confirm_123_0",
+        "signature": "sig-confirm",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "confirm-me",
+        "bonding_curve": "curve-confirm",
+        "parser_status": "decoded",
+    }
+    probe_calls: list[tuple[float, ...]] = []
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None) -> list[dict]:
+            assert on_create_event is not None
+            append_row(self.config.pumpfun_create_stream_events_path, create_event)
+            on_create_event(dict(create_event))
+            return [create_event]
+
+    def emit_path(event_callback, fdv: float, ts: float, fingerprint: str) -> None:
+        if event_callback is None:
+            return
+        event_callback(
+            {
+                "event_id": f"fdv-confirm-{fingerprint}",
+                "mint": create_event["mint"],
+                "timestamp": ts,
+                "observed_at": create_event["observed_at"],
+                "event_observed_at": create_event["observed_at"],
+                "fdv_proxy": fdv,
+                "fdv_usd": fdv,
+                "fdv_units": "usd",
+                "source_event_type": "fdv_path_update",
+                "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                "fdv_source": "bonding_curve_account_state",
+                "fdv_source_confidence": "high",
+                "reserve_state_fingerprint": fingerprint,
+                "account_data_hash": fingerprint,
+            }
+        )
+
+    def fake_probe_runner(
+        config: RuleRuntimeConfig,
+        create: dict,
+        *,
+        probe: object,
+        event_callback=None,
+        now_fn=None,
+        follow_up_probe_delays=None,
+    ) -> dict:
+        delays = tuple(follow_up_probe_delays or ())
+        probe_calls.append(delays)
+        if not delays:
+            row = {
+                "event_id": "probe-initial-confirm",
+                "mint": create["mint"],
+                "bonding_curve": create["bonding_curve"],
+                "probe_status": "success",
+                "probe_scheduled_during_stream": True,
+                "fdv_proxy": 6_000.0,
+                "fdv_usd": 6_000.0,
+                "fdv_units": "usd",
+                "observed_to_probe_started_ms": 5.0,
+                "helius_rpc_request_count": 1,
+                "http_429_count": 0,
+            }
+            append_row(config.bonding_curve_account_probe_events_path, row)
+            emit_path(event_callback, 6_000.0, 100.01, "initial-state")
+            return row
+        row = {
+            "event_id": "probe-confirmation-followup",
+            "mint": create["mint"],
+            "bonding_curve": create["bonding_curve"],
+            "probe_status": "success",
+            "probe_phase": "confirmation_follow_up",
+            "fdv_proxy": 12_000.0,
+            "fdv_usd": 12_000.0,
+            "fdv_units": "usd",
+            "observed_to_probe_started_ms": 250.0,
+            "helius_rpc_request_count": 2,
+            "http_429_count": 0,
+        }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        emit_path(event_callback, 11_000.0, 100.25, "confirm-state-a")
+        emit_path(event_callback, 12_000.0, 101.00, "confirm-state-b")
+        return row
+
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=2.0,
+    )
+
+    assert probe_calls[0] == ()
+    assert any(delays for delays in probe_calls[1:])
+    assert summary["decoded_create_probe_coverage_rate"] == 1.0
+    assert summary["confirmed_10k_watches"] == 1
+
+
 def test_transaction_subscribe_smoke_runs_final_archive_sweep_before_summary(tmp_path: Path, monkeypatch) -> None:
     from research.mtp_research.validation import forward_efficient_mover_observer as observer
     from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source

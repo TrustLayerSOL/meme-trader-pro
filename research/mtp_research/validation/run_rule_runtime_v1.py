@@ -274,6 +274,12 @@ def main() -> int:
         print(f"accepted_births={result['accepted_births']}")
         print(f"bonding_curve_probes={result['bonding_curve_probes_started']}/{result['bonding_curve_probes_succeeded']}/{result['bonding_curve_probes_failed']}")
         print(f"probes_started_during_stream={result['probes_started_during_stream']}")
+        print(
+            "confirmation_followups="
+            f"{result.get('confirmation_follow_up_futures')}/"
+            f"{result.get('confirmation_follow_up_probe_rows')}/"
+            f"{result.get('confirmation_follow_up_successes')}"
+        )
         print(f"first_attempt_successes={result['first_attempt_successes']}")
         print(f"account_not_found_retries={result['account_not_found_retries']}")
         print(f"account_not_found_recovered_by_retry={result['account_not_found_recovered_by_retry']}")

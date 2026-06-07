@@ -299,9 +299,11 @@ def run_bonding_curve_account_probe_for_create_event(
         runtime_event.update(mint_owner)
         _copy_fdv_probe_fields(result, runtime_event)
     winning = "getAccountInfo_processed" if status == "success" else "none"
+    confirmation_follow_up = bool(create_event.get("confirmation_follow_up_scheduled"))
     row = {
         "event_id": f"probe_{create_event.get('event_id') or create_event.get('signature')}_{int(started * 1000)}",
-        "probe_phase": "initial",
+        "probe_phase": "confirmation_initial" if confirmation_follow_up else "initial",
+        "confirmation_follow_up_scheduled": confirmation_follow_up,
         "mint": create_event.get("mint"),
         "bonding_curve": create_event.get("bonding_curve"),
         "source_create_signature": create_event.get("signature"),
@@ -380,7 +382,8 @@ def run_bonding_curve_account_probe_for_create_event(
                 _copy_fdv_probe_fields(follow_result, follow_event)
             follow_row = {
                 "event_id": f"probe_follow_{create_event.get('event_id') or create_event.get('signature')}_{follow_up_index}_{int(follow_started * 1000)}",
-                "probe_phase": "follow_up",
+                "probe_phase": "confirmation_follow_up" if confirmation_follow_up else "follow_up",
+                "confirmation_follow_up_scheduled": confirmation_follow_up,
                 "follow_up_index": follow_up_index,
                 "follow_up_delay_seconds": float(delay),
                 "mint": create_event.get("mint"),

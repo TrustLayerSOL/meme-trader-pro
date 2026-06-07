@@ -108,6 +108,9 @@ TIER_1_FLAT_DELTA_PCT = 0.05
 TIER_1_PRESSURE_THRESHOLD = 20
 ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS: tuple[float, ...] = ()
+CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
+CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
+CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 2
 SCHEDULER_MODE = "priority_single_worker"
 SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS = {SPL_TOKEN_PROGRAM_ID}
@@ -1481,9 +1484,12 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     )
     sol_usd = resolve_forward_sol_usd_price(config.root)
     probe_futures = []
+    confirmation_futures = []
+    confirmation_future_lock = Lock()
     probe_errors: list[dict[str, Any]] = []
+    confirmation_errors: list[dict[str, Any]] = []
 
-    def run_probe(event: dict[str, Any]) -> dict[str, Any]:
+    def run_probe(event: dict[str, Any], *, follow_up_probe_delays: tuple[float, ...] = ()) -> dict[str, Any]:
         probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
         try:
             return run_bonding_curve_account_probe_for_create_event(
@@ -1491,7 +1497,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 event,
                 probe=probe,
                 event_callback=on_hot_event,
-                follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS,
+                follow_up_probe_delays=follow_up_probe_delays,
             )
         except TypeError as exc:
             if "follow_up_probe_delays" not in str(exc):
@@ -1503,11 +1509,29 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 event_callback=on_hot_event,
             )
 
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor:
+    def run_first_fdv_probe_and_schedule_confirmation(event: dict[str, Any], confirmation_executor: ThreadPoolExecutor) -> dict[str, Any]:
+        row = run_probe(event, follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS)
+        if _should_schedule_confirmation_follow_up(row):
+            confirmation_event = dict(event)
+            confirmation_event["probe_scheduled_during_stream"] = True
+            confirmation_event["confirmation_follow_up_scheduled"] = True
+            future = confirmation_executor.submit(
+                run_probe,
+                confirmation_event,
+                follow_up_probe_delays=CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS,
+            )
+            with confirmation_future_lock:
+                confirmation_futures.append(future)
+        return row
+
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor, ThreadPoolExecutor(
+        max_workers=CONFIRMATION_FOLLOW_UP_MAX_WORKERS,
+        thread_name_prefix="txsub-confirm-probe",
+    ) as confirmation_executor:
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
             try:
-                probe_futures.append(executor.submit(run_probe, dict(event)))
+                probe_futures.append(executor.submit(run_first_fdv_probe_and_schedule_confirmation, dict(event), confirmation_executor))
             except Exception as exc:
                 _append_jsonl(
                     config.bonding_curve_account_probe_events_path,
@@ -1539,6 +1563,13 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 future.result()
             except Exception as exc:
                 probe_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        with confirmation_future_lock:
+            pending_confirmation_futures = list(confirmation_futures)
+        for future in as_completed(pending_confirmation_futures):
+            try:
+                future.result()
+            except Exception as exc:
+                confirmation_errors.append({"error": f"{type(exc).__name__}:{exc}"})
     with runtime_lock:
         final = engine.consume_event_bus(bus, max_events=10_000)
         archive_runtime_queue_candidates(config, now=time.time())
@@ -1548,6 +1579,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         failures = probe_stats.setdefault("failures_by_reason", {})
         failures["probe_worker_exception"] = int(failures.get("probe_worker_exception") or 0) + len(probe_errors)
         probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(probe_errors)
+    if confirmation_errors:
+        failures = probe_stats.setdefault("failures_by_reason", {})
+        failures["confirmation_probe_worker_exception"] = int(failures.get("confirmation_probe_worker_exception") or 0) + len(confirmation_errors)
+        probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(confirmation_errors)
+    probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
     _record_bonding_curve_probe_stats(config, probe_stats)
     status = rule_runtime_status(config)
     summary = _helius_transaction_subscribe_bonding_curve_probe_summary(
@@ -2609,6 +2645,17 @@ def _milestone_fdv_usd(row: dict[str, Any]) -> float | None:
     if units in {"sol", "quote", "fdv_sol", "fdv_quote"}:
         return None
     return _num(row.get("fdv_proxy") if row.get("fdv_proxy") is not None else row.get("current_fdv"))
+
+
+def _should_schedule_confirmation_follow_up(row: dict[str, Any]) -> bool:
+    if row.get("probe_status") != "success":
+        return False
+    if row.get("fdv_anomaly_flag_from_source") is True:
+        return False
+    fdv = _milestone_fdv_usd(row)
+    if fdv is None or fdv <= 0 or fdv >= FDV_ANOMALY_HIGH:
+        return False
+    return fdv >= CONFIRMATION_FOLLOW_UP_TRIGGER_FDV
 
 
 def _copy_fdv_unit_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
@@ -3860,6 +3907,9 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "bonding_curve_resolved_to_getAccountInfo_p50_p90_p99": _percentiles(
             [_num(row.get("bonding_curve_resolved_to_getAccountInfo_ms")) for row in source_rows]
         ),
+        "confirmation_follow_up_futures": int(stats.get("confirmation_follow_up_futures") or 0),
+        "confirmation_follow_up_probe_rows": int(stats.get("confirmation_follow_up_probe_rows") or 0),
+        "confirmation_follow_up_successes": int(stats.get("confirmation_follow_up_successes") or 0),
         "accountSubscribe_bonding_curve_status": stats.get("account_subscribe_bonding_curve_status") or "accountSubscribe_bonding_curve_not_implemented",
         "active_account_subscriptions": int(stats.get("active_account_subscriptions") or 0),
         "metadata_hot_path_allowed": False,
@@ -3902,6 +3952,13 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "curve_pda_verified": sum(1 for row in create_rows if row.get("bonding_curve_verified") is True),
         "curve_account_probes_started": len(probe_rows),
         "probes_started_during_stream": sum(1 for row in probe_rows if row.get("probe_scheduled_during_stream") is True),
+        "confirmation_follow_up_futures": int(source_summary.get("confirmation_follow_up_futures") or 0),
+        "confirmation_follow_up_probe_rows": sum(1 for row in probe_rows if str(row.get("probe_phase") or "").startswith("confirmation")),
+        "confirmation_follow_up_successes": sum(
+            1
+            for row in probe_rows
+            if str(row.get("probe_phase") or "").startswith("confirmation") and row.get("probe_status") == "success"
+        ),
         "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
         "first_attempt_successes": sum(1 for row in probe_rows if row.get("probe_status") == "success" and int(_num(row.get("probe_attempt_count")) or 1) == 1),
@@ -4167,6 +4224,7 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- curve PDA verified: {txsub.get('curve_pda_verified')}",
             f"- curve account probes started: {txsub.get('curve_account_probes_started')}",
             f"- probes started during stream: {txsub.get('probes_started_during_stream')}",
+            f"- confirmation follow-up futures/rows/successes: {txsub.get('confirmation_follow_up_futures')} / {txsub.get('confirmation_follow_up_probe_rows')} / {txsub.get('confirmation_follow_up_successes')}",
             f"- curve account probes succeeded: {txsub.get('curve_account_probes_succeeded')}",
             f"- curve account probes failed: {txsub.get('curve_account_probes_failed')}",
             f"- first-attempt successes: {txsub.get('first_attempt_successes')}",
@@ -4304,6 +4362,7 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 	<p>Decoded create probe coverage: {html.escape(str(txsub.get('decoded_create_mints_with_probe')))} / {html.escape(str(txsub.get('decoded_create_unique_mints')))} ({html.escape(str(txsub.get('decoded_create_probe_coverage_rate')))}); missing probes: {html.escape(str(txsub.get('decoded_create_mints_without_probe')))}</p>
 	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
+	<p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
 	<p>First-attempt successes: {html.escape(str(txsub.get('first_attempt_successes')))}; account-not-found retries: {html.escape(str(txsub.get('account_not_found_retries')))}</p>
 	<p>Account-not-found recovered by retry: {html.escape(str(txsub.get('account_not_found_recovered_by_retry')))}; final failures: {html.escape(str(txsub.get('account_not_found_final_failures')))}; recovery rate: {html.escape(str(txsub.get('account_not_found_retry_recovery_rate')))}</p>
 	<p>First FDV source counts: account-state {html.escape(str(txsub.get('first_fdv_from_bonding_curve_account_state')))}, transaction-delta {html.escape(str(txsub.get('first_fdv_from_transaction_delta')))}, unknown {html.escape(str(txsub.get('first_fdv_from_unknown')))}</p>
@@ -4560,6 +4619,9 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "accepted_births": int(create_events_decoded) if transaction_subscribe_used else int((fallback_summary.get("collector_result") or {}).get("official_accepted_births") or 0),
         "bonding_curve_probes_started": int(txsub.get("curve_account_probes_started") or 0),
         "probes_started_during_stream": int(txsub.get("probes_started_during_stream") or 0),
+        "confirmation_follow_up_futures": int(txsub.get("confirmation_follow_up_futures") or 0),
+        "confirmation_follow_up_probe_rows": int(txsub.get("confirmation_follow_up_probe_rows") or 0),
+        "confirmation_follow_up_successes": int(txsub.get("confirmation_follow_up_successes") or 0),
         "bonding_curve_probes_succeeded": int(txsub.get("curve_account_probes_succeeded") or 0),
         "bonding_curve_probes_failed": int(txsub.get("curve_account_probes_failed") or 0),
         "first_attempt_successes": int(txsub.get("first_attempt_successes") or 0),
@@ -4630,6 +4692,7 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary_md(summary: dict[s
             f"- Decoded creates without probe: `{summary['decoded_create_mints_without_probe']}` sample `{summary['decoded_create_mints_without_probe_sample']}`",
             f"- Accepted births: `{summary['accepted_births']}`",
             f"- Bonding curve probes started/during-stream/succeeded/failed: `{summary['bonding_curve_probes_started']}` / `{summary['probes_started_during_stream']}` / `{summary['bonding_curve_probes_succeeded']}` / `{summary['bonding_curve_probes_failed']}`",
+            f"- Confirmation follow-up futures/rows/successes: `{summary['confirmation_follow_up_futures']}` / `{summary['confirmation_follow_up_probe_rows']}` / `{summary['confirmation_follow_up_successes']}`",
             f"- First-attempt successes: `{summary['first_attempt_successes']}`",
             f"- Account-not-found retries: `{summary['account_not_found_retries']}`",
             f"- Account-not-found recovered by retry: `{summary['account_not_found_recovered_by_retry']}`",
@@ -4817,6 +4880,12 @@ def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str,
         "failures_by_reason": dict(sorted(failures_by_reason.items())),
         "requests_used": int(sum(_num(row.get("helius_rpc_request_count")) or 0 for row in rows)),
         "http_429_count": int(sum(_num(row.get("http_429_count")) or 0 for row in rows)),
+        "confirmation_follow_up_probe_rows": sum(1 for row in rows if str(row.get("probe_phase") or "").startswith("confirmation")),
+        "confirmation_follow_up_successes": sum(
+            1
+            for row in rows
+            if str(row.get("probe_phase") or "").startswith("confirmation") and row.get("probe_status") == "success"
+        ),
     }
 
 
@@ -4831,6 +4900,9 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
         current = _num(stats.get("helius_rpc_request_count")) or 0
         stats["helius_rpc_request_count"] = int(max(current, int(requests_used or 0)))
     stats["http_429_count"] = int(stats.get("http_429_count") or 0) + int(probe_stats.get("http_429_count") or 0)
+    stats["confirmation_follow_up_futures"] = int(probe_stats.get("confirmation_follow_up_futures") or 0)
+    stats["confirmation_follow_up_probe_rows"] = int(probe_stats.get("confirmation_follow_up_probe_rows") or 0)
+    stats["confirmation_follow_up_successes"] = int(probe_stats.get("confirmation_follow_up_successes") or 0)
     _write_json(config.runtime_state_path, state)
 
 
