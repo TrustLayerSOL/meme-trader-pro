@@ -1515,11 +1515,13 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     confirmation_futures = []
     live_watch_futures = []
     confirmation_future_lock = Lock()
+    confirmation_scheduled_mints: set[str] = set()
     live_watch_lock = Lock()
     live_watch_scheduled_mints: set[str] = set()
     watch_follow_up_jobs: list[tuple[float, int, dict[str, Any]]] = []
     watch_follow_up_futures = []
     watch_follow_up_lock = Lock()
+    hot_watch_scheduled_modes: set[tuple[str, str]] = set()
     watch_follow_up_sequence = 0
     post_birth_watch_follow_up_scheduled_count = 0
     hot_watch_follow_up_scheduled_count = 0
@@ -1578,6 +1580,13 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     def schedule_confirmation_follow_up(event: dict[str, Any], row: dict[str, Any], confirmation_executor: ThreadPoolExecutor) -> None:
         if not _should_schedule_confirmation_follow_up(row):
             return
+        mint = str(row.get("mint") or event.get("mint") or "")
+        if not mint:
+            return
+        with confirmation_future_lock:
+            if mint in confirmation_scheduled_mints:
+                return
+            confirmation_scheduled_mints.add(mint)
         confirmation_event = dict(event)
         confirmation_event["probe_scheduled_during_stream"] = True
         confirmation_event["confirmation_follow_up_scheduled"] = True
@@ -1648,11 +1657,27 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         mode = _watch_mode_for_fdv(_milestone_fdv_usd(row))
         if mode not in {"near_threshold_hot_watch", "confirmed_10k_watch", "entry_zone_watch"}:
             return
+        mint = str(row.get("mint") or event.get("mint") or "")
+        if not mint:
+            return
         delays = ENTRY_ZONE_PROBE_DELAYS_SECONDS if mode == "entry_zone_watch" else HOT_WATCH_PROBE_DELAYS_SECONDS
         now_monotonic = time.monotonic()
         with watch_follow_up_lock:
+            key = (mint, mode)
+            if key in hot_watch_scheduled_modes:
+                return
+            hot_watch_scheduled_modes.add(key)
             for index, delay in enumerate(tuple(delays), start=1):
                 follow_event = dict(event)
+                for stale_key in [
+                    "post_birth_watch_follow_up_scheduled",
+                    "post_birth_watch_follow_up_index",
+                    "post_birth_watch_due_delay_seconds",
+                    "post_birth_watch_lane",
+                    "confirmation_follow_up_scheduled",
+                    "probe_phase_override",
+                ]:
+                    follow_event.pop(stale_key, None)
                 follow_event["probe_scheduled_during_stream"] = True
                 follow_event["hot_watch_follow_up_scheduled"] = True
                 follow_event["hot_watch_follow_up_index"] = index
@@ -1719,6 +1744,57 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                         drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
                 except Exception as exc:
                     errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        return cancelled
+
+    def wait_for_watch_follow_ups_until_deadline(
+        watch_executor: ThreadPoolExecutor,
+        confirmation_executor: ThreadPoolExecutor,
+        live_watch_executor: ThreadPoolExecutor,
+        *,
+        cleanup_deadline: float,
+    ) -> int:
+        cancelled = 0
+        completed: set[Any] = set()
+        while time.monotonic() < cleanup_deadline:
+            drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
+            pending = {future for future in watch_follow_up_futures if future not in completed and not future.done()}
+            done = {future for future in watch_follow_up_futures if future not in completed and future.done()}
+            if done:
+                for future in done:
+                    completed.add(future)
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        watch_follow_up_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+                continue
+            if pending:
+                remaining = max(0.0, cleanup_deadline - time.monotonic())
+                done_now, _ = wait(pending, timeout=min(0.05, remaining))
+                for future in done_now:
+                    completed.add(future)
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        watch_follow_up_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+                continue
+            with watch_follow_up_lock:
+                next_due = watch_follow_up_jobs[0][0] if watch_follow_up_jobs else None
+            if next_due is None:
+                return cancelled
+            sleep_seconds = min(max(0.0, next_due - time.monotonic()), max(0.0, cleanup_deadline - time.monotonic()), 0.05)
+            if sleep_seconds <= 0:
+                continue
+            time.sleep(sleep_seconds)
+        with watch_follow_up_lock:
+            cancelled += len(watch_follow_up_jobs)
+            watch_follow_up_jobs.clear()
+        for future in watch_follow_up_futures:
+            if future in completed or future.done():
+                continue
+            if future.cancel():
+                cancelled += 1
+            else:
+                cancelled += 1
         return cancelled
 
     executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe")
@@ -1791,10 +1867,10 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         )
         if time.monotonic() < cleanup_deadline:
             drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
-        cancelled_watch_follow_up_futures = wait_for_futures(
-            list(watch_follow_up_futures),
-            watch_follow_up_errors,
-            failure_key="watch_follow_up_cleanup_timeout",
+        cancelled_watch_follow_up_futures = wait_for_watch_follow_ups_until_deadline(
+            watch_executor,
+            confirmation_executor,
+            live_watch_executor,
             cleanup_deadline=cleanup_deadline,
         )
         with live_watch_lock:
@@ -4488,6 +4564,14 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
     probed_mints = {row.get("mint") for row in probe_rows if row.get("mint")}
     missing_probe_mints = sorted(str(mint) for mint in decoded_create_mints - probed_mints)
     probe_failures = [row for row in probe_rows if row.get("probe_status") != "success"]
+    initial_probe_rows = [
+        row
+        for row in probe_rows
+        if str(row.get("probe_phase") or "initial") == "initial"
+        and not row.get("post_birth_watch_follow_up_scheduled")
+        and not row.get("hot_watch_follow_up_scheduled")
+        and not row.get("confirmation_follow_up_scheduled")
+    ]
     failure_reasons: dict[str, int] = {}
     for row in probe_failures:
         reason = str(row.get("probe_error") or "unknown")
@@ -4564,11 +4648,15 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "first_fdv_from_unknown": int(source_summary.get("unknown_successes") or 0),
         "getAccountInfo_p50_p90_p99": _percentiles([_num(row.get("getAccountInfo_latency_ms")) for row in probe_rows]),
         "accountSubscribe_p50_p90_p99": _percentiles([_num(row.get("accountSubscribe_latency_ms")) for row in probe_rows]),
-        "observed_to_probe_started_p50_p90_p99": _percentiles([_num(row.get("observed_to_probe_started_ms")) for row in probe_rows]),
-        "probe_started_to_first_curve_state_p50_p90_p99": _percentiles(
-            [_num(row.get("probe_started_to_first_curve_state_ms")) for row in probe_rows]
+        "observed_to_probe_started_p50_p90_p99": _percentiles(
+            [_num(row.get("observed_to_probe_started_ms")) for row in initial_probe_rows]
         ),
-        "observed_to_first_fdv_p50_p90_p99": _percentiles([_num(row.get("observed_to_first_fdv_emitted_ms")) for row in probe_rows]),
+        "probe_started_to_first_curve_state_p50_p90_p99": _percentiles(
+            [_num(row.get("probe_started_to_first_curve_state_ms")) for row in initial_probe_rows]
+        ),
+        "observed_to_first_fdv_p50_p90_p99": _percentiles(
+            [_num(row.get("observed_to_first_fdv_emitted_ms")) for row in initial_probe_rows]
+        ),
         "observed_to_first_fdv_account_state_p50_p90_p99": source_summary.get("observed_to_first_fdv_account_state_p50_p90_p99"),
         "decode_failures": failure_reasons.get("decode_failed", 0),
         "probe_failures_by_reason": failure_reasons,

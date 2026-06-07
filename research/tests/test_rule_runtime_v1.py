@@ -1940,6 +1940,8 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
     ) -> dict:
         if create.get("post_birth_watch_follow_up_scheduled"):
             phase = "post_birth_watch_follow_up"
+        elif create.get("hot_watch_follow_up_scheduled"):
+            phase = "entry_zone_hot_watch_follow_up"
         elif create.get("confirmation_follow_up_scheduled"):
             phase = "confirmation_follow_up"
         else:
@@ -2019,6 +2021,7 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
 
     monkeypatch.setattr(runtime, "POST_BIRTH_WATCH_TRIGGER_FDV", 2_000.0, raising=False)
     monkeypatch.setattr(runtime, "POST_BIRTH_WATCH_PROBE_DELAYS_SECONDS", (0.0,), raising=False)
+    monkeypatch.setattr(runtime, "ENTRY_ZONE_PROBE_DELAYS_SECONDS", (0.0,), raising=False)
     monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
     monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
     monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
@@ -2034,7 +2037,10 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
         max_runtime_seconds=2.0,
     )
 
-    assert probe_calls == ["initial", "post_birth_watch_follow_up", "confirmation_follow_up"]
+    assert probe_calls[0] == "initial"
+    assert probe_calls.count("post_birth_watch_follow_up") == 1
+    assert probe_calls.count("confirmation_follow_up") == 1
+    assert probe_calls.count("entry_zone_hot_watch_follow_up") == 1
     assert probe_threads["initial"].startswith("txsub-fdv-probe")
     assert probe_threads["post_birth_watch_follow_up"].startswith("txsub-watch-follow-up")
     assert summary["post_birth_watch_follow_up_futures"] == 1
@@ -2222,6 +2228,59 @@ def test_transaction_subscribe_status_reports_decoded_creates_without_probe(tmp_
     assert "decoded_creates_missing_bonding_curve_probe" in txsub["warnings"]
 
 
+def test_transaction_subscribe_first_fdv_latency_uses_initial_probe_rows(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+    config.helius_transaction_subscribe_capability_audit_json_path.write_text(
+        json.dumps(
+            {
+                "recommended_endpoint": {
+                    "name": "helius_beta",
+                    "transactionSubscribe_supported": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.pumpfun_create_stream_events_path.write_text(
+        json.dumps({"mint": "latency-mint", "parser_status": "decoded", "bonding_curve_verified": True}) + "\n",
+        encoding="utf-8",
+    )
+    config.bonding_curve_account_probe_events_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {
+                    "mint": "latency-mint",
+                    "probe_status": "success",
+                    "probe_phase": "initial",
+                    "probe_scheduled_during_stream": True,
+                    "observed_to_probe_started_ms": 10.0,
+                    "observed_to_first_fdv_emitted_ms": 20.0,
+                    "getAccountInfo_latency_ms": 5.0,
+                },
+                {
+                    "mint": "latency-mint",
+                    "probe_status": "success",
+                    "probe_phase": "post_birth_watch_follow_up",
+                    "probe_scheduled_during_stream": True,
+                    "observed_to_probe_started_ms": 300_000.0,
+                    "observed_to_first_fdv_emitted_ms": 300_020.0,
+                    "getAccountInfo_latency_ms": 5.0,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    txsub = rule_runtime_status(config)["helius_transaction_subscribe_first_fdv"]
+
+    assert txsub["observed_to_probe_started_p50_p90_p99"] == {"p50": 10.0, "p90": 10.0, "p99": 10.0}
+    assert txsub["observed_to_first_fdv_p50_p90_p99"] == {"p50": 20.0, "p90": 20.0, "p99": 20.0}
+
+
 def test_transaction_subscribe_smoke_schedules_confirmation_followups_for_near_threshold(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2354,6 +2413,137 @@ def test_transaction_subscribe_smoke_schedules_confirmation_followups_for_near_t
     assert any(delays for delays in probe_calls[1:])
     assert summary["decoded_create_probe_coverage_rate"] == 1.0
     assert summary["confirmed_10k_watches"] == 1
+
+
+def test_transaction_subscribe_cleanup_drains_late_hot_watch_jobs(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+    from research.mtp_research.validation import rule_runtime_v1 as runtime
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-hot-late_123_0",
+        "signature": "sig-hot-late",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "late-hot-watch",
+        "bonding_curve": "curve-hot-late",
+        "parser_status": "decoded",
+    }
+    probe_phases: list[str] = []
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
+            assert on_create_event is not None
+            append_row(self.config.pumpfun_create_stream_events_path, create_event)
+            on_create_event(dict(create_event))
+            return [create_event]
+
+    def fake_probe_runner(
+        config: RuleRuntimeConfig,
+        create: dict,
+        *,
+        probe: object,
+        event_callback=None,
+        now_fn=None,
+        follow_up_probe_delays=None,
+    ) -> dict:
+        if create.get("hot_watch_follow_up_scheduled"):
+            phase = "near_threshold_hot_watch_follow_up"
+            fdv = 13_500.0
+            ts = 101.0
+        elif create.get("confirmation_follow_up_scheduled"):
+            phase = "confirmation_follow_up"
+            fdv = 13_500.0
+            ts = 100.5
+        else:
+            time.sleep(0.03)
+            phase = "initial"
+            fdv = 13_500.0
+            ts = 100.03
+        probe_phases.append(phase)
+        row = {
+            "event_id": f"probe-{phase}",
+            "mint": create["mint"],
+            "bonding_curve": create["bonding_curve"],
+            "probe_status": "success",
+            "probe_phase": phase,
+            "probe_scheduled_during_stream": create.get("probe_scheduled_during_stream"),
+            "hot_watch_follow_up_scheduled": bool(create.get("hot_watch_follow_up_scheduled")),
+            "fdv_proxy": fdv,
+            "fdv_usd": fdv,
+            "fdv_units": "usd",
+            "observed_to_probe_started_ms": 10.0,
+            "observed_to_first_fdv_emitted_ms": 20.0,
+            "helius_rpc_request_count": 1,
+            "http_429_count": 0,
+        }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        if event_callback is not None:
+            event_callback(
+                {
+                    "event_id": f"fdv-{phase}",
+                    "mint": create["mint"],
+                    "timestamp": ts,
+                    "observed_at": create["observed_at"],
+                    "event_observed_at": create["observed_at"],
+                    "fdv_proxy": fdv,
+                    "fdv_usd": fdv,
+                    "fdv_units": "usd",
+                    "source_event_type": "fdv_path_update",
+                    "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                    "fdv_source": "bonding_curve_account_state",
+                    "fdv_source_confidence": "high",
+                    "account_data_hash": f"hash-{phase}",
+                    "reserve_state_fingerprint": f"reserve-{phase}",
+                    "observed_to_first_fdv_account_state_ms": 20.0,
+                }
+            )
+        return row
+
+    monkeypatch.setattr(runtime, "HOT_WATCH_PROBE_DELAYS_SECONDS", (0.01,), raising=False)
+    monkeypatch.setattr(runtime, "CONFIRMATION_FOLLOW_UP_TRIGGER_FDV", 99_000.0, raising=False)
+    monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=1.0,
+    )
+
+    assert probe_phases == ["initial", "near_threshold_hot_watch_follow_up"]
+    assert summary["hot_watch_follow_up_futures"] == 1
+    assert summary["hot_watch_probe_count"] == 1
+    assert summary["entry_zone_watch_probe_count"] == 0
+    assert summary["confirmed_20k_candidates"] == 0
 
 
 def test_transaction_subscribe_smoke_runs_final_archive_sweep_before_summary(tmp_path: Path, monkeypatch) -> None:
