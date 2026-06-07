@@ -125,6 +125,7 @@ LIVE_WATCH_ARM_USD = 14_000.0
 ENTRY_ZONE_MIN_USD = 20_000.0
 ENTRY_ZONE_MAX_USD = 26_000.0
 HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75, 1.0)
+WARM_WATCH_PROBE_DELAYS_SECONDS = (0.5, 1.0, 2.0, 3.0, 5.0)
 ENTRY_ZONE_PROBE_DELAYS_SECONDS = (0.1, 0.25, 0.5, 0.75, 1.0)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
@@ -601,7 +602,7 @@ class RuleRuntimeEngine:
             candidate["tier"] = -1
             _record_rejection(self.config, candidate, normalized, "rejected_same_timestamp_jump", "same_timestamp_major_jump")
             _record_variant_rejections(self.config, candidate, normalized, "same_timestamp_major_jump")
-        elif candidate.get("single_row_spike_flag"):
+        elif candidate.get("single_row_spike_flag") and not _single_row_spike_watch_softened(candidate, normalized):
             candidate["state"] = "rejected_spike"
             candidate["tier"] = -1
             _record_rejection(self.config, candidate, normalized, "rejected_spike", "single_row_fdv_spike")
@@ -1673,7 +1674,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         mint = str(row.get("mint") or event.get("mint") or "")
         if not mint:
             return
-        delays = ENTRY_ZONE_PROBE_DELAYS_SECONDS if mode == "entry_zone_watch" else HOT_WATCH_PROBE_DELAYS_SECONDS
+        delays = _watch_delays_for_mode(mode)
         now_monotonic = time.monotonic()
         with watch_follow_up_lock:
             key = (mint, mode)
@@ -2681,17 +2682,20 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
     observed_inside_entry_zone = _observed_inside_entry_zone(candidate)
     observed_inside_buy_band = current_fdv is not None and ENTRY_THRESHOLD_FDV <= current_fdv <= ENTRY_ZONE_MAX_USD
     hot_watch_active = _hot_watch_active_before_entry(candidate, row)
+    watch_active = _watch_active_before_entry(candidate, row)
     pre_entry_live_arm_observed = _pre_entry_live_arm_observed(candidate)
+    pre_entry_watch_observed = _pre_entry_watch_observed(candidate)
+    single_row_spike_softened = _single_row_spike_watch_softened(candidate, row)
     chase_exceeded = current_fdv is not None and current_fdv > ENTRY_ZONE_MAX_USD
     missed_entry = bool(chase_exceeded and not observed_inside_entry_zone)
-    if chase_exceeded and (previous_fdv is None or previous_fdv < LIVE_WATCH_ARM_USD or not hot_watch_active):
+    if chase_exceeded and (previous_fdv is None or previous_fdv < WATCH_THRESHOLD_FDV or not watch_active):
         missed_entry = True
-    if observed_inside_buy_band and hot_watch_active:
+    if observed_inside_buy_band and watch_active:
         result = "pass"
         reason = None
     elif missed_entry:
         result = "reject"
-        reason = "missed_entry_probe_gap" if pre_entry_live_arm_observed else "missed_live_arm"
+        reason = "missed_entry_probe_gap" if pre_entry_watch_observed else "missed_live_arm"
     elif chase_exceeded:
         result = "reject"
         reason = "chase_guard_exceeded"
@@ -2701,9 +2705,9 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
     elif current_fdv < ENTRY_THRESHOLD_FDV:
         result = "reject"
         reason = "below_entry_trigger"
-    elif not hot_watch_active:
+    elif not watch_active:
         result = "reject"
-        reason = "hot_watch_not_active_before_entry"
+        reason = "watch_not_active_before_entry"
     else:
         result = "reject"
         reason = "outside_entry_zone"
@@ -2717,10 +2721,13 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
         "previous_observation_time": previous_ts,
         "observed_inside_entry_zone": bool(observed_inside_entry_zone),
         "hot_watch_active_before_entry": bool(hot_watch_active),
+        "watch_active_before_entry": bool(watch_active),
         "pre_entry_live_arm_observed": bool(pre_entry_live_arm_observed),
+        "pre_entry_watch_observed": bool(pre_entry_watch_observed),
+        "single_row_spike_watch_softened": bool(single_row_spike_softened),
         "missed_entry_zone": bool(missed_entry),
-        "missed_live_arm": bool(missed_entry and not pre_entry_live_arm_observed),
-        "missed_entry_probe_gap": bool(missed_entry and pre_entry_live_arm_observed),
+        "missed_live_arm": bool(missed_entry and not pre_entry_watch_observed),
+        "missed_entry_probe_gap": bool(missed_entry and pre_entry_watch_observed),
         "chase_guard_exceeded": bool(chase_exceeded),
         "same_timestamp_major_jump": bool(candidate.get("same_timestamp_major_jump_flag")),
         "entry_band_result": result,
@@ -2759,16 +2766,50 @@ def _pre_entry_live_arm_observed(candidate: dict[str, Any]) -> bool:
     )
 
 
-def _hot_watch_active_before_entry(candidate: dict[str, Any], row: dict[str, Any]) -> bool:
+def _pre_entry_watch_observed(candidate: dict[str, Any]) -> bool:
+    return any(
+        fdv is not None and WATCH_THRESHOLD_FDV <= fdv < ENTRY_THRESHOLD_FDV
+        for fdv in (_milestone_fdv_usd(row) for row in candidate.get("path_rows") or [])
+    )
+
+
+def _watch_active_before_entry(candidate: dict[str, Any], row: dict[str, Any]) -> bool:
     row_ts = _num(row.get("timestamp"))
+    row_key = _confirmation_evidence_key(row)
     for candidate_row in candidate.get("path_rows") or []:
         ts = _num(candidate_row.get("timestamp"))
-        if row_ts is not None and ts is not None and ts > row_ts:
-            continue
+        if row_ts is not None and ts is not None:
+            if ts > row_ts:
+                continue
+            if ts == row_ts and _confirmation_evidence_key(candidate_row) == row_key:
+                continue
         fdv = _milestone_fdv_usd(candidate_row)
-        if fdv is not None and fdv >= LIVE_WATCH_ARM_USD:
+        if fdv is not None and WATCH_THRESHOLD_FDV <= fdv < ENTRY_THRESHOLD_FDV:
             return True
     return False
+
+
+def _hot_watch_active_before_entry(candidate: dict[str, Any], row: dict[str, Any]) -> bool:
+    row_ts = _num(row.get("timestamp"))
+    row_key = _confirmation_evidence_key(row)
+    for candidate_row in candidate.get("path_rows") or []:
+        ts = _num(candidate_row.get("timestamp"))
+        if row_ts is not None and ts is not None:
+            if ts > row_ts:
+                continue
+            if ts == row_ts and _confirmation_evidence_key(candidate_row) == row_key:
+                continue
+        fdv = _milestone_fdv_usd(candidate_row)
+        if fdv is not None and LIVE_WATCH_ARM_USD <= fdv < ENTRY_THRESHOLD_FDV:
+            return True
+    return False
+
+
+def _single_row_spike_watch_softened(candidate: dict[str, Any], row: dict[str, Any]) -> bool:
+    fdv = _milestone_fdv_usd(row)
+    if fdv is None or not ENTRY_THRESHOLD_FDV <= fdv <= ENTRY_ZONE_MAX_USD:
+        return False
+    return _watch_active_before_entry(candidate, row)
 
 
 def _watch_mode_for_fdv(fdv: float | None) -> str:
@@ -2783,6 +2824,14 @@ def _watch_mode_for_fdv(fdv: float | None) -> str:
     if fdv >= LOW_FDV_WATCH_MIN_USD:
         return "low_fdv_post_birth_watch"
     return "light_watch"
+
+
+def _watch_delays_for_mode(mode: str) -> tuple[float, ...]:
+    if mode == "entry_zone_watch":
+        return ENTRY_ZONE_PROBE_DELAYS_SECONDS
+    if mode == "confirmed_10k_watch":
+        return WARM_WATCH_PROBE_DELAYS_SECONDS
+    return HOT_WATCH_PROBE_DELAYS_SECONDS
 
 
 def _trigger_fdv_usd(candidate: dict[str, Any]) -> float | None:
@@ -3684,7 +3733,7 @@ def _evaluate_entry(
         ("same_timestamp_major_jump_flag", "same_timestamp_major_jump"),
         ("fdv_anomaly_flag", "fdv_anomaly"),
     ]:
-        if candidate.get(flag):
+        if candidate.get(flag) and not (flag == "single_row_spike_flag" and _single_row_spike_watch_softened(candidate, row)):
             reasons.append(reason)
     fdv_units = str(row.get("fdv_units") or "").strip().lower()
     if not fdv_units:

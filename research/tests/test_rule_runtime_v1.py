@@ -6,11 +6,13 @@ import time
 from pathlib import Path
 
 from research.mtp_research.validation.rule_runtime_v1 import (
+    ENTRY_ZONE_PROBE_DELAYS_SECONDS,
     RuleRuntimeConfig,
     RuleRuntimeEngine,
     RuleRuntimeLiveAdapter,
     RuleRuntimeLiveAdapterConfig,
     RuleRuntimePriorityScheduler,
+    WARM_WATCH_PROBE_DELAYS_SECONDS,
     archive_runtime_queue_candidates,
     birth_coverage_audit,
     first_fdv_queue_triage_audit,
@@ -24,6 +26,7 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     run_first_fdv_queue_triage_smoke,
     run_rule_runtime_smoke,
     rule_runtime_status,
+    _watch_delays_for_mode,
     _watch_mode_for_fdv,
 )
 from research.mtp_research.validation.bonding_curve_account_state import (
@@ -1089,8 +1092,9 @@ def test_chase_guard_rejects_paper_entry_above_26k_hard_cap(tmp_path: Path) -> N
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
 
-    engine.process_path_event(_event("chase", 100, 22_486.83, reserve_state_fingerprint="chase-a", account_data_hash="chase-a", slot=1))
-    result = engine.process_path_event(_event("chase", 111, 27_876.00, reserve_state_fingerprint="chase-b", account_data_hash="chase-b", slot=2))
+    engine.process_path_event(_event("chase", 100, 14_000, reserve_state_fingerprint="chase-a", account_data_hash="chase-a", slot=1))
+    engine.process_path_event(_event("chase", 110, 22_486.83, reserve_state_fingerprint="chase-b", account_data_hash="chase-b", slot=2))
+    result = engine.process_path_event(_event("chase", 111, 27_876.00, reserve_state_fingerprint="chase-c", account_data_hash="chase-c", slot=3))
     decisions = _rows(config.paper_decisions_path)
     decision = next(row for row in decisions if row["mint"] == "chase" and row["paper_event_id"].startswith("decision_"))
 
@@ -1288,13 +1292,14 @@ def test_entry_band_rejects_first_observation_above_allowed_entry_zone(tmp_path:
     assert result["paper_buy_created"] is False
     assert decision["decision"] == "paper_rejected_entry"
     assert decision["entry_band_result"] == "reject"
-    assert decision["entry_band_rejection_reason"] == "missed_live_arm"
+    assert decision["entry_band_rejection_reason"] == "missed_entry_probe_gap"
     assert decision["missed_entry_zone"] is True
-    assert decision["missed_live_arm"] is True
+    assert decision["missed_live_arm"] is False
+    assert decision["missed_entry_probe_gap"] is True
     assert decision["chase_guard_exceeded"] is True
     assert decision["observed_inside_entry_zone"] is False
     assert rule_runtime_status(config)["missed_entry_zone_count"] == 1
-    assert rule_runtime_status(config)["missed_live_arm_count"] == 1
+    assert rule_runtime_status(config)["missed_entry_probe_gap_count"] == 1
 
 
 def test_entry_band_allows_fast_runner_inside_26k_chase_zone(tmp_path: Path) -> None:
@@ -1315,9 +1320,29 @@ def test_entry_band_allows_fast_runner_inside_26k_chase_zone(tmp_path: Path) -> 
     assert decision["hot_watch_active_before_entry"] is True
 
 
+def test_warm_watch_allows_10k_runner_to_confirm_inside_26k_zone(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("warm-entry", 100, 10_000, reserve_state_fingerprint="warm-a", account_data_hash="warm-a"))
+    engine.process_path_event(_event("warm-entry", 101, 24_500, reserve_state_fingerprint="warm-b", account_data_hash="warm-b"))
+    result = engine.process_path_event(_event("warm-entry", 102, 24_700, reserve_state_fingerprint="warm-c", account_data_hash="warm-c"))
+    decision = [row for row in _rows(config.paper_decisions_path) if row["mint"] == "warm-entry"][-1]
+
+    assert result["paper_buy_created"] is True
+    assert decision["decision"] == "paper_buy"
+    assert decision["entry_band_result"] == "pass"
+    assert decision["watch_active_before_entry"] is True
+    assert decision["pre_entry_watch_observed"] is True
+    assert decision["single_row_spike_watch_softened"] is True
+
+
 def test_watch_mode_arms_entry_zone_at_14k() -> None:
     assert _watch_mode_for_fdv(13_999.0) == "confirmed_10k_watch"
     assert _watch_mode_for_fdv(14_000.0) == "entry_zone_watch"
+    assert _watch_delays_for_mode("confirmed_10k_watch") == WARM_WATCH_PROBE_DELAYS_SECONDS
+    assert _watch_delays_for_mode("entry_zone_watch") == ENTRY_ZONE_PROBE_DELAYS_SECONDS
 
 
 def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(tmp_path: Path) -> None:
@@ -1350,8 +1375,10 @@ def test_holder_gate_and_mayhem_labels_are_entry_safe(tmp_path: Path) -> None:
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
 
+    engine.process_path_event(_event("holder-one", 90, 14_000, holder_count_at_10k_proxy=1, mayhem_mode=True, reserve_state_fingerprint="h1-arm", account_data_hash="h1-arm"))
     engine.process_path_event(_event("holder-one", 100, 20_100, holder_count_at_10k_proxy=1, mayhem_mode=True, reserve_state_fingerprint="h1a", account_data_hash="h1a"))
     engine.process_path_event(_event("holder-one", 110, 20_200, holder_count_at_10k_proxy=1, mayhem_mode=True, reserve_state_fingerprint="h1b", account_data_hash="h1b"))
+    engine.process_path_event(_event("holder-three", 190, 14_000, holder_count_at_10k_proxy=3, mayhem_mode=True, reserve_state_fingerprint="h3-arm", account_data_hash="h3-arm"))
     engine.process_path_event(_event("holder-three", 200, 20_100, holder_count_at_10k_proxy=3, mayhem_mode=True, reserve_state_fingerprint="h3a", account_data_hash="h3a"))
     engine.process_path_event(_event("holder-three", 210, 20_200, holder_count_at_10k_proxy=3, mayhem_mode=True, reserve_state_fingerprint="h3b", account_data_hash="h3b"))
     decisions = _rows(config.paper_decisions_path)
@@ -1372,6 +1399,7 @@ def test_stagnation_after_runup_triggers_paper_sell(tmp_path: Path) -> None:
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
 
+    engine.process_path_event(_event("stagnate", 90, 14_000, reserve_state_fingerprint="s-arm", account_data_hash="s-arm"))
     engine.process_path_event(_event("stagnate", 100, 20_100, reserve_state_fingerprint="s-a", account_data_hash="s-a"))
     engine.process_path_event(_event("stagnate", 110, 20_200, reserve_state_fingerprint="s-b", account_data_hash="s-b"))
     engine.process_path_event(_event("stagnate", 130, 31_000, reserve_state_fingerprint="s-c", account_data_hash="s-c"))
@@ -2523,7 +2551,7 @@ def test_transaction_subscribe_cleanup_drains_late_hot_watch_jobs(tmp_path: Path
             )
         return row
 
-    monkeypatch.setattr(runtime, "HOT_WATCH_PROBE_DELAYS_SECONDS", (0.01,), raising=False)
+    monkeypatch.setattr(runtime, "WARM_WATCH_PROBE_DELAYS_SECONDS", (0.01,), raising=False)
     monkeypatch.setattr(runtime, "CONFIRMATION_FOLLOW_UP_TRIGGER_FDV", 99_000.0, raising=False)
     monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS", 1.0, raising=False)
     monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
