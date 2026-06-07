@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from research.mtp_research.validation.rule_runtime_v1 import (
+    ENTRY_VALIDATION_BURST_DELAYS_SECONDS,
     ENTRY_ZONE_PROBE_DELAYS_SECONDS,
     RuleRuntimeConfig,
     RuleRuntimeEngine,
@@ -1394,6 +1395,49 @@ def test_holder_gate_and_mayhem_labels_are_entry_safe(tmp_path: Path) -> None:
     assert "holder_count_lte_1_hard_reject" not in holder_three["risk_labels"]
 
 
+def test_account_state_only_entry_rows_do_not_treat_missing_trade_counts_as_fake_volume(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+    mint = "account-state-only"
+
+    engine.process_path_event(
+        _event(
+            mint,
+            100,
+            20_200,
+            source_event_type="fdv_path_update",
+            data_source="helius_transaction_subscribe_bonding_curve_probe",
+            token_program="TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            holder_count_at_10k_proxy=5,
+            event_count_present=False,
+            buy_count_present=False,
+            active_wallet_count_present=False,
+        )
+    )
+    result = engine.process_path_event(
+        _event(
+            mint,
+            100.2,
+            20_500,
+            source_event_type="fdv_path_update",
+            data_source="helius_transaction_subscribe_bonding_curve_probe",
+            probe_phase="entry_validation_burst",
+            token_program="TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            holder_count_at_10k_proxy=5,
+            event_count_present=False,
+            buy_count_present=False,
+            active_wallet_count_present=False,
+        )
+    )
+
+    decisions = _rows(config.paper_decisions_path)
+    assert result["paper_buy_created"] is True
+    assert decisions[-1]["decision"] == "paper_buy"
+    assert "fake_volume_suspect" not in decisions[-1]["risk_labels"]
+    assert "dev_pump_suspect" not in decisions[-1]["risk_labels"]
+
+
 def test_stagnation_after_runup_triggers_paper_sell(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
@@ -1970,6 +2014,8 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
     ) -> dict:
         if create.get("post_birth_watch_follow_up_scheduled"):
             phase = "post_birth_watch_follow_up"
+        elif create.get("entry_validation_burst_scheduled"):
+            phase = "entry_validation_burst"
         elif create.get("hot_watch_follow_up_scheduled"):
             phase = "entry_zone_hot_watch_follow_up"
         elif create.get("confirmation_follow_up_scheduled"):
@@ -1978,7 +2024,7 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
             phase = "initial"
         probe_calls.append(phase)
         probe_threads[phase] = threading.current_thread().name
-        fdv = 24_000.0 if phase in {"post_birth_watch_follow_up", "confirmation_follow_up"} else 2_400.0
+        fdv = 24_000.0 if phase in {"post_birth_watch_follow_up", "confirmation_follow_up", "entry_validation_burst"} else 2_400.0
         row = {
             "event_id": f"probe-{phase}",
             "mint": create["mint"],
@@ -2574,6 +2620,137 @@ def test_transaction_subscribe_cleanup_drains_late_hot_watch_jobs(tmp_path: Path
     assert summary["hot_watch_probe_count"] == 1
     assert summary["entry_zone_watch_probe_count"] == 0
     assert summary["confirmed_20k_candidates"] == 0
+
+
+def test_transaction_subscribe_entry_validation_burst_can_confirm_20k_and_buy(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+    from research.mtp_research.validation import rule_runtime_v1 as runtime
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-entry_123_0",
+        "signature": "sig-entry",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "entry-burst-buy",
+        "bonding_curve": "curve-entry",
+        "parser_status": "decoded",
+    }
+    probe_phases: list[str] = []
+    delay_calls: list[tuple[float, ...]] = []
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
+            assert on_create_event is not None
+            append_row(self.config.pumpfun_create_stream_events_path, create_event)
+            on_create_event(dict(create_event))
+            return [create_event]
+
+    def fake_probe_runner(
+        config: RuleRuntimeConfig,
+        create: dict,
+        *,
+        probe: object,
+        event_callback=None,
+        now_fn=None,
+        follow_up_probe_delays=None,
+    ) -> dict:
+        delays = tuple(follow_up_probe_delays or ())
+        delay_calls.append(delays)
+        phase = str(create.get("probe_phase_override") or "initial")
+        probe_phases.append(phase)
+        index = len(probe_phases)
+        fdv = 20_500.0 if phase == "initial" else 20_800.0
+        timestamp = 100.0 if phase == "initial" else 100.2
+        row = {
+            "event_id": f"probe-{phase}",
+            "mint": create["mint"],
+            "bonding_curve": create["bonding_curve"],
+            "probe_status": "success",
+            "probe_phase": phase,
+            "probe_scheduled_during_stream": create.get("probe_scheduled_during_stream"),
+            "entry_validation_burst_scheduled": bool(create.get("entry_validation_burst_scheduled")),
+            "fdv_proxy": fdv,
+            "fdv_usd": fdv,
+            "fdv_units": "usd",
+            "observed_to_probe_started_ms": 10.0,
+            "observed_to_first_fdv_emitted_ms": 20.0,
+            "helius_rpc_request_count": 1,
+            "http_429_count": 0,
+        }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        if event_callback is not None:
+            event_callback(
+                {
+                    "event_id": f"fdv-{phase}-{index}",
+                    "mint": create["mint"],
+                    "timestamp": timestamp,
+                    "observed_at": create["observed_at"],
+                    "event_observed_at": create["observed_at"],
+                    "fdv_proxy": fdv,
+                    "fdv_usd": fdv,
+                    "fdv_units": "usd",
+                    "source_event_type": "fdv_path_update",
+                    "source_adapter": "helius_transaction_subscribe_bonding_curve_probe",
+                    "fdv_source": "bonding_curve_account_state",
+                    "fdv_source_confidence": "high",
+                    "probe_phase": phase,
+                    "token_program": runtime.SPL_TOKEN_PROGRAM_ID,
+                    "holder_count_at_10k_proxy": 6,
+                    "account_data_hash": f"entry-hash-{index}",
+                    "reserve_state_fingerprint": f"entry-reserve-{index}",
+                    "observed_to_first_fdv_account_state_ms": 20.0,
+                }
+            )
+        return row
+
+    monkeypatch.setattr(runtime, "ENTRY_VALIDATION_BURST_DELAYS_SECONDS", (0.0,), raising=False)
+    monkeypatch.setattr(runtime, "ENTRY_ZONE_PROBE_DELAYS_SECONDS", (), raising=False)
+    monkeypatch.setattr(runtime, "CONFIRMATION_FOLLOW_UP_TRIGGER_FDV", 99_000.0, raising=False)
+    monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=1.0,
+    )
+
+    assert ENTRY_VALIDATION_BURST_DELAYS_SECONDS
+    assert delay_calls[0] == ()
+    assert "entry_validation_burst" in probe_phases
+    assert summary["entry_validation_burst_futures"] == 1
+    assert summary["entry_validation_burst_probe_rows"] == 1
+    assert summary["confirmed_20k_candidates"] == 1
+    assert summary["paper_buys"] == 1
 
 
 def test_transaction_subscribe_smoke_runs_final_archive_sweep_before_summary(tmp_path: Path, monkeypatch) -> None:

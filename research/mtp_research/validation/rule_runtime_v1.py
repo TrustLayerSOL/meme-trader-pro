@@ -127,6 +127,7 @@ ENTRY_ZONE_MAX_USD = 26_000.0
 HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75, 1.0)
 WARM_WATCH_PROBE_DELAYS_SECONDS = (0.5, 1.0, 2.0, 3.0, 5.0)
 ENTRY_ZONE_PROBE_DELAYS_SECONDS = (0.1, 0.25, 0.5, 0.75, 1.0)
+ENTRY_VALIDATION_BURST_DELAYS_SECONDS = (0.0, 0.1, 0.25, 0.5)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
 TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS = 16
@@ -1524,9 +1525,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     watch_follow_up_futures = []
     watch_follow_up_lock = Lock()
     hot_watch_scheduled_modes: set[tuple[str, str]] = set()
+    entry_validation_scheduled_mints: set[str] = set()
     watch_follow_up_sequence = 0
     post_birth_watch_follow_up_scheduled_count = 0
     hot_watch_follow_up_scheduled_count = 0
+    entry_validation_burst_scheduled_count = 0
     near_entry_live_watch_scheduled_count = 0
     probe_errors: list[dict[str, Any]] = []
     confirmation_errors: list[dict[str, Any]] = []
@@ -1620,6 +1623,42 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         with confirmation_future_lock:
             confirmation_futures.append(future)
 
+    def schedule_entry_validation_burst(event: dict[str, Any], row: dict[str, Any]) -> None:
+        nonlocal entry_validation_burst_scheduled_count, watch_follow_up_sequence
+        if not _should_schedule_entry_validation_burst(row):
+            return
+        mint = str(row.get("mint") or event.get("mint") or "")
+        if not mint:
+            return
+        now_monotonic = time.monotonic()
+        with watch_follow_up_lock:
+            if mint in entry_validation_scheduled_mints:
+                return
+            entry_validation_scheduled_mints.add(mint)
+            for index, delay in enumerate(tuple(ENTRY_VALIDATION_BURST_DELAYS_SECONDS), start=1):
+                follow_event = dict(event)
+                for stale_key in [
+                    "post_birth_watch_follow_up_scheduled",
+                    "post_birth_watch_follow_up_index",
+                    "post_birth_watch_due_delay_seconds",
+                    "post_birth_watch_lane",
+                    "hot_watch_follow_up_scheduled",
+                    "hot_watch_follow_up_index",
+                    "hot_watch_due_delay_seconds",
+                    "hot_watch_mode",
+                    "confirmation_follow_up_scheduled",
+                    "probe_phase_override",
+                ]:
+                    follow_event.pop(stale_key, None)
+                follow_event["probe_scheduled_during_stream"] = True
+                follow_event["entry_validation_burst_scheduled"] = True
+                follow_event["entry_validation_burst_index"] = index
+                follow_event["entry_validation_burst_due_delay_seconds"] = float(delay)
+                follow_event["probe_phase_override"] = "entry_validation_burst"
+                watch_follow_up_sequence += 1
+                entry_validation_burst_scheduled_count += 1
+                heapq.heappush(watch_follow_up_jobs, (now_monotonic + float(delay), watch_follow_up_sequence, follow_event))
+
     def run_first_fdv_probe_and_schedule_confirmation(
         event: dict[str, Any],
         confirmation_executor: ThreadPoolExecutor,
@@ -1632,6 +1671,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         )
         schedule_post_birth_watch_follow_up(event, row)
         schedule_hot_watch_follow_up(event, row)
+        schedule_entry_validation_burst(event, row)
         schedule_near_entry_live_watch(event, row, live_watch_executor)
         schedule_confirmation_follow_up(event, row, confirmation_executor)
         return row
@@ -1643,6 +1683,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     ) -> dict[str, Any]:
         row = run_probe(event)
         schedule_hot_watch_follow_up(event, row)
+        schedule_entry_validation_burst(event, row)
         schedule_near_entry_live_watch(event, row, live_watch_executor)
         schedule_confirmation_follow_up(event, row, confirmation_executor)
         return row
@@ -1906,6 +1947,10 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             failure_key="confirmation_cleanup_timeout",
             cleanup_deadline=cleanup_deadline,
         )
+        with watch_follow_up_lock:
+            if watch_follow_up_jobs and time.monotonic() >= cleanup_deadline:
+                cancelled_watch_follow_up_futures += len(watch_follow_up_jobs)
+                watch_follow_up_jobs.clear()
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
         watch_executor.shutdown(wait=False, cancel_futures=True)
@@ -1935,9 +1980,14 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
     probe_stats["initial_probe_max_workers"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS
     probe_stats["initial_probe_metadata_deferred"] = True
-    pending_watch_events = [item[2] for item in watch_follow_up_jobs]
+    with watch_follow_up_lock:
+        if watch_follow_up_jobs and time.monotonic() >= cleanup_deadline:
+            cancelled_watch_follow_up_futures += len(watch_follow_up_jobs)
+            watch_follow_up_jobs.clear()
+        pending_watch_events = [item[2] for item in watch_follow_up_jobs]
     probe_stats["post_birth_watch_follow_up_futures"] = post_birth_watch_follow_up_scheduled_count
     probe_stats["hot_watch_follow_up_futures"] = hot_watch_follow_up_scheduled_count
+    probe_stats["entry_validation_burst_futures"] = entry_validation_burst_scheduled_count
     probe_stats["near_entry_live_watch_futures"] = near_entry_live_watch_scheduled_count
     probe_stats["shutdown_cancelled_probe_futures"] = int(cancelled_probe_futures)
     probe_stats["shutdown_cancelled_watch_follow_up_futures"] = int(cancelled_watch_follow_up_futures)
@@ -1945,6 +1995,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     probe_stats["shutdown_cancelled_confirmation_futures"] = int(cancelled_confirmation_futures)
     probe_stats["post_birth_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if item.get("probe_phase_override") == "post_birth_watch_follow_up")
     probe_stats["hot_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if str(item.get("probe_phase_override") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"})
+    probe_stats["entry_validation_burst_pending"] = sum(1 for item in pending_watch_events if item.get("probe_phase_override") == "entry_validation_burst")
     _record_bonding_curve_probe_stats(config, probe_stats)
     status = rule_runtime_status(config)
     summary = _helius_transaction_subscribe_bonding_curve_probe_summary(
@@ -2681,6 +2732,8 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
     previous_ts = _num(previous.get("timestamp")) if previous else None
     observed_inside_entry_zone = _observed_inside_entry_zone(candidate)
     observed_inside_buy_band = current_fdv is not None and ENTRY_THRESHOLD_FDV <= current_fdv <= ENTRY_ZONE_MAX_USD
+    entry_validation_burst = str(row.get("probe_phase") or "") == "entry_validation_burst"
+    previous_inside_buy_band = previous_fdv is not None and ENTRY_THRESHOLD_FDV <= previous_fdv <= ENTRY_ZONE_MAX_USD
     hot_watch_active = _hot_watch_active_before_entry(candidate, row)
     watch_active = _watch_active_before_entry(candidate, row)
     pre_entry_live_arm_observed = _pre_entry_live_arm_observed(candidate)
@@ -2690,7 +2743,7 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
     missed_entry = bool(chase_exceeded and not observed_inside_entry_zone)
     if chase_exceeded and (previous_fdv is None or previous_fdv < WATCH_THRESHOLD_FDV or not watch_active):
         missed_entry = True
-    if observed_inside_buy_band and watch_active:
+    if observed_inside_buy_band and (watch_active or (entry_validation_burst and previous_inside_buy_band)):
         result = "pass"
         reason = None
     elif missed_entry:
@@ -2725,6 +2778,7 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
         "pre_entry_live_arm_observed": bool(pre_entry_live_arm_observed),
         "pre_entry_watch_observed": bool(pre_entry_watch_observed),
         "single_row_spike_watch_softened": bool(single_row_spike_softened),
+        "entry_validation_burst_confirmed": bool(entry_validation_burst and previous_inside_buy_band),
         "missed_entry_zone": bool(missed_entry),
         "missed_live_arm": bool(missed_entry and not pre_entry_watch_observed),
         "missed_entry_probe_gap": bool(missed_entry and pre_entry_watch_observed),
@@ -2902,9 +2956,16 @@ def _entry_risk_labels(row: dict[str, Any]) -> list[str]:
 
 def _volume_risk_labels(row: dict[str, Any], features: dict[str, Any]) -> list[str]:
     labels = []
-    if int(row.get("active_wallet_count") or 0) <= 1:
+    account_state_fdv_only = (
+        str(row.get("fdv_source") or "") == "bonding_curve_account_state"
+        and str(row.get("source_event_type") or "") == "fdv_path_update"
+    )
+    has_active_wallet_count = bool(row.get("active_wallet_count_present")) and not account_state_fdv_only
+    has_buy_count = bool(row.get("buy_count_present")) and not account_state_fdv_only
+    has_event_count = bool(row.get("event_count_present")) and not account_state_fdv_only
+    if has_active_wallet_count and int(row.get("active_wallet_count") or 0) <= 1:
         labels.append("dev_pump_suspect")
-    if int(row.get("buy_count") or 0) <= 0 or int(row.get("event_count") or 0) <= 1:
+    if (has_buy_count and int(row.get("buy_count") or 0) <= 0) or (has_event_count and int(row.get("event_count") or 0) <= 1):
         labels.append("fake_volume_suspect")
     if (_num(row.get("repeated_buyer_count")) or 0) >= 2:
         labels.append("concentrated_buying_suspect")
@@ -3187,6 +3248,10 @@ def _default_scheduler_stats() -> dict[str, Any]:
         "active_account_subscriptions": 0,
         "hot_watch_follow_up_futures": 0,
         "hot_watch_follow_up_pending": 0,
+        "entry_validation_burst_futures": 0,
+        "entry_validation_burst_pending": 0,
+        "entry_validation_burst_probe_rows": 0,
+        "entry_validation_burst_successes": 0,
         "shutdown_cancelled_probe_futures": 0,
         "shutdown_cancelled_watch_follow_up_futures": 0,
         "shutdown_cancelled_live_watch_futures": 0,
@@ -3217,6 +3282,9 @@ def _normalize_path_event(event: dict[str, Any]) -> dict[str, Any]:
         "buy_count": int(_num(event.get("buy_count")) or 0),
         "sell_count": int(_num(event.get("sell_count")) or 0),
         "active_wallet_count": int(_num(event.get("active_wallet_count")) or 0),
+        "event_count_present": "event_count" in event,
+        "buy_count_present": "buy_count" in event,
+        "active_wallet_count_present": "active_wallet_count" in event,
         "data_source": str(event.get("data_source") or "helius_rpc_read_only"),
         "source_event_type": str(event.get("source_event_type") or "fdv_path"),
         "observed_at": float(_num(event.get("observed_at")) or timestamp),
@@ -3293,6 +3361,17 @@ def _should_schedule_near_entry_live_watch(row: dict[str, Any]) -> bool:
     return LIVE_WATCH_ARM_USD <= fdv <= ENTRY_ZONE_MAX_USD
 
 
+def _should_schedule_entry_validation_burst(row: dict[str, Any]) -> bool:
+    if row.get("probe_status") != "success":
+        return False
+    if row.get("fdv_anomaly_flag_from_source") is True:
+        return False
+    fdv = _milestone_fdv_usd(row)
+    if fdv is None or fdv <= 0 or fdv >= FDV_ANOMALY_HIGH:
+        return False
+    return ENTRY_ZONE_MIN_USD <= fdv <= ENTRY_ZONE_MAX_USD
+
+
 def _should_schedule_post_birth_watch_follow_up(row: dict[str, Any]) -> bool:
     if row.get("probe_status") != "success":
         return False
@@ -3341,6 +3420,7 @@ def _copy_first_fdv_probe_fields(source: dict[str, Any], target: dict[str, Any])
         "probe_started_to_first_curve_state_ms",
         "observed_to_first_fdv_emitted_ms",
         "probe_attempt_count",
+        "probe_phase",
         "account_not_found_retry_count",
         "account_not_found_recovered_by_retry",
         "first_failure_reason",
@@ -4626,6 +4706,7 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
     probe_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
     state = _read_json(config.runtime_state_path)
     candidates = state.get("candidates") if isinstance(state.get("candidates"), dict) else {}
+    scheduler_stats = state.get("scheduler_stats") if isinstance(state.get("scheduler_stats"), dict) else {}
     audit = _read_json(config.helius_transaction_subscribe_capability_audit_json_path)
     recommended = audit.get("recommended_endpoint") if isinstance(audit.get("recommended_endpoint"), dict) else {}
     decoded_create_rows = [row for row in create_rows if row.get("parser_status") == "decoded"]
@@ -4660,6 +4741,7 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         for row in probe_rows
         if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
     ]
+    entry_validation_burst_rows = [row for row in probe_rows if row.get("probe_phase") == "entry_validation_burst"]
     near_entry_live_watch_rows = [row for row in probe_rows if row.get("probe_phase") == "near_entry_live_watch"]
     post_birth_watch = _post_birth_watch_status_metrics(
         probe_rows,
@@ -4691,6 +4773,18 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "post_birth_watch_follow_up_pending": int(source_summary.get("post_birth_watch_follow_up_pending") or 0),
         "hot_watch_follow_up_futures": int(source_summary.get("hot_watch_follow_up_futures") or 0),
         "hot_watch_follow_up_pending": int(source_summary.get("hot_watch_follow_up_pending") or 0),
+        "entry_validation_burst_futures": int(
+            scheduler_stats.get("entry_validation_burst_futures")
+            or source_summary.get("entry_validation_burst_futures")
+            or 0
+        ),
+        "entry_validation_burst_pending": int(
+            scheduler_stats.get("entry_validation_burst_pending")
+            or source_summary.get("entry_validation_burst_pending")
+            or 0
+        ),
+        "entry_validation_burst_probe_rows": len(entry_validation_burst_rows),
+        "entry_validation_burst_successes": sum(1 for row in entry_validation_burst_rows if row.get("probe_status") == "success"),
         "near_entry_live_watch_futures": int(source_summary.get("near_entry_live_watch_futures") or 0),
         "post_birth_watch_follow_up_probe_rows": sum(1 for row in probe_rows if row.get("probe_phase") == "post_birth_watch_follow_up"),
         "post_birth_watch_follow_up_successes": sum(
@@ -4733,10 +4827,26 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "probe_failures_by_reason": failure_reasons,
         "http_429": int(source_summary.get("http_429_count") or 0),
         "accountSubscribe_bonding_curve_status": source_summary.get("accountSubscribe_bonding_curve_status"),
-        "shutdown_cancelled_probe_futures": int(source_summary.get("shutdown_cancelled_probe_futures") or 0),
-        "shutdown_cancelled_watch_follow_up_futures": int(source_summary.get("shutdown_cancelled_watch_follow_up_futures") or 0),
-        "shutdown_cancelled_live_watch_futures": int(source_summary.get("shutdown_cancelled_live_watch_futures") or 0),
-        "shutdown_cancelled_confirmation_futures": int(source_summary.get("shutdown_cancelled_confirmation_futures") or 0),
+        "shutdown_cancelled_probe_futures": int(
+            scheduler_stats.get("shutdown_cancelled_probe_futures")
+            or source_summary.get("shutdown_cancelled_probe_futures")
+            or 0
+        ),
+        "shutdown_cancelled_watch_follow_up_futures": int(
+            scheduler_stats.get("shutdown_cancelled_watch_follow_up_futures")
+            or source_summary.get("shutdown_cancelled_watch_follow_up_futures")
+            or 0
+        ),
+        "shutdown_cancelled_live_watch_futures": int(
+            scheduler_stats.get("shutdown_cancelled_live_watch_futures")
+            or source_summary.get("shutdown_cancelled_live_watch_futures")
+            or 0
+        ),
+        "shutdown_cancelled_confirmation_futures": int(
+            scheduler_stats.get("shutdown_cancelled_confirmation_futures")
+            or source_summary.get("shutdown_cancelled_confirmation_futures")
+            or 0
+        ),
         "warnings": warnings,
     }
 
@@ -5208,7 +5318,8 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 	<p>Decoded create probe coverage: {html.escape(str(txsub.get('decoded_create_mints_with_probe')))} / {html.escape(str(txsub.get('decoded_create_unique_mints')))} ({html.escape(str(txsub.get('decoded_create_probe_coverage_rate')))}); missing probes: {html.escape(str(txsub.get('decoded_create_mints_without_probe')))}</p>
 	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
-	<p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
+<p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
+<p>Entry-validation burst futures/pending/rows/successes: {html.escape(str(txsub.get('entry_validation_burst_futures')))} / {html.escape(str(txsub.get('entry_validation_burst_pending')))} / {html.escape(str(txsub.get('entry_validation_burst_probe_rows')))} / {html.escape(str(txsub.get('entry_validation_burst_successes')))}</p>
 <p>Hot-watch futures/pending/probes/successes: {html.escape(str(txsub.get('hot_watch_follow_up_futures')))} / {html.escape(str(txsub.get('hot_watch_follow_up_pending')))} / {html.escape(str(txsub.get('hot_watch_probe_count')))} / {html.escape(str(txsub.get('hot_watch_success_count')))}</p>
 <p>Hot-watch near-threshold/entry-zone probes: {html.escape(str(txsub.get('near_threshold_hot_watch_probe_count')))} / {html.escape(str(txsub.get('entry_zone_watch_probe_count')))}</p>
 <p>Near-entry live-watch futures/rows/successes: {html.escape(str(txsub.get('near_entry_live_watch_futures')))} / {html.escape(str(txsub.get('near_entry_live_watch_probe_rows')))} / {html.escape(str(txsub.get('near_entry_live_watch_successes')))}</p>
@@ -5476,6 +5587,10 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "confirmation_follow_up_successes": int(txsub.get("confirmation_follow_up_successes") or 0),
         "hot_watch_follow_up_futures": int(txsub.get("hot_watch_follow_up_futures") or 0),
         "hot_watch_follow_up_pending": int(txsub.get("hot_watch_follow_up_pending") or 0),
+        "entry_validation_burst_futures": int(txsub.get("entry_validation_burst_futures") or 0),
+        "entry_validation_burst_pending": int(txsub.get("entry_validation_burst_pending") or 0),
+        "entry_validation_burst_probe_rows": int(txsub.get("entry_validation_burst_probe_rows") or 0),
+        "entry_validation_burst_successes": int(txsub.get("entry_validation_burst_successes") or 0),
         "hot_watch_probe_count": int(txsub.get("hot_watch_probe_count") or 0),
         "near_threshold_hot_watch_probe_count": int(txsub.get("near_threshold_hot_watch_probe_count") or 0),
         "entry_zone_watch_probe_count": int(txsub.get("entry_zone_watch_probe_count") or 0),
@@ -5493,6 +5608,10 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "post_birth_watch_follow_up_pending": int(txsub.get("post_birth_watch_follow_up_pending") or 0),
         "hot_watch_follow_up_futures": int(txsub.get("hot_watch_follow_up_futures") or 0),
         "hot_watch_follow_up_pending": int(txsub.get("hot_watch_follow_up_pending") or 0),
+        "entry_validation_burst_futures": int(txsub.get("entry_validation_burst_futures") or 0),
+        "entry_validation_burst_pending": int(txsub.get("entry_validation_burst_pending") or 0),
+        "entry_validation_burst_probe_rows": int(txsub.get("entry_validation_burst_probe_rows") or 0),
+        "entry_validation_burst_successes": int(txsub.get("entry_validation_burst_successes") or 0),
         "hot_watch_probe_count": int(txsub.get("hot_watch_probe_count") or 0),
         "near_threshold_hot_watch_probe_count": int(txsub.get("near_threshold_hot_watch_probe_count") or 0),
         "entry_zone_watch_probe_count": int(txsub.get("entry_zone_watch_probe_count") or 0),
@@ -5582,6 +5701,7 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary_md(summary: dict[s
             f"- Accepted births: `{summary['accepted_births']}`",
             f"- Bonding curve probes started/during-stream/succeeded/failed: `{summary['bonding_curve_probes_started']}` / `{summary['probes_started_during_stream']}` / `{summary['bonding_curve_probes_succeeded']}` / `{summary['bonding_curve_probes_failed']}`",
             f"- Confirmation follow-up futures/rows/successes: `{summary['confirmation_follow_up_futures']}` / `{summary['confirmation_follow_up_probe_rows']}` / `{summary['confirmation_follow_up_successes']}`",
+            f"- Entry-validation burst futures/pending/rows/successes: `{summary['entry_validation_burst_futures']}` / `{summary['entry_validation_burst_pending']}` / `{summary['entry_validation_burst_probe_rows']}` / `{summary['entry_validation_burst_successes']}`",
             f"- Post-birth watch scheduled/probes/successes/pending: `{summary['post_birth_watch_count']}` / `{summary['post_birth_watch_probe_count']}` / `{summary['post_birth_watch_success_count']}` / `{summary['post_birth_watch_pending_count']}`",
             f"- Post-birth watch promotions 5k/10k/20k: `{summary['post_birth_watch_promotions_to_5k']}` / `{summary['post_birth_watch_promotions_to_10k']}` / `{summary['post_birth_watch_promotions_to_20k']}`",
             f"- Post-birth watch archives/rechecked runners: `{summary['post_birth_watch_archives']}` / `{summary['missed_runner_recheck_count']}`",
@@ -5805,6 +5925,12 @@ def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str,
             if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
             and row.get("probe_status") == "success"
         ),
+        "entry_validation_burst_probe_rows": sum(1 for row in rows if row.get("probe_phase") == "entry_validation_burst"),
+        "entry_validation_burst_successes": sum(
+            1
+            for row in rows
+            if row.get("probe_phase") == "entry_validation_burst" and row.get("probe_status") == "success"
+        ),
         "near_entry_live_watch_probe_rows": sum(1 for row in rows if row.get("probe_phase") == "near_entry_live_watch"),
         "near_entry_live_watch_successes": sum(
             1
@@ -5836,6 +5962,10 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["near_threshold_hot_watch_probe_count"] = int(probe_stats.get("near_threshold_hot_watch_probe_count") or 0)
     stats["entry_zone_watch_probe_count"] = int(probe_stats.get("entry_zone_watch_probe_count") or 0)
     stats["hot_watch_success_count"] = int(probe_stats.get("hot_watch_success_count") or 0)
+    stats["entry_validation_burst_futures"] = int(probe_stats.get("entry_validation_burst_futures") or 0)
+    stats["entry_validation_burst_pending"] = int(probe_stats.get("entry_validation_burst_pending") or 0)
+    stats["entry_validation_burst_probe_rows"] = int(probe_stats.get("entry_validation_burst_probe_rows") or 0)
+    stats["entry_validation_burst_successes"] = int(probe_stats.get("entry_validation_burst_successes") or 0)
     stats["near_entry_live_watch_futures"] = int(probe_stats.get("near_entry_live_watch_futures") or 0)
     stats["near_entry_live_watch_probe_rows"] = int(probe_stats.get("near_entry_live_watch_probe_rows") or 0)
     stats["near_entry_live_watch_successes"] = int(probe_stats.get("near_entry_live_watch_successes") or 0)
