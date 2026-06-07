@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from research.mtp_research.validation.rule_runtime_v1 import (
@@ -22,6 +23,7 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     run_first_fdv_queue_triage_smoke,
     run_rule_runtime_smoke,
     rule_runtime_status,
+    _watch_mode_for_fdv,
 )
 from research.mtp_research.validation.bonding_curve_account_state import (
     BondingCurveState,
@@ -1081,7 +1083,7 @@ def test_distinct_account_state_rows_can_confirm_20k(tmp_path: Path) -> None:
     assert status["confirmed_20k_entry_candidates"] == 1
 
 
-def test_chase_guard_rejects_paper_entry_above_15pct_over_trigger(tmp_path: Path) -> None:
+def test_chase_guard_rejects_paper_entry_above_26k_hard_cap(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
@@ -1095,7 +1097,8 @@ def test_chase_guard_rejects_paper_entry_above_15pct_over_trigger(tmp_path: Path
     assert decision["decision"] == "paper_rejected_entry"
     assert decision["rejection_reason"] == "chase_guard_exceeded"
     assert decision["trigger_fdv_usd"] == 22486.83
-    assert decision["max_entry_above_trigger_pct"] == 0.15
+    assert decision["max_entry_above_trigger_pct"] == 0.3
+    assert decision["max_allowed_paper_entry_fdv_usd"] == 26_000.0
     assert decision["chase_guard_result"] == "rejected"
     assert rule_runtime_status(config)["chase_guard_reject_count"] == 1
 
@@ -1277,18 +1280,43 @@ def test_entry_band_rejects_first_observation_above_allowed_entry_zone(tmp_path:
     engine = RuleRuntimeEngine(config)
 
     engine.process_path_event(_event("missed-entry", 100, 12_000, reserve_state_fingerprint="missed-a", account_data_hash="missed-a"))
-    engine.process_path_event(_event("missed-entry", 110, 24_500, reserve_state_fingerprint="missed-b", account_data_hash="missed-b"))
-    result = engine.process_path_event(_event("missed-entry", 111, 24_700, reserve_state_fingerprint="missed-c", account_data_hash="missed-c"))
+    engine.process_path_event(_event("missed-entry", 110, 27_500, reserve_state_fingerprint="missed-b", account_data_hash="missed-b"))
+    result = engine.process_path_event(_event("missed-entry", 111, 27_700, reserve_state_fingerprint="missed-c", account_data_hash="missed-c"))
     decision = [row for row in _rows(config.paper_decisions_path) if row["mint"] == "missed-entry"][-1]
 
     assert result["paper_buy_created"] is False
     assert decision["decision"] == "paper_rejected_entry"
     assert decision["entry_band_result"] == "reject"
-    assert decision["entry_band_rejection_reason"] == "missed_entry_zone"
+    assert decision["entry_band_rejection_reason"] == "missed_live_arm"
     assert decision["missed_entry_zone"] is True
+    assert decision["missed_live_arm"] is True
     assert decision["chase_guard_exceeded"] is True
     assert decision["observed_inside_entry_zone"] is False
     assert rule_runtime_status(config)["missed_entry_zone_count"] == 1
+    assert rule_runtime_status(config)["missed_live_arm_count"] == 1
+
+
+def test_entry_band_allows_fast_runner_inside_26k_chase_zone(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("fast-entry", 100, 14_000, reserve_state_fingerprint="fast-a", account_data_hash="fast-a"))
+    engine.process_path_event(_event("fast-entry", 110, 24_500, reserve_state_fingerprint="fast-b", account_data_hash="fast-b"))
+    result = engine.process_path_event(_event("fast-entry", 111, 24_700, reserve_state_fingerprint="fast-c", account_data_hash="fast-c"))
+    decision = [row for row in _rows(config.paper_decisions_path) if row["mint"] == "fast-entry"][-1]
+
+    assert result["paper_buy_created"] is True
+    assert decision["decision"] == "paper_buy"
+    assert decision["entry_band_result"] == "pass"
+    assert decision["entry_zone_max_usd"] == 26_000.0
+    assert decision["chase_guard_result"] == "pass"
+    assert decision["hot_watch_active_before_entry"] is True
+
+
+def test_watch_mode_arms_entry_zone_at_14k() -> None:
+    assert _watch_mode_for_fdv(13_999.0) == "confirmed_10k_watch"
+    assert _watch_mode_for_fdv(14_000.0) == "entry_zone_watch"
 
 
 def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(tmp_path: Path) -> None:
@@ -1876,6 +1904,7 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
         "parser_status": "decoded",
     }
     probe_calls: list[str] = []
+    probe_threads: dict[str, str] = {}
 
     def append_row(path: Path, row: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1908,9 +1937,15 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
         now_fn=None,
         follow_up_probe_delays=None,
     ) -> dict:
-        phase = "post_birth_watch_follow_up" if create.get("post_birth_watch_follow_up_scheduled") else "initial"
+        if create.get("post_birth_watch_follow_up_scheduled"):
+            phase = "post_birth_watch_follow_up"
+        elif create.get("confirmation_follow_up_scheduled"):
+            phase = "confirmation_follow_up"
+        else:
+            phase = "initial"
         probe_calls.append(phase)
-        fdv = 24_000.0 if phase == "post_birth_watch_follow_up" else 2_400.0
+        probe_threads[phase] = threading.current_thread().name
+        fdv = 24_000.0 if phase in {"post_birth_watch_follow_up", "confirmation_follow_up"} else 2_400.0
         row = {
             "event_id": f"probe-{phase}",
             "mint": create["mint"],
@@ -1998,7 +2033,9 @@ def test_transaction_subscribe_smoke_keeps_low_fdv_runners_on_post_birth_watch(t
         max_runtime_seconds=2.0,
     )
 
-    assert probe_calls == ["initial", "post_birth_watch_follow_up"]
+    assert probe_calls == ["initial", "post_birth_watch_follow_up", "confirmation_follow_up"]
+    assert probe_threads["initial"].startswith("txsub-fdv-probe")
+    assert probe_threads["post_birth_watch_follow_up"].startswith("txsub-watch-follow-up")
     assert summary["post_birth_watch_follow_up_futures"] == 1
     assert summary["post_birth_watch_follow_up_probe_rows"] == 1
     assert summary["post_birth_watch_follow_up_successes"] == 1

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable
+import base64
 import json
 import os
 import threading
@@ -29,6 +30,7 @@ TRANSACTION_SUBSCRIBE_REQUEST_ID = "mtp-pumpfun-transaction-subscribe"
 CAPABILITY_TRANSACTION_ID = "mtp-transaction-subscribe-capability"
 CAPABILITY_ACCOUNT_ID = "mtp-account-subscribe-capability"
 CAPABILITY_GET_ACCOUNT_ID = "mtp-get-account-info-capability"
+ACCOUNT_SUBSCRIBE_REQUEST_PREFIX = "live-watch"
 ACCOUNT_NOT_FOUND_RETRY_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
 _JSONL_WRITE_LOCK = threading.Lock()
 
@@ -49,6 +51,21 @@ def build_transaction_subscribe_request(*, request_id: str = TRANSACTION_SUBSCRI
                 "showRewards": False,
                 "maxSupportedTransactionVersion": 0,
                 "encoding": "jsonParsed",
+            },
+        ],
+    }
+
+
+def build_account_subscribe_request(pubkey: str, *, request_id: str | None = None) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id or f"{ACCOUNT_SUBSCRIBE_REQUEST_PREFIX}-{pubkey}",
+        "method": "accountSubscribe",
+        "params": [
+            pubkey,
+            {
+                "commitment": "processed",
+                "encoding": "base64",
             },
         ],
     }
@@ -127,6 +144,93 @@ class HeliusTransactionSubscribeCreateSource:
                         on_idle()
                     if len(rows) >= max(0, int(max_events)):
                         break
+        return rows
+
+
+class HeliusBondingCurveLiveWatchSource:
+    source_adapter = "helius_account_subscribe_bonding_curve_live_watch"
+
+    def __init__(
+        self,
+        *,
+        config: Any,
+        websocket_url: str | None = None,
+        ws_connect: Any | None = None,
+        now_fn: Callable[[], float] = time.time,
+        timeout_seconds: float = 2.0,
+    ) -> None:
+        self.config = config
+        self.websocket_url = websocket_url or resolve_helius_ws_url()
+        self._ws_connect = ws_connect or _websocket_connect
+        self.now_fn = now_fn
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+
+    def watch_create_event(
+        self,
+        create_event: dict[str, Any],
+        *,
+        probe: Any,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
+        max_updates: int = 25,
+        max_seconds: float = 15.0,
+    ) -> list[dict[str, Any]]:
+        mint = str(create_event.get("mint") or "").strip()
+        bonding_curve = str(create_event.get("bonding_curve") or "").strip()
+        if not mint or not bonding_curve or not self.websocket_url:
+            return []
+        request_id = f"{ACCOUNT_SUBSCRIBE_REQUEST_PREFIX}-{bonding_curve}"
+        rows: list[dict[str, Any]] = []
+        subscription_id: int | None = None
+        deadline = time.monotonic() + max(0.1, float(max_seconds))
+        with self._ws_connect(self.websocket_url, open_timeout=min(5.0, self.timeout_seconds), close_timeout=1.0) as websocket:
+            websocket.send(json.dumps(build_account_subscribe_request(bonding_curve, request_id=request_id)))
+            while len(rows) < max(0, int(max_updates)) and time.monotonic() < deadline:
+                try:
+                    message = websocket.recv(timeout=min(1.0, max(0.1, deadline - time.monotonic())))
+                except TimeoutError:
+                    continue
+                payload = json.loads(message) if isinstance(message, str) else message
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("id") == request_id:
+                    subscription_id = _optional_int(payload.get("result"))
+                    continue
+                if not _account_notification_matches(payload, subscription_id):
+                    continue
+                observed_at = self.now_fn()
+                slot = _slot(_find_result(payload) or {})
+                account_data = _account_data_from_account_notification(payload)
+                result = probe.decode_account_update(
+                    mint=mint,
+                    bonding_curve=bonding_curve,
+                    account_data=account_data,
+                    observed_at=observed_at,
+                    slot=slot,
+                    now_fn=self.now_fn,
+                    fdv_probe_method="accountSubscribe_processed_bonding_curve",
+                )
+                row = _live_watch_probe_row(create_event, result, observed_at=observed_at, slot=slot)
+                _append_jsonl(self.config.bonding_curve_account_probe_events_path, row)
+                rows.append(row)
+                runtime_event = result.to_runtime_event(timestamp=getattr(result, "decode_finished_at", None) or observed_at) if getattr(result, "probe_status", None) == "success" else None
+                if runtime_event is not None:
+                    runtime_event["event_id"] = f"fdv_live_{create_event.get('event_id') or create_event.get('signature')}_{int(observed_at * 1000)}"
+                    runtime_event["source_event_type"] = "fdv_path_update"
+                    runtime_event["source_adapter"] = self.source_adapter
+                    runtime_event["source_provenance"] = self.source_adapter
+                    runtime_event["data_source"] = "bonding_curve_account_state"
+                    runtime_event["milestone_provenance"] = "bonding_curve_account_state"
+                    runtime_event["probe_phase"] = "near_entry_live_watch"
+                    runtime_event["probe_scheduled_during_stream"] = True
+                    runtime_event["near_entry_live_watch"] = True
+                    runtime_event["live_watch_started_at"] = observed_at
+                    runtime_event["live_watch_arm_usd"] = create_event.get("live_watch_arm_usd")
+                    runtime_event["pumpfun_create_verified"] = str(create_event.get("parser_status") or "") == "decoded"
+                    runtime_event["bonding_curve_pda_verified"] = bool(create_event.get("bonding_curve_verified"))
+                    runtime_event["bonding_curve_decode_status"] = "success"
+                    _copy_fdv_probe_fields(result, runtime_event)
+                    if event_callback is not None:
+                        event_callback(runtime_event)
         return rows
 
 
@@ -482,6 +586,8 @@ def _copy_fdv_probe_fields(source: Any, target: dict[str, Any]) -> None:
         "token_program",
         "mint_account_owner",
         "mint_account_owner_status",
+        "account_data_slot",
+        "account_data_hash",
     ]:
         if isinstance(source, dict):
             value = source.get(key)
@@ -616,6 +722,84 @@ def _recv_matching(websocket: Any, request_id: str, *, timeout_seconds: int) -> 
         if isinstance(payload, dict) and payload.get("id") == request_id:
             return payload
     return {"error": "capability_timeout"}
+
+
+def _account_notification_matches(payload: dict[str, Any], subscription_id: int | None) -> bool:
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        return False
+    if subscription_id is None:
+        return payload.get("method") == "accountNotification"
+    return payload.get("method") == "accountNotification" and _optional_int(params.get("subscription")) == subscription_id
+
+
+def _account_data_from_account_notification(payload: dict[str, Any]) -> bytes | None:
+    result = _find_result(payload)
+    value = result.get("value") if isinstance(result, dict) else None
+    if not isinstance(value, dict):
+        return None
+    data = value.get("data")
+    if isinstance(data, list) and data:
+        encoded = data[0]
+    else:
+        encoded = data
+    if isinstance(encoded, str):
+        try:
+            return base64.b64decode(encoded)
+        except Exception:
+            return None
+    if isinstance(encoded, bytes):
+        return encoded
+    return None
+
+
+def _live_watch_probe_row(create_event: dict[str, Any], result: Any, *, observed_at: float, slot: int | None) -> dict[str, Any]:
+    status = str(getattr(result, "probe_status", "failed") or "failed")
+    row = {
+        "event_id": f"probe_live_{create_event.get('event_id') or create_event.get('signature')}_{int(observed_at * 1000)}",
+        "probe_phase": "near_entry_live_watch",
+        "near_entry_live_watch": True,
+        "mint": create_event.get("mint"),
+        "bonding_curve": create_event.get("bonding_curve"),
+        "source_create_signature": create_event.get("signature"),
+        "create_slot": create_event.get("slot"),
+        "create_observed_at": create_event.get("observed_at"),
+        "probe_scheduled_during_stream": True,
+        "pumpfun_create_verified": str(create_event.get("parser_status") or "") == "decoded",
+        "bonding_curve_pda_verified": bool(create_event.get("bonding_curve_verified")),
+        "bonding_curve_decode_status": "success" if status == "success" else "failed",
+        "probe_started_at": observed_at,
+        "account_subscribe_started_at": observed_at,
+        "get_account_info_started_at": None,
+        "first_curve_state_at": getattr(result, "decode_finished_at", None) or observed_at if status == "success" else None,
+        "first_fdv_emitted_at": getattr(result, "decode_finished_at", None) or observed_at if status == "success" else None,
+        "first_response_at": getattr(result, "decode_finished_at", None) or observed_at,
+        "winning_probe_source": "accountSubscribe_processed" if status == "success" else "none",
+        "probe_attempt_count": 1,
+        "account_not_found_retry_count": 0,
+        "account_not_found_recovered_by_retry": False,
+        "account_not_found_final_failure": False,
+        "first_failure_reason": getattr(result, "failure_reason", None) if status != "success" else None,
+        "final_failure_reason": None if status == "success" else getattr(result, "failure_reason", None),
+        "retry_delays_ms": [],
+        "observed_to_probe_started_ms": _duration_ms(create_event.get("observed_at"), observed_at),
+        "probe_started_to_first_curve_state_ms": _duration_ms(observed_at, getattr(result, "decode_finished_at", None) or observed_at if status == "success" else None),
+        "observed_to_first_fdv_emitted_ms": _duration_ms(create_event.get("observed_at"), getattr(result, "decode_finished_at", None) or observed_at if status == "success" else None),
+        "getAccountInfo_latency_ms": None,
+        "accountSubscribe_latency_ms": _duration_ms(observed_at, getattr(result, "decode_finished_at", None) or observed_at if status == "success" else None),
+        "account_data_slot": getattr(result, "account_data_slot", None) or slot,
+        "account_data_encoding": "base64",
+        "probe_status": status,
+        "probe_error": None if status == "success" else getattr(result, "failure_reason", None),
+        "helius_rpc_request_count": int(getattr(result, "helius_rpc_request_count", None) or 0),
+        "http_429_count": int(getattr(result, "http_429_count", None) or 0),
+    }
+    _copy_fdv_probe_fields(result, row)
+    for key in ["account_data_slot", "account_data_hash"]:
+        value = getattr(result, key, None)
+        if value is not None:
+            row[key] = value
+    return row
 
 
 def _find_result(payload: dict[str, Any]) -> dict[str, Any] | None:

@@ -121,13 +121,15 @@ POST_BIRTH_WATCH_MAX_INITIAL_FDV = 5_000.0
 POST_BIRTH_WATCH_PROBE_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0, 180.0, 300.0)
 LOW_FDV_WATCH_MIN_USD = 2_000.0
 NEAR_THRESHOLD_HOT_WATCH_USD = 8_000.0
-ENTRY_ZONE_MIN_USD = 18_000.0
-ENTRY_ZONE_MAX_USD = 23_000.0
-HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.0)
-ENTRY_ZONE_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75)
+LIVE_WATCH_ARM_USD = 14_000.0
+ENTRY_ZONE_MIN_USD = 20_000.0
+ENTRY_ZONE_MAX_USD = 26_000.0
+HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75, 1.0)
+ENTRY_ZONE_PROBE_DELAYS_SECONDS = (0.1, 0.25, 0.5, 0.75, 1.0)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
 CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 2
+WATCH_FOLLOW_UP_MAX_WORKERS = 2
 SCHEDULER_MODE = "priority_single_worker"
 SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
@@ -138,8 +140,8 @@ HARD_REJECT_ENTRY_RISK_LABELS = {
     "missing_holder_depth",
 }
 ENTRY_CHASE_TRIGGER_FDV_USD = 20_000.0
-MAX_ENTRY_ABOVE_TRIGGER_PCT = 0.15
-MAX_ALLOWED_PAPER_ENTRY_FDV_USD = ENTRY_CHASE_TRIGGER_FDV_USD * (1.0 + MAX_ENTRY_ABOVE_TRIGGER_PCT)
+MAX_ENTRY_ABOVE_TRIGGER_PCT = 0.30
+MAX_ALLOWED_PAPER_ENTRY_FDV_USD = ENTRY_ZONE_MAX_USD
 STAGNATION_RUNUP_PCT = 0.50
 STAGNATION_NO_HIGH_SECONDS = 120.0
 DEFAULT_HOLDER_GATE_CONFIG = {
@@ -1453,6 +1455,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         resolve_helius_ws_url,
     )
     from research.mtp_research.validation.helius_transaction_subscribe_source import (
+        HeliusBondingCurveLiveWatchSource,
         HeliusTransactionSubscribeCreateSource,
         helius_transaction_subscribe_capability_audit,
         run_bonding_curve_account_probe_for_create_event,
@@ -1495,23 +1498,34 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 _update_runtime_bus_depth(config, int((result.get("bus_metrics") or {}).get("queue_depth") or 0))
                 archive_runtime_queue_candidates(config, now=_num(event.get("timestamp")) or time.time())
 
+    source_websocket_url = _transaction_subscribe_runtime_ws_url(recommended, resolve_helius_api_key=resolve_helius_api_key, resolve_helius_ws_url=resolve_helius_ws_url)
     source = HeliusTransactionSubscribeCreateSource(
         config=config,
-        websocket_url=_transaction_subscribe_runtime_ws_url(recommended, resolve_helius_api_key=resolve_helius_api_key, resolve_helius_ws_url=resolve_helius_ws_url),
+        websocket_url=source_websocket_url,
+        timeout_seconds=2.0,
+    )
+    live_watch_source = HeliusBondingCurveLiveWatchSource(
+        config=config,
+        websocket_url=source_websocket_url,
         timeout_seconds=2.0,
     )
     sol_usd = resolve_forward_sol_usd_price(config.root)
     probe_futures = []
     confirmation_futures = []
+    live_watch_futures = []
     confirmation_future_lock = Lock()
+    live_watch_lock = Lock()
+    live_watch_scheduled_mints: set[str] = set()
     watch_follow_up_jobs: list[tuple[float, int, dict[str, Any]]] = []
     watch_follow_up_futures = []
     watch_follow_up_lock = Lock()
     watch_follow_up_sequence = 0
     post_birth_watch_follow_up_scheduled_count = 0
     hot_watch_follow_up_scheduled_count = 0
+    near_entry_live_watch_scheduled_count = 0
     probe_errors: list[dict[str, Any]] = []
     confirmation_errors: list[dict[str, Any]] = []
+    live_watch_errors: list[dict[str, Any]] = []
     watch_follow_up_errors: list[dict[str, Any]] = []
 
     def run_probe(event: dict[str, Any], *, follow_up_probe_delays: tuple[float, ...] = ()) -> dict[str, Any]:
@@ -1534,21 +1548,79 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 event_callback=on_hot_event,
             )
 
-    def run_first_fdv_probe_and_schedule_confirmation(event: dict[str, Any], confirmation_executor: ThreadPoolExecutor) -> dict[str, Any]:
+    def run_near_entry_live_watch(event: dict[str, Any]) -> list[dict[str, Any]]:
+        probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
+        live_event = dict(event)
+        live_event["live_watch_arm_usd"] = LIVE_WATCH_ARM_USD
+        return live_watch_source.watch_create_event(
+            live_event,
+            probe=probe,
+            event_callback=on_hot_event,
+            max_updates=25,
+            max_seconds=15.0,
+        )
+
+    def schedule_near_entry_live_watch(event: dict[str, Any], row: dict[str, Any], live_watch_executor: ThreadPoolExecutor) -> None:
+        nonlocal near_entry_live_watch_scheduled_count
+        if not _should_schedule_near_entry_live_watch(row):
+            return
+        mint = str(row.get("mint") or event.get("mint") or "")
+        if not mint:
+            return
+        with live_watch_lock:
+            if mint in live_watch_scheduled_mints:
+                return
+            live_watch_scheduled_mints.add(mint)
+            near_entry_live_watch_scheduled_count += 1
+            live_watch_futures.append(live_watch_executor.submit(run_near_entry_live_watch, dict(event)))
+
+    def schedule_confirmation_follow_up(event: dict[str, Any], row: dict[str, Any], confirmation_executor: ThreadPoolExecutor) -> None:
+        if not _should_schedule_confirmation_follow_up(row):
+            return
+        confirmation_event = dict(event)
+        confirmation_event["probe_scheduled_during_stream"] = True
+        confirmation_event["confirmation_follow_up_scheduled"] = True
+        for key in [
+            "post_birth_watch_follow_up_scheduled",
+            "post_birth_watch_follow_up_index",
+            "post_birth_watch_due_delay_seconds",
+            "post_birth_watch_lane",
+            "hot_watch_follow_up_scheduled",
+            "hot_watch_follow_up_index",
+            "hot_watch_due_delay_seconds",
+            "hot_watch_mode",
+            "probe_phase_override",
+        ]:
+            confirmation_event.pop(key, None)
+        future = confirmation_executor.submit(
+            run_probe,
+            confirmation_event,
+            follow_up_probe_delays=CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS,
+        )
+        with confirmation_future_lock:
+            confirmation_futures.append(future)
+
+    def run_first_fdv_probe_and_schedule_confirmation(
+        event: dict[str, Any],
+        confirmation_executor: ThreadPoolExecutor,
+        live_watch_executor: ThreadPoolExecutor,
+    ) -> dict[str, Any]:
         row = run_probe(event, follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS)
         schedule_post_birth_watch_follow_up(event, row)
         schedule_hot_watch_follow_up(event, row)
-        if _should_schedule_confirmation_follow_up(row):
-            confirmation_event = dict(event)
-            confirmation_event["probe_scheduled_during_stream"] = True
-            confirmation_event["confirmation_follow_up_scheduled"] = True
-            future = confirmation_executor.submit(
-                run_probe,
-                confirmation_event,
-                follow_up_probe_delays=CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS,
-            )
-            with confirmation_future_lock:
-                confirmation_futures.append(future)
+        schedule_near_entry_live_watch(event, row, live_watch_executor)
+        schedule_confirmation_follow_up(event, row, confirmation_executor)
+        return row
+
+    def run_watch_follow_up_probe_and_schedule(
+        event: dict[str, Any],
+        confirmation_executor: ThreadPoolExecutor,
+        live_watch_executor: ThreadPoolExecutor,
+    ) -> dict[str, Any]:
+        row = run_probe(event)
+        schedule_hot_watch_follow_up(event, row)
+        schedule_near_entry_live_watch(event, row, live_watch_executor)
+        schedule_confirmation_follow_up(event, row, confirmation_executor)
         return row
 
     def schedule_post_birth_watch_follow_up(event: dict[str, Any], row: dict[str, Any]) -> None:
@@ -1590,7 +1662,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 hot_watch_follow_up_scheduled_count += 1
                 heapq.heappush(watch_follow_up_jobs, (now_monotonic + float(delay), watch_follow_up_sequence, follow_event))
 
-    def drain_due_watch_follow_ups(executor: ThreadPoolExecutor) -> int:
+    def drain_due_watch_follow_ups(
+        watch_executor: ThreadPoolExecutor,
+        confirmation_executor: ThreadPoolExecutor,
+        live_watch_executor: ThreadPoolExecutor,
+    ) -> int:
         due: list[dict[str, Any]] = []
         now_monotonic = time.monotonic()
         with watch_follow_up_lock:
@@ -1598,18 +1674,30 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 _, _, event = heapq.heappop(watch_follow_up_jobs)
                 due.append(event)
         for event in due:
-            watch_follow_up_futures.append(executor.submit(run_probe, event))
+            watch_follow_up_futures.append(
+                watch_executor.submit(run_watch_follow_up_probe_and_schedule, event, confirmation_executor, live_watch_executor)
+            )
         return len(due)
 
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-fdv-probe") as executor, ThreadPoolExecutor(
         max_workers=CONFIRMATION_FOLLOW_UP_MAX_WORKERS,
         thread_name_prefix="txsub-confirm-probe",
-    ) as confirmation_executor:
+    ) as confirmation_executor, ThreadPoolExecutor(
+        max_workers=WATCH_FOLLOW_UP_MAX_WORKERS,
+        thread_name_prefix="txsub-watch-follow-up",
+    ) as watch_executor, ThreadPoolExecutor(max_workers=4, thread_name_prefix="txsub-live-watch") as live_watch_executor:
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
-            drain_due_watch_follow_ups(executor)
+            drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
             try:
-                probe_futures.append(executor.submit(run_first_fdv_probe_and_schedule_confirmation, dict(event), confirmation_executor))
+                probe_futures.append(
+                    executor.submit(
+                        run_first_fdv_probe_and_schedule_confirmation,
+                        dict(event),
+                        confirmation_executor,
+                        live_watch_executor,
+                    )
+                )
             except Exception as exc:
                 _append_jsonl(
                     config.bonding_curve_account_probe_events_path,
@@ -1632,7 +1720,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 raise
 
         def on_idle() -> None:
-            drain_due_watch_follow_ups(executor)
+            drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
 
         create_events = source.fetch_create_events(
             max_events=target_births,
@@ -1643,15 +1731,22 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         for future in as_completed(probe_futures):
             try:
                 future.result()
-                drain_due_watch_follow_ups(executor)
+                drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
             except Exception as exc:
                 probe_errors.append({"error": f"{type(exc).__name__}:{exc}"})
-        drain_due_watch_follow_ups(executor)
+        drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
         for future in as_completed(list(watch_follow_up_futures)):
             try:
                 future.result()
             except Exception as exc:
                 watch_follow_up_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+        with live_watch_lock:
+            pending_live_watch_futures = list(live_watch_futures)
+        for future in as_completed(pending_live_watch_futures):
+            try:
+                future.result()
+            except Exception as exc:
+                live_watch_errors.append({"error": f"{type(exc).__name__}:{exc}"})
         with confirmation_future_lock:
             pending_confirmation_futures = list(confirmation_futures)
         for future in as_completed(pending_confirmation_futures):
@@ -1676,10 +1771,15 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         failures = probe_stats.setdefault("failures_by_reason", {})
         failures["post_birth_watch_probe_worker_exception"] = int(failures.get("post_birth_watch_probe_worker_exception") or 0) + len(watch_follow_up_errors)
         probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(watch_follow_up_errors)
+    if live_watch_errors:
+        failures = probe_stats.setdefault("failures_by_reason", {})
+        failures["near_entry_live_watch_worker_exception"] = int(failures.get("near_entry_live_watch_worker_exception") or 0) + len(live_watch_errors)
+        probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(live_watch_errors)
     probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
     pending_watch_events = [item[2] for item in watch_follow_up_jobs]
     probe_stats["post_birth_watch_follow_up_futures"] = post_birth_watch_follow_up_scheduled_count
     probe_stats["hot_watch_follow_up_futures"] = hot_watch_follow_up_scheduled_count
+    probe_stats["near_entry_live_watch_futures"] = near_entry_live_watch_scheduled_count
     probe_stats["post_birth_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if item.get("probe_phase_override") == "post_birth_watch_follow_up")
     probe_stats["hot_watch_follow_up_pending"] = sum(1 for item in pending_watch_events if str(item.get("probe_phase_override") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"})
     _record_bonding_curve_probe_stats(config, probe_stats)
@@ -2398,7 +2498,7 @@ def _entry_chase_guard(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
     trigger = _trigger_fdv_usd(candidate) or ENTRY_CHASE_TRIGGER_FDV_USD
     buy_fdv = _num(row.get("fdv_usd") or row.get("fdv_proxy"))
     pct = _pct_above(buy_fdv, trigger)
-    max_allowed = min(trigger * (1.0 + MAX_ENTRY_ABOVE_TRIGGER_PCT), MAX_ALLOWED_PAPER_ENTRY_FDV_USD)
+    max_allowed = MAX_ALLOWED_PAPER_ENTRY_FDV_USD
     rejected = buy_fdv is not None and buy_fdv > max_allowed
     return {
         "trigger_fdv_usd": _round_optional(trigger),
@@ -2419,16 +2519,17 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
     observed_inside_entry_zone = _observed_inside_entry_zone(candidate)
     observed_inside_buy_band = current_fdv is not None and ENTRY_THRESHOLD_FDV <= current_fdv <= ENTRY_ZONE_MAX_USD
     hot_watch_active = _hot_watch_active_before_entry(candidate, row)
+    pre_entry_live_arm_observed = _pre_entry_live_arm_observed(candidate)
     chase_exceeded = current_fdv is not None and current_fdv > ENTRY_ZONE_MAX_USD
     missed_entry = bool(chase_exceeded and not observed_inside_entry_zone)
-    if chase_exceeded and (previous_fdv is None or previous_fdv < WATCH_THRESHOLD_FDV or not hot_watch_active):
+    if chase_exceeded and (previous_fdv is None or previous_fdv < LIVE_WATCH_ARM_USD or not hot_watch_active):
         missed_entry = True
     if observed_inside_buy_band and hot_watch_active:
         result = "pass"
         reason = None
     elif missed_entry:
         result = "reject"
-        reason = "missed_entry_zone"
+        reason = "missed_entry_probe_gap" if pre_entry_live_arm_observed else "missed_live_arm"
     elif chase_exceeded:
         result = "reject"
         reason = "chase_guard_exceeded"
@@ -2446,6 +2547,7 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
         reason = "outside_entry_zone"
     return {
         "entry_zone_min_usd": ENTRY_ZONE_MIN_USD,
+        "live_watch_arm_usd": LIVE_WATCH_ARM_USD,
         "entry_trigger_usd": ENTRY_THRESHOLD_FDV,
         "entry_zone_max_usd": ENTRY_ZONE_MAX_USD,
         "current_fdv_usd": _round_optional(current_fdv),
@@ -2453,7 +2555,10 @@ def _entry_band_status(candidate: dict[str, Any], row: dict[str, Any]) -> dict[s
         "previous_observation_time": previous_ts,
         "observed_inside_entry_zone": bool(observed_inside_entry_zone),
         "hot_watch_active_before_entry": bool(hot_watch_active),
+        "pre_entry_live_arm_observed": bool(pre_entry_live_arm_observed),
         "missed_entry_zone": bool(missed_entry),
+        "missed_live_arm": bool(missed_entry and not pre_entry_live_arm_observed),
+        "missed_entry_probe_gap": bool(missed_entry and pre_entry_live_arm_observed),
         "chase_guard_exceeded": bool(chase_exceeded),
         "same_timestamp_major_jump": bool(candidate.get("same_timestamp_major_jump_flag")),
         "entry_band_result": result,
@@ -2485,6 +2590,13 @@ def _observed_inside_entry_zone(candidate: dict[str, Any]) -> bool:
     )
 
 
+def _pre_entry_live_arm_observed(candidate: dict[str, Any]) -> bool:
+    return any(
+        fdv is not None and LIVE_WATCH_ARM_USD <= fdv < ENTRY_THRESHOLD_FDV
+        for fdv in (_milestone_fdv_usd(row) for row in candidate.get("path_rows") or [])
+    )
+
+
 def _hot_watch_active_before_entry(candidate: dict[str, Any], row: dict[str, Any]) -> bool:
     row_ts = _num(row.get("timestamp"))
     for candidate_row in candidate.get("path_rows") or []:
@@ -2492,7 +2604,7 @@ def _hot_watch_active_before_entry(candidate: dict[str, Any], row: dict[str, Any
         if row_ts is not None and ts is not None and ts > row_ts:
             continue
         fdv = _milestone_fdv_usd(candidate_row)
-        if fdv is not None and fdv >= NEAR_THRESHOLD_HOT_WATCH_USD:
+        if fdv is not None and fdv >= LIVE_WATCH_ARM_USD:
             return True
     return False
 
@@ -2500,7 +2612,7 @@ def _hot_watch_active_before_entry(candidate: dict[str, Any], row: dict[str, Any
 def _watch_mode_for_fdv(fdv: float | None) -> str:
     if fdv is None:
         return "unknown"
-    if fdv >= ENTRY_ZONE_MIN_USD:
+    if fdv >= LIVE_WATCH_ARM_USD:
         return "entry_zone_watch"
     if fdv >= WATCH_THRESHOLD_FDV:
         return "confirmed_10k_watch"
@@ -2597,6 +2709,8 @@ def _primary_rejection_reason(reasons: list[str]) -> str | None:
     priority = [
         "duplicate_same_state_confirmation",
         "same_timestamp_major_jump",
+        "missed_live_arm",
+        "missed_entry_probe_gap",
         "missed_entry_zone",
         "chase_guard_exceeded",
         "unsupported_token_program",
@@ -2858,7 +2972,7 @@ def _default_scheduler_stats() -> dict[str, Any]:
         "helius_rpc_request_count": None,
         "bonding_curve_account_state_failures": 0,
         "bonding_curve_account_state_failure_reasons": {},
-        "account_subscribe_bonding_curve_status": "accountSubscribe_bonding_curve_not_implemented",
+        "account_subscribe_bonding_curve_status": "accountSubscribe_bonding_curve_live_watch_enabled",
         "active_account_subscriptions": 0,
         "hot_watch_follow_up_futures": 0,
         "hot_watch_follow_up_pending": 0,
@@ -2951,6 +3065,17 @@ def _should_schedule_confirmation_follow_up(row: dict[str, Any]) -> bool:
     if fdv is None or fdv <= 0 or fdv >= FDV_ANOMALY_HIGH:
         return False
     return fdv >= CONFIRMATION_FOLLOW_UP_TRIGGER_FDV
+
+
+def _should_schedule_near_entry_live_watch(row: dict[str, Any]) -> bool:
+    if row.get("probe_status") != "success":
+        return False
+    if row.get("fdv_anomaly_flag_from_source") is True:
+        return False
+    fdv = _milestone_fdv_usd(row)
+    if fdv is None or fdv <= 0 or fdv >= FDV_ANOMALY_HIGH:
+        return False
+    return LIVE_WATCH_ARM_USD <= fdv <= ENTRY_ZONE_MAX_USD
 
 
 def _should_schedule_post_birth_watch_follow_up(row: dict[str, Any]) -> bool:
@@ -4264,9 +4389,12 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "post_birth_watch_follow_up_pending": int(stats.get("post_birth_watch_follow_up_pending") or 0),
         "hot_watch_follow_up_futures": int(stats.get("hot_watch_follow_up_futures") or 0),
         "hot_watch_follow_up_pending": int(stats.get("hot_watch_follow_up_pending") or 0),
+        "near_entry_live_watch_futures": int(stats.get("near_entry_live_watch_futures") or 0),
+        "near_entry_live_watch_probe_rows": int(stats.get("near_entry_live_watch_probe_rows") or 0),
+        "near_entry_live_watch_successes": int(stats.get("near_entry_live_watch_successes") or 0),
         "post_birth_watch_follow_up_probe_rows": int(stats.get("post_birth_watch_follow_up_probe_rows") or 0),
         "post_birth_watch_follow_up_successes": int(stats.get("post_birth_watch_follow_up_successes") or 0),
-        "accountSubscribe_bonding_curve_status": stats.get("account_subscribe_bonding_curve_status") or "accountSubscribe_bonding_curve_not_implemented",
+        "accountSubscribe_bonding_curve_status": stats.get("account_subscribe_bonding_curve_status") or "accountSubscribe_bonding_curve_live_watch_enabled",
         "active_account_subscriptions": int(stats.get("active_account_subscriptions") or 0),
         "metadata_hot_path_allowed": False,
     }
@@ -4303,6 +4431,7 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         for row in probe_rows
         if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
     ]
+    near_entry_live_watch_rows = [row for row in probe_rows if row.get("probe_phase") == "near_entry_live_watch"]
     post_birth_watch = _post_birth_watch_status_metrics(
         probe_rows,
         candidates,
@@ -4333,6 +4462,7 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "post_birth_watch_follow_up_pending": int(source_summary.get("post_birth_watch_follow_up_pending") or 0),
         "hot_watch_follow_up_futures": int(source_summary.get("hot_watch_follow_up_futures") or 0),
         "hot_watch_follow_up_pending": int(source_summary.get("hot_watch_follow_up_pending") or 0),
+        "near_entry_live_watch_futures": int(source_summary.get("near_entry_live_watch_futures") or 0),
         "post_birth_watch_follow_up_probe_rows": sum(1 for row in probe_rows if row.get("probe_phase") == "post_birth_watch_follow_up"),
         "post_birth_watch_follow_up_successes": sum(
             1
@@ -4343,6 +4473,8 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "near_threshold_hot_watch_probe_count": sum(1 for row in hot_watch_rows if row.get("probe_phase") == "near_threshold_hot_watch_follow_up"),
         "entry_zone_watch_probe_count": sum(1 for row in hot_watch_rows if row.get("probe_phase") == "entry_zone_hot_watch_follow_up"),
         "hot_watch_success_count": sum(1 for row in hot_watch_rows if row.get("probe_status") == "success"),
+        "near_entry_live_watch_probe_rows": len(near_entry_live_watch_rows),
+        "near_entry_live_watch_successes": sum(1 for row in near_entry_live_watch_rows if row.get("probe_status") == "success"),
         **post_birth_watch,
         "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
@@ -4562,6 +4694,8 @@ def _runtime_safety_counts(
         "chase_guard_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "chase_guard_exceeded")
         + sum(1 for row in void_rows if row.get("void_reason") == "chase_guard_exceeded"),
         "missed_entry_zone_count": sum(1 for row in decisions if row.get("missed_entry_zone") is True or row.get("rejection_reason") == "missed_entry_zone"),
+        "missed_live_arm_count": sum(1 for row in decisions if row.get("missed_live_arm") is True or row.get("rejection_reason") == "missed_live_arm"),
+        "missed_entry_probe_gap_count": sum(1 for row in decisions if row.get("missed_entry_probe_gap") is True or row.get("rejection_reason") == "missed_entry_probe_gap"),
         "same_timestamp_major_jump_reject_count": sum(1 for row in decisions if row.get("rejection_reason") == "same_timestamp_major_jump")
         + sum(1 for row in candidates.values() if row.get("same_timestamp_major_jump_flag")),
         "low_fdv_watch_count": len({row.get("mint") for row in path_rows if _watch_mode_for_fdv(_milestone_fdv_usd(row)) == "low_fdv_post_birth_watch" and row.get("mint")}),
@@ -4692,6 +4826,7 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- confirmation follow-up futures/rows/successes: {txsub.get('confirmation_follow_up_futures')} / {txsub.get('confirmation_follow_up_probe_rows')} / {txsub.get('confirmation_follow_up_successes')}",
             f"- hot-watch futures/pending/probes/successes: {txsub.get('hot_watch_follow_up_futures')} / {txsub.get('hot_watch_follow_up_pending')} / {txsub.get('hot_watch_probe_count')} / {txsub.get('hot_watch_success_count')}",
             f"- hot-watch near-threshold/entry-zone probes: {txsub.get('near_threshold_hot_watch_probe_count')} / {txsub.get('entry_zone_watch_probe_count')}",
+            f"- near-entry live-watch futures/rows/successes: {txsub.get('near_entry_live_watch_futures')} / {txsub.get('near_entry_live_watch_probe_rows')} / {txsub.get('near_entry_live_watch_successes')}",
             f"- post-birth watch scheduled/probes/successes/pending: {txsub.get('post_birth_watch_count')} / {txsub.get('post_birth_watch_probe_count')} / {txsub.get('post_birth_watch_success_count')} / {txsub.get('post_birth_watch_pending_count')}",
             f"- post-birth watch promotions 5k/10k/20k: {txsub.get('post_birth_watch_promotions_to_5k')} / {txsub.get('post_birth_watch_promotions_to_10k')} / {txsub.get('post_birth_watch_promotions_to_20k')}",
             f"- post-birth watch archives/rechecked runners: {txsub.get('post_birth_watch_archives')} / {txsub.get('missed_runner_recheck_count')}",
@@ -4835,9 +4970,10 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
 	<p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
-	<p>Hot-watch futures/pending/probes/successes: {html.escape(str(txsub.get('hot_watch_follow_up_futures')))} / {html.escape(str(txsub.get('hot_watch_follow_up_pending')))} / {html.escape(str(txsub.get('hot_watch_probe_count')))} / {html.escape(str(txsub.get('hot_watch_success_count')))}</p>
-	<p>Hot-watch near-threshold/entry-zone probes: {html.escape(str(txsub.get('near_threshold_hot_watch_probe_count')))} / {html.escape(str(txsub.get('entry_zone_watch_probe_count')))}</p>
-	<p>Post-birth watch scheduled/probes/successes/pending: {html.escape(str(txsub.get('post_birth_watch_count')))} / {html.escape(str(txsub.get('post_birth_watch_probe_count')))} / {html.escape(str(txsub.get('post_birth_watch_success_count')))} / {html.escape(str(txsub.get('post_birth_watch_pending_count')))}</p>
+<p>Hot-watch futures/pending/probes/successes: {html.escape(str(txsub.get('hot_watch_follow_up_futures')))} / {html.escape(str(txsub.get('hot_watch_follow_up_pending')))} / {html.escape(str(txsub.get('hot_watch_probe_count')))} / {html.escape(str(txsub.get('hot_watch_success_count')))}</p>
+<p>Hot-watch near-threshold/entry-zone probes: {html.escape(str(txsub.get('near_threshold_hot_watch_probe_count')))} / {html.escape(str(txsub.get('entry_zone_watch_probe_count')))}</p>
+<p>Near-entry live-watch futures/rows/successes: {html.escape(str(txsub.get('near_entry_live_watch_futures')))} / {html.escape(str(txsub.get('near_entry_live_watch_probe_rows')))} / {html.escape(str(txsub.get('near_entry_live_watch_successes')))}</p>
+<p>Post-birth watch scheduled/probes/successes/pending: {html.escape(str(txsub.get('post_birth_watch_count')))} / {html.escape(str(txsub.get('post_birth_watch_probe_count')))} / {html.escape(str(txsub.get('post_birth_watch_success_count')))} / {html.escape(str(txsub.get('post_birth_watch_pending_count')))}</p>
 	<p>Post-birth watch promotions 5k/10k/20k: {html.escape(str(txsub.get('post_birth_watch_promotions_to_5k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_10k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_20k')))}; archives: {html.escape(str(txsub.get('post_birth_watch_archives')))}; rechecked runners: {html.escape(str(txsub.get('missed_runner_recheck_count')))}</p>
 	<p>Low-FDV watch oldest age/due count: {html.escape(str(txsub.get('low_fdv_watch_oldest_age')))} / {html.escape(str(txsub.get('low_fdv_watch_due_count')))}; lane counts: {html.escape(str(txsub.get('post_birth_watch_lane_counts')))}</p>
 	<p>First-attempt successes: {html.escape(str(txsub.get('first_attempt_successes')))}; account-not-found retries: {html.escape(str(txsub.get('account_not_found_retries')))}</p>
@@ -5105,6 +5241,9 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "near_threshold_hot_watch_probe_count": int(txsub.get("near_threshold_hot_watch_probe_count") or 0),
         "entry_zone_watch_probe_count": int(txsub.get("entry_zone_watch_probe_count") or 0),
         "hot_watch_success_count": int(txsub.get("hot_watch_success_count") or 0),
+        "near_entry_live_watch_futures": int(txsub.get("near_entry_live_watch_futures") or 0),
+        "near_entry_live_watch_probe_rows": int(txsub.get("near_entry_live_watch_probe_rows") or 0),
+        "near_entry_live_watch_successes": int(txsub.get("near_entry_live_watch_successes") or 0),
         "post_birth_watch_follow_up_futures": int(txsub.get("post_birth_watch_follow_up_futures") or 0),
         "post_birth_watch_follow_up_pending": int(txsub.get("post_birth_watch_follow_up_pending") or 0),
         "hot_watch_follow_up_futures": int(txsub.get("hot_watch_follow_up_futures") or 0),
@@ -5348,6 +5487,7 @@ def _status_md(summary: dict[str, Any]) -> str:
                 f"- curve PDA verified: `{txsub.get('curve_pda_verified')}`",
                 f"- curve account probes started: `{txsub.get('curve_account_probes_started')}`",
                 f"- probes started during stream: `{txsub.get('probes_started_during_stream')}`",
+                f"- near-entry live-watch futures/rows/successes: `{txsub.get('near_entry_live_watch_futures')}` / `{txsub.get('near_entry_live_watch_probe_rows')}` / `{txsub.get('near_entry_live_watch_successes')}`",
                 f"- post-birth watch scheduled/probes/successes/pending: `{txsub.get('post_birth_watch_count')}` / `{txsub.get('post_birth_watch_probe_count')}` / `{txsub.get('post_birth_watch_success_count')}` / `{txsub.get('post_birth_watch_pending_count')}`",
                 f"- post-birth watch promotions 5k/10k/20k: `{txsub.get('post_birth_watch_promotions_to_5k')}` / `{txsub.get('post_birth_watch_promotions_to_10k')}` / `{txsub.get('post_birth_watch_promotions_to_20k')}`",
                 f"- post-birth watch archives/rechecked runners: `{txsub.get('post_birth_watch_archives')}` / `{txsub.get('missed_runner_recheck_count')}`",
@@ -5420,6 +5560,12 @@ def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str,
             if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
             and row.get("probe_status") == "success"
         ),
+        "near_entry_live_watch_probe_rows": sum(1 for row in rows if row.get("probe_phase") == "near_entry_live_watch"),
+        "near_entry_live_watch_successes": sum(
+            1
+            for row in rows
+            if row.get("probe_phase") == "near_entry_live_watch" and row.get("probe_status") == "success"
+        ),
     }
 
 
@@ -5445,6 +5591,11 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["near_threshold_hot_watch_probe_count"] = int(probe_stats.get("near_threshold_hot_watch_probe_count") or 0)
     stats["entry_zone_watch_probe_count"] = int(probe_stats.get("entry_zone_watch_probe_count") or 0)
     stats["hot_watch_success_count"] = int(probe_stats.get("hot_watch_success_count") or 0)
+    stats["near_entry_live_watch_futures"] = int(probe_stats.get("near_entry_live_watch_futures") or 0)
+    stats["near_entry_live_watch_probe_rows"] = int(probe_stats.get("near_entry_live_watch_probe_rows") or 0)
+    stats["near_entry_live_watch_successes"] = int(probe_stats.get("near_entry_live_watch_successes") or 0)
+    stats["account_subscribe_bonding_curve_status"] = "accountSubscribe_bonding_curve_live_watch_enabled"
+    stats["active_account_subscriptions"] = int(probe_stats.get("near_entry_live_watch_futures") or 0)
     stats["post_birth_watch_follow_up_probe_rows"] = int(probe_stats.get("post_birth_watch_follow_up_probe_rows") or 0)
     stats["post_birth_watch_follow_up_successes"] = int(probe_stats.get("post_birth_watch_follow_up_successes") or 0)
     _write_json(config.runtime_state_path, state)

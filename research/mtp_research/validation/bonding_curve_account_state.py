@@ -95,6 +95,8 @@ class FDVProbeResult:
     observed_to_first_fdv_account_state_ms: float | None = None
     helius_rpc_request_count: int = 0
     http_429_count: int = 0
+    account_data_slot: int | None = None
+    account_data_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -143,6 +145,9 @@ class FDVProbeResult:
             "raw_crossed_10k": float(self.fdv_proxy) >= 10_000,
             "raw_crossed_20k": float(self.fdv_proxy) >= 20_000,
             "raw_crossed_50k": float(self.fdv_proxy) >= 50_000,
+            "slot": self.account_data_slot,
+            "account_data_slot": self.account_data_slot,
+            "account_data_hash": self.account_data_hash,
         }
 
 
@@ -262,6 +267,79 @@ class BondingCurveAccountStateProbe:
 
     def probe_create_event(self, create_event: dict[str, Any], *, now_fn: Callable[[], float] = time.time) -> FDVProbeResult:
         return self.probe_birth(create_event, now_fn=now_fn)
+
+    def decode_account_update(
+        self,
+        *,
+        mint: str,
+        bonding_curve: str,
+        account_data: bytes | str | list[Any] | None,
+        observed_at: float | None = None,
+        slot: int | None = None,
+        now_fn: Callable[[], float] = time.time,
+        fdv_probe_method: str = "accountSubscribe_processed_bonding_curve",
+    ) -> FDVProbeResult:
+        observed = float(observed_at if observed_at is not None else now_fn())
+        decode_started = now_fn()
+        raw = _coerce_account_data_bytes(account_data)
+        if raw is None:
+            return self._failure(
+                "account_data_missing",
+                mint=mint,
+                bonding_curve=bonding_curve,
+                observed_at=observed,
+                decode_started_at=decode_started,
+                decode_finished_at=now_fn(),
+            )
+        state = decode_pump_bonding_curve_account(raw)
+        decode_finished = now_fn()
+        fdv = compute_fdv_from_bonding_curve_state(state, sol_usd=self.sol_usd)
+        account_hash = hashlib.sha256(raw).hexdigest()
+        if fdv.probe_status != "success":
+            reason = "decode_failed" if state.decode_status != "decoded" else "no_reserve_state"
+            return self._failure(
+                reason,
+                mint=mint,
+                bonding_curve=bonding_curve,
+                observed_at=observed,
+                decode_started_at=decode_started,
+                decode_finished_at=decode_finished,
+                state=state,
+                calculation_error=fdv.calculation_error,
+            )
+        self.successes += 1
+        return FDVProbeResult(
+            probe_status="success",
+            fdv_source_confidence="high",
+            fdv_probe_method=fdv_probe_method,
+            mint=mint,
+            bonding_curve=bonding_curve,
+            fdv_proxy=fdv.fdv_usd if fdv.fdv_usd is not None else fdv.fdv_sol or fdv.fdv_quote,
+            price_sol=fdv.price_sol,
+            fdv_sol=fdv.fdv_sol,
+            fdv_usd=fdv.fdv_usd,
+            price_quote=fdv.price_quote,
+            fdv_quote=fdv.fdv_quote,
+            fdv_units="usd" if fdv.fdv_usd is not None else ("sol" if fdv.fdv_sol is not None else "quote"),
+            sol_usd=self.sol_usd,
+            quote_decimals=fdv.quote_decimals,
+            token_decimals=fdv.token_decimals,
+            calculation_status=fdv.calculation_status,
+            decode_status=state.decode_status,
+            decode_error=state.decode_error,
+            layout_version=state.layout_version,
+            quote_type=state.quote_type,
+            account_state=state.to_dict(),
+            observed_at=observed,
+            decode_started_at=decode_started,
+            decode_finished_at=decode_finished,
+            decode_latency_ms=_round_ms((decode_finished - decode_started) * 1000.0),
+            observed_to_first_fdv_account_state_ms=_round_ms((decode_finished - observed) * 1000.0),
+            helius_rpc_request_count=self.requests_used,
+            http_429_count=self.http_429_count,
+            account_data_slot=slot,
+            account_data_hash=account_hash,
+        )
 
     def _get_account_info(self, bonding_curve: str, *, min_context_slot: int | None = None) -> dict[str, Any]:
         options: dict[str, Any] = {

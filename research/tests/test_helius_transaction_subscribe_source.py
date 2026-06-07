@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 from research.mtp_research.validation.helius_transaction_subscribe_source import (
+    HeliusBondingCurveLiveWatchSource,
     HeliusTransactionSubscribeCreateSource,
+    build_account_subscribe_request,
     build_transaction_subscribe_request,
     decode_pumpfun_transaction_subscribe_notification,
     helius_transaction_subscribe_capability_audit,
@@ -60,6 +62,16 @@ def test_transaction_subscribe_payload_filters_pumpfun_create_authority() -> Non
     assert payload["params"][1]["showRewards"] is False
     assert payload["params"][1]["encoding"] == "jsonParsed"
     assert payload["params"][1]["maxSupportedTransactionVersion"] == 0
+
+
+def test_account_subscribe_payload_watches_bonding_curve_processed_base64() -> None:
+    payload = build_account_subscribe_request("curve-a", request_id="watch-a")
+
+    assert payload["method"] == "accountSubscribe"
+    assert payload["id"] == "watch-a"
+    assert payload["params"][0] == "curve-a"
+    assert payload["params"][1]["commitment"] == "processed"
+    assert payload["params"][1]["encoding"] == "base64"
 
 
 def test_decode_transaction_subscribe_create_v2_without_get_transaction() -> None:
@@ -512,3 +524,105 @@ def test_account_not_found_retry_recovers_fast_first_fdv(tmp_path: Path) -> None
     assert row["observed_to_first_fdv_emitted_ms"] == 220.0
     assert emitted[0]["account_not_found_recovered_by_retry"] is True
     assert json.loads(config.bonding_curve_account_probe_events_path.read_text(encoding="utf-8").splitlines()[0])["account_not_found_recovered_by_retry"] is True
+
+
+def test_live_watch_account_subscribe_emits_fdv_path_update(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+
+    class FakeProbe:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def decode_account_update(self, **kwargs: object) -> object:
+            self.calls += 1
+            mint = str(kwargs["mint"])
+            bonding_curve = str(kwargs["bonding_curve"])
+
+            class Result:
+                probe_status = "success"
+                failure_reason = None
+                fdv_proxy = 21_500.0
+                fdv_usd = 21_500.0
+                fdv_sol = 215.0
+                fdv_quote = None
+                fdv_units = "usd"
+                price_sol = 0.000215
+                price_quote = None
+                sol_usd = 100.0
+                quote_decimals = 9
+                token_decimals = 6
+                calculation_status = "fdv_usd_available"
+                quote_type = "sol"
+                account_state = {"virtual_token_reserves": 1, "virtual_sol_reserves": 1}
+                decode_finished_at = 200.01
+                account_data_slot = 456
+                account_data_hash = "hash-live"
+                helius_rpc_request_count = 0
+                http_429_count = 0
+
+                def to_runtime_event(self, timestamp: float | None = None) -> dict:
+                    return {
+                        "event_id": "fdv-live",
+                        "mint": mint,
+                        "timestamp": timestamp or 200.01,
+                        "event_observed_at": 200.0,
+                        "fdv_proxy": self.fdv_proxy,
+                        "fdv_usd": self.fdv_usd,
+                        "fdv_sol": self.fdv_sol,
+                        "fdv_units": self.fdv_units,
+                        "source_event_type": "fdv_path_update",
+                        "source_adapter": "helius_account_subscribe_bonding_curve_live_watch",
+                        "fdv_source": "bonding_curve_account_state",
+                        "fdv_source_confidence": "high",
+                    }
+
+            return Result()
+
+    websocket = FakeWebSocket(
+        [
+            {"id": "live-watch-curve-live", "result": 77},
+            {
+                "method": "accountNotification",
+                "params": {
+                    "subscription": 77,
+                    "result": {
+                        "context": {"slot": 456},
+                        "value": {"data": ["AQID", "base64"]},
+                    },
+                },
+            },
+        ]
+    )
+
+    def ws_connect(_url: str, **_kwargs: object) -> FakeWebSocket:
+        return websocket
+
+    emitted: list[dict] = []
+    source = HeliusBondingCurveLiveWatchSource(
+        config=config,
+        websocket_url="wss://fake",
+        ws_connect=ws_connect,
+        now_fn=iter([200.0, 200.01]).__next__,
+    )
+    rows = source.watch_create_event(
+        {
+            "event_id": "txsub-live",
+            "signature": "sig-live",
+            "slot": 123,
+            "observed_at": 199.5,
+            "mint": "mint-live",
+            "bonding_curve": "curve-live",
+        },
+        probe=FakeProbe(),
+        event_callback=emitted.append,
+        max_updates=1,
+        max_seconds=1,
+    )
+
+    assert websocket.sent[0]["method"] == "accountSubscribe"
+    assert rows[0]["probe_phase"] == "near_entry_live_watch"
+    assert rows[0]["winning_probe_source"] == "accountSubscribe_processed"
+    assert rows[0]["fdv_usd"] == 21_500.0
+    assert emitted[0]["source_adapter"] == "helius_account_subscribe_bonding_curve_live_watch"
+    assert emitted[0]["fdv_usd"] == 21_500.0
