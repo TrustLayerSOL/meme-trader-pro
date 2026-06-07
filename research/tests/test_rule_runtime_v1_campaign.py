@@ -73,8 +73,22 @@ def test_campaign_status_snapshot_reports_retry_credit_and_paper_metrics(tmp_pat
             "getAccountInfo_latency_ms": 8.0,
         },
     )
+    for index in range(7):
+        _append_jsonl(
+            config.bonding_curve_account_probe_events_path,
+            {
+                "probe_phase": "near_entry_live_watch",
+                "probe_status": "success",
+                "probe_attempt_count": 0,
+                "helius_rpc_request_count": 0,
+                "accountSubscribe_latency_ms": 4.0 + index,
+            },
+        )
     state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
     state["cash_usd"] = 255.0
+    state["scheduler_stats"]["near_entry_live_watch_futures"] = 2
+    state["scheduler_stats"]["near_entry_live_watch_probe_rows"] = 7
+    state["scheduler_stats"]["near_entry_live_watch_successes"] = 7
     state["open_positions"] = {
         "mint-a": {
             "mint": "mint-a",
@@ -101,6 +115,9 @@ def test_campaign_status_snapshot_reports_retry_credit_and_paper_metrics(tmp_pat
 
     assert snapshot["helius_credits_used"] == 2
     assert snapshot["decoded_pumpfun_creates"] == 1
+    assert snapshot["accountSubscribe_calls"] == 2
+    assert snapshot["near_entry_live_watch_probe_rows"] == 7
+    assert snapshot["near_entry_live_watch_successes"] == 7
     assert snapshot["account_not_found_recovered_by_retry"] == 1
     assert snapshot["paper_trading"]["current_paper_wallet_value"] == 309.0
     assert snapshot["paper_trading"]["current_15pct_buy_size"] == 46.35
@@ -108,7 +125,9 @@ def test_campaign_status_snapshot_reports_retry_credit_and_paper_metrics(tmp_pat
     snapshot_md = list(paths.status_snapshots_root.glob("status_*.md"))
     assert snapshot_json
     assert snapshot_md
-    assert "Helius credits used/cap" in snapshot_md[0].read_text(encoding="utf-8")
+    snapshot_text = snapshot_md[0].read_text(encoding="utf-8")
+    assert "Helius credits used/cap" in snapshot_text
+    assert "accountSubscribe calls/live-watch rows/successes" in snapshot_text
 
 
 def test_build_scan_command_uses_caffeinate_and_locked_paper_sizing(tmp_path: Path) -> None:
