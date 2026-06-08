@@ -2387,6 +2387,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         failures["near_entry_live_watch_worker_exception"] = int(failures.get("near_entry_live_watch_worker_exception") or 0) + len(live_watch_errors)
         probe_stats["failures"] = int(probe_stats.get("failures") or 0) + len(live_watch_errors)
     probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
+    probe_stats["reconnect_count"] = int(getattr(source, "reconnect_count", 0) or 0)
     probe_stats["initial_probe_max_workers"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS
     probe_stats["initial_probe_metadata_deferred"] = True
     with watch_follow_up_lock:
@@ -5309,6 +5310,7 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "decode_failures": failure_reasons.get("decode_failed", 0),
         "probe_failures_by_reason": failure_reasons,
         "http_429": int(source_summary.get("http_429_count") or 0),
+        "reconnect_count": int(source_summary.get("reconnect_count") or 0),
         "accountSubscribe_bonding_curve_status": source_summary.get("accountSubscribe_bonding_curve_status"),
         "shutdown_cancelled_probe_futures": int(
             scheduler_stats.get("shutdown_cancelled_probe_futures")
@@ -6109,6 +6111,7 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "decoded_create_mints_without_probe_sample": txsub.get("decoded_create_mints_without_probe_sample") or [],
         "events_processed": int(status.get("events_processed") or 0),
         "accepted_births": int(create_events_decoded) if transaction_subscribe_used else int((fallback_summary.get("collector_result") or {}).get("official_accepted_births") or 0),
+        "reconnect_count": int(txsub.get("reconnect_count") or 0),
         "bonding_curve_probes_started": int(txsub.get("curve_account_probes_started") or 0),
         "probes_started_during_stream": int(txsub.get("probes_started_during_stream") or 0),
         "confirmation_follow_up_futures": int(txsub.get("confirmation_follow_up_futures") or 0),

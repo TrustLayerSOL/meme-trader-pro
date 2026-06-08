@@ -89,6 +89,7 @@ class HeliusTransactionSubscribeCreateSource:
         self.now_fn = now_fn
         self.timeout_seconds = max(0.1, float(timeout_seconds))
         self.requests_used = 0
+        self.reconnect_count = 0
 
     def availability(self) -> dict[str, Any]:
         if not self.websocket_url:
@@ -115,36 +116,69 @@ class HeliusTransactionSubscribeCreateSource:
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         deadline = time.monotonic() + max(0.1, float(max_seconds))
-        with self._ws_connect(self.websocket_url, open_timeout=min(5.0, self.timeout_seconds), close_timeout=1.0) as websocket:
-            request = build_transaction_subscribe_request()
-            websocket.send(json.dumps(request))
-            self.requests_used += 1
-            while len(rows) < max(0, int(max_events)) and time.monotonic() < deadline:
-                try:
-                    message = websocket.recv(timeout=min(1.0, max(0.1, deadline - time.monotonic())))
-                except TimeoutError:
-                    if on_idle is not None:
-                        on_idle()
-                    continue
-                raw = json.loads(message) if isinstance(message, str) else message
-                if not isinstance(raw, dict):
-                    continue
-                _append_jsonl(self.config.pumpfun_transaction_subscribe_raw_path, {**raw, "source": "transactionSubscribe"})
-                if raw.get("id") == TRANSACTION_SUBSCRIBE_REQUEST_ID:
-                    continue
-                decoded = decode_pumpfun_transaction_subscribe_notification(raw, observed_at=self.now_fn())
-                if not decoded:
-                    continue
-                for row in decoded:
-                    _append_jsonl(self.config.pumpfun_create_stream_events_path, row)
-                    rows.append(row)
-                    if on_create_event is not None:
-                        on_create_event(row)
-                    if on_idle is not None:
-                        on_idle()
-                    if len(rows) >= max(0, int(max_events)):
-                        break
+        while len(rows) < max(0, int(max_events)) and time.monotonic() < deadline:
+            try:
+                with self._ws_connect(
+                    self.websocket_url,
+                    open_timeout=min(5.0, self.timeout_seconds),
+                    close_timeout=1.0,
+                ) as websocket:
+                    request = build_transaction_subscribe_request()
+                    websocket.send(json.dumps(request))
+                    self.requests_used += 1
+                    while len(rows) < max(0, int(max_events)) and time.monotonic() < deadline:
+                        try:
+                            message = websocket.recv(timeout=min(1.0, max(0.1, deadline - time.monotonic())))
+                        except TimeoutError:
+                            if on_idle is not None:
+                                on_idle()
+                            continue
+                        except BaseException as exc:
+                            if not _is_reconnectable_websocket_close(exc):
+                                raise
+                            self._record_websocket_reconnect(exc)
+                            if on_idle is not None:
+                                on_idle()
+                            break
+                        raw = json.loads(message) if isinstance(message, str) else message
+                        if not isinstance(raw, dict):
+                            continue
+                        _append_jsonl(self.config.pumpfun_transaction_subscribe_raw_path, {**raw, "source": "transactionSubscribe"})
+                        if raw.get("id") == TRANSACTION_SUBSCRIBE_REQUEST_ID:
+                            continue
+                        decoded = decode_pumpfun_transaction_subscribe_notification(raw, observed_at=self.now_fn())
+                        if not decoded:
+                            continue
+                        for row in decoded:
+                            _append_jsonl(self.config.pumpfun_create_stream_events_path, row)
+                            rows.append(row)
+                            if on_create_event is not None:
+                                on_create_event(row)
+                            if on_idle is not None:
+                                on_idle()
+                            if len(rows) >= max(0, int(max_events)):
+                                break
+            except BaseException as exc:
+                if not _is_reconnectable_websocket_close(exc):
+                    raise
+                self._record_websocket_reconnect(exc)
+                if on_idle is not None:
+                    on_idle()
         return rows
+
+    def _record_websocket_reconnect(self, exc: BaseException) -> None:
+        self.reconnect_count += 1
+        _append_jsonl(
+            self.config.pumpfun_transaction_subscribe_raw_path,
+            {
+                "source": "transactionSubscribe",
+                "event": "websocket_reconnect",
+                "reason": type(exc).__name__,
+                "message": str(exc),
+                "reconnect_count": self.reconnect_count,
+                "observed_at": self.now_fn(),
+            },
+        )
 
 
 class HeliusBondingCurveLiveWatchSource:
@@ -886,6 +920,18 @@ def _websocket_connect(*args: Any, **kwargs: Any) -> Any:
     from websockets.sync.client import connect
 
     return connect(*args, **kwargs)
+
+
+def _is_reconnectable_websocket_close(exc: BaseException) -> bool:
+    try:
+        from websockets.exceptions import ConnectionClosed
+    except Exception:
+        return type(exc).__name__ in {"ConnectionClosed", "ConnectionClosedOK", "ConnectionClosedError"}
+    return isinstance(exc, ConnectionClosed) or type(exc).__name__ in {
+        "ConnectionClosed",
+        "ConnectionClosedOK",
+        "ConnectionClosedError",
+    }
 
 
 def _append_jsonl(path: Path, row: dict[str, Any]) -> None:

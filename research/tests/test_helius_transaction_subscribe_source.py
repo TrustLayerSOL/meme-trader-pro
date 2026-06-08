@@ -259,6 +259,41 @@ def test_source_invokes_create_callback_while_stream_is_active(tmp_path: Path) -
     assert callback_rows[1] == ("sig-b", 0)
 
 
+def test_source_reconnects_after_clean_websocket_close(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+
+    class ConnectionClosedOK(Exception):
+        pass
+
+    class ClosingWebSocket(FakeWebSocket):
+        def recv(self, timeout: float | None = None) -> str:
+            raise ConnectionClosedOK("received 1001 going away")
+
+    sockets = [ClosingWebSocket(), FakeWebSocket()]
+    idle_calls: list[bool] = []
+
+    def ws_connect(_url: str, **_kwargs: object) -> FakeWebSocket:
+        return sockets.pop(0)
+
+    source = HeliusTransactionSubscribeCreateSource(
+        config=config,
+        websocket_url="wss://fake",
+        ws_connect=ws_connect,
+        now_fn=iter([100.0, 100.1, 100.2]).__next__,
+    )
+
+    rows = source.fetch_create_events(max_events=1, max_seconds=0.2, on_idle=lambda: idle_calls.append(True))
+
+    assert rows == []
+    assert source.reconnect_count == 1
+    assert source.requests_used == 2
+    assert idle_calls
+    raw_rows = [json.loads(line) for line in config.pumpfun_transaction_subscribe_raw_path.read_text(encoding="utf-8").splitlines()]
+    assert raw_rows[0]["event"] == "websocket_reconnect"
+    assert raw_rows[0]["reason"] == "ConnectionClosedOK"
+
+
 def test_get_account_info_probe_row_uses_min_context_slot_and_emits_runtime_event(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
