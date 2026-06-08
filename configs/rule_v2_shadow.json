@@ -8,7 +8,7 @@
         "synthetic_activity_proxy_max": 1,
         "top_10_holder_share_proxy_max": 1
       },
-      "fdv_efficiency_score_definition": "mean of log1p-clipped fdv_per_event_at_20k, fdv_per_buy_at_20k, and fdv_per_active_wallet_at_20k",
+      "fdv_efficiency_score_definition": "mean of fdv_per_event_at_20k, fdv_per_buy_at_20k, and fdv_per_active_wallet_at_20k, divided by 1000",
       "historical_support": {
         "reached_100k_pct": 99.3,
         "reached_500k_pct": 52.2,
@@ -18,7 +18,7 @@
       },
       "name": "20k Q75 efficiency with risk filter",
       "role": "broader_main_variant",
-      "variant_id": "RULE_V2_20K_Q75_EFFICIENCY_RISK_FILTER"
+      "variant_id": "BUY_V2_Q75_EFFICIENCY_RISK"
     },
     {
       "additional_conditions": {
@@ -38,10 +38,10 @@
         "stalls_before_50k": 0,
         "support_count": 38
       },
-      "inherits_variant": "RULE_V2_20K_Q75_EFFICIENCY_RISK_FILTER",
+      "inherits_variant": "BUY_V2_Q75_EFFICIENCY_RISK",
       "name": "20k Q75 efficiency with repeated buyer",
       "role": "stricter_high_conviction_variant",
-      "variant_id": "RULE_V2_20K_Q75_EFFICIENCY_REPEAT_BUYER"
+      "variant_id": "BUY_V2_Q75_EFFICIENCY_REPEAT_BUYER"
     }
   ],
   "config_id": "rule_v2_shadow_locked_20260607",
@@ -58,17 +58,21 @@
     "duplicate_open_bought_closed_reject": true,
     "fast_entry_burst_validation_path_allowed": true,
     "fdv_anomaly_reject": true,
-    "hard_reject_risk_labels": [
-      "dev_pump_suspect",
-      "fake_volume_suspect",
-      "missing_holder_depth"
-    ],
+    "hard_reject_risk_labels": [],
     "holder_gate": {
       "holder_count_2_to_4": "allow_with_low_holder_depth_label",
       "holder_count_gte_5": "pass",
       "holder_count_lte_1": "hard_reject",
-      "missing_holder_depth": "hard_reject"
+      "missing_holder_depth": "label_only_variant_condition"
     },
+    "label_only_risk_labels": [
+      "dev_pump_suspect",
+      "fake_volume_suspect",
+      "missing_holder_depth",
+      "mayhem_mode",
+      "mayhem_assisted_momentum",
+      "low_holder_depth_2_to_4"
+    ],
     "same_timestamp_major_jump_handling": "tag_actionability_or_missed_entry_research_only",
     "silently_pass_sol_quote_or_raw_units": false,
     "single_row_spike_reject_unless_softened": true,
@@ -211,9 +215,24 @@
       "runner_open",
       "final_fdv_after_sell",
       "max_fdv_after_sell",
+      "max_fdv_after_each_sell",
+      "time_to_later_max_seconds",
       "missed_upside",
+      "missed_upside_multiple",
+      "hit_200k_after_sell",
+      "hit_500k_after_sell",
+      "hit_1m_after_sell",
       "sell_protected_from_collapse",
       "hindsight_best_exit"
+    ],
+    "post_sell_analysis_fields": [
+      "max_fdv_after_each_sell",
+      "time_to_later_max_seconds",
+      "missed_upside_multiple",
+      "hit_200k_after_sell",
+      "hit_500k_after_sell",
+      "hit_1m_after_sell",
+      "sell_protected_from_collapse"
     ]
   },
   "transaction_signing_enabled": false,

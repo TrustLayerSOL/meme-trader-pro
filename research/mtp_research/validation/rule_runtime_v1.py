@@ -26,21 +26,26 @@ from research.mtp_research.validation.bonding_curve_account_state import (
     write_bonding_curve_first_fdv_probe_summary,
 )
 from research.mtp_research.validation.rule_runtime_event_bus import RuleRuntimeEventBus
+from research.mtp_research.validation.rule_v2_shadow_lock import (
+    RULE_V2_VARIANT_1_ID,
+    RULE_V2_VARIANT_2_ID,
+    SHARED_RULE_V2_EXIT_ID,
+)
 
 
 RUNTIME_LABEL = "rule_runtime_v1"
 FROZEN_BUY_RULE_ID = "RULE_D_20K_EFFICIENCY_CREATOR_HOLDER_RISK_FILTER"
-FROZEN_EXIT_RULE_ID = "EXIT_NO_RECLAIM_AFTER_30PCT_10M"
+FROZEN_EXIT_RULE_ID = SHARED_RULE_V2_EXIT_ID
 STAGNATION_EXIT_RULE_ID = "EXIT_STAGNATION_AFTER_RUNUP"
-VARIANT_A_ID = "FDV_BASELINE_20K"
-VARIANT_B_ID = "FDV_CREATOR_HOLDER_AVAILABLE_FILTER"
-VARIANT_C_ID = "FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"
-RULE_VARIANTS = [VARIANT_A_ID, VARIANT_B_ID, VARIANT_C_ID]
+VARIANT_A_ID = RULE_V2_VARIANT_1_ID
+VARIANT_B_ID = RULE_V2_VARIANT_2_ID
+VARIANT_C_ID = "BUY_V2_DISABLED_STRICT_REFERENCE"
+RULE_VARIANTS = [VARIANT_A_ID, VARIANT_B_ID]
 VARIANT_GATE_PROFILES = {
-    VARIANT_A_ID: "variant_a_minimal_hard_safety_fdv_entry_band",
-    VARIANT_B_ID: "variant_b_available_holder_creator_risk_filter",
-    VARIANT_C_ID: "variant_c_strict_full_risk_filter",
+    VARIANT_A_ID: "buy_v2_q75_efficiency_risk",
+    VARIANT_B_ID: "buy_v2_q75_efficiency_repeat_buyer",
 }
+Q75_EFFICIENCY_SCORE_MIN = 10.65
 AVAILABLE_RISK_FIELDS = [
     "creator_prior_migration_count",
     "repeated_buyer_count",
@@ -277,6 +282,10 @@ class RuleRuntimeConfig:
     @property
     def paper_rule_variant_exits_path(self) -> Path:
         return self.runtime_root / "paper_rule_variant_exits.jsonl"
+
+    @property
+    def paper_rule_variant_post_sell_analysis_path(self) -> Path:
+        return self.runtime_root / "paper_rule_variant_post_sell_analysis.jsonl"
 
     @property
     def latency_events_path(self) -> Path:
@@ -656,6 +665,9 @@ class RuleRuntimeEngine:
         variant_sells = _evaluate_variant_exits(self.config, state, candidate, normalized)
         if variant_sells:
             result["variant_paper_sells_created"] = variant_sells
+        post_sell_updates = _update_variant_post_sell_tracking(self.config, state, candidate, normalized)
+        if post_sell_updates:
+            result["variant_post_sell_updates"] = post_sell_updates
 
         _finish_event(self.config, state, candidate, normalized, started, previous_state, runtime_mode=runtime_mode)
         _write_monitor(self.config, state)
@@ -701,6 +713,7 @@ def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -
             config.paper_decisions_path,
             config.paper_rule_variant_decisions_path,
             config.paper_rule_variant_exits_path,
+            config.paper_rule_variant_post_sell_analysis_path,
             config.latency_events_path,
             config.pumpfun_create_stream_events_path,
             config.bonding_curve_account_probe_events_path,
@@ -716,6 +729,7 @@ def initialize_rule_runtime(config: RuleRuntimeConfig, *, reset: bool = False) -
             config.paper_decisions_path,
             config.paper_rule_variant_decisions_path,
             config.paper_rule_variant_exits_path,
+            config.paper_rule_variant_post_sell_analysis_path,
             config.latency_events_path,
             config.pumpfun_create_stream_events_path,
             config.bonding_curve_account_probe_events_path,
@@ -4582,52 +4596,25 @@ def _variant_decision_row(
     status = "paper_buy" if not base_reasons else "rejected"
     paper_buy_allowed = not base_reasons
     rejection_reason = ",".join(base_reasons) if base_reasons else None
-    if variant_id == VARIANT_B_ID and not base_reasons:
-        blocking_label_risks = sorted(set(label_only_risks) & {"dev_pump_suspect", "fake_volume_suspect", "missing_holder_depth"})
-        if blocking_label_risks:
+    efficiency_status = _q75_efficiency_status(features)
+    repeat_buyer_status = "not_required"
+    if not base_reasons:
+        if efficiency_status["status"] != "q75_efficiency_pass":
             status = "rejected"
             paper_buy_allowed = False
-            risk_status = "risk_label_filter_fail"
-            rejection_reason = "risk_label_filter_fail"
-        available = [field for field in AVAILABLE_RISK_FIELDS if _field_has_value(row, field)]
-        missing = [field for field in AVAILABLE_RISK_FIELDS if not _field_has_value(row, field)]
-        if status == "rejected":
-            pass
-        elif not available:
-            status = "not_evaluable"
-            paper_buy_allowed = False
-            risk_status = "missing"
-            rejection_reason = "available_risk_fields_missing"
-        elif _has_negative_risk_value(row, available):
-            status = "rejected"
-            paper_buy_allowed = False
-            risk_status = "risk_filter_available_fail"
-            rejection_reason = "available_risk_filter_fail"
+            rejection_reason = "q75_efficiency_filter_fail"
         else:
-            risk_status = "risk_filter_available_pass"
-    elif variant_id == VARIANT_C_ID and not base_reasons:
-        if label_only_risks:
-            status = "rejected"
-            paper_buy_allowed = False
-            risk_status = "strict_risk_label_filter_fail"
-            rejection_reason = "strict_risk_label_filter_fail"
-        missing = [field for field in FULL_RISK_FIELDS if not _field_has_value(row, field)]
-        if status == "rejected":
-            pass
-        elif missing:
-            status = "not_evaluable"
-            paper_buy_allowed = False
-            risk_status = "missing"
-            rejection_reason = "full_risk_fields_missing"
-        elif _has_negative_risk_value(row, FULL_RISK_FIELDS):
-            status = "rejected"
-            paper_buy_allowed = False
-            risk_status = "risk_filter_full_fail"
-            rejection_reason = "full_risk_filter_fail"
-        else:
-            risk_status = "risk_filter_full_pass"
-    elif variant_id == VARIANT_A_ID:
-        risk_status = "not_required" if not base_reasons else "rejected"
+            risk_status, missing, risk_rejection = _v2_available_risk_filter_status(row)
+            if risk_rejection:
+                status = "rejected"
+                paper_buy_allowed = False
+                rejection_reason = risk_rejection
+            elif variant_id == VARIANT_B_ID:
+                repeat_buyer_status = _repeat_buyer_filter_status(row)
+                if repeat_buyer_status != "repeat_buyer_pass":
+                    status = "rejected"
+                    paper_buy_allowed = False
+                    rejection_reason = "repeat_buyer_filter_fail"
     decision = {
         "decision_id": f"variant_decision_{variant_id}_{candidate['mint']}_{int(float(row['timestamp']) * 1000)}",
         "mint": candidate["mint"],
@@ -4645,8 +4632,11 @@ def _variant_decision_row(
         "paper_buy_fdv": row.get("fdv_proxy"),
         "paper_buy_fdv_usd": row.get("fdv_usd"),
         "fdv_efficiency_bucket": _overall_efficiency_bucket(features),
-        "fdv_efficiency_threshold_status": "fdv_threshold_unfrozen",
+        "fdv_efficiency_score": efficiency_status["score"],
+        "fdv_efficiency_threshold_status": efficiency_status["status"],
+        "fdv_efficiency_score_min": Q75_EFFICIENCY_SCORE_MIN,
         "risk_filter_status": risk_status,
+        "repeat_buyer_filter_status": repeat_buyer_status,
         "missing_required_fields": missing,
         "rejection_reason": rejection_reason,
         "risk_labels": risk_labels,
@@ -4692,7 +4682,9 @@ def _create_variant_position(
         "reclaim_prior_high_time": None,
         "paper_sell_emitted": False,
         "base_rule_id": FROZEN_BUY_RULE_ID,
-        "exit_rule_id": FROZEN_EXIT_RULE_ID,
+        "exit_rule_id": SHARED_RULE_V2_EXIT_ID,
+        "sell_events": [],
+        "runner_open": True,
         "no_real_trade": True,
         **_fdv_provenance_fields(row),
     }
@@ -4735,7 +4727,7 @@ def _evaluate_variant_exits(
             "ca": candidate["mint"],
             "timestamp": timestamp,
             "base_rule_id": FROZEN_BUY_RULE_ID,
-            "exit_rule_id": FROZEN_EXIT_RULE_ID,
+            "exit_rule_id": SHARED_RULE_V2_EXIT_ID,
             "paper_buy_fdv": position.get("paper_buy_fdv"),
             "paper_sell_fdv": fdv,
             "local_high_fdv": local_high,
@@ -4752,10 +4744,78 @@ def _evaluate_variant_exits(
         _append_jsonl(config.paper_rule_variant_exits_path, exit_row)
         position.update(exit_row)
         position["paper_sell_emitted"] = True
+        position["runner_open"] = False
+        position["sell_events"] = list(position.get("sell_events") or []) + [exit_row]
+        position["max_fdv_after_sell"] = fdv
+        position["max_fdv_after_each_sell"] = [fdv]
+        position["min_fdv_after_sell"] = fdv
+        position["time_to_later_max_seconds"] = 0.0
+        position["missed_upside_multiple"] = 1.0
+        position["hit_200k_after_sell"] = False
+        position["hit_500k_after_sell"] = False
+        position["hit_1m_after_sell"] = False
+        position["sell_protected_from_collapse"] = False
         state["variant_closed_positions"][key] = position
         del state["variant_open_positions"][key]
         closed += 1
     return closed
+
+
+def _update_variant_post_sell_tracking(
+    config: RuleRuntimeConfig,
+    state: dict[str, Any],
+    candidate: dict[str, Any],
+    row: dict[str, Any],
+) -> int:
+    state.setdefault("variant_closed_positions", {})
+    fdv = float(row.get("fdv_proxy") or 0.0)
+    timestamp = float(row.get("timestamp") or 0.0)
+    updated = 0
+    for key, position in list(state["variant_closed_positions"].items()):
+        if position.get("mint") != candidate["mint"]:
+            continue
+        sell_ts = _num(position.get("timestamp"))
+        sell_fdv = _num(position.get("paper_sell_fdv"))
+        if sell_ts is None or sell_fdv is None or timestamp <= sell_ts:
+            continue
+        previous_max = _num(position.get("max_fdv_after_sell")) or sell_fdv
+        previous_min = _num(position.get("min_fdv_after_sell")) or sell_fdv
+        max_after = max(previous_max, fdv)
+        min_after = min(previous_min, fdv)
+        position["max_fdv_after_sell"] = _round_optional(max_after)
+        position["max_fdv_after_each_sell"] = [_round_optional(max_after)]
+        position["min_fdv_after_sell"] = _round_optional(min_after)
+        if fdv >= max_after:
+            position["time_to_later_max_seconds"] = _round_seconds(timestamp - sell_ts)
+        position["missed_upside_multiple"] = _round_optional(max_after / sell_fdv if sell_fdv else None)
+        position["missed_upside"] = _round_optional(max_after - sell_fdv)
+        position["hit_200k_after_sell"] = bool(max_after >= 200_000.0)
+        position["hit_500k_after_sell"] = bool(max_after >= 500_000.0)
+        position["hit_1m_after_sell"] = bool(max_after >= 1_000_000.0)
+        position["sell_protected_from_collapse"] = bool(min_after <= sell_fdv * 0.5)
+        analysis = {
+            "analysis_id": f"variant_post_sell_{position['variant_id']}_{candidate['mint']}_{int(timestamp * 1000)}",
+            "variant_id": position["variant_id"],
+            "mint": candidate["mint"],
+            "ca": candidate["mint"],
+            "timestamp": timestamp,
+            "paper_sell_fdv": sell_fdv,
+            "current_fdv": fdv,
+            "max_fdv_after_each_sell": position["max_fdv_after_each_sell"],
+            "max_fdv_after_sell": position["max_fdv_after_sell"],
+            "min_fdv_after_sell": position["min_fdv_after_sell"],
+            "time_to_later_max_seconds": position["time_to_later_max_seconds"],
+            "missed_upside_multiple": position["missed_upside_multiple"],
+            "missed_upside": position["missed_upside"],
+            "hit_200k_after_sell": position["hit_200k_after_sell"],
+            "hit_500k_after_sell": position["hit_500k_after_sell"],
+            "hit_1m_after_sell": position["hit_1m_after_sell"],
+            "sell_protected_from_collapse": position["sell_protected_from_collapse"],
+            "no_real_trade": True,
+        }
+        _append_jsonl(config.paper_rule_variant_post_sell_analysis_path, analysis)
+        updated += 1
+    return updated
 
 
 def _record_rejection(
@@ -5818,10 +5878,56 @@ def _overall_efficiency_bucket(features: dict[str, Any]) -> str:
     return "low"
 
 
+def _q75_efficiency_status(features: dict[str, Any]) -> dict[str, Any]:
+    values = [
+        _num(features.get(key))
+        for key in ["fdv_per_event_at_20k", "fdv_per_buy_at_20k", "fdv_per_active_wallet_at_20k"]
+    ]
+    present = [value for value in values if value is not None and value > 0]
+    if not present:
+        return {"status": "q75_efficiency_missing", "score": None}
+    score = sum(value / 1000.0 for value in present) / len(present)
+    return {
+        "status": "q75_efficiency_pass" if score >= Q75_EFFICIENCY_SCORE_MIN else "q75_efficiency_fail",
+        "score": _round_num(score),
+    }
+
+
+def _v2_available_risk_filter_status(row: dict[str, Any]) -> tuple[str, list[str], str | None]:
+    fields = [
+        "creator_extraction_proxy_before_20k",
+        "top_10_holder_share_proxy",
+        "synthetic_activity_proxy",
+    ]
+    missing = [field for field in fields if not _field_has_value(row, field)]
+    checks = [
+        ("creator_extraction_proxy_before_20k", 0.0),
+        ("top_10_holder_share_proxy", 1.0),
+        ("synthetic_activity_proxy", 1.0),
+    ]
+    for field, maximum in checks:
+        value = _num(row.get(field))
+        if value is not None and value > maximum:
+            return "risk_filter_available_fail", missing, f"{field}_above_v2_max"
+    return "risk_filter_available_pass", missing, None
+
+
+def _repeat_buyer_filter_status(row: dict[str, Any]) -> str:
+    repeated = _num(row.get("repeated_buyer_count"))
+    if repeated is None:
+        return "repeat_buyer_missing"
+    if repeated >= 1:
+        return "repeat_buyer_pass"
+    return "repeat_buyer_fail"
+
+
 def _risk_field_values(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "creator_prior_migration_count": row.get("creator_prior_migration_count"),
+        "creator_extraction_proxy_before_20k": row.get("creator_extraction_proxy_before_20k"),
         "repeated_buyer_count": row.get("repeated_buyer_count"),
+        "top_10_holder_share_proxy": row.get("top_10_holder_share_proxy"),
+        "synthetic_activity_proxy": row.get("synthetic_activity_proxy"),
         "holder_count_at_10k_proxy": row.get("holder_count_at_10k_proxy"),
         "holder_growth_to_20k_proxy": row.get("holder_growth_to_20k_proxy"),
         "early_buyer_with_prior_100k_count": row.get("early_buyer_with_prior_100k_count"),

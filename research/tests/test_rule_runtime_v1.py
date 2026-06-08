@@ -31,6 +31,11 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     _watch_delays_for_mode,
     _watch_mode_for_fdv,
 )
+from research.mtp_research.validation.rule_v2_shadow_lock import (
+    RULE_V2_VARIANT_1_ID,
+    RULE_V2_VARIANT_2_ID,
+    SHARED_RULE_V2_EXIT_ID,
+)
 from research.mtp_research.validation.bonding_curve_account_state import (
     BondingCurveState,
     BondingCurveAccountStateProbe,
@@ -144,7 +149,7 @@ def test_initializes_manifest_ledgers_and_monitor_under_rule_runtime_namespace(t
     manifest = json.loads(config.runtime_manifest_json_path.read_text(encoding="utf-8"))
     assert result["runtime_label"] == "rule_runtime_v1"
     assert manifest["frozen_buy_rule_id"] == "RULE_D_20K_EFFICIENCY_CREATOR_HOLDER_RISK_FILTER"
-    assert manifest["frozen_exit_rule_id"] == "EXIT_NO_RECLAIM_AFTER_30PCT_10M"
+    assert manifest["frozen_exit_rule_id"] == SHARED_RULE_V2_EXIT_ID
     assert manifest["paper_trading_enabled"] is True
     assert manifest["live_trading_enabled"] is False
     assert manifest["private_keys_allowed"] is False
@@ -454,7 +459,7 @@ def test_confirmed_20k_creates_one_paper_buy_with_efficiency_features(tmp_path: 
 
     engine.process_path_event(_event("mint-a", 100, 10_200, events=4, buys=2, wallets=2))
     engine.process_path_event(_event("mint-a", 130, 11_000, events=5, buys=3, wallets=3))
-    engine.process_path_event(_event("mint-a", 170, 20_500, events=8, buys=4, wallets=4))
+    engine.process_path_event(_event("mint-a", 170, 20_500, events=1, buys=1, wallets=1))
     first = engine.process_path_event(_event("mint-a", 200, 22_000, events=10, buys=5, wallets=5))
     duplicate = engine.process_path_event(_event("mint-a", 215, 23_000, events=11, buys=6, wallets=6))
 
@@ -478,7 +483,7 @@ def test_confirmed_20k_creates_one_paper_buy_with_efficiency_features(tmp_path: 
     assert decisions[-1]["decision"] == "paper_buy"
 
 
-def test_confirmed_20k_creates_three_variant_decisions_with_available_risk_fields(tmp_path: Path) -> None:
+def test_confirmed_20k_creates_v2_variant_decisions_with_available_risk_fields(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path, starting_wallet_usd=300, position_fraction=0.05)
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
@@ -491,9 +496,9 @@ def test_confirmed_20k_creates_three_variant_decisions_with_available_risk_field
             "mint-a",
             200,
             22_000,
-            events=10,
-            buys=5,
-            wallets=5,
+            events=1,
+            buys=1,
+            wallets=1,
             creator_prior_migration_count=1,
             repeated_buyer_count=3,
             holder_count_at_10k_proxy=24,
@@ -505,24 +510,23 @@ def test_confirmed_20k_creates_three_variant_decisions_with_available_risk_field
     decisions = _rows(config.paper_rule_variant_decisions_path)
     by_variant = {row["variant_id"]: row for row in decisions}
     assert set(by_variant) == {
-        "FDV_BASELINE_20K",
-        "FDV_CREATOR_HOLDER_AVAILABLE_FILTER",
-        "FDV_FULL_RISK_FILTER_WHEN_AVAILABLE",
+        RULE_V2_VARIANT_1_ID,
+        RULE_V2_VARIANT_2_ID,
     }
-    assert by_variant["FDV_BASELINE_20K"]["variant_status"] == "paper_buy"
-    assert by_variant["FDV_BASELINE_20K"]["paper_buy_emitted"] is True
-    assert by_variant["FDV_BASELINE_20K"]["fdv_efficiency_threshold_status"] == "fdv_threshold_unfrozen"
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["variant_status"] == "paper_buy"
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["risk_filter_status"] == "risk_filter_available_pass"
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["creator_prior_migration_count"] == 1
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["repeated_buyer_count"] == 3
-    assert by_variant["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["variant_status"] == "not_evaluable"
-    assert by_variant["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["risk_filter_status"] == "missing"
-    assert "early_buyer_with_prior_100k_count" in by_variant["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["missing_required_fields"]
+    assert by_variant[RULE_V2_VARIANT_1_ID]["variant_status"] == "paper_buy"
+    assert by_variant[RULE_V2_VARIANT_1_ID]["paper_buy_emitted"] is True
+    assert by_variant[RULE_V2_VARIANT_1_ID]["variant_gate_profile"] == "buy_v2_q75_efficiency_risk"
+    assert by_variant[RULE_V2_VARIANT_1_ID]["fdv_efficiency_threshold_status"] == "q75_efficiency_pass"
+    assert by_variant[RULE_V2_VARIANT_1_ID]["risk_filter_status"] == "risk_filter_available_pass"
+    assert by_variant[RULE_V2_VARIANT_1_ID]["creator_prior_migration_count"] == 1
+    assert by_variant[RULE_V2_VARIANT_2_ID]["variant_status"] == "paper_buy"
+    assert by_variant[RULE_V2_VARIANT_2_ID]["variant_gate_profile"] == "buy_v2_q75_efficiency_repeat_buyer"
+    assert by_variant[RULE_V2_VARIANT_2_ID]["repeat_buyer_filter_status"] == "repeat_buyer_pass"
+    assert by_variant[RULE_V2_VARIANT_2_ID]["repeated_buyer_count"] == 3
     assert len([row for row in _rows(config.paper_trades_path) if row["side"] == "paper_buy"]) == 1
 
 
-def test_partial_clean_risk_fields_do_not_block_fdv_baseline_variant(tmp_path: Path) -> None:
+def test_v2_repeat_buyer_variant_rejects_when_repeat_buyer_missing(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
@@ -530,17 +534,17 @@ def test_partial_clean_risk_fields_do_not_block_fdv_baseline_variant(tmp_path: P
     for event in [
         _event("mint-a", 100, 10_200),
         _event("mint-a", 130, 11_000),
-        _event("mint-a", 170, 20_500),
-        _event("mint-a", 200, 22_000),
+        _event("mint-a", 170, 20_500, events=1, buys=1, wallets=1),
+        _event("mint-a", 200, 22_000, events=1, buys=1, wallets=1),
     ]:
         engine.process_path_event(event)
 
     by_variant = {row["variant_id"]: row for row in _rows(config.paper_rule_variant_decisions_path)}
-    assert by_variant["FDV_BASELINE_20K"]["variant_status"] == "paper_buy"
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["variant_status"] == "paper_buy"
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["risk_filter_status"] == "risk_filter_available_pass"
-    assert "creator_prior_migration_count" in by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["missing_required_fields"]
-    assert by_variant["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["variant_status"] == "not_evaluable"
+    assert by_variant[RULE_V2_VARIANT_1_ID]["variant_status"] == "paper_buy"
+    assert by_variant[RULE_V2_VARIANT_1_ID]["risk_filter_status"] == "risk_filter_available_pass"
+    assert "creator_extraction_proxy_before_20k" in by_variant[RULE_V2_VARIANT_1_ID]["missing_required_fields"]
+    assert by_variant[RULE_V2_VARIANT_2_ID]["variant_status"] == "rejected"
+    assert by_variant[RULE_V2_VARIANT_2_ID]["rejection_reason"] == "repeat_buyer_filter_fail"
 
 
 def test_variant_entry_rejections_capture_spike_jump_and_fdv_anomaly_flags(tmp_path: Path) -> None:
@@ -560,7 +564,7 @@ def test_variant_entry_rejections_capture_spike_jump_and_fdv_anomaly_flags(tmp_p
         engine.process_path_event(event)
 
     decisions = _rows(config.paper_rule_variant_decisions_path)
-    reasons = {row["mint"]: row["rejection_reason"] for row in decisions if row["variant_id"] == "FDV_BASELINE_20K"}
+    reasons = {row["mint"]: row["rejection_reason"] for row in decisions if row["variant_id"] == RULE_V2_VARIANT_1_ID}
     assert reasons["spike"] == "single_row_spike"
     assert reasons["jump"] == "same_timestamp_major_jump"
     assert reasons["anomaly"] == "fdv_anomaly"
@@ -579,6 +583,9 @@ def test_exit_tracking_is_recorded_per_paper_variant(tmp_path: Path) -> None:
             "mint-a",
             160,
             20_500,
+            events=1,
+            buys=1,
+            wallets=1,
             creator_prior_migration_count=1,
             repeated_buyer_count=2,
             holder_count_at_10k_proxy=18,
@@ -588,6 +595,9 @@ def test_exit_tracking_is_recorded_per_paper_variant(tmp_path: Path) -> None:
             "mint-a",
             180,
             21_000,
+            events=1,
+            buys=1,
+            wallets=1,
             creator_prior_migration_count=1,
             repeated_buyer_count=2,
             holder_count_at_10k_proxy=18,
@@ -601,10 +611,45 @@ def test_exit_tracking_is_recorded_per_paper_variant(tmp_path: Path) -> None:
 
     exits = _rows(config.paper_rule_variant_exits_path)
     by_variant = {row["variant_id"]: row for row in exits}
-    assert set(by_variant) == {"FDV_BASELINE_20K", "FDV_CREATOR_HOLDER_AVAILABLE_FILTER"}
-    assert by_variant["FDV_BASELINE_20K"]["exit_rule_id"] == "EXIT_NO_RECLAIM_AFTER_30PCT_10M"
-    assert by_variant["FDV_BASELINE_20K"]["paper_sell_emitted"] is True
-    assert by_variant["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["paper_sell_fdv"] == 45_000
+    assert set(by_variant) == {RULE_V2_VARIANT_1_ID, RULE_V2_VARIANT_2_ID}
+    assert by_variant[RULE_V2_VARIANT_1_ID]["exit_rule_id"] == SHARED_RULE_V2_EXIT_ID
+    assert by_variant[RULE_V2_VARIANT_1_ID]["paper_sell_emitted"] is True
+    assert by_variant[RULE_V2_VARIANT_2_ID]["paper_sell_fdv"] == 45_000
+
+
+def test_closed_v2_variant_keeps_tracking_later_max_and_missed_upside(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    for event in [
+        _event("runner", 100, 10_500),
+        _event("runner", 130, 11_500),
+        _event("runner", 160, 20_500, events=1, buys=1, wallets=1, repeated_buyer_count=2),
+        _event("runner", 180, 21_000, events=1, buys=1, wallets=1, repeated_buyer_count=2),
+        _event("runner", 240, 80_000),
+        _event("runner", 300, 48_000),
+        _event("runner", 901, 45_000),
+        _event("runner", 960, 210_000),
+        _event("runner", 990, 525_000),
+        _event("runner", 1020, 1_100_000),
+        _event("runner", 1100, 8_000),
+    ]:
+        engine.process_path_event(event)
+
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    post_sell = _rows(config.paper_rule_variant_post_sell_analysis_path)
+    closed = state["variant_closed_positions"][f"{RULE_V2_VARIANT_1_ID}|runner"]
+
+    assert closed["max_fdv_after_each_sell"] == [1_100_000]
+    assert closed["time_to_later_max_seconds"] == 119
+    assert closed["missed_upside_multiple"] == 24.444444
+    assert closed["hit_200k_after_sell"] is True
+    assert closed["hit_500k_after_sell"] is True
+    assert closed["hit_1m_after_sell"] is True
+    assert closed["sell_protected_from_collapse"] is True
+    assert post_sell[-1]["mint"] == "runner"
+    assert post_sell[-1]["variant_id"] == RULE_V2_VARIANT_1_ID
 
 
 def test_status_and_monitor_include_variant_counts(tmp_path: Path) -> None:
@@ -615,19 +660,18 @@ def test_status_and_monitor_include_variant_counts(tmp_path: Path) -> None:
     for event in [
         _event("mint-a", 100, 10_200),
         _event("mint-a", 130, 11_000),
-        _event("mint-a", 170, 20_500),
-        _event("mint-a", 200, 22_000),
+        _event("mint-a", 170, 20_500, events=1, buys=1, wallets=1),
+        _event("mint-a", 200, 22_000, events=1, buys=1, wallets=1),
     ]:
         engine.process_path_event(event)
 
     status = rule_runtime_status(config)
     html = config.monitor_html_path.read_text(encoding="utf-8")
-    assert status["variants"]["FDV_BASELINE_20K"]["paper_buys"] == 1
-    assert status["variants"]["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["paper_buys"] == 1
-    assert status["variants"]["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["not_evaluable"] == 1
+    assert status["variants"][RULE_V2_VARIANT_1_ID]["paper_buys"] == 1
+    assert status["variants"][RULE_V2_VARIANT_2_ID]["rejected"] == 1
     assert "Rule Runtime v1 Variants" in html
-    assert "FDV_BASELINE_20K" in html
-    assert "FDV_FULL_RISK_FILTER_WHEN_AVAILABLE" in html
+    assert RULE_V2_VARIANT_1_ID in html
+    assert RULE_V2_VARIANT_2_ID in html
 
 
 def test_rejects_single_row_spike_and_same_timestamp_jump_for_entry(tmp_path: Path) -> None:
@@ -687,7 +731,7 @@ def test_exit_no_reclaim_creates_paper_sell_after_30pct_drawdown_timer(tmp_path:
     trades = _rows(config.paper_trades_path)
     sell = [row for row in trades if row["side"] == "paper_sell"][0]
     assert result["paper_sell_created"] is True
-    assert sell["exit_rule_id"] == "EXIT_NO_RECLAIM_AFTER_30PCT_10M"
+    assert sell["exit_rule_id"] == SHARED_RULE_V2_EXIT_ID
     assert sell["exit_reason"] == "no_reclaim_after_10m_30pct_drawdown"
     assert sell["paper_sell_fdv"] == 45_000
     assert sell["local_high_fdv"] == 70_000
@@ -1368,11 +1412,9 @@ def test_label_only_risks_do_not_universally_reject_variant_a_proof_buy(tmp_path
     assert "fake_volume_suspect" in decision["risk_labels"]
     assert "missing_holder_depth" in decision["risk_labels"]
     assert decision["label_only_risk_reasons"] == ["dev_pump_suspect", "fake_volume_suspect", "missing_holder_depth"]
-    assert variant_rows["FDV_BASELINE_20K"]["variant_status"] == "paper_buy"
-    assert variant_rows["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["variant_status"] == "rejected"
-    assert variant_rows["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["rejection_reason"] == "risk_label_filter_fail"
-    assert variant_rows["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["variant_status"] == "rejected"
-    assert variant_rows["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["rejection_reason"] == "strict_risk_label_filter_fail"
+    assert variant_rows[RULE_V2_VARIANT_1_ID]["variant_status"] == "paper_buy"
+    assert variant_rows[RULE_V2_VARIANT_2_ID]["variant_status"] == "rejected"
+    assert variant_rows[RULE_V2_VARIANT_2_ID]["rejection_reason"] == "repeat_buyer_filter_fail"
     status = rule_runtime_status(config)
     assert status["paper_buys"] == 1
     assert status["dev_pump_suspect_count"] >= 1
@@ -1544,8 +1586,8 @@ def test_retroactive_safety_review_voids_unsupported_or_high_risk_paper_buy(tmp_
         "tier": 4,
         "paper_buy_created": True,
     }
-    state["variant_open_positions"]["FDV_BASELINE_20K|token-2022-pump"] = {
-        "variant_id": "FDV_BASELINE_20K",
+    state["variant_open_positions"][f"{RULE_V2_VARIANT_1_ID}|token-2022-pump"] = {
+        "variant_id": RULE_V2_VARIANT_1_ID,
         "mint": "token-2022-pump",
         "paper_buy_fdv": 22_436.05,
         "no_real_trade": True,
@@ -1580,7 +1622,7 @@ def test_retroactive_safety_review_voids_unsupported_or_high_risk_paper_buy(tmp_
     assert row["void_reason"] == "unsupported_token_program"
     assert status["valid_paper_buys"] == 0
     assert status["voided_paper_buys"] == 1
-    assert status["variants"]["FDV_BASELINE_20K"]["open_positions"] == 0
+    assert status["variants"][RULE_V2_VARIANT_1_ID]["open_positions"] == 0
     assert status["cash_usd"] == 300.0
 
 

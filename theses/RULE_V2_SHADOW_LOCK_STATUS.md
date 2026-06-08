@@ -4,8 +4,8 @@ Status: locked as paper-shadow config only.
 
 Locked buy variants:
 
-- `RULE_V2_20K_Q75_EFFICIENCY_RISK_FILTER`
-- `RULE_V2_20K_Q75_EFFICIENCY_REPEAT_BUYER`
+- `BUY_V2_Q75_EFFICIENCY_RISK`
+- `BUY_V2_Q75_EFFICIENCY_REPEAT_BUYER`
 
 Locked shared exit:
 
@@ -16,7 +16,9 @@ Scope:
 - Paper/shadow only.
 - Starting paper cash: `$300`.
 - Position size: `5%` of available paper cash/wallet value.
-- Current Rule D config was not overwritten.
+- Current Rule D historical artifacts were not overwritten.
+- V2 paper-shadow variant decisions are wired into `rule_runtime_v1`.
+- Every V2 simulated sell keeps post-sell tracking for later max FDV, missed upside, 200k/500k/1m continuation, and collapse protection.
 - No real trades, wallet execution, private keys, transaction signing, swaps, order routing, or live trading are enabled.
 
 Primary lock artifacts:
@@ -29,4 +31,4 @@ Primary lock artifacts:
 
 Next logical step:
 
-Wire V2 shadow candidate labeling into `rule_runtime_v1` after the actionable-candidate-quality bottleneck audit, so every confirmed 20k candidate reports which V2 gates passed or failed before any paper buy is allowed.
+Run a short paper-only proof campaign and compare V2 variant buys, exits, rejected candidates, and post-sell missed-upside tracking.

@@ -20,23 +20,38 @@ def test_rule_v2_shadow_config_locks_two_buy_variants_and_shared_exit() -> None:
     assert config["starting_paper_cash_usd"] == 300.0
     assert config["position_fraction"] == 0.05
     assert [variant["variant_id"] for variant in config["buy_variants"]] == [
-        RULE_V2_VARIANT_1_ID,
-        RULE_V2_VARIANT_2_ID,
+        "BUY_V2_Q75_EFFICIENCY_RISK",
+        "BUY_V2_Q75_EFFICIENCY_REPEAT_BUYER",
     ]
+    assert RULE_V2_VARIANT_1_ID == "BUY_V2_Q75_EFFICIENCY_RISK"
+    assert RULE_V2_VARIANT_2_ID == "BUY_V2_Q75_EFFICIENCY_REPEAT_BUYER"
     assert config["shared_exit_rule"]["rule_id"] == SHARED_RULE_V2_EXIT_ID
     assert config["entry_gate"]["confirmed_clean_10k_required"] is True
     assert config["entry_gate"]["confirmed_clean_20k_required"] is True
     assert config["entry_gate"]["buy_fdv_band_usd"] == {"min": 20_000.0, "max": 26_000.0}
-    assert config["entry_gate"]["holder_gate"]["missing_holder_depth"] == "hard_reject"
+    assert config["entry_gate"]["holder_gate"]["missing_holder_depth"] == "label_only_variant_condition"
     assert config["entry_gate"]["holder_gate"]["holder_count_lte_1"] == "hard_reject"
-    assert config["entry_gate"]["hard_reject_risk_labels"] == [
+    assert config["entry_gate"]["label_only_risk_labels"] == [
         "dev_pump_suspect",
         "fake_volume_suspect",
         "missing_holder_depth",
+        "mayhem_mode",
+        "mayhem_assisted_momentum",
+        "low_holder_depth_2_to_4",
     ]
+    assert config["entry_gate"]["hard_reject_risk_labels"] == []
     assert config["buy_variants"][0]["historical_support"]["support_count"] == 136
     assert config["buy_variants"][1]["additional_conditions"] == {"repeated_buyer_count_min": 1}
     assert config["tracking"]["continue_full_path_after_sell"] is True
+    assert config["tracking"]["post_sell_analysis_fields"] == [
+        "max_fdv_after_each_sell",
+        "time_to_later_max_seconds",
+        "missed_upside_multiple",
+        "hit_200k_after_sell",
+        "hit_500k_after_sell",
+        "hit_1m_after_sell",
+        "sell_protected_from_collapse",
+    ]
 
 
 def test_rule_v2_shadow_lock_artifacts_are_written_without_overwriting_rule_d(tmp_path: Path) -> None:

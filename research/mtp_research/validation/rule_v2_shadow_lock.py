@@ -14,8 +14,8 @@ from typing import Any
 from research.mtp_research.data_paths import data_lake_root
 
 
-RULE_V2_VARIANT_1_ID = "RULE_V2_20K_Q75_EFFICIENCY_RISK_FILTER"
-RULE_V2_VARIANT_2_ID = "RULE_V2_20K_Q75_EFFICIENCY_REPEAT_BUYER"
+RULE_V2_VARIANT_1_ID = "BUY_V2_Q75_EFFICIENCY_RISK"
+RULE_V2_VARIANT_2_ID = "BUY_V2_Q75_EFFICIENCY_REPEAT_BUYER"
 SHARED_RULE_V2_EXIT_ID = "EXIT_V2_PROFIT_LOCK_WITH_RUNNER"
 
 RULE_V2_SHADOW_RELATIVE_ROOT = Path("data") / "forward_observation" / "rule_v2_shadow"
@@ -80,15 +80,19 @@ def build_rule_v2_shadow_config() -> dict[str, Any]:
                 "unknown_or_unsupported": "hard_reject",
             },
             "holder_gate": {
-                "missing_holder_depth": "hard_reject",
+                "missing_holder_depth": "label_only_variant_condition",
                 "holder_count_lte_1": "hard_reject",
                 "holder_count_2_to_4": "allow_with_low_holder_depth_label",
                 "holder_count_gte_5": "pass",
             },
-            "hard_reject_risk_labels": [
+            "hard_reject_risk_labels": [],
+            "label_only_risk_labels": [
                 "dev_pump_suspect",
                 "fake_volume_suspect",
                 "missing_holder_depth",
+                "mayhem_mode",
+                "mayhem_assisted_momentum",
+                "low_holder_depth_2_to_4",
             ],
         },
         "buy_variants": [
@@ -104,8 +108,8 @@ def build_rule_v2_shadow_config() -> dict[str, Any]:
                     "fdv_efficiency_score_min": 10.65,
                 },
                 "fdv_efficiency_score_definition": (
-                    "mean of log1p-clipped fdv_per_event_at_20k, "
-                    "fdv_per_buy_at_20k, and fdv_per_active_wallet_at_20k"
+                    "mean of fdv_per_event_at_20k, fdv_per_buy_at_20k, "
+                    "and fdv_per_active_wallet_at_20k, divided by 1000"
                 ),
                 "historical_support": {
                     "support_count": 136,
@@ -199,9 +203,24 @@ def build_rule_v2_shadow_config() -> dict[str, Any]:
                 "runner_open",
                 "final_fdv_after_sell",
                 "max_fdv_after_sell",
+                "max_fdv_after_each_sell",
+                "time_to_later_max_seconds",
                 "missed_upside",
+                "missed_upside_multiple",
+                "hit_200k_after_sell",
+                "hit_500k_after_sell",
+                "hit_1m_after_sell",
                 "sell_protected_from_collapse",
                 "hindsight_best_exit",
+            ],
+            "post_sell_analysis_fields": [
+                "max_fdv_after_each_sell",
+                "time_to_later_max_seconds",
+                "missed_upside_multiple",
+                "hit_200k_after_sell",
+                "hit_500k_after_sell",
+                "hit_1m_after_sell",
+                "sell_protected_from_collapse",
             ],
             "milestones_usd": [30_000, 40_000, 50_000, 75_000, 100_000, 200_000, 500_000, 1_000_000],
         },
@@ -274,8 +293,8 @@ def write_rule_v2_shadow_lock_artifacts(
         "sells_by_reason": {},
         "open_runners": 0,
         "missed_upside_summary": {},
-        "blockers": ["rule_v2_shadow_not_wired_to_runtime_yet"],
-        "next_logical_step": "wire V2 shadow candidate labeling into rule_runtime_v1 after actionable candidate quality bottleneck audit",
+        "blockers": [],
+        "next_logical_step": "run paper-only proof campaign and compare V2 variant buys, sells, and post-sell upside capture",
     }
 
     _write_json(repo_config_path, config)
@@ -318,8 +337,8 @@ def _status_markdown(config: dict[str, Any], manifest: dict[str, Any], variant_s
             "- Confirmed clean 10k required.",
             "- Confirmed clean 20k required.",
             "- Buy FDV band is `$20,000` to `$26,000` unless explicit fast-entry burst validation applies.",
-            "- Missing holder depth and holder count <= 1 are hard rejects.",
-            "- Hard risk labels: `dev_pump_suspect`, `fake_volume_suspect`, `missing_holder_depth`.",
+            "- Holder count <= 1 is a hard reject.",
+            "- Missing holder depth, Mayhem, low holder depth, dev-pump, and fake-volume are labels or variant conditions, not universal hard rejects.",
             "",
             "## Variant Summary",
             "",
