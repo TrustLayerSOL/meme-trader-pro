@@ -1862,7 +1862,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     transactions_per_mint: int = 7,
 ) -> dict[str, Any]:
     from concurrent.futures import ThreadPoolExecutor, wait
-    from threading import Lock
+    from threading import Event, Lock, Thread
 
     from research.mtp_research.validation.forward_efficient_mover_observer import (
         resolve_forward_sol_usd_price,
@@ -1942,6 +1942,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     hot_watch_follow_up_scheduled_count = 0
     entry_validation_burst_scheduled_count = 0
     near_entry_live_watch_scheduled_count = 0
+    watch_follow_up_scheduler_started = False
     probe_errors: list[dict[str, Any]] = []
     confirmation_errors: list[dict[str, Any]] = []
     live_watch_errors: list[dict[str, Any]] = []
@@ -2171,6 +2172,15 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             )
         return len(due)
 
+    def run_watch_follow_up_scheduler(
+        stop_event: Event,
+        watch_executor: ThreadPoolExecutor,
+        confirmation_executor: ThreadPoolExecutor,
+        live_watch_executor: ThreadPoolExecutor,
+    ) -> None:
+        while not stop_event.wait(0.01):
+            drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
+
     def wait_for_futures(
         futures: list[Any],
         errors: list[dict[str, Any]],
@@ -2280,7 +2290,18 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     cancelled_watch_follow_up_futures = 0
     cancelled_live_watch_futures = 0
     cancelled_confirmation_futures = 0
+    watch_follow_up_scheduler_stop = Event()
+    watch_follow_up_scheduler_thread: Thread | None = None
     try:
+        watch_follow_up_scheduler_thread = Thread(
+            target=run_watch_follow_up_scheduler,
+            args=(watch_follow_up_scheduler_stop, watch_executor, confirmation_executor, live_watch_executor),
+            name="txsub-watch-follow-up-scheduler",
+            daemon=True,
+        )
+        watch_follow_up_scheduler_thread.start()
+        watch_follow_up_scheduler_started = True
+
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
             try:
@@ -2323,6 +2344,9 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             on_create_event=on_create_event,
             on_idle=on_idle,
         )
+        watch_follow_up_scheduler_stop.set()
+        if watch_follow_up_scheduler_thread is not None:
+            watch_follow_up_scheduler_thread.join(timeout=1.0)
         cleanup_deadline = time.monotonic() + TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS
         cancelled_probe_futures = wait_for_futures(
             probe_futures,
@@ -2363,6 +2387,9 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 cancelled_watch_follow_up_futures += len(watch_follow_up_jobs)
                 watch_follow_up_jobs.clear()
     finally:
+        watch_follow_up_scheduler_stop.set()
+        if watch_follow_up_scheduler_thread is not None and watch_follow_up_scheduler_thread.is_alive():
+            watch_follow_up_scheduler_thread.join(timeout=1.0)
         executor.shutdown(wait=False, cancel_futures=True)
         watch_executor.shutdown(wait=False, cancel_futures=True)
         live_watch_executor.shutdown(wait=False, cancel_futures=True)
@@ -2392,6 +2419,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     probe_stats["reconnect_count"] = int(getattr(source, "reconnect_count", 0) or 0)
     probe_stats["initial_probe_max_workers"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS
     probe_stats["initial_probe_metadata_deferred"] = True
+    probe_stats["watch_follow_up_scheduler_active_during_stream"] = bool(watch_follow_up_scheduler_started)
     with watch_follow_up_lock:
         if watch_follow_up_jobs and time.monotonic() >= cleanup_deadline:
             cancelled_watch_follow_up_futures += len(watch_follow_up_jobs)
@@ -5204,6 +5232,7 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "near_entry_live_watch_successes": int(stats.get("near_entry_live_watch_successes") or 0),
         "initial_probe_max_workers": int(stats.get("initial_probe_max_workers") or 0),
         "initial_probe_metadata_deferred": bool(stats.get("initial_probe_metadata_deferred")),
+        "watch_follow_up_scheduler_active_during_stream": bool(stats.get("watch_follow_up_scheduler_active_during_stream")),
         "shutdown_cancelled_probe_futures": int(stats.get("shutdown_cancelled_probe_futures") or 0),
         "shutdown_cancelled_watch_follow_up_futures": int(stats.get("shutdown_cancelled_watch_follow_up_futures") or 0),
         "shutdown_cancelled_live_watch_futures": int(stats.get("shutdown_cancelled_live_watch_futures") or 0),
@@ -5315,6 +5344,7 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "near_entry_live_watch_successes": sum(1 for row in near_entry_live_watch_rows if row.get("probe_status") == "success"),
         "initial_probe_max_workers": int(source_summary.get("initial_probe_max_workers") or 0),
         "initial_probe_metadata_deferred": bool(source_summary.get("initial_probe_metadata_deferred")),
+        "watch_follow_up_scheduler_active_during_stream": bool(source_summary.get("watch_follow_up_scheduler_active_during_stream")),
         **post_birth_watch,
         "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
@@ -5688,6 +5718,7 @@ def _monitor_md(payload: dict[str, Any]) -> str:
             f"- curve PDA verified: {txsub.get('curve_pda_verified')}",
             f"- curve account probes started: {txsub.get('curve_account_probes_started')}",
             f"- probes started during stream: {txsub.get('probes_started_during_stream')}",
+            f"- watch follow-up scheduler active during stream: {txsub.get('watch_follow_up_scheduler_active_during_stream')}",
             f"- confirmation follow-up futures/rows/successes: {txsub.get('confirmation_follow_up_futures')} / {txsub.get('confirmation_follow_up_probe_rows')} / {txsub.get('confirmation_follow_up_successes')}",
             f"- hot-watch futures/pending/probes/successes: {txsub.get('hot_watch_follow_up_futures')} / {txsub.get('hot_watch_follow_up_pending')} / {txsub.get('hot_watch_probe_count')} / {txsub.get('hot_watch_success_count')}",
             f"- hot-watch near-threshold/entry-zone probes: {txsub.get('near_threshold_hot_watch_probe_count')} / {txsub.get('entry_zone_watch_probe_count')}",
@@ -5834,6 +5865,7 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 	<p>Decoded create probe coverage: {html.escape(str(txsub.get('decoded_create_mints_with_probe')))} / {html.escape(str(txsub.get('decoded_create_unique_mints')))} ({html.escape(str(txsub.get('decoded_create_probe_coverage_rate')))}); missing probes: {html.escape(str(txsub.get('decoded_create_mints_without_probe')))}</p>
 	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
+<p>Watch follow-up scheduler active during stream: {html.escape(str(txsub.get('watch_follow_up_scheduler_active_during_stream')))}</p>
 <p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
 <p>Entry-validation burst futures/pending/rows/successes: {html.escape(str(txsub.get('entry_validation_burst_futures')))} / {html.escape(str(txsub.get('entry_validation_burst_pending')))} / {html.escape(str(txsub.get('entry_validation_burst_probe_rows')))} / {html.escape(str(txsub.get('entry_validation_burst_successes')))}</p>
 <p>Hot-watch futures/pending/probes/successes: {html.escape(str(txsub.get('hot_watch_follow_up_futures')))} / {html.escape(str(txsub.get('hot_watch_follow_up_pending')))} / {html.escape(str(txsub.get('hot_watch_probe_count')))} / {html.escape(str(txsub.get('hot_watch_success_count')))}</p>
@@ -6163,6 +6195,7 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "near_entry_live_watch_successes": int(txsub.get("near_entry_live_watch_successes") or 0),
         "initial_probe_max_workers": int(txsub.get("initial_probe_max_workers") or 0),
         "initial_probe_metadata_deferred": bool(txsub.get("initial_probe_metadata_deferred")),
+        "watch_follow_up_scheduler_active_during_stream": bool(txsub.get("watch_follow_up_scheduler_active_during_stream")),
         "shutdown_cancelled_probe_futures": int(txsub.get("shutdown_cancelled_probe_futures") or 0),
         "shutdown_cancelled_watch_follow_up_futures": int(txsub.get("shutdown_cancelled_watch_follow_up_futures") or 0),
         "shutdown_cancelled_live_watch_futures": int(txsub.get("shutdown_cancelled_live_watch_futures") or 0),
@@ -6534,6 +6567,7 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["near_entry_live_watch_successes"] = int(probe_stats.get("near_entry_live_watch_successes") or 0)
     stats["initial_probe_max_workers"] = int(probe_stats.get("initial_probe_max_workers") or 0)
     stats["initial_probe_metadata_deferred"] = bool(probe_stats.get("initial_probe_metadata_deferred"))
+    stats["watch_follow_up_scheduler_active_during_stream"] = bool(probe_stats.get("watch_follow_up_scheduler_active_during_stream"))
     stats["shutdown_cancelled_probe_futures"] = int(probe_stats.get("shutdown_cancelled_probe_futures") or 0)
     stats["shutdown_cancelled_watch_follow_up_futures"] = int(probe_stats.get("shutdown_cancelled_watch_follow_up_futures") or 0)
     stats["shutdown_cancelled_live_watch_futures"] = int(probe_stats.get("shutdown_cancelled_live_watch_futures") or 0)
