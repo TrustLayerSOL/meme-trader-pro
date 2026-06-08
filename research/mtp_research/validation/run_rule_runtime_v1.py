@@ -11,6 +11,7 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     FROZEN_EXIT_RULE_ID,
     RuleRuntimeConfig,
     RuleRuntimeLiveAdapterConfig,
+    actionability_rejection_counterfactual_audit,
     birth_coverage_audit,
     bonding_curve_resolution_audit,
     first_fdv_queue_triage_audit,
@@ -203,6 +204,21 @@ def main() -> int:
         print(f"rugged_count={summary.get('rugged_count')}")
         print(f"report_path={config.paper_buy_fdv_reconciliation_audit_json_path}")
         print(f"rows_path={config.paper_buy_fdv_reconciliation_rows_csv_path}")
+        return 0
+    if args.mode == "actionability-audit":
+        result = actionability_rejection_counterfactual_audit(config)
+        print("## Actionability Rejection Counterfactual Audit")
+        print(f"rows={result.get('row_count')}")
+        print(f"confirmed_20k_candidates={result.get('confirmed_20k_candidate_count')}")
+        print(f"near_entry_candidates={result.get('near_entry_candidate_count')}")
+        print(f"rejected={result.get('rejected_count')}")
+        print(f"would_have_passed_without_blocking_gate={result.get('would_have_passed_without_blocking_gate_count')}")
+        print(f"blocked_then_reached_30k={result.get('blocked_then_reached_30k_count')}")
+        print(f"blocked_then_reached_50k={result.get('blocked_then_reached_50k_count')}")
+        print(f"blocked_then_reached_100k={result.get('blocked_then_reached_100k_count')}")
+        print(f"blocked_then_reached_500k={result.get('blocked_then_reached_500k_count')}")
+        print(f"report_path={config.actionability_rejection_counterfactual_audit_json_path}")
+        print(f"rows_path={config.actionability_rejection_counterfactual_rows_csv_path}")
         return 0
     if args.mode == "runtime-safety-patch-review":
         result = run_rule_runtime_safety_patch_review(config, apply_voids=not args.no_apply_voids)
@@ -443,6 +459,7 @@ def parse_args() -> argparse.Namespace:
             "triage-smoke",
             "birth-coverage-audit",
             "paper-buy-fdv-audit",
+            "actionability-audit",
             "runtime-safety-patch-review",
             "bonding-curve-resolution-audit",
             "transaction-subscribe-capability-audit",

@@ -21,6 +21,7 @@ from research.mtp_research.validation.rule_runtime_v1 import (
     load_historical_rule_config,
     normalize_live_path_row_for_rule_runtime,
     paper_buy_fdv_reconciliation_audit,
+    actionability_rejection_counterfactual_audit,
     run_rule_runtime_safety_patch_review,
     run_helius_transaction_subscribe_bonding_curve_probe_smoke,
     run_rule_runtime_live_adapter_once,
@@ -1346,11 +1347,12 @@ def test_watch_mode_arms_entry_zone_at_14k() -> None:
     assert _watch_delays_for_mode("entry_zone_watch") == ENTRY_ZONE_PROBE_DELAYS_SECONDS
 
 
-def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(tmp_path: Path) -> None:
+def test_label_only_risks_do_not_universally_reject_variant_a_proof_buy(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)
     engine = RuleRuntimeEngine(config)
 
+    engine.process_path_event(_event("label-risk", 90, 14_000, events=1, buys=0, wallets=1, holder_count_at_10k_proxy=None, reserve_state_fingerprint="risk-arm", account_data_hash="risk-arm"))
     engine.process_path_event(_event("label-risk", 100, 20_100, events=1, buys=0, wallets=1, holder_count_at_10k_proxy=None, reserve_state_fingerprint="risk-a", account_data_hash="risk-a"))
     engine.process_path_event(_event("label-risk", 110, 20_200, events=1, buys=0, wallets=1, holder_count_at_10k_proxy=None, reserve_state_fingerprint="risk-b", account_data_hash="risk-b"))
     decision = next(
@@ -1358,17 +1360,53 @@ def test_fake_volume_dev_pump_or_missing_holder_depth_rejects_primary_paper_buy(
         for row in _rows(config.paper_decisions_path)
         if row["mint"] == "label-risk" and row["paper_event_id"].startswith("decision_")
     )
+    variant_rows = {row["variant_id"]: row for row in _rows(config.paper_rule_variant_decisions_path)}
 
-    assert decision["decision"] == "paper_rejected_entry"
-    assert decision["rejection_reason"] == "high_risk_label_hard_reject"
+    assert decision["decision"] == "paper_buy"
+    assert decision["rejection_reason"] is None
     assert "dev_pump_suspect" in decision["risk_labels"]
     assert "fake_volume_suspect" in decision["risk_labels"]
     assert "missing_holder_depth" in decision["risk_labels"]
+    assert decision["label_only_risk_reasons"] == ["dev_pump_suspect", "fake_volume_suspect", "missing_holder_depth"]
+    assert variant_rows["FDV_BASELINE_20K"]["variant_status"] == "paper_buy"
+    assert variant_rows["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["variant_status"] == "rejected"
+    assert variant_rows["FDV_CREATOR_HOLDER_AVAILABLE_FILTER"]["rejection_reason"] == "risk_label_filter_fail"
+    assert variant_rows["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["variant_status"] == "rejected"
+    assert variant_rows["FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"]["rejection_reason"] == "strict_risk_label_filter_fail"
     status = rule_runtime_status(config)
-    assert status["paper_buys"] == 0
+    assert status["paper_buys"] == 1
     assert status["dev_pump_suspect_count"] >= 1
     assert status["fake_volume_suspect_count"] >= 1
     assert status["missing_holder_depth_label_count"] >= 1
+
+
+def test_actionability_rejection_counterfactual_audit_reports_blocked_winners(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("missed-winner", 100, 14_000, reserve_state_fingerprint="mw-arm", account_data_hash="mw-arm"))
+    engine.process_path_event(_event("missed-winner", 110, 22_000, reserve_state_fingerprint="mw-entry", account_data_hash="mw-entry"))
+    engine.process_path_event(_event("missed-winner", 111, 27_000, reserve_state_fingerprint="mw-chase", account_data_hash="mw-chase"))
+    engine.process_path_event(_event("missed-winner", 130, 55_000, reserve_state_fingerprint="mw-50", account_data_hash="mw-50"))
+    engine.process_path_event(_event("missed-winner", 180, 125_000, reserve_state_fingerprint="mw-100", account_data_hash="mw-100"))
+
+    audit = actionability_rejection_counterfactual_audit(config)
+    row = next(row for row in audit["rows"] if row["ca"] == "missed-winner")
+
+    assert row["exact_rejection_reason"] == "chase_guard_exceeded"
+    assert row["blocking_gate"] == "chase_guard"
+    assert row["would_have_passed_without_blocking_gate"] is True
+    assert row["max_fdv_after_rejection"] == 125_000.0
+    assert row["reached_30k"] is True
+    assert row["reached_50k"] is True
+    assert row["reached_100k"] is True
+    assert row["reached_500k"] is False
+    assert row["chase_guard_status"] == "rejected"
+    assert row["missed_entry_status"] in {"not_missed", "missed_entry_zone"}
+    assert config.actionability_rejection_counterfactual_audit_json_path.exists()
+    assert "Actionability Rejection Counterfactual Audit" in config.actionability_rejection_counterfactual_audit_md_path.read_text(encoding="utf-8")
+    assert config.actionability_rejection_counterfactual_rows_csv_path.exists()
 
 
 def test_holder_gate_and_mayhem_labels_are_entry_safe(tmp_path: Path) -> None:

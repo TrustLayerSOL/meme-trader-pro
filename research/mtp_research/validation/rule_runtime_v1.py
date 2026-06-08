@@ -6,7 +6,7 @@ orders, swaps, or transactions.
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +36,11 @@ VARIANT_A_ID = "FDV_BASELINE_20K"
 VARIANT_B_ID = "FDV_CREATOR_HOLDER_AVAILABLE_FILTER"
 VARIANT_C_ID = "FDV_FULL_RISK_FILTER_WHEN_AVAILABLE"
 RULE_VARIANTS = [VARIANT_A_ID, VARIANT_B_ID, VARIANT_C_ID]
+VARIANT_GATE_PROFILES = {
+    VARIANT_A_ID: "variant_a_minimal_hard_safety_fdv_entry_band",
+    VARIANT_B_ID: "variant_b_available_holder_creator_risk_filter",
+    VARIANT_C_ID: "variant_c_strict_full_risk_filter",
+}
 AVAILABLE_RISK_FIELDS = [
     "creator_prior_migration_count",
     "repeated_buyer_count",
@@ -138,11 +143,15 @@ SCHEDULER_MODE = "priority_single_worker"
 SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 SUPPORTED_PAPER_ENTRY_TOKEN_PROGRAMS = {SPL_TOKEN_PROGRAM_ID}
-HARD_REJECT_ENTRY_RISK_LABELS = {
+LABEL_ONLY_ENTRY_RISK_LABELS = {
     "dev_pump_suspect",
     "fake_volume_suspect",
     "missing_holder_depth",
+    "mayhem_mode",
+    "mayhem_assisted_momentum",
+    "low_holder_depth_2_to_4",
 }
+HARD_REJECT_ENTRY_RISK_LABELS: set[str] = set()
 ENTRY_CHASE_TRIGGER_FDV_USD = 20_000.0
 MAX_ENTRY_ABOVE_TRIGGER_PCT = 0.30
 MAX_ALLOWED_PAPER_ENTRY_FDV_USD = ENTRY_ZONE_MAX_USD
@@ -420,6 +429,18 @@ class RuleRuntimeConfig:
     @property
     def runtime_safety_patch_summary_md_path(self) -> Path:
         return self.report_root / "runtime_safety_patch_summary.md"
+
+    @property
+    def actionability_rejection_counterfactual_audit_json_path(self) -> Path:
+        return self.report_root / "actionability_rejection_counterfactual_audit.json"
+
+    @property
+    def actionability_rejection_counterfactual_audit_md_path(self) -> Path:
+        return self.report_root / "actionability_rejection_counterfactual_audit.md"
+
+    @property
+    def actionability_rejection_counterfactual_rows_csv_path(self) -> Path:
+        return self.report_root / "actionability_rejection_counterfactual_rows.csv"
 
     @property
     def hot_path_gap_analysis_path(self) -> Path:
@@ -1136,6 +1157,380 @@ def paper_buy_fdv_reconciliation_audit(
     config.paper_buy_fdv_reconciliation_audit_md_path.write_text(_paper_buy_fdv_reconciliation_audit_md(summary), encoding="utf-8")
     _write_paper_buy_reconciliation_csv(config.paper_buy_fdv_reconciliation_rows_csv_path, rows)
     return summary
+
+
+def actionability_rejection_counterfactual_audit(config: RuleRuntimeConfig) -> dict[str, Any]:
+    if not config.runtime_state_path.exists():
+        initialize_rule_runtime(config)
+    state = _load_state(config)
+    candidates = state.get("candidates") or {}
+    decisions = _read_jsonl(config.paper_decisions_path)
+    variant_decisions = _read_jsonl(config.paper_rule_variant_decisions_path)
+    decision_by_mint = _first_actionability_decision_by_mint(decisions)
+    eligible_mints = sorted(
+        {
+            *[
+                str(row.get("mint"))
+                for row in candidates.values()
+                if row.get("mint")
+                and (
+                    row.get("confirmed_crossed_20k")
+                    or row.get("confirmed_crossed_10k")
+                    or (_num(row.get("max_fdv_proxy")) or 0.0) >= LIVE_WATCH_ARM_USD
+                )
+            ],
+            *[
+                str(row.get("mint"))
+                for row in decisions
+                if row.get("mint") and row.get("decision") in {"paper_rejected_entry", "paper_buy"}
+            ],
+        }
+    )
+    rows = [
+        _actionability_counterfactual_row(
+            mint,
+            candidates.get(mint) or {},
+            decision_by_mint.get(mint),
+            [row for row in variant_decisions if row.get("mint") == mint],
+        )
+        for mint in eligible_mints
+    ]
+    rows = sorted(rows, key=lambda row: (str(row.get("exact_rejection_reason") or "zzzz"), str(row.get("ca") or "")))
+    audit = {
+        "report_id": "actionability_rejection_counterfactual_audit",
+        "updated_at": _utc_now(),
+        "scope": "confirmed_20k_candidates_rejected_entries_and_near_entry_candidates",
+        "paper_only": True,
+        "row_count": len(rows),
+        "confirmed_20k_candidate_count": sum(1 for row in rows if row.get("confirmed_crossed_20k")),
+        "near_entry_candidate_count": sum(1 for row in rows if row.get("near_entry_candidate")),
+        "rejected_count": sum(1 for row in rows if row.get("exact_rejection_reason")),
+        "would_have_passed_without_blocking_gate_count": sum(1 for row in rows if row.get("would_have_passed_without_blocking_gate")),
+        "blocked_then_reached_30k_count": sum(1 for row in rows if row.get("exact_rejection_reason") and row.get("reached_30k")),
+        "blocked_then_reached_50k_count": sum(1 for row in rows if row.get("exact_rejection_reason") and row.get("reached_50k")),
+        "blocked_then_reached_100k_count": sum(1 for row in rows if row.get("exact_rejection_reason") and row.get("reached_100k")),
+        "blocked_then_reached_500k_count": sum(1 for row in rows if row.get("exact_rejection_reason") and row.get("reached_500k")),
+        "blocking_gate_counts": dict(Counter(str(row.get("blocking_gate") or "none") for row in rows)),
+        "hard_rejects_remaining_hard": [
+            "fdv_anomaly",
+            "missing_fdv_units",
+            "missing_fdv_usd_for_usd_threshold",
+            "duplicate_same_state_confirmation",
+            "same_timestamp_major_jump",
+            "missed_live_arm",
+            "missed_entry_probe_gap",
+            "missed_entry_zone",
+            "watch_not_active_before_entry",
+            "outside_entry_zone",
+            "chase_guard_exceeded",
+            "holder_count_lte_1_hard_reject",
+            "unknown_token_program",
+            "unsupported_token_program",
+        ],
+        "label_only_not_universal_hard_reject": sorted(LABEL_ONLY_ENTRY_RISK_LABELS),
+        "paths": {
+            "json": str(config.actionability_rejection_counterfactual_audit_json_path),
+            "markdown": str(config.actionability_rejection_counterfactual_audit_md_path),
+            "csv": str(config.actionability_rejection_counterfactual_rows_csv_path),
+        },
+        "rows": rows,
+    }
+    _write_json(config.actionability_rejection_counterfactual_audit_json_path, audit)
+    config.actionability_rejection_counterfactual_audit_md_path.write_text(
+        _actionability_rejection_counterfactual_md(audit),
+        encoding="utf-8",
+    )
+    _write_actionability_counterfactual_csv(config.actionability_rejection_counterfactual_rows_csv_path, rows)
+    return audit
+
+
+def _first_actionability_decision_by_mint(decisions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    by_mint: dict[str, dict[str, Any]] = {}
+    for row in decisions:
+        mint = str(row.get("mint") or "")
+        if not mint or row.get("decision") not in {"paper_rejected_entry", "paper_buy"}:
+            continue
+        current = by_mint.get(mint)
+        if current is None or (
+            _is_provisional_milestone_rejection(current) and not _is_provisional_milestone_rejection(row)
+        ):
+            by_mint[mint] = row
+    return by_mint
+
+
+def _is_provisional_milestone_rejection(row: dict[str, Any]) -> bool:
+    if row.get("decision") != "paper_rejected_entry":
+        return False
+    reasons = set(row.get("rejection_reasons") or [])
+    if row.get("rejection_reason"):
+        reasons.add(str(row.get("rejection_reason")))
+    return bool(reasons) and reasons <= {"insufficient_path_evidence_for_confirmed_20k", "missing_confirmed_20k"}
+
+
+def _actionability_counterfactual_row(
+    mint: str,
+    candidate: dict[str, Any],
+    decision: dict[str, Any] | None,
+    variant_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    path_rows = sorted(
+        list(candidate.get("path_rows") or []),
+        key=lambda row: (_num(row.get("timestamp")) or 0.0, _num(row.get("fdv_proxy")) or 0.0),
+    )
+    decision_ts = _num((decision or {}).get("timestamp"))
+    entry_fdv = _num((decision or {}).get("paper_buy_fdv") or (decision or {}).get("fdv_proxy"))
+    entry_row = _closest_runtime_row(path_rows, timestamp=decision_ts, fdv=entry_fdv) if path_rows else {}
+    if entry_fdv is None:
+        entry_fdv = _num(entry_row.get("fdv_usd") or entry_row.get("fdv_proxy"))
+    if decision_ts is None:
+        decision_ts = _num(entry_row.get("timestamp"))
+    later_rows = [
+        row
+        for row in path_rows
+        if decision_ts is None or ((_num(row.get("timestamp")) or 0.0) >= decision_ts)
+    ]
+    latest_row = path_rows[-1] if path_rows else {}
+    exact_reason = (decision or {}).get("rejection_reason")
+    reasons = list((decision or {}).get("rejection_reasons") or [])
+    if not reasons and exact_reason:
+        reasons = [str(exact_reason)]
+    blocking_gate = _blocking_gate_for_rejection(str(exact_reason or ""))
+    max_after = max((_num(row.get("fdv_usd") or row.get("fdv_proxy")) or 0.0 for row in later_rows), default=None)
+    max_fdv = _num(candidate.get("max_fdv_proxy")) or max(
+        (_num(row.get("fdv_usd") or row.get("fdv_proxy")) or 0.0 for row in path_rows),
+        default=0.0,
+    )
+    current_fdv = _num(latest_row.get("fdv_usd") or latest_row.get("fdv_proxy") or candidate.get("last_fdv_proxy"))
+    trigger_fdv = _num((decision or {}).get("trigger_fdv_usd")) or _first_fdv_at_or_above(path_rows, ENTRY_THRESHOLD_FDV)
+    token_program_gate = _token_program_gate({**entry_row, **(decision or {})})
+    holder_status = (decision or {}).get("holder_depth_status") or _holder_depth_status_from_row(entry_row)
+    risk_labels = sorted(set((decision or {}).get("risk_labels") or _entry_risk_labels(entry_row)))
+    variant_statuses = {
+        str(row.get("variant_id")): {
+            "status": row.get("variant_status"),
+            "rejection_reason": row.get("rejection_reason"),
+            "gate_profile": row.get("variant_gate_profile"),
+        }
+        for row in variant_rows
+        if row.get("variant_id")
+    }
+    return {
+        "ca": mint,
+        "mint": mint,
+        "confirmed_crossed_20k": bool(candidate.get("confirmed_crossed_20k")),
+        "near_entry_candidate": bool(max_fdv >= LIVE_WATCH_ARM_USD),
+        "max_fdv_after_rejection": _round_optional(max_after),
+        "max_runtime_fdv": _round_optional(max_fdv),
+        "current_fdv": _round_optional(current_fdv),
+        "entry_fdv": _round_optional(entry_fdv),
+        "trigger_fdv": _round_optional(trigger_fdv),
+        "decision_timestamp": decision_ts,
+        "exact_rejection_reason": exact_reason,
+        "all_rejection_reasons": reasons,
+        "blocking_gate": blocking_gate,
+        "which_gate_blocked_it": blocking_gate,
+        "would_have_passed_without_blocking_gate": _would_pass_without_blocking_gate(reasons, blocking_gate),
+        "would_have_passed_without_that_gate": _would_pass_without_blocking_gate(reasons, blocking_gate),
+        "reached_30k": bool(max_fdv >= 30_000.0),
+        "reached_50k": bool(max_fdv >= 50_000.0),
+        "reached_100k": bool(max_fdv >= 100_000.0),
+        "reached_500k": bool(max_fdv >= 500_000.0),
+        "token_program": token_program_gate.get("token_program"),
+        "token_program_status": token_program_gate.get("token_program_status"),
+        "token_program_gate_result": token_program_gate.get("token_program_gate_result"),
+        "holder_depth_status": holder_status,
+        "holder_count_at_entry": (decision or {}).get("holder_count_at_entry") if decision else _entry_holder_count(entry_row),
+        "risk_labels": risk_labels,
+        "duplicate_state_status": _duplicate_state_status(candidate),
+        "same_timestamp_status": _same_timestamp_status(candidate, decision),
+        "chase_guard_status": (decision or {}).get("chase_guard_result") or _entry_chase_guard(candidate, entry_row).get("chase_guard_result"),
+        "missed_entry_status": _missed_entry_status(decision),
+        "entry_band_status": (decision or {}).get("entry_band_result"),
+        "entry_band_rejection_reason": (decision or {}).get("entry_band_rejection_reason"),
+        "variant_statuses": variant_statuses,
+        "variant_a_status": (variant_statuses.get(VARIANT_A_ID) or {}).get("status"),
+        "variant_b_status": (variant_statuses.get(VARIANT_B_ID) or {}).get("status"),
+        "variant_c_status": (variant_statuses.get(VARIANT_C_ID) or {}).get("status"),
+        "no_real_trade": True,
+    }
+
+
+def _holder_depth_status_from_row(row: dict[str, Any]) -> str | None:
+    holder_count = _entry_holder_count(row)
+    if holder_count is None:
+        return "missing"
+    if holder_count <= DEFAULT_HOLDER_GATE_CONFIG["absolute_reject_holder_count_lte"]:
+        return "hard_reject"
+    if DEFAULT_HOLDER_GATE_CONFIG["low_holder_depth_label_min"] <= holder_count <= DEFAULT_HOLDER_GATE_CONFIG["low_holder_depth_label_max"]:
+        return "low_label"
+    return "pass"
+
+
+def _first_fdv_at_or_above(rows: list[dict[str, Any]], threshold: float) -> float | None:
+    for row in rows:
+        fdv = _num(row.get("fdv_usd") or row.get("fdv_proxy"))
+        if fdv is not None and fdv >= threshold:
+            return fdv
+    return None
+
+
+def _blocking_gate_for_rejection(reason: str) -> str | None:
+    if not reason:
+        return None
+    if reason in {"fdv_anomaly", "single_row_spike", "single_row_fdv_spike"}:
+        return "fdv_safety"
+    if reason in {"missing_fdv_units", "missing_fdv_usd_for_usd_threshold"}:
+        return "fdv_units"
+    if reason == "duplicate_same_state_confirmation":
+        return "duplicate_state"
+    if reason == "same_timestamp_major_jump":
+        return "same_timestamp"
+    if reason == "chase_guard_exceeded":
+        return "chase_guard"
+    if reason in {"missed_live_arm", "missed_entry_probe_gap", "missed_entry_zone", "watch_not_active_before_entry", "outside_entry_zone"}:
+        return "entry_band"
+    if reason == "holder_count_lte_1_hard_reject":
+        return "holder_depth"
+    if reason in {"unknown_token_program", "unsupported_token_program"}:
+        return "token_program"
+    if reason == "high_risk_label_hard_reject":
+        return "legacy_label_hard_reject"
+    if reason in {"missing_confirmed_10k", "missing_confirmed_20k", "insufficient_path_evidence_for_confirmed_20k"}:
+        return "milestone_confirmation"
+    return "other"
+
+
+def _gate_reasons(gate: str | None) -> set[str]:
+    return {
+        "fdv_safety": {"fdv_anomaly", "single_row_spike", "single_row_fdv_spike"},
+        "fdv_units": {"missing_fdv_units", "missing_fdv_usd_for_usd_threshold"},
+        "duplicate_state": {"duplicate_same_state_confirmation"},
+        "same_timestamp": {"same_timestamp_major_jump"},
+        "chase_guard": {"chase_guard_exceeded"},
+        "entry_band": {"missed_live_arm", "missed_entry_probe_gap", "missed_entry_zone", "watch_not_active_before_entry", "outside_entry_zone"},
+        "holder_depth": {"holder_count_lte_1_hard_reject"},
+        "token_program": {"unknown_token_program", "unsupported_token_program"},
+        "legacy_label_hard_reject": {"high_risk_label_hard_reject"},
+        "milestone_confirmation": {"missing_confirmed_10k", "missing_confirmed_20k", "insufficient_path_evidence_for_confirmed_20k"},
+    }.get(gate or "", set())
+
+
+def _would_pass_without_blocking_gate(reasons: list[str], gate: str | None) -> bool:
+    if not reasons or gate is None:
+        return False
+    return not [reason for reason in reasons if reason not in _gate_reasons(gate)]
+
+
+def _duplicate_state_status(candidate: dict[str, Any]) -> str:
+    if candidate.get("duplicate_state_block_active") or candidate.get("duplicate_same_state_confirmation_reject"):
+        return "active_block"
+    if candidate.get("duplicate_state_block_cleared"):
+        return "cleared_after_distinct_confirmation"
+    if candidate.get("duplicate_state_seen"):
+        return "seen"
+    return "clean"
+
+
+def _same_timestamp_status(candidate: dict[str, Any], decision: dict[str, Any] | None) -> str:
+    if candidate.get("same_timestamp_major_jump_flag") or (decision or {}).get("rejection_reason") == "same_timestamp_major_jump":
+        return "rejected"
+    return "clean"
+
+
+def _missed_entry_status(decision: dict[str, Any] | None) -> str:
+    if not decision:
+        return "no_decision"
+    if decision.get("missed_entry_probe_gap"):
+        return "missed_entry_probe_gap"
+    if decision.get("missed_live_arm"):
+        return "missed_live_arm"
+    if decision.get("missed_entry_zone"):
+        return "missed_entry_zone"
+    return "not_missed"
+
+
+def _actionability_rejection_counterfactual_md(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Actionability Rejection Counterfactual Audit",
+        "",
+        "Paper-only counterfactual report. No real trades, wallet execution, signing, swaps, or order routing are enabled.",
+        "",
+        f"Updated: `{audit.get('updated_at')}`",
+        f"Rows: `{audit.get('row_count')}`",
+        f"Confirmed 20k candidates: `{audit.get('confirmed_20k_candidate_count')}`",
+        f"Near-entry candidates: `{audit.get('near_entry_candidate_count')}`",
+        f"Rejected rows: `{audit.get('rejected_count')}`",
+        f"Would have passed without blocking gate: `{audit.get('would_have_passed_without_blocking_gate_count')}`",
+        f"Blocked then reached 30k/50k/100k/500k: `{audit.get('blocked_then_reached_30k_count')}` / `{audit.get('blocked_then_reached_50k_count')}` / `{audit.get('blocked_then_reached_100k_count')}` / `{audit.get('blocked_then_reached_500k_count')}`",
+        f"Blocking gate counts: `{audit.get('blocking_gate_counts')}`",
+        "",
+        "## Label Split",
+        "",
+        f"- Hard rejects remain hard: `{audit.get('hard_rejects_remaining_hard')}`",
+        f"- Label-only, not universal hard reject: `{audit.get('label_only_not_universal_hard_reject')}`",
+        "",
+        "## Top Blocked Runners",
+        "",
+    ]
+    blocked = [row for row in audit.get("rows") or [] if row.get("exact_rejection_reason")]
+    blocked = sorted(blocked, key=lambda row: _num(row.get("max_runtime_fdv")) or 0.0, reverse=True)[:20]
+    if not blocked:
+        lines.append("No rejected candidates found.")
+    for row in blocked:
+        lines.extend(
+            [
+                f"### {row.get('ca')}",
+                "",
+                f"- Rejection: `{row.get('exact_rejection_reason')}` via `{row.get('blocking_gate')}`",
+                f"- Entry/trigger/current/max FDV: `{row.get('entry_fdv')}` / `{row.get('trigger_fdv')}` / `{row.get('current_fdv')}` / `{row.get('max_runtime_fdv')}`",
+                f"- Later 30k/50k/100k/500k: `{row.get('reached_30k')}` / `{row.get('reached_50k')}` / `{row.get('reached_100k')}` / `{row.get('reached_500k')}`",
+                f"- Token/holder/chase/missed: `{row.get('token_program_status')}` / `{row.get('holder_depth_status')}` / `{row.get('chase_guard_status')}` / `{row.get('missed_entry_status')}`",
+                f"- Risk labels: `{row.get('risk_labels')}`",
+                f"- Variants A/B/C: `{row.get('variant_a_status')}` / `{row.get('variant_b_status')}` / `{row.get('variant_c_status')}`",
+                "",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _write_actionability_counterfactual_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    fields = [
+        "ca",
+        "max_fdv_after_rejection",
+        "max_runtime_fdv",
+        "current_fdv",
+        "entry_fdv",
+        "trigger_fdv",
+        "decision_timestamp",
+        "exact_rejection_reason",
+        "blocking_gate",
+        "would_have_passed_without_blocking_gate",
+        "reached_30k",
+        "reached_50k",
+        "reached_100k",
+        "reached_500k",
+        "token_program",
+        "token_program_status",
+        "token_program_gate_result",
+        "holder_depth_status",
+        "holder_count_at_entry",
+        "risk_labels",
+        "duplicate_state_status",
+        "same_timestamp_status",
+        "chase_guard_status",
+        "missed_entry_status",
+        "entry_band_status",
+        "entry_band_rejection_reason",
+        "variant_a_status",
+        "variant_b_status",
+        "variant_c_status",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key) for key in fields})
 
 
 def run_rule_runtime_safety_patch_review(config: RuleRuntimeConfig, *, apply_voids: bool = True) -> dict[str, Any]:
@@ -3843,6 +4238,7 @@ def _evaluate_entry(
     features = _efficiency_features(row)
     labels.extend(_volume_risk_labels(row, features))
     labels = sorted(set(labels))
+    label_only_risks = sorted(set(labels) & LABEL_ONLY_ENTRY_RISK_LABELS)
     label_reason = _high_risk_label_rejection(labels)
     if label_reason:
         reasons.append(label_reason)
@@ -3864,6 +4260,8 @@ def _evaluate_entry(
         "rejection_reason": primary_reason,
         "rejection_reasons": reasons,
         "risk_labels": labels,
+        "label_only_risk_reasons": label_only_risks,
+        "hard_reject_risk_labels": sorted(set(labels) & HARD_REJECT_ENTRY_RISK_LABELS),
         "holder_depth_status": holder_status.get("holder_depth_status"),
         "holder_count_at_entry": holder_status.get("holder_count"),
         "efficiency_threshold_status": "efficiency_unfrozen",
@@ -3917,6 +4315,8 @@ def _create_paper_buy(
         "efficiency_threshold_warning": "fdv_efficiency_threshold_unfrozen_baseline_mode",
         "fdv_efficiency_bucket_labels": _efficiency_bucket_labels(_efficiency_features(row)),
         "risk_labels": decision.get("risk_labels") or [],
+        "label_only_risk_reasons": decision.get("label_only_risk_reasons") or [],
+        "hard_reject_risk_labels": decision.get("hard_reject_risk_labels") or [],
         "trigger_fdv_usd": decision.get("trigger_fdv_usd"),
         "entry_above_trigger_pct": decision.get("entry_above_trigger_pct"),
         "max_entry_above_trigger_pct": decision.get("max_entry_above_trigger_pct"),
@@ -4138,6 +4538,7 @@ def _record_variant_rejections(
             "base_rule_id": FROZEN_BUY_RULE_ID,
             "exit_rule_id": FROZEN_EXIT_RULE_ID,
             "variant_id": variant_id,
+            "variant_gate_profile": VARIANT_GATE_PROFILES.get(variant_id),
             "variant_status": "rejected",
             "paper_buy_allowed": False,
             "paper_buy_emitted": False,
@@ -4167,20 +4568,32 @@ def _variant_decision_row(
     variant_id: str,
 ) -> dict[str, Any]:
     features = _efficiency_features(row)
-    base_reasons = [
-        item
-        for item in str(base_decision.get("rejection_reason") or "").split(",")
-        if item
-    ]
+    base_reasons = list(base_decision.get("rejection_reasons") or [])
+    if not base_reasons and base_decision.get("rejection_reason"):
+        base_reasons = [
+            item
+            for item in str(base_decision.get("rejection_reason") or "").split(",")
+            if item
+        ]
+    risk_labels = sorted(set(base_decision.get("risk_labels") or _entry_risk_labels(row)))
+    label_only_risks = sorted(set(risk_labels) & LABEL_ONLY_ENTRY_RISK_LABELS)
     missing: list[str] = []
     risk_status = "not_required"
     status = "paper_buy" if not base_reasons else "rejected"
     paper_buy_allowed = not base_reasons
     rejection_reason = ",".join(base_reasons) if base_reasons else None
     if variant_id == VARIANT_B_ID and not base_reasons:
+        blocking_label_risks = sorted(set(label_only_risks) & {"dev_pump_suspect", "fake_volume_suspect", "missing_holder_depth"})
+        if blocking_label_risks:
+            status = "rejected"
+            paper_buy_allowed = False
+            risk_status = "risk_label_filter_fail"
+            rejection_reason = "risk_label_filter_fail"
         available = [field for field in AVAILABLE_RISK_FIELDS if _field_has_value(row, field)]
         missing = [field for field in AVAILABLE_RISK_FIELDS if not _field_has_value(row, field)]
-        if not available:
+        if status == "rejected":
+            pass
+        elif not available:
             status = "not_evaluable"
             paper_buy_allowed = False
             risk_status = "missing"
@@ -4193,8 +4606,15 @@ def _variant_decision_row(
         else:
             risk_status = "risk_filter_available_pass"
     elif variant_id == VARIANT_C_ID and not base_reasons:
+        if label_only_risks:
+            status = "rejected"
+            paper_buy_allowed = False
+            risk_status = "strict_risk_label_filter_fail"
+            rejection_reason = "strict_risk_label_filter_fail"
         missing = [field for field in FULL_RISK_FIELDS if not _field_has_value(row, field)]
-        if missing:
+        if status == "rejected":
+            pass
+        elif missing:
             status = "not_evaluable"
             paper_buy_allowed = False
             risk_status = "missing"
@@ -4216,6 +4636,7 @@ def _variant_decision_row(
         "base_rule_id": FROZEN_BUY_RULE_ID,
         "exit_rule_id": FROZEN_EXIT_RULE_ID,
         "variant_id": variant_id,
+        "variant_gate_profile": VARIANT_GATE_PROFILES.get(variant_id),
         "variant_status": status,
         "paper_buy_allowed": bool(paper_buy_allowed),
         "paper_buy_emitted": status == "paper_buy",
@@ -4228,7 +4649,9 @@ def _variant_decision_row(
         "risk_filter_status": risk_status,
         "missing_required_fields": missing,
         "rejection_reason": rejection_reason,
-        "risk_labels": base_decision.get("risk_labels") or _entry_risk_labels(row),
+        "risk_labels": risk_labels,
+        "label_only_risk_reasons": label_only_risks,
+        "hard_reject_risk_labels": sorted(set(risk_labels) & HARD_REJECT_ENTRY_RISK_LABELS),
         "trigger_fdv_usd": base_decision.get("trigger_fdv_usd"),
         "entry_above_trigger_pct": base_decision.get("entry_above_trigger_pct"),
         "max_entry_above_trigger_pct": base_decision.get("max_entry_above_trigger_pct"),
