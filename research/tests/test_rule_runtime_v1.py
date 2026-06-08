@@ -891,6 +891,34 @@ def test_tier_1_drains_flat_low_fdv_and_promotes_rising_or_floor_candidates(tmp_
     assert queue["promoted_to_near_threshold"] == 3
 
 
+def test_raw_10k_rising_candidate_is_not_archived_before_warm_watch_window(tmp_path: Path) -> None:
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    initialize_rule_runtime(config, reset=True)
+    engine = RuleRuntimeEngine(config)
+
+    engine.process_path_event(_event("delayed-runner", 100, 7_204, reserve_state_fingerprint="warm-a", account_data_hash="warm-a"))
+    engine.process_path_event(_event("delayed-runner", 194, 9_967, reserve_state_fingerprint="warm-b", account_data_hash="warm-b"))
+    engine.process_path_event(_event("delayed-runner", 223, 11_299, reserve_state_fingerprint="warm-c", account_data_hash="warm-c"))
+
+    archived = archive_runtime_queue_candidates(config, now=360)
+
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    candidate = state["candidates"]["delayed-runner"]
+    assert archived["archived_no_activity"] == 0
+    assert candidate["state"] == "near_threshold_watch"
+    assert candidate.get("archive_reason") is None
+    assert candidate["raw_milestones"]["raw_crossed_10k"] is True
+    assert candidate["max_fdv_proxy"] == 11_299
+    assert candidate["no_activity_timeout_seconds"] == 600.0
+
+    archived_late = archive_runtime_queue_candidates(config, now=824)
+    state = json.loads(config.runtime_state_path.read_text(encoding="utf-8"))
+    candidate = state["candidates"]["delayed-runner"]
+    assert archived_late["archived_no_activity"] == 1
+    assert candidate["state"] == "archived_no_activity"
+    assert candidate["archive_reason"] == "no_activity"
+
+
 def test_runtime_archives_birth_without_fdv_path_after_timeout(tmp_path: Path) -> None:
     config = RuleRuntimeConfig(data_root=tmp_path)
     initialize_rule_runtime(config, reset=True)

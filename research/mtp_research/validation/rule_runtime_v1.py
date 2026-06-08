@@ -134,16 +134,18 @@ NEAR_THRESHOLD_HOT_WATCH_USD = 8_000.0
 LIVE_WATCH_ARM_USD = 14_000.0
 ENTRY_ZONE_MIN_USD = 20_000.0
 ENTRY_ZONE_MAX_USD = 26_000.0
-HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75, 1.0)
-WARM_WATCH_PROBE_DELAYS_SECONDS = (0.5, 1.0, 2.0, 3.0, 5.0)
+HOT_WATCH_PROBE_DELAYS_SECONDS = (0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 30.0, 60.0)
+WARM_WATCH_PROBE_DELAYS_SECONDS = (0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 180.0, 300.0)
 ENTRY_ZONE_PROBE_DELAYS_SECONDS = (0.1, 0.25, 0.5, 0.75, 1.0)
 ENTRY_VALIDATION_BURST_DELAYS_SECONDS = (0.0, 0.1, 0.25, 0.5)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
-CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0)
+CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0, 6.0, 12.0, 24.0, 45.0, 60.0, 90.0)
 TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS = 16
-CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 2
+CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 4
 WATCH_FOLLOW_UP_MAX_WORKERS = 2
 TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS = 30.0
+RISING_WATCH_RETENTION_SECONDS = 360.0
+RAW_10K_WATCH_RETENTION_SECONDS = 600.0
 SCHEDULER_MODE = "priority_single_worker"
 SPL_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
@@ -2520,6 +2522,16 @@ def archive_runtime_queue_candidates(
             tier_1_age = now - first_seen
             last_update_age = now - (_num(candidate.get("last_path_time")) or first_seen)
             candidate["last_update_age_seconds"] = _round_seconds(max(0.0, last_update_age))
+            if (tier_1_reason := _tier_1_promotion_reason(candidate)) is not None:
+                candidate["state"] = "near_threshold_watch"
+                candidate["tier"] = 2
+                candidate["tier_1_exit_reason"] = tier_1_reason
+                promotions = candidate.setdefault("promotions_recorded", [])
+                if "near_threshold_watch" not in promotions:
+                    promotions.append("near_threshold_watch")
+                    stats["promoted_to_near_threshold"] = int(stats.get("promoted_to_near_threshold") or 0) + 1
+                state_name = "near_threshold_watch"
+                continue
             if _tier_1_low_fdv_flat_stale(candidate, now=now, stale_seconds=TIER_1_LOW_FDV_STALE_SECONDS):
                 candidate["state"] = "archived_no_activity"
                 candidate["tier"] = -1
@@ -2555,7 +2567,11 @@ def archive_runtime_queue_candidates(
             result["downgrade_count"] += 1
             state_name = "light_watch"
         inactive_since = last_activity or last_path or first_seen
-        if state_name in {"light_watch", "fdv_path_seen", "near_threshold_watch", "birth_seen"} and now - inactive_since >= no_activity_archive_seconds:
+        no_activity_timeout = float(no_activity_archive_seconds)
+        if state_name in {"fdv_path_seen", "near_threshold_watch"}:
+            no_activity_timeout = max(no_activity_timeout, _watch_lane_no_activity_timeout_seconds(candidate))
+            candidate["no_activity_timeout_seconds"] = _round_seconds(no_activity_timeout)
+        if state_name in {"light_watch", "fdv_path_seen", "near_threshold_watch", "birth_seen"} and now - inactive_since >= no_activity_timeout:
             candidate["state"] = "archived_no_activity"
             candidate["tier"] = -1
             candidate["archive_reason"] = "no_activity"
@@ -4159,6 +4175,21 @@ def _tier_1_audit_row(candidate: dict[str, Any], *, now: float) -> dict[str, Any
         "path_row_count": int(candidate.get("path_row_count") or len(candidate.get("path_rows") or [])),
         "retention_reason": _tier_1_retention_reason(candidate, now=now),
     }
+
+
+def _watch_lane_no_activity_timeout_seconds(candidate: dict[str, Any]) -> float:
+    raw = candidate.get("raw_milestones") if isinstance(candidate.get("raw_milestones"), dict) else {}
+    max_fdv = float(candidate.get("max_fdv_proxy") or candidate.get("latest_fdv_proxy") or candidate.get("last_fdv_proxy") or 0.0)
+    delta_pct = float(candidate.get("fdv_delta_pct") or 0.0)
+    if (
+        raw.get("raw_crossed_10k")
+        or candidate.get("milestone_first_times", {}).get("10k") is not None
+        or max_fdv >= WATCH_THRESHOLD_FDV
+    ):
+        return RAW_10K_WATCH_RETENTION_SECONDS
+    if max_fdv >= NEAR_THRESHOLD_HOT_WATCH_USD or delta_pct >= TIER_1_RISING_DELTA_PCT:
+        return RISING_WATCH_RETENTION_SECONDS
+    return NO_ACTIVITY_ARCHIVE_SECONDS
 
 
 def _detect_spike(candidate: dict[str, Any], rows: list[dict[str, Any]]) -> None:
