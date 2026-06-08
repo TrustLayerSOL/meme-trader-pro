@@ -1,0 +1,221 @@
+{
+  "buy_variants": [
+    {
+      "base_entry_gate_required": true,
+      "conditions": {
+        "creator_extraction_proxy_before_20k_max": 0,
+        "fdv_efficiency_score_min": 10.65,
+        "synthetic_activity_proxy_max": 1,
+        "top_10_holder_share_proxy_max": 1
+      },
+      "fdv_efficiency_score_definition": "mean of log1p-clipped fdv_per_event_at_20k, fdv_per_buy_at_20k, and fdv_per_active_wallet_at_20k",
+      "historical_support": {
+        "reached_100k_pct": 99.3,
+        "reached_500k_pct": 52.2,
+        "reached_50k_pct": 100.0,
+        "stalls_before_50k": 0,
+        "support_count": 136
+      },
+      "name": "20k Q75 efficiency with risk filter",
+      "role": "broader_main_variant",
+      "variant_id": "RULE_V2_20K_Q75_EFFICIENCY_RISK_FILTER"
+    },
+    {
+      "additional_conditions": {
+        "repeated_buyer_count_min": 1
+      },
+      "base_entry_gate_required": true,
+      "conditions": {
+        "creator_extraction_proxy_before_20k_max": 0,
+        "fdv_efficiency_score_min": 10.65,
+        "synthetic_activity_proxy_max": 1,
+        "top_10_holder_share_proxy_max": 1
+      },
+      "historical_support": {
+        "reached_100k_pct": 100.0,
+        "reached_500k_pct": 55.3,
+        "reached_50k_pct": 100.0,
+        "stalls_before_50k": 0,
+        "support_count": 38
+      },
+      "inherits_variant": "RULE_V2_20K_Q75_EFFICIENCY_RISK_FILTER",
+      "name": "20k Q75 efficiency with repeated buyer",
+      "role": "stricter_high_conviction_variant",
+      "variant_id": "RULE_V2_20K_Q75_EFFICIENCY_REPEAT_BUYER"
+    }
+  ],
+  "config_id": "rule_v2_shadow_locked_20260607",
+  "current_rule_d_overwritten": false,
+  "description": "Two explicit V2 paper-shadow buy variants with one shared V2 profit-lock exit. This config is for simulated paper accounting and forward evidence capture only.",
+  "entry_gate": {
+    "above_band_handling": "reject_or_missed_chase_research_only",
+    "buy_fdv_band_usd": {
+      "max": 26000.0,
+      "min": 20000.0
+    },
+    "confirmed_clean_10k_required": true,
+    "confirmed_clean_20k_required": true,
+    "duplicate_open_bought_closed_reject": true,
+    "fast_entry_burst_validation_path_allowed": true,
+    "fdv_anomaly_reject": true,
+    "hard_reject_risk_labels": [
+      "dev_pump_suspect",
+      "fake_volume_suspect",
+      "missing_holder_depth"
+    ],
+    "holder_gate": {
+      "holder_count_2_to_4": "allow_with_low_holder_depth_label",
+      "holder_count_gte_5": "pass",
+      "holder_count_lte_1": "hard_reject",
+      "missing_holder_depth": "hard_reject"
+    },
+    "same_timestamp_major_jump_handling": "tag_actionability_or_missed_entry_research_only",
+    "silently_pass_sol_quote_or_raw_units": false,
+    "single_row_spike_reject_unless_softened": true,
+    "supported_token_programs": {
+      "pumpfun_token_2022": {
+        "requirements": [
+          "pumpfun_create_seen",
+          "bonding_curve_pda_verified",
+          "bonding_curve_decode_verified",
+          "fdv_units_present",
+          "fdv_calculation_status_verified"
+        ],
+        "status": "conditional_pass"
+      },
+      "spl": "pass",
+      "unknown_or_unsupported": "hard_reject"
+    },
+    "usd_fdv_required_when_units_usd": true,
+    "valid_fdv_units_required": true,
+    "valid_milestone_ordering_required": true
+  },
+  "guardrails": [
+    "paper_only",
+    "shadow_only",
+    "no_private_keys",
+    "no_wallet_execution",
+    "no_transaction_signing",
+    "no_order_routing",
+    "no_live_trading",
+    "no_rule_d_overwrite",
+    "preserve_historical_artifacts"
+  ],
+  "live_trading_enabled": false,
+  "mode": "paper_shadow_only",
+  "multi_variant_handling": {
+    "record_all_passing_variant_ids_on_lifecycle_record": true,
+    "token_can_pass_both_variants": true
+  },
+  "no_real_trade": true,
+  "order_routing_enabled": false,
+  "output_files": {
+    "buy_events": "rule_v2_shadow_buy_events.jsonl",
+    "daily_status": "rule_v2_shadow_daily_status.md",
+    "full_paths": "rule_v2_shadow_full_paths.jsonl",
+    "lock_manifest": "rule_v2_shadow_lock_manifest.json",
+    "locked_config": "rule_v2_shadow_locked_config.json",
+    "positions": "rule_v2_shadow_positions.jsonl",
+    "post_sell_analysis": "rule_v2_shadow_post_sell_analysis.jsonl",
+    "sell_events": "rule_v2_shadow_sell_events.jsonl",
+    "variant_summary": "rule_v2_shadow_variant_summary.json"
+  },
+  "paper_units_formula": "allocation_usd / paper_buy_fdv",
+  "position_fraction": 0.05,
+  "reporting": [
+    "variant_1_candidates",
+    "variant_1_buys",
+    "variant_2_candidates",
+    "variant_2_buys",
+    "sells_by_reason",
+    "open_runners",
+    "max_fdv_after_sell_for_closed_positions",
+    "missed_upside_summary",
+    "blockers",
+    "next_logical_step"
+  ],
+  "shared_exit_rule": {
+    "no_reclaim_exit": {
+      "action": "sell_remaining_open_amount",
+      "drawdown_from_local_high_pct": 30.0,
+      "reclaim_window_seconds": 600.0
+    },
+    "position_starts_open_pct": 100.0,
+    "pre_first_50k_exit": {
+      "drawdown_no_reclaim": "30pct_drawdown_no_reclaim_after_10m_sell_all",
+      "runup_stagnation": "50pct_runup_no_new_high_120s_flat_or_negative_slope_sell_all"
+    },
+    "rule_id": "EXIT_V2_PROFIT_LOCK_WITH_RUNNER",
+    "runner": {
+      "remaining_percent_after_scale_outs": 30.0,
+      "trail_after_200k_pct": 35.0,
+      "trail_after_500k_pct": 25.0
+    },
+    "scale_outs": [
+      {
+        "confirmed_fdv_usd": 50000.0,
+        "percent_sold": 40.0,
+        "sell_leg": "first_confirmed_50k"
+      },
+      {
+        "confirmed_fdv_usd": 100000.0,
+        "percent_sold": 30.0,
+        "sell_leg": "first_confirmed_100k"
+      }
+    ],
+    "stagnation_exit": {
+      "action": "sell_remaining_open_amount",
+      "local_high_min_gain_pct_above_buy": 50.0,
+      "no_new_high_seconds": 120.0,
+      "required_recent_fdv_slope": "flat_or_negative"
+    }
+  },
+  "starting_paper_cash_usd": 300.0,
+  "tracking": {
+    "continue_full_path_after_sell": true,
+    "milestones_usd": [
+      30000,
+      40000,
+      50000,
+      75000,
+      100000,
+      200000,
+      500000,
+      1000000
+    ],
+    "minimum_fields": [
+      "mint",
+      "launch_id",
+      "token_name",
+      "token_symbol",
+      "buy_variant_ids",
+      "buy_timestamp",
+      "buy_fdv",
+      "entry_status",
+      "fdv_efficiency_score",
+      "fdv_per_event_at_20k",
+      "fdv_per_buy_at_20k",
+      "fdv_per_active_wallet_at_20k",
+      "holder_count",
+      "risk_labels",
+      "creator_extraction_proxy_before_20k",
+      "repeated_buyer_count",
+      "top_10_holder_share_proxy",
+      "synthetic_activity_proxy",
+      "allocation_usd",
+      "paper_units",
+      "observed_fdv_path",
+      "local_high_fdv",
+      "milestones",
+      "sell_events",
+      "runner_open",
+      "final_fdv_after_sell",
+      "max_fdv_after_sell",
+      "missed_upside",
+      "sell_protected_from_collapse",
+      "hindsight_best_exit"
+    ]
+  },
+  "transaction_signing_enabled": false,
+  "wallet_execution_enabled": false
+}
