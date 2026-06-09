@@ -73,6 +73,7 @@ def _event(mint: str, ts: float, fdv: float, *, events: int = 10, buys: int = 5,
         "holder_count_at_10k_proxy": 5,
         "data_source": "mock_helius_rpc",
     }
+    release_probe = threading.Event()
     row.update(extra)
     return row
 
@@ -2862,6 +2863,298 @@ def test_transaction_subscribe_drains_due_watch_jobs_while_stream_is_busy(tmp_pa
     assert summary["post_birth_watch_follow_up_probe_rows"] == 1
     assert summary["hot_watch_follow_up_futures"] == 1
     assert summary["watch_follow_up_scheduler_active_during_stream"] is True
+
+
+def test_transaction_subscribe_records_initial_probe_queue_before_worker_runs(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+    from research.mtp_research.validation import rule_runtime_v1 as runtime
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-queued_123_0",
+        "signature": "sig-queued",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "queued-before-worker",
+        "bonding_curve": "curve-queued",
+        "parser_status": "decoded",
+    }
+    release_probe = threading.Event()
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
+            assert on_create_event is not None
+            append_row(self.config.pumpfun_create_stream_events_path, create_event)
+            on_create_event(dict(create_event))
+            return [create_event]
+
+    def blocked_probe_runner(config: RuleRuntimeConfig, create: dict, *, probe: object, event_callback=None, **kwargs) -> dict:
+        release_probe.wait(timeout=5.0)
+        row = {
+            "event_id": "probe-started-late",
+            "mint": create["mint"],
+            "probe_status": "success",
+            "probe_phase": "initial",
+            "probe_scheduled_during_stream": True,
+            "fdv_proxy": 2_000.0,
+            "fdv_usd": 2_000.0,
+            "fdv_units": "usd",
+            "helius_rpc_request_count": 1,
+            "http_429_count": 0,
+        }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        return row
+
+    monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS", 0.0, raising=False)
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", blocked_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=1.0,
+    )
+
+    assert summary["decoded_create_mints_without_probe"] == 0
+    assert summary["decoded_create_probe_coverage_rate"] == 1.0
+    assert summary["initial_probe_queued_without_started"] == 0
+    assert summary["initial_probe_started_rows"] + summary["initial_probe_terminal_unstarted"] == 1
+    release_probe.set()
+
+
+def test_transaction_subscribe_initial_probe_queue_is_bounded_under_backlog(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+    from research.mtp_research.validation import rule_runtime_v1 as runtime
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_events = [
+        {
+            "event_id": f"txsub_sig-backlog_{index}_0",
+            "signature": f"sig-backlog-{index}",
+            "slot": 123 + index,
+            "observed_at": 100.0 + index,
+            "mint": f"backlog-mint-{index}",
+            "bonding_curve": f"curve-backlog-{index}",
+            "parser_status": "decoded",
+        }
+        for index in range(6)
+    ]
+    release_probe = threading.Event()
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
+            assert on_create_event is not None
+            for event in create_events:
+                append_row(self.config.pumpfun_create_stream_events_path, event)
+                on_create_event(dict(event))
+            return create_events
+
+    def blocked_probe_runner(config: RuleRuntimeConfig, create: dict, *, probe: object, event_callback=None, **kwargs) -> dict:
+        release_probe.wait(timeout=0.25)
+        row = {
+            "event_id": f"probe-{create['mint']}",
+            "mint": create["mint"],
+            "probe_status": "success",
+            "probe_phase": "initial",
+            "probe_scheduled_during_stream": True,
+            "fdv_proxy": 2_000.0,
+            "fdv_usd": 2_000.0,
+            "fdv_units": "usd",
+            "helius_rpc_request_count": 1,
+            "http_429_count": 0,
+        }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        return row
+
+    monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS", 1, raising=False)
+    monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_MAX_SIZE", 2, raising=False)
+    monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS", 0.0, raising=False)
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", blocked_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=len(create_events),
+        max_runtime_seconds=1.0,
+    )
+
+    assert summary["decoded_create_mints_without_probe"] == 0
+    assert summary["decoded_create_probe_coverage_rate"] == 1.0
+    assert summary["initial_probe_queue_max_size"] == 2
+    assert summary["initial_probe_max_queue_depth"] <= 2
+    assert summary["initial_probe_queue_pressure_dropped"] > 0
+    assert summary["initial_probe_queued_without_started"] == 0
+    release_probe.set()
+
+
+def test_transaction_subscribe_account_not_found_retry_uses_delayed_scheduler(tmp_path: Path, monkeypatch) -> None:
+    from research.mtp_research.validation import forward_efficient_mover_observer as observer
+    from research.mtp_research.validation import helius_transaction_subscribe_source as tx_source
+    from research.mtp_research.validation import rule_runtime_v1 as runtime
+
+    audit = {
+        "recommended_endpoint": {
+            "name": "helius_beta",
+            "transactionSubscribe_supported": True,
+            "accountSubscribe_supported": True,
+            "getAccountInfo_supported": True,
+        }
+    }
+    create_event = {
+        "event_id": "txsub_sig-retry_123_0",
+        "signature": "sig-retry",
+        "slot": 123,
+        "observed_at": 100.0,
+        "mint": "account-not-found-retry",
+        "bonding_curve": "curve-retry",
+        "parser_status": "decoded",
+    }
+    phases: list[str] = []
+    retry_delay_args: list[tuple[float, ...]] = []
+
+    def append_row(path: Path, row: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+    def fake_audit(config: RuleRuntimeConfig) -> dict:
+        config.helius_transaction_subscribe_capability_audit_json_path.parent.mkdir(parents=True, exist_ok=True)
+        config.helius_transaction_subscribe_capability_audit_json_path.write_text(json.dumps(audit), encoding="utf-8")
+        return audit
+
+    class FakeCreateSource:
+        def __init__(self, *, config: RuleRuntimeConfig, websocket_url: str, timeout_seconds: float) -> None:
+            self.config = config
+
+        def fetch_create_events(self, *, max_events: int, max_seconds: float, on_create_event=None, on_idle=None) -> list[dict]:
+            assert on_create_event is not None
+            append_row(self.config.pumpfun_create_stream_events_path, create_event)
+            on_create_event(dict(create_event))
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline and "account_not_found_retry" not in phases:
+                time.sleep(0.01)
+            return [create_event]
+
+    def fake_probe_runner(
+        config: RuleRuntimeConfig,
+        create: dict,
+        *,
+        probe: object,
+        event_callback=None,
+        account_not_found_retry_delays=None,
+        **kwargs,
+    ) -> dict:
+        phase = str(create.get("probe_phase_override") or "initial")
+        phases.append(phase)
+        retry_delay_args.append(tuple(account_not_found_retry_delays or ()))
+        if phase == "initial":
+            row = {
+                "event_id": "probe-initial-account-not-found",
+                "mint": create["mint"],
+                "bonding_curve": create["bonding_curve"],
+                "probe_status": "failed",
+                "probe_phase": "initial",
+                "probe_error": "account_not_found",
+                "final_failure_reason": "account_not_found",
+                "account_not_found_final_failure": True,
+                "probe_scheduled_during_stream": True,
+                "helius_rpc_request_count": 1,
+                "http_429_count": 0,
+            }
+        else:
+            row = {
+                "event_id": "probe-account-not-found-retry",
+                "mint": create["mint"],
+                "bonding_curve": create["bonding_curve"],
+                "probe_status": "success",
+                "probe_phase": "account_not_found_retry",
+                "account_not_found_retry_follow_up_scheduled": True,
+                "probe_scheduled_during_stream": True,
+                "fdv_proxy": 2_200.0,
+                "fdv_usd": 2_200.0,
+                "fdv_units": "usd",
+                "helius_rpc_request_count": 1,
+                "http_429_count": 0,
+            }
+        append_row(config.bonding_curve_account_probe_events_path, row)
+        return row
+
+    monkeypatch.setattr(runtime, "ACCOUNT_NOT_FOUND_RETRY_PROBE_DELAYS_SECONDS", (0.01,), raising=False)
+    monkeypatch.setattr(runtime, "TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(tx_source, "helius_transaction_subscribe_capability_audit", fake_audit)
+    monkeypatch.setattr(tx_source, "HeliusTransactionSubscribeCreateSource", FakeCreateSource)
+    monkeypatch.setattr(tx_source, "run_bonding_curve_account_probe_for_create_event", fake_probe_runner)
+    monkeypatch.setattr(observer, "resolve_forward_sol_usd_price", lambda _root: 100.0)
+    monkeypatch.setattr(observer, "resolve_helius_api_key", lambda *, load_project_dotenv=True: "test-key")
+    monkeypatch.setattr(observer, "resolve_helius_ws_url", lambda *, load_project_dotenv=True: "wss://configured.example")
+
+    config = RuleRuntimeConfig(data_root=tmp_path)
+    summary = run_helius_transaction_subscribe_bonding_curve_probe_smoke(
+        config,
+        collector_data_root=tmp_path / "collector",
+        target_births=1,
+        max_runtime_seconds=1.0,
+    )
+
+    assert phases[:2] == ["initial", "account_not_found_retry"]
+    assert retry_delay_args[0] == ()
+    assert summary["account_not_found_retry_follow_up_futures"] == 1
+    assert summary["account_not_found_retry_probe_rows"] == 1
+    assert summary["account_not_found_retry_successes"] == 1
 
 
 def test_transaction_subscribe_entry_validation_burst_can_confirm_20k_and_buy(tmp_path: Path, monkeypatch) -> None:

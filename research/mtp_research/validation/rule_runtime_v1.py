@@ -16,6 +16,7 @@ import csv
 import hashlib
 import heapq
 import html
+import inspect
 import json
 import time
 
@@ -126,6 +127,7 @@ TIER_1_FLAT_DELTA_PCT = 0.05
 TIER_1_PRESSURE_THRESHOLD = 20
 ACCOUNT_STATE_FOLLOW_UP_PROBE_DELAYS_SECONDS = (1.0, 2.0, 5.0)
 TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS: tuple[float, ...] = ()
+ACCOUNT_NOT_FOUND_RETRY_PROBE_DELAYS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0)
 POST_BIRTH_WATCH_TRIGGER_FDV = 1_500.0
 POST_BIRTH_WATCH_MAX_INITIAL_FDV = 5_000.0
 POST_BIRTH_WATCH_PROBE_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0, 180.0, 300.0)
@@ -141,6 +143,9 @@ ENTRY_VALIDATION_BURST_DELAYS_SECONDS = (0.0, 0.1, 0.25, 0.5)
 CONFIRMATION_FOLLOW_UP_TRIGGER_FDV = 5_000.0
 CONFIRMATION_FOLLOW_UP_PROBE_DELAYS_SECONDS = (0.25, 0.75, 1.5, 3.0, 6.0, 12.0, 24.0, 45.0, 60.0, 90.0)
 TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS = 16
+TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_MAX_SIZE = 128
+TRANSACTION_SUBSCRIBE_INITIAL_PROBE_STALE_SECONDS = 60.0
+TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_POLICY = "newest_first_bounded"
 CONFIRMATION_FOLLOW_UP_MAX_WORKERS = 4
 WATCH_FOLLOW_UP_MAX_WORKERS = 2
 TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS = 30.0
@@ -1862,7 +1867,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     transactions_per_mint: int = 7,
 ) -> dict[str, Any]:
     from concurrent.futures import ThreadPoolExecutor, wait
-    from threading import Event, Lock, Thread
+    from threading import Condition, Event, Lock, Thread
 
     from research.mtp_research.validation.forward_efficient_mover_observer import (
         resolve_forward_sol_usd_price,
@@ -1925,7 +1930,6 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         timeout_seconds=2.0,
     )
     sol_usd = resolve_forward_sol_usd_price(config.root)
-    probe_futures = []
     confirmation_futures = []
     live_watch_futures = []
     confirmation_future_lock = Lock()
@@ -1935,9 +1939,24 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     watch_follow_up_jobs: list[tuple[float, int, dict[str, Any]]] = []
     watch_follow_up_futures = []
     watch_follow_up_lock = Lock()
+    initial_probe_queue: deque[dict[str, Any]] = deque()
+    initial_probe_queue_condition = Condition()
+    initial_probe_stop = Event()
+    initial_probe_worker_threads: list[Thread] = []
     hot_watch_scheduled_modes: set[tuple[str, str]] = set()
     entry_validation_scheduled_mints: set[str] = set()
+    account_not_found_retry_scheduled_mints: set[str] = set()
+    successful_probe_mints: set[str] = set()
     watch_follow_up_sequence = 0
+    initial_probe_queued_count = 0
+    initial_probe_started_count = 0
+    initial_probe_queue_pressure_dropped_count = 0
+    initial_probe_stale_before_start_count = 0
+    initial_probe_shutdown_unstarted_count = 0
+    initial_probe_worker_timeout_count = 0
+    initial_probe_max_queue_depth = 0
+    initial_probe_active_count = 0
+    account_not_found_retry_scheduled_count = 0
     post_birth_watch_follow_up_scheduled_count = 0
     hot_watch_follow_up_scheduled_count = 0
     entry_validation_burst_scheduled_count = 0
@@ -1953,28 +1972,206 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         *,
         follow_up_probe_delays: tuple[float, ...] = (),
         include_mint_account_owner: bool = True,
+        account_not_found_retry_delays: tuple[float, ...] = (),
     ) -> dict[str, Any]:
         probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
+        kwargs: dict[str, Any] = {
+            "probe": probe,
+            "event_callback": on_hot_event,
+        }
         try:
-            return run_bonding_curve_account_probe_for_create_event(
-                config,
-                event,
-                probe=probe,
-                event_callback=on_hot_event,
-                follow_up_probe_delays=follow_up_probe_delays,
-                include_mint_account_owner=include_mint_account_owner,
+            params = inspect.signature(run_bonding_curve_account_probe_for_create_event).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "follow_up_probe_delays" in params:
+            kwargs["follow_up_probe_delays"] = follow_up_probe_delays
+        if "include_mint_account_owner" in params:
+            kwargs["include_mint_account_owner"] = include_mint_account_owner
+        if "account_not_found_retry_delays" in params:
+            kwargs["account_not_found_retry_delays"] = account_not_found_retry_delays
+        return run_bonding_curve_account_probe_for_create_event(config, event, **kwargs)
+
+    def record_initial_probe_queued(event: dict[str, Any]) -> None:
+        nonlocal initial_probe_queued_count
+        initial_probe_queued_count += 1
+        now = time.time()
+        create_observed_at = _num(event.get("observed_at") or event.get("create_log_observed_at") or event.get("timestamp"))
+        _append_jsonl(
+            config.bonding_curve_account_probe_events_path,
+            {
+                "event_id": f"probe_queued_{event.get('event_id') or event.get('signature')}_{int(now * 1000)}",
+                "probe_phase": "initial",
+                "probe_tracking_status": "queued",
+                "probe_status": "queued",
+                "mint": event.get("mint"),
+                "bonding_curve": event.get("bonding_curve"),
+                "source_create_signature": event.get("signature"),
+                "create_slot": event.get("slot"),
+                "create_observed_at": create_observed_at,
+                "probe_queued_at": now,
+                "probe_scheduled_during_stream": True,
+                "pumpfun_create_verified": str(event.get("parser_status") or "") == "decoded",
+                "bonding_curve_pda_verified": bool(event.get("bonding_curve_verified")),
+                "helius_rpc_request_count": 0,
+                "http_429_count": 0,
+            },
+        )
+
+    def _initial_probe_terminal_tracking_status(reason: str) -> str:
+        if reason == "initial_probe_queue_pressure_dropped":
+            return "dropped"
+        if reason == "initial_probe_stale_before_start":
+            return "stale"
+        return "cancelled"
+
+    def record_initial_probe_started(event: dict[str, Any]) -> None:
+        nonlocal initial_probe_started_count
+        with initial_probe_queue_condition:
+            initial_probe_started_count += 1
+        now = time.time()
+        create_observed_at = _num(event.get("observed_at") or event.get("create_log_observed_at") or event.get("timestamp"))
+        observed_to_started_ms = None
+        if create_observed_at is not None:
+            observed_to_started_ms = max(0.0, (now - float(create_observed_at)) * 1000.0)
+        _append_jsonl(
+            config.bonding_curve_account_probe_events_path,
+            {
+                "event_id": f"probe_started_{event.get('event_id') or event.get('signature')}_{int(now * 1000)}",
+                "probe_phase": "initial",
+                "probe_tracking_status": "started",
+                "probe_status": "started",
+                "mint": event.get("mint"),
+                "bonding_curve": event.get("bonding_curve"),
+                "source_create_signature": event.get("signature"),
+                "create_slot": event.get("slot"),
+                "create_observed_at": create_observed_at,
+                "probe_queued_at": event.get("_initial_probe_queued_wall_time"),
+                "probe_started_at": now,
+                "probe_queue_age_seconds": _round_num(time.monotonic() - float(event.get("_initial_probe_queued_monotonic") or time.monotonic())),
+                "observed_to_probe_started_ms": _round_num(observed_to_started_ms),
+                "probe_scheduled_during_stream": True,
+                "pumpfun_create_verified": str(event.get("parser_status") or "") == "decoded",
+                "bonding_curve_pda_verified": bool(event.get("bonding_curve_verified")),
+                "helius_rpc_request_count": 0,
+                "http_429_count": 0,
+            },
+        )
+
+    def record_initial_probe_unstarted_terminal(event: dict[str, Any], reason: str) -> None:
+        nonlocal initial_probe_queue_pressure_dropped_count, initial_probe_stale_before_start_count, initial_probe_shutdown_unstarted_count
+        if reason == "initial_probe_queue_pressure_dropped":
+            initial_probe_queue_pressure_dropped_count += 1
+        elif reason == "initial_probe_stale_before_start":
+            initial_probe_stale_before_start_count += 1
+        else:
+            initial_probe_shutdown_unstarted_count += 1
+        now = time.time()
+        queued_monotonic = _num(event.get("_initial_probe_queued_monotonic"))
+        create_observed_at = _num(event.get("observed_at") or event.get("create_log_observed_at") or event.get("timestamp"))
+        _append_jsonl(
+            config.bonding_curve_account_probe_events_path,
+            {
+                "event_id": f"{reason}_{event.get('event_id') or event.get('signature')}_{int(now * 1000)}",
+                "probe_phase": "initial",
+                "probe_tracking_status": _initial_probe_terminal_tracking_status(reason),
+                "probe_status": "failed",
+                "probe_error": reason,
+                "mint": event.get("mint"),
+                "bonding_curve": event.get("bonding_curve"),
+                "source_create_signature": event.get("signature"),
+                "create_slot": event.get("slot"),
+                "create_observed_at": create_observed_at,
+                "probe_queued_at": event.get("_initial_probe_queued_wall_time"),
+                "probe_started_at": None,
+                "probe_queue_age_seconds": _round_num(time.monotonic() - float(queued_monotonic or time.monotonic())),
+                "probe_scheduled_during_stream": True,
+                "pumpfun_create_verified": str(event.get("parser_status") or "") == "decoded",
+                "bonding_curve_pda_verified": bool(event.get("bonding_curve_verified")),
+                "helius_rpc_request_count": 0,
+                "http_429_count": 0,
+            },
+        )
+
+    def submit_initial_probe(event: dict[str, Any]) -> None:
+        nonlocal initial_probe_max_queue_depth
+        queued_event = dict(event)
+        queued_event["_initial_probe_queued_monotonic"] = time.monotonic()
+        queued_event["_initial_probe_queued_wall_time"] = time.time()
+        dropped: list[dict[str, Any]] = []
+        with initial_probe_queue_condition:
+            if initial_probe_stop.is_set():
+                dropped.append(queued_event)
+            else:
+                initial_probe_queue.append(queued_event)
+                while len(initial_probe_queue) > TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_MAX_SIZE:
+                    dropped.append(initial_probe_queue.popleft())
+                initial_probe_max_queue_depth = max(initial_probe_max_queue_depth, len(initial_probe_queue))
+                initial_probe_queue_condition.notify()
+        for dropped_event in dropped:
+            reason = "initial_probe_scheduler_closed" if initial_probe_stop.is_set() else "initial_probe_queue_pressure_dropped"
+            record_initial_probe_unstarted_terminal(dropped_event, reason)
+
+    def initial_probe_worker() -> None:
+        nonlocal initial_probe_active_count
+        while True:
+            with initial_probe_queue_condition:
+                while not initial_probe_queue and not initial_probe_stop.is_set():
+                    initial_probe_queue_condition.wait(timeout=0.05)
+                if initial_probe_stop.is_set():
+                    return
+                event = initial_probe_queue.pop()
+                initial_probe_active_count += 1
+            try:
+                queued_monotonic = _num(event.get("_initial_probe_queued_monotonic")) or time.monotonic()
+                if time.monotonic() - float(queued_monotonic) > TRANSACTION_SUBSCRIBE_INITIAL_PROBE_STALE_SECONDS:
+                    record_initial_probe_unstarted_terminal(event, "initial_probe_stale_before_start")
+                    continue
+                record_initial_probe_started(event)
+                try:
+                    run_first_fdv_probe_and_schedule_confirmation(event, confirmation_executor, live_watch_executor)
+                except Exception as exc:
+                    probe_errors.append({"error": f"{type(exc).__name__}:{exc}"})
+            finally:
+                with initial_probe_queue_condition:
+                    initial_probe_active_count = max(0, initial_probe_active_count - 1)
+                    initial_probe_queue_condition.notify_all()
+
+    def start_initial_probe_workers() -> None:
+        if initial_probe_worker_threads:
+            return
+        for index in range(TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS):
+            thread = Thread(
+                target=initial_probe_worker,
+                name=f"txsub-first-fdv-priority-{index + 1}",
+                daemon=True,
             )
-        except TypeError as exc:
-            message = str(exc)
-            if "follow_up_probe_delays" not in message and "include_mint_account_owner" not in message:
-                raise
-            kwargs: dict[str, Any] = {
-                "probe": probe,
-                "event_callback": on_hot_event,
-            }
-            if "follow_up_probe_delays" not in message:
-                kwargs["follow_up_probe_delays"] = follow_up_probe_delays
-            return run_bonding_curve_account_probe_for_create_event(config, event, **kwargs)
+            initial_probe_worker_threads.append(thread)
+            thread.start()
+
+    def stop_initial_probe_workers(*, cleanup_deadline: float) -> int:
+        nonlocal initial_probe_worker_timeout_count
+        with initial_probe_queue_condition:
+            remaining = list(initial_probe_queue)
+            initial_probe_queue.clear()
+            initial_probe_stop.set()
+            initial_probe_queue_condition.notify_all()
+        for event in remaining:
+            record_initial_probe_unstarted_terminal(event, "initial_probe_shutdown_unstarted")
+        for thread in initial_probe_worker_threads:
+            remaining_seconds = max(0.0, cleanup_deadline - time.monotonic())
+            if remaining_seconds <= 0:
+                break
+            thread.join(timeout=remaining_seconds)
+        initial_probe_worker_timeout_count = sum(1 for thread in initial_probe_worker_threads if thread.is_alive())
+        return len(remaining) + initial_probe_worker_timeout_count
+
+    def wait_for_initial_probe_queue_until_deadline(*, cleanup_deadline: float) -> int:
+        while time.monotonic() < cleanup_deadline:
+            with initial_probe_queue_condition:
+                if not initial_probe_queue and initial_probe_active_count <= 0:
+                    break
+                initial_probe_queue_condition.wait(timeout=min(0.05, max(0.0, cleanup_deadline - time.monotonic())))
+        return stop_initial_probe_workers(cleanup_deadline=cleanup_deadline)
 
     def run_near_entry_live_watch(event: dict[str, Any]) -> list[dict[str, Any]]:
         probe = BondingCurveAccountStateProbe(sol_usd=sol_usd)
@@ -2071,6 +2268,45 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 entry_validation_burst_scheduled_count += 1
                 heapq.heappush(watch_follow_up_jobs, (now_monotonic + float(delay), watch_follow_up_sequence, follow_event))
 
+    def schedule_account_not_found_retry_follow_up(event: dict[str, Any], row: dict[str, Any]) -> None:
+        nonlocal account_not_found_retry_scheduled_count, watch_follow_up_sequence
+        if row.get("account_not_found_final_failure") is not True and row.get("final_failure_reason") != "account_not_found":
+            return
+        mint = str(row.get("mint") or event.get("mint") or "")
+        if not mint:
+            return
+        now_monotonic = time.monotonic()
+        with watch_follow_up_lock:
+            if mint in account_not_found_retry_scheduled_mints:
+                return
+            account_not_found_retry_scheduled_mints.add(mint)
+            for index, delay in enumerate(tuple(ACCOUNT_NOT_FOUND_RETRY_PROBE_DELAYS_SECONDS), start=1):
+                follow_event = dict(event)
+                for stale_key in [
+                    "post_birth_watch_follow_up_scheduled",
+                    "post_birth_watch_follow_up_index",
+                    "post_birth_watch_due_delay_seconds",
+                    "post_birth_watch_lane",
+                    "hot_watch_follow_up_scheduled",
+                    "hot_watch_follow_up_index",
+                    "hot_watch_due_delay_seconds",
+                    "hot_watch_mode",
+                    "confirmation_follow_up_scheduled",
+                    "entry_validation_burst_scheduled",
+                    "entry_validation_burst_index",
+                    "entry_validation_burst_due_delay_seconds",
+                    "probe_phase_override",
+                ]:
+                    follow_event.pop(stale_key, None)
+                follow_event["probe_scheduled_during_stream"] = True
+                follow_event["account_not_found_retry_follow_up_scheduled"] = True
+                follow_event["account_not_found_retry_follow_up_index"] = index
+                follow_event["account_not_found_retry_due_delay_seconds"] = float(delay)
+                follow_event["probe_phase_override"] = "account_not_found_retry"
+                watch_follow_up_sequence += 1
+                account_not_found_retry_scheduled_count += 1
+                heapq.heappush(watch_follow_up_jobs, (now_monotonic + float(delay), watch_follow_up_sequence, follow_event))
+
     def run_first_fdv_probe_and_schedule_confirmation(
         event: dict[str, Any],
         confirmation_executor: ThreadPoolExecutor,
@@ -2080,7 +2316,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             event,
             follow_up_probe_delays=TRANSACTION_SUBSCRIBE_FIRST_FDV_FOLLOW_UP_DELAYS_SECONDS,
             include_mint_account_owner=False,
+            account_not_found_retry_delays=(),
         )
+        if row.get("probe_status") == "success":
+            successful_probe_mints.add(str(row.get("mint") or event.get("mint") or ""))
+        schedule_account_not_found_retry_follow_up(event, row)
         schedule_post_birth_watch_follow_up(event, row)
         schedule_hot_watch_follow_up(event, row)
         schedule_entry_validation_burst(event, row)
@@ -2093,7 +2333,10 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
         confirmation_executor: ThreadPoolExecutor,
         live_watch_executor: ThreadPoolExecutor,
     ) -> dict[str, Any]:
-        row = run_probe(event)
+        row = run_probe(event, account_not_found_retry_delays=())
+        if row.get("probe_status") == "success":
+            successful_probe_mints.add(str(row.get("mint") or event.get("mint") or ""))
+        schedule_account_not_found_retry_follow_up(event, row)
         schedule_hot_watch_follow_up(event, row)
         schedule_entry_validation_burst(event, row)
         schedule_near_entry_live_watch(event, row, live_watch_executor)
@@ -2167,6 +2410,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 _, _, event = heapq.heappop(watch_follow_up_jobs)
                 due.append(event)
         for event in due:
+            if (
+                event.get("probe_phase_override") == "account_not_found_retry"
+                and str(event.get("mint") or "") in successful_probe_mints
+            ):
+                continue
             watch_follow_up_futures.append(
                 watch_executor.submit(run_watch_follow_up_probe_and_schedule, event, confirmation_executor, live_watch_executor)
             )
@@ -2273,10 +2521,6 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 cancelled += 1
         return cancelled
 
-    executor = ThreadPoolExecutor(
-        max_workers=TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS,
-        thread_name_prefix="txsub-first-fdv",
-    )
     confirmation_executor = ThreadPoolExecutor(
         max_workers=CONFIRMATION_FOLLOW_UP_MAX_WORKERS,
         thread_name_prefix="txsub-confirm-probe",
@@ -2293,6 +2537,7 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     watch_follow_up_scheduler_stop = Event()
     watch_follow_up_scheduler_thread: Thread | None = None
     try:
+        start_initial_probe_workers()
         watch_follow_up_scheduler_thread = Thread(
             target=run_watch_follow_up_scheduler,
             args=(watch_follow_up_scheduler_stop, watch_executor, confirmation_executor, live_watch_executor),
@@ -2304,35 +2549,8 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
 
         def on_create_event(event: dict[str, Any]) -> None:
             event["probe_scheduled_during_stream"] = True
-            try:
-                probe_futures.append(
-                    executor.submit(
-                        run_first_fdv_probe_and_schedule_confirmation,
-                        dict(event),
-                        confirmation_executor,
-                        live_watch_executor,
-                    )
-                )
-            except Exception as exc:
-                _append_jsonl(
-                    config.bonding_curve_account_probe_events_path,
-                    {
-                        "event_id": f"probe_schedule_failed_{event.get('event_id') or event.get('signature')}",
-                        "probe_phase": "initial",
-                        "mint": event.get("mint"),
-                        "bonding_curve": event.get("bonding_curve"),
-                        "source_create_signature": event.get("signature"),
-                        "create_slot": event.get("slot"),
-                        "create_observed_at": event.get("observed_at"),
-                        "probe_scheduled_during_stream": True,
-                        "probe_started_at": None,
-                        "probe_status": "failed",
-                        "probe_error": f"probe_schedule_failed:{type(exc).__name__}:{exc}",
-                        "helius_rpc_request_count": 0,
-                        "http_429_count": 0,
-                    },
-                )
-                raise
+            record_initial_probe_queued(event)
+            submit_initial_probe(event)
             drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
 
         def on_idle() -> None:
@@ -2344,20 +2562,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
             on_create_event=on_create_event,
             on_idle=on_idle,
         )
+        cleanup_deadline = time.monotonic() + TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS
+        cancelled_probe_futures = wait_for_initial_probe_queue_until_deadline(cleanup_deadline=cleanup_deadline)
         watch_follow_up_scheduler_stop.set()
         if watch_follow_up_scheduler_thread is not None:
             watch_follow_up_scheduler_thread.join(timeout=1.0)
-        cleanup_deadline = time.monotonic() + TRANSACTION_SUBSCRIBE_SHUTDOWN_GRACE_SECONDS
-        cancelled_probe_futures = wait_for_futures(
-            probe_futures,
-            probe_errors,
-            failure_key="probe_cleanup_timeout",
-            cleanup_deadline=cleanup_deadline,
-            drain_after_done=True,
-            watch_executor=watch_executor,
-            confirmation_executor=confirmation_executor,
-            live_watch_executor=live_watch_executor,
-        )
         if time.monotonic() < cleanup_deadline:
             drain_due_watch_follow_ups(watch_executor, confirmation_executor, live_watch_executor)
         cancelled_watch_follow_up_futures = wait_for_watch_follow_ups_until_deadline(
@@ -2387,10 +2596,11 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
                 cancelled_watch_follow_up_futures += len(watch_follow_up_jobs)
                 watch_follow_up_jobs.clear()
     finally:
+        if not initial_probe_stop.is_set():
+            stop_initial_probe_workers(cleanup_deadline=time.monotonic())
         watch_follow_up_scheduler_stop.set()
         if watch_follow_up_scheduler_thread is not None and watch_follow_up_scheduler_thread.is_alive():
             watch_follow_up_scheduler_thread.join(timeout=1.0)
-        executor.shutdown(wait=False, cancel_futures=True)
         watch_executor.shutdown(wait=False, cancel_futures=True)
         live_watch_executor.shutdown(wait=False, cancel_futures=True)
         confirmation_executor.shutdown(wait=False, cancel_futures=True)
@@ -2418,7 +2628,18 @@ def run_helius_transaction_subscribe_bonding_curve_probe_smoke(
     probe_stats["confirmation_follow_up_futures"] = len(confirmation_futures)
     probe_stats["reconnect_count"] = int(getattr(source, "reconnect_count", 0) or 0)
     probe_stats["initial_probe_max_workers"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_MAX_WORKERS
+    probe_stats["initial_probe_queue_policy"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_POLICY
+    probe_stats["initial_probe_queue_max_size"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_MAX_SIZE
+    probe_stats["initial_probe_stale_seconds"] = TRANSACTION_SUBSCRIBE_INITIAL_PROBE_STALE_SECONDS
+    probe_stats["initial_probe_started_rows"] = initial_probe_started_count
+    probe_stats["initial_probe_queue_pressure_dropped"] = initial_probe_queue_pressure_dropped_count
+    probe_stats["initial_probe_stale_before_start"] = initial_probe_stale_before_start_count
+    probe_stats["initial_probe_shutdown_unstarted"] = initial_probe_shutdown_unstarted_count
+    probe_stats["initial_probe_worker_timeouts"] = initial_probe_worker_timeout_count
+    probe_stats["initial_probe_max_queue_depth"] = initial_probe_max_queue_depth
     probe_stats["initial_probe_metadata_deferred"] = True
+    probe_stats["initial_probe_queued_rows"] = initial_probe_queued_count
+    probe_stats["account_not_found_retry_follow_up_futures"] = account_not_found_retry_scheduled_count
     probe_stats["watch_follow_up_scheduler_active_during_stream"] = bool(watch_follow_up_scheduler_started)
     with watch_follow_up_lock:
         if watch_follow_up_jobs and time.monotonic() >= cleanup_deadline:
@@ -3700,6 +3921,16 @@ def _default_scheduler_stats() -> dict[str, Any]:
         "bonding_curve_account_state_failure_reasons": {},
         "account_subscribe_bonding_curve_status": "accountSubscribe_bonding_curve_live_watch_enabled",
         "active_account_subscriptions": 0,
+        "initial_probe_queued_rows": 0,
+        "initial_probe_started_rows": 0,
+        "initial_probe_queue_pressure_dropped": 0,
+        "initial_probe_stale_before_start": 0,
+        "initial_probe_shutdown_unstarted": 0,
+        "initial_probe_worker_timeouts": 0,
+        "initial_probe_max_queue_depth": 0,
+        "account_not_found_retry_follow_up_futures": 0,
+        "account_not_found_retry_probe_rows": 0,
+        "account_not_found_retry_successes": 0,
         "hot_watch_follow_up_futures": 0,
         "hot_watch_follow_up_pending": 0,
         "entry_validation_burst_futures": 0,
@@ -5231,7 +5462,20 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
         "near_entry_live_watch_probe_rows": int(stats.get("near_entry_live_watch_probe_rows") or 0),
         "near_entry_live_watch_successes": int(stats.get("near_entry_live_watch_successes") or 0),
         "initial_probe_max_workers": int(stats.get("initial_probe_max_workers") or 0),
+        "initial_probe_queue_policy": stats.get("initial_probe_queue_policy") or TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_POLICY,
+        "initial_probe_queue_max_size": int(stats.get("initial_probe_queue_max_size") or TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_MAX_SIZE),
+        "initial_probe_stale_seconds": _round_num(stats.get("initial_probe_stale_seconds") or TRANSACTION_SUBSCRIBE_INITIAL_PROBE_STALE_SECONDS),
+        "initial_probe_started_rows": int(stats.get("initial_probe_started_rows") or 0),
+        "initial_probe_queue_pressure_dropped": int(stats.get("initial_probe_queue_pressure_dropped") or 0),
+        "initial_probe_stale_before_start": int(stats.get("initial_probe_stale_before_start") or 0),
+        "initial_probe_shutdown_unstarted": int(stats.get("initial_probe_shutdown_unstarted") or 0),
+        "initial_probe_worker_timeouts": int(stats.get("initial_probe_worker_timeouts") or 0),
+        "initial_probe_max_queue_depth": int(stats.get("initial_probe_max_queue_depth") or 0),
         "initial_probe_metadata_deferred": bool(stats.get("initial_probe_metadata_deferred")),
+        "initial_probe_queued_rows": int(stats.get("initial_probe_queued_rows") or 0),
+        "account_not_found_retry_follow_up_futures": int(stats.get("account_not_found_retry_follow_up_futures") or 0),
+        "account_not_found_retry_probe_rows": int(stats.get("account_not_found_retry_probe_rows") or 0),
+        "account_not_found_retry_successes": int(stats.get("account_not_found_retry_successes") or 0),
         "watch_follow_up_scheduler_active_during_stream": bool(stats.get("watch_follow_up_scheduler_active_during_stream")),
         "shutdown_cancelled_probe_futures": int(stats.get("shutdown_cancelled_probe_futures") or 0),
         "shutdown_cancelled_watch_follow_up_futures": int(stats.get("shutdown_cancelled_watch_follow_up_futures") or 0),
@@ -5245,9 +5489,18 @@ def _first_fdv_probe_source_summary(state: dict[str, Any], latency_rows: list[di
     }
 
 
+def _is_probe_tracking_row(row: dict[str, Any]) -> bool:
+    return str(row.get("probe_tracking_status") or "").strip().lower() in {"queued", "started", "dropped", "stale", "cancelled"}
+
+
+def _actual_probe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if not _is_probe_tracking_row(row)]
+
+
 def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, source_summary: dict[str, Any]) -> dict[str, Any]:
     create_rows = _read_jsonl(config.pumpfun_create_stream_events_path)
     probe_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
+    actual_probe_rows = _actual_probe_rows(probe_rows)
     state = _read_json(config.runtime_state_path)
     candidates = state.get("candidates") if isinstance(state.get("candidates"), dict) else {}
     scheduler_stats = state.get("scheduler_stats") if isinstance(state.get("scheduler_stats"), dict) else {}
@@ -5255,16 +5508,36 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
     recommended = audit.get("recommended_endpoint") if isinstance(audit.get("recommended_endpoint"), dict) else {}
     decoded_create_rows = [row for row in create_rows if row.get("parser_status") == "decoded"]
     decoded_create_mints = {row.get("mint") for row in decoded_create_rows if row.get("mint")}
-    probed_mints = {row.get("mint") for row in probe_rows if row.get("mint")}
-    missing_probe_mints = sorted(str(mint) for mint in decoded_create_mints - probed_mints)
-    probe_failures = [row for row in probe_rows if row.get("probe_status") != "success"]
+    initial_probe_record_mints = {row.get("mint") for row in probe_rows if row.get("mint") and str(row.get("probe_phase") or "initial") == "initial"}
+    initial_probe_started_tracking_mints = {
+        row.get("mint")
+        for row in probe_rows
+        if row.get("mint")
+        and str(row.get("probe_phase") or "initial") == "initial"
+        and str(row.get("probe_tracking_status") or "").strip().lower() == "started"
+    }
+    initial_probe_terminal_unstarted_mints = {
+        row.get("mint")
+        for row in probe_rows
+        if row.get("mint")
+        and str(row.get("probe_phase") or "initial") == "initial"
+        and str(row.get("probe_tracking_status") or "").strip().lower() in {"dropped", "stale", "cancelled"}
+    }
+    probed_mints = {row.get("mint") for row in actual_probe_rows if row.get("mint")}
+    missing_probe_mints = sorted(str(mint) for mint in decoded_create_mints - initial_probe_record_mints)
+    started_probe_mints = probed_mints | initial_probe_started_tracking_mints
+    queued_probe_mints_without_start = sorted(
+        str(mint) for mint in (initial_probe_record_mints - started_probe_mints - initial_probe_terminal_unstarted_mints)
+    )
+    probe_failures = [row for row in actual_probe_rows if row.get("probe_status") != "success"]
     initial_probe_rows = [
         row
-        for row in probe_rows
+        for row in actual_probe_rows
         if str(row.get("probe_phase") or "initial") == "initial"
         and not row.get("post_birth_watch_follow_up_scheduled")
         and not row.get("hot_watch_follow_up_scheduled")
         and not row.get("confirmation_follow_up_scheduled")
+        and not row.get("account_not_found_retry_follow_up_scheduled")
     ]
     failure_reasons: dict[str, int] = {}
     for row in probe_failures:
@@ -5277,18 +5550,23 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         warnings.append("bonding_curve_account_probe_failures_present")
     if missing_probe_mints:
         warnings.append("decoded_creates_missing_bonding_curve_probe")
-    account_not_found_retries = int(sum(_num(row.get("account_not_found_retry_count")) or 0 for row in probe_rows))
-    account_not_found_recovered = sum(1 for row in probe_rows if row.get("account_not_found_recovered_by_retry") is True)
-    account_not_found_final_failures = sum(1 for row in probe_rows if row.get("account_not_found_final_failure") is True)
+    if queued_probe_mints_without_start:
+        warnings.append("initial_probe_queued_without_started_row")
+    if initial_probe_terminal_unstarted_mints:
+        warnings.append("initial_probe_terminal_unstarted_rows_present")
+    account_not_found_retries = int(sum(_num(row.get("account_not_found_retry_count")) or 0 for row in actual_probe_rows))
+    account_not_found_recovered = sum(1 for row in actual_probe_rows if row.get("account_not_found_recovered_by_retry") is True)
+    account_not_found_final_failures = sum(1 for row in actual_probe_rows if row.get("account_not_found_final_failure") is True)
     hot_watch_rows = [
         row
-        for row in probe_rows
+        for row in actual_probe_rows
         if str(row.get("probe_phase") or "") in {"near_threshold_hot_watch_follow_up", "entry_zone_hot_watch_follow_up"}
     ]
-    entry_validation_burst_rows = [row for row in probe_rows if row.get("probe_phase") == "entry_validation_burst"]
-    near_entry_live_watch_rows = [row for row in probe_rows if row.get("probe_phase") == "near_entry_live_watch"]
+    entry_validation_burst_rows = [row for row in actual_probe_rows if row.get("probe_phase") == "entry_validation_burst"]
+    near_entry_live_watch_rows = [row for row in actual_probe_rows if row.get("probe_phase") == "near_entry_live_watch"]
+    account_not_found_retry_rows = [row for row in actual_probe_rows if row.get("probe_phase") == "account_not_found_retry"]
     post_birth_watch = _post_birth_watch_status_metrics(
-        probe_rows,
+        actual_probe_rows,
         candidates,
         scheduled_count=int(source_summary.get("post_birth_watch_follow_up_futures") or 0)
         + int(source_summary.get("post_birth_watch_follow_up_pending") or 0),
@@ -5299,18 +5577,54 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "endpoint_used": recommended.get("name"),
         "create_events_decoded": len(decoded_create_rows),
         "decoded_create_unique_mints": len(decoded_create_mints),
-        "decoded_create_mints_with_probe": len(decoded_create_mints & probed_mints),
+        "decoded_create_mints_with_probe": len(decoded_create_mints & initial_probe_record_mints),
+        "decoded_create_mints_with_started_probe": len(decoded_create_mints & started_probe_mints),
         "decoded_create_mints_without_probe": len(missing_probe_mints),
-        "decoded_create_probe_coverage_rate": _round_num(len(decoded_create_mints & probed_mints) / max(1, len(decoded_create_mints))),
+        "decoded_create_probe_coverage_rate": _round_num(len(decoded_create_mints & initial_probe_record_mints) / max(1, len(decoded_create_mints))),
+        "decoded_create_started_probe_coverage_rate": _round_num(len(decoded_create_mints & started_probe_mints) / max(1, len(decoded_create_mints))),
         "decoded_create_mints_without_probe_sample": missing_probe_mints[:25],
+        "initial_probe_queued_rows": sum(1 for row in probe_rows if row.get("probe_tracking_status") == "queued"),
+        "initial_probe_started_rows": sum(1 for row in probe_rows if row.get("probe_tracking_status") == "started"),
+        "initial_probe_terminal_unstarted": sum(
+            1 for row in probe_rows if str(row.get("probe_tracking_status") or "").strip().lower() in {"dropped", "stale", "cancelled"}
+        ),
+        "initial_probe_queue_pressure_dropped": int(
+            scheduler_stats.get("initial_probe_queue_pressure_dropped")
+            or sum(1 for row in probe_rows if row.get("probe_error") == "initial_probe_queue_pressure_dropped")
+        ),
+        "initial_probe_stale_before_start": int(
+            scheduler_stats.get("initial_probe_stale_before_start")
+            or sum(1 for row in probe_rows if row.get("probe_error") == "initial_probe_stale_before_start")
+        ),
+        "initial_probe_shutdown_unstarted": int(
+            scheduler_stats.get("initial_probe_shutdown_unstarted")
+            or sum(1 for row in probe_rows if row.get("probe_error") == "initial_probe_shutdown_unstarted")
+        ),
+        "initial_probe_worker_timeouts": int(scheduler_stats.get("initial_probe_worker_timeouts") or 0),
+        "initial_probe_max_queue_depth": int(scheduler_stats.get("initial_probe_max_queue_depth") or source_summary.get("initial_probe_max_queue_depth") or 0),
+        "initial_probe_queue_policy": scheduler_stats.get("initial_probe_queue_policy")
+        or source_summary.get("initial_probe_queue_policy")
+        or TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_POLICY,
+        "initial_probe_queue_max_size": int(
+            scheduler_stats.get("initial_probe_queue_max_size")
+            or source_summary.get("initial_probe_queue_max_size")
+            or TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_MAX_SIZE
+        ),
+        "initial_probe_stale_seconds": _round_num(
+            scheduler_stats.get("initial_probe_stale_seconds")
+            or source_summary.get("initial_probe_stale_seconds")
+            or TRANSACTION_SUBSCRIBE_INITIAL_PROBE_STALE_SECONDS
+        ),
+        "initial_probe_queued_without_started": len(queued_probe_mints_without_start),
+        "initial_probe_queued_without_started_sample": queued_probe_mints_without_start[:25],
         "curve_pda_verified": sum(1 for row in create_rows if row.get("bonding_curve_verified") is True),
-        "curve_account_probes_started": len(probe_rows),
-        "probes_started_during_stream": sum(1 for row in probe_rows if row.get("probe_scheduled_during_stream") is True),
+        "curve_account_probes_started": len(actual_probe_rows),
+        "probes_started_during_stream": sum(1 for row in actual_probe_rows if row.get("probe_scheduled_during_stream") is True),
         "confirmation_follow_up_futures": int(source_summary.get("confirmation_follow_up_futures") or 0),
-        "confirmation_follow_up_probe_rows": sum(1 for row in probe_rows if str(row.get("probe_phase") or "").startswith("confirmation")),
+        "confirmation_follow_up_probe_rows": sum(1 for row in actual_probe_rows if str(row.get("probe_phase") or "").startswith("confirmation")),
         "confirmation_follow_up_successes": sum(
             1
-            for row in probe_rows
+            for row in actual_probe_rows
             if str(row.get("probe_phase") or "").startswith("confirmation") and row.get("probe_status") == "success"
         ),
         "post_birth_watch_follow_up_futures": int(source_summary.get("post_birth_watch_follow_up_futures") or 0),
@@ -5330,10 +5644,10 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "entry_validation_burst_probe_rows": len(entry_validation_burst_rows),
         "entry_validation_burst_successes": sum(1 for row in entry_validation_burst_rows if row.get("probe_status") == "success"),
         "near_entry_live_watch_futures": int(source_summary.get("near_entry_live_watch_futures") or 0),
-        "post_birth_watch_follow_up_probe_rows": sum(1 for row in probe_rows if row.get("probe_phase") == "post_birth_watch_follow_up"),
+        "post_birth_watch_follow_up_probe_rows": sum(1 for row in actual_probe_rows if row.get("probe_phase") == "post_birth_watch_follow_up"),
         "post_birth_watch_follow_up_successes": sum(
             1
-            for row in probe_rows
+            for row in actual_probe_rows
             if row.get("probe_phase") == "post_birth_watch_follow_up" and row.get("probe_status") == "success"
         ),
         "hot_watch_probe_count": len(hot_watch_rows),
@@ -5346,18 +5660,21 @@ def _helius_transaction_subscribe_first_fdv_status(config: RuleRuntimeConfig, so
         "initial_probe_metadata_deferred": bool(source_summary.get("initial_probe_metadata_deferred")),
         "watch_follow_up_scheduler_active_during_stream": bool(source_summary.get("watch_follow_up_scheduler_active_during_stream")),
         **post_birth_watch,
-        "curve_account_probes_succeeded": sum(1 for row in probe_rows if row.get("probe_status") == "success"),
+        "curve_account_probes_succeeded": sum(1 for row in actual_probe_rows if row.get("probe_status") == "success"),
         "curve_account_probes_failed": len(probe_failures),
-        "first_attempt_successes": sum(1 for row in probe_rows if row.get("probe_status") == "success" and int(_num(row.get("probe_attempt_count")) or 1) == 1),
+        "first_attempt_successes": sum(1 for row in actual_probe_rows if row.get("probe_status") == "success" and int(_num(row.get("probe_attempt_count")) or 1) == 1),
         "account_not_found_retries": account_not_found_retries,
+        "account_not_found_retry_follow_up_futures": int(source_summary.get("account_not_found_retry_follow_up_futures") or 0),
+        "account_not_found_retry_probe_rows": len(account_not_found_retry_rows),
+        "account_not_found_retry_successes": sum(1 for row in account_not_found_retry_rows if row.get("probe_status") == "success"),
         "account_not_found_recovered_by_retry": account_not_found_recovered,
         "account_not_found_final_failures": account_not_found_final_failures,
         "account_not_found_retry_recovery_rate": _round_num(account_not_found_recovered / max(1, account_not_found_recovered + account_not_found_final_failures)),
         "first_fdv_from_bonding_curve_account_state": int(source_summary.get("bonding_curve_account_state_successes") or 0),
         "first_fdv_from_transaction_delta": int(source_summary.get("transaction_delta_successes") or 0),
         "first_fdv_from_unknown": int(source_summary.get("unknown_successes") or 0),
-        "getAccountInfo_p50_p90_p99": _percentiles([_num(row.get("getAccountInfo_latency_ms")) for row in probe_rows]),
-        "accountSubscribe_p50_p90_p99": _percentiles([_num(row.get("accountSubscribe_latency_ms")) for row in probe_rows]),
+        "getAccountInfo_p50_p90_p99": _percentiles([_num(row.get("getAccountInfo_latency_ms")) for row in actual_probe_rows]),
+        "accountSubscribe_p50_p90_p99": _percentiles([_num(row.get("accountSubscribe_latency_ms")) for row in actual_probe_rows]),
         "observed_to_probe_started_p50_p90_p99": _percentiles(
             [_num(row.get("observed_to_probe_started_ms")) for row in initial_probe_rows]
         ),
@@ -5862,8 +6179,12 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 <h2>Helius transactionSubscribe First-FDV</h2>
 <p>transactionSubscribe supported: {html.escape(str(txsub.get('transactionSubscribe_supported')))}; endpoint used: {html.escape(str(txsub.get('endpoint_used')))}</p>
 <p>Create events decoded: {html.escape(str(txsub.get('create_events_decoded')))}; curve PDA verified: {html.escape(str(txsub.get('curve_pda_verified')))}</p>
-	<p>Decoded create probe coverage: {html.escape(str(txsub.get('decoded_create_mints_with_probe')))} / {html.escape(str(txsub.get('decoded_create_unique_mints')))} ({html.escape(str(txsub.get('decoded_create_probe_coverage_rate')))}); missing probes: {html.escape(str(txsub.get('decoded_create_mints_without_probe')))}</p>
+	<p>Decoded create probe queued coverage: {html.escape(str(txsub.get('decoded_create_mints_with_probe')))} / {html.escape(str(txsub.get('decoded_create_unique_mints')))} ({html.escape(str(txsub.get('decoded_create_probe_coverage_rate')))}); missing queue records: {html.escape(str(txsub.get('decoded_create_mints_without_probe')))}</p>
+	<p>Decoded create probe started coverage: {html.escape(str(txsub.get('decoded_create_mints_with_started_probe')))} / {html.escape(str(txsub.get('decoded_create_unique_mints')))} ({html.escape(str(txsub.get('decoded_create_started_probe_coverage_rate')))}); queued without started: {html.escape(str(txsub.get('initial_probe_queued_without_started')))}</p>
+	<p>Initial probe lane: policy {html.escape(str(txsub.get('initial_probe_queue_policy')))}; queue max {html.escape(str(txsub.get('initial_probe_queue_max_size')))}; stale seconds {html.escape(str(txsub.get('initial_probe_stale_seconds')))}; max depth {html.escape(str(txsub.get('initial_probe_max_queue_depth')))}</p>
+	<p>Initial probe started/terminal/pressure-dropped/stale/shutdown: {html.escape(str(txsub.get('initial_probe_started_rows')))} / {html.escape(str(txsub.get('initial_probe_terminal_unstarted')))} / {html.escape(str(txsub.get('initial_probe_queue_pressure_dropped')))} / {html.escape(str(txsub.get('initial_probe_stale_before_start')))} / {html.escape(str(txsub.get('initial_probe_shutdown_unstarted')))}</p>
 	<p>Missing-probe sample: {html.escape(str(txsub.get('decoded_create_mints_without_probe_sample')))}</p>
+	<p>Queued-without-start sample: {html.escape(str(txsub.get('initial_probe_queued_without_started_sample')))}</p>
 	<p>Curve probes started/during-stream/succeeded/failed: {html.escape(str(txsub.get('curve_account_probes_started')))} / {html.escape(str(txsub.get('probes_started_during_stream')))} / {html.escape(str(txsub.get('curve_account_probes_succeeded')))} / {html.escape(str(txsub.get('curve_account_probes_failed')))}</p>
 <p>Watch follow-up scheduler active during stream: {html.escape(str(txsub.get('watch_follow_up_scheduler_active_during_stream')))}</p>
 <p>Confirmation follow-up futures/rows/successes: {html.escape(str(txsub.get('confirmation_follow_up_futures')))} / {html.escape(str(txsub.get('confirmation_follow_up_probe_rows')))} / {html.escape(str(txsub.get('confirmation_follow_up_successes')))}</p>
@@ -5875,6 +6196,7 @@ function copyCA(value){{navigator.clipboard.writeText(value).then(function(){{do
 	<p>Post-birth watch promotions 5k/10k/20k: {html.escape(str(txsub.get('post_birth_watch_promotions_to_5k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_10k')))} / {html.escape(str(txsub.get('post_birth_watch_promotions_to_20k')))}; archives: {html.escape(str(txsub.get('post_birth_watch_archives')))}; rechecked runners: {html.escape(str(txsub.get('missed_runner_recheck_count')))}</p>
 	<p>Low-FDV watch oldest age/due count: {html.escape(str(txsub.get('low_fdv_watch_oldest_age')))} / {html.escape(str(txsub.get('low_fdv_watch_due_count')))}; lane counts: {html.escape(str(txsub.get('post_birth_watch_lane_counts')))}</p>
 	<p>First-attempt successes: {html.escape(str(txsub.get('first_attempt_successes')))}; account-not-found retries: {html.escape(str(txsub.get('account_not_found_retries')))}</p>
+	<p>Account-not-found retry scheduled/rows/successes: {html.escape(str(txsub.get('account_not_found_retry_follow_up_futures')))} / {html.escape(str(txsub.get('account_not_found_retry_probe_rows')))} / {html.escape(str(txsub.get('account_not_found_retry_successes')))}</p>
 	<p>Account-not-found recovered by retry: {html.escape(str(txsub.get('account_not_found_recovered_by_retry')))}; final failures: {html.escape(str(txsub.get('account_not_found_final_failures')))}; recovery rate: {html.escape(str(txsub.get('account_not_found_retry_recovery_rate')))}</p>
 	<p>First FDV source counts: account-state {html.escape(str(txsub.get('first_fdv_from_bonding_curve_account_state')))}, transaction-delta {html.escape(str(txsub.get('first_fdv_from_transaction_delta')))}, unknown {html.escape(str(txsub.get('first_fdv_from_unknown')))}</p>
 	<p>Observed to probe started p50/p90/p99: {html.escape(str(txsub.get('observed_to_probe_started_p50_p90_p99')))}</p>
@@ -6169,9 +6491,24 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "decoded_create_events": int(create_events_decoded),
         "decoded_create_unique_mints": int(txsub.get("decoded_create_unique_mints") or 0),
         "decoded_create_mints_with_probe": int(txsub.get("decoded_create_mints_with_probe") or 0),
+        "decoded_create_mints_with_started_probe": int(txsub.get("decoded_create_mints_with_started_probe") or 0),
         "decoded_create_mints_without_probe": int(txsub.get("decoded_create_mints_without_probe") or 0),
         "decoded_create_probe_coverage_rate": txsub.get("decoded_create_probe_coverage_rate"),
+        "decoded_create_started_probe_coverage_rate": txsub.get("decoded_create_started_probe_coverage_rate"),
         "decoded_create_mints_without_probe_sample": txsub.get("decoded_create_mints_without_probe_sample") or [],
+        "initial_probe_queued_rows": int(txsub.get("initial_probe_queued_rows") or 0),
+        "initial_probe_started_rows": int(txsub.get("initial_probe_started_rows") or 0),
+        "initial_probe_terminal_unstarted": int(txsub.get("initial_probe_terminal_unstarted") or 0),
+        "initial_probe_queue_pressure_dropped": int(txsub.get("initial_probe_queue_pressure_dropped") or 0),
+        "initial_probe_stale_before_start": int(txsub.get("initial_probe_stale_before_start") or 0),
+        "initial_probe_shutdown_unstarted": int(txsub.get("initial_probe_shutdown_unstarted") or 0),
+        "initial_probe_worker_timeouts": int(txsub.get("initial_probe_worker_timeouts") or 0),
+        "initial_probe_max_queue_depth": int(txsub.get("initial_probe_max_queue_depth") or 0),
+        "initial_probe_queue_policy": txsub.get("initial_probe_queue_policy"),
+        "initial_probe_queue_max_size": int(txsub.get("initial_probe_queue_max_size") or 0),
+        "initial_probe_stale_seconds": txsub.get("initial_probe_stale_seconds"),
+        "initial_probe_queued_without_started": int(txsub.get("initial_probe_queued_without_started") or 0),
+        "initial_probe_queued_without_started_sample": txsub.get("initial_probe_queued_without_started_sample") or [],
         "events_processed": int(status.get("events_processed") or 0),
         "accepted_births": int(create_events_decoded) if transaction_subscribe_used else int((fallback_summary.get("collector_result") or {}).get("official_accepted_births") or 0),
         "reconnect_count": int(txsub.get("reconnect_count") or 0),
@@ -6195,6 +6532,9 @@ def _helius_transaction_subscribe_bonding_curve_probe_summary(
         "near_entry_live_watch_successes": int(txsub.get("near_entry_live_watch_successes") or 0),
         "initial_probe_max_workers": int(txsub.get("initial_probe_max_workers") or 0),
         "initial_probe_metadata_deferred": bool(txsub.get("initial_probe_metadata_deferred")),
+        "account_not_found_retry_follow_up_futures": int(txsub.get("account_not_found_retry_follow_up_futures") or 0),
+        "account_not_found_retry_probe_rows": int(txsub.get("account_not_found_retry_probe_rows") or 0),
+        "account_not_found_retry_successes": int(txsub.get("account_not_found_retry_successes") or 0),
         "watch_follow_up_scheduler_active_during_stream": bool(txsub.get("watch_follow_up_scheduler_active_during_stream")),
         "shutdown_cancelled_probe_futures": int(txsub.get("shutdown_cancelled_probe_futures") or 0),
         "shutdown_cancelled_watch_follow_up_futures": int(txsub.get("shutdown_cancelled_watch_follow_up_futures") or 0),
@@ -6483,7 +6823,8 @@ def _update_runtime_bus_depth(config: RuleRuntimeConfig, depth: int) -> None:
 
 
 def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str, Any]:
-    rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
+    all_rows = _read_jsonl(config.bonding_curve_account_probe_events_path)
+    rows = _actual_probe_rows(all_rows)
     failures_by_reason: dict[str, int] = {}
     for row in rows:
         if row.get("probe_status") == "success":
@@ -6533,6 +6874,20 @@ def _bonding_curve_probe_stats_from_rows(config: RuleRuntimeConfig) -> dict[str,
             for row in rows
             if row.get("probe_phase") == "near_entry_live_watch" and row.get("probe_status") == "success"
         ),
+        "initial_probe_queued_rows": sum(1 for row in all_rows if row.get("probe_tracking_status") == "queued"),
+        "initial_probe_started_rows": sum(1 for row in all_rows if row.get("probe_tracking_status") == "started"),
+        "initial_probe_terminal_unstarted": sum(
+            1 for row in all_rows if str(row.get("probe_tracking_status") or "").strip().lower() in {"dropped", "stale", "cancelled"}
+        ),
+        "initial_probe_queue_pressure_dropped": sum(1 for row in all_rows if row.get("probe_error") == "initial_probe_queue_pressure_dropped"),
+        "initial_probe_stale_before_start": sum(1 for row in all_rows if row.get("probe_error") == "initial_probe_stale_before_start"),
+        "initial_probe_shutdown_unstarted": sum(1 for row in all_rows if row.get("probe_error") == "initial_probe_shutdown_unstarted"),
+        "account_not_found_retry_probe_rows": sum(1 for row in rows if row.get("probe_phase") == "account_not_found_retry"),
+        "account_not_found_retry_successes": sum(
+            1
+            for row in rows
+            if row.get("probe_phase") == "account_not_found_retry" and row.get("probe_status") == "success"
+        ),
     }
 
 
@@ -6565,7 +6920,20 @@ def _record_bonding_curve_probe_stats(config: RuleRuntimeConfig, probe_stats: di
     stats["near_entry_live_watch_futures"] = int(probe_stats.get("near_entry_live_watch_futures") or 0)
     stats["near_entry_live_watch_probe_rows"] = int(probe_stats.get("near_entry_live_watch_probe_rows") or 0)
     stats["near_entry_live_watch_successes"] = int(probe_stats.get("near_entry_live_watch_successes") or 0)
+    stats["initial_probe_queued_rows"] = int(probe_stats.get("initial_probe_queued_rows") or 0)
+    stats["account_not_found_retry_follow_up_futures"] = int(probe_stats.get("account_not_found_retry_follow_up_futures") or 0)
+    stats["account_not_found_retry_probe_rows"] = int(probe_stats.get("account_not_found_retry_probe_rows") or 0)
+    stats["account_not_found_retry_successes"] = int(probe_stats.get("account_not_found_retry_successes") or 0)
     stats["initial_probe_max_workers"] = int(probe_stats.get("initial_probe_max_workers") or 0)
+    stats["initial_probe_queue_policy"] = probe_stats.get("initial_probe_queue_policy") or TRANSACTION_SUBSCRIBE_INITIAL_PROBE_QUEUE_POLICY
+    stats["initial_probe_queue_max_size"] = int(probe_stats.get("initial_probe_queue_max_size") or 0)
+    stats["initial_probe_stale_seconds"] = _round_num(probe_stats.get("initial_probe_stale_seconds"))
+    stats["initial_probe_started_rows"] = int(probe_stats.get("initial_probe_started_rows") or 0)
+    stats["initial_probe_queue_pressure_dropped"] = int(probe_stats.get("initial_probe_queue_pressure_dropped") or 0)
+    stats["initial_probe_stale_before_start"] = int(probe_stats.get("initial_probe_stale_before_start") or 0)
+    stats["initial_probe_shutdown_unstarted"] = int(probe_stats.get("initial_probe_shutdown_unstarted") or 0)
+    stats["initial_probe_worker_timeouts"] = int(probe_stats.get("initial_probe_worker_timeouts") or 0)
+    stats["initial_probe_max_queue_depth"] = int(probe_stats.get("initial_probe_max_queue_depth") or 0)
     stats["initial_probe_metadata_deferred"] = bool(probe_stats.get("initial_probe_metadata_deferred"))
     stats["watch_follow_up_scheduler_active_during_stream"] = bool(probe_stats.get("watch_follow_up_scheduler_active_during_stream"))
     stats["shutdown_cancelled_probe_futures"] = int(probe_stats.get("shutdown_cancelled_probe_futures") or 0)
