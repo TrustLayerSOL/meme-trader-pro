@@ -1367,3 +1367,17 @@ New production metadata:
 Readiness change:
 
 A run is not production-ready merely because it writes artifacts. It must prove DB ledger consistency, no impossible states, complete watcher contract fields, manifest/layout registry presence, latency histogram presence, and correct live/replay separation.
+
+## T007 Canonical Single Writer Repair
+
+The failed L2 proof was a source-health pass and canonical-evidence fail. The repair target is now explicit:
+
+- `T007SqliteWriter` is the only production writer allowed to execute SQLite writes for proof evidence.
+- The legacy lifecycle collector adapter is disabled for runtime writes and remains compatibility-only.
+- The canonical DB is created on internal local disk; the ORICO run root receives a pointer file and compatibility artifacts after DB commit.
+- Artifact rows are exported only after SQLite commits and carry `raw_envelope_id`, `domain_event_id`, `canonical_db_path`, `exported_after_db_commit`, and DB commit sequence metadata.
+- `run_manifest` and `protocol_layout_versions` are bootstrapped before source evidence is accepted by the event bus.
+- Malformed/corrupt SQLite errors are fatal and write `t007_db_fatal_status.json` instead of allowing thousands of repeated DB errors.
+- Readiness must compare source/artifact counts against canonical SQLite counts and fail if capture ratios are below proof thresholds.
+
+No scanner/RPC/WebSocket tuning is part of this repair. The source layer already produced enough data; the proof blocker is canonical durability and materialization.

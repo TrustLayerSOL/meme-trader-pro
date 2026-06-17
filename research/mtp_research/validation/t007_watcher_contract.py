@@ -163,3 +163,34 @@ def production_readiness_from_watcher_payload(summary, *, duration_seconds=None)
     result['decision_label'] = 'T007_PRODUCTION_READY_FOR_10M_TEST' if not result['blockers'] else 'T007_PRODUCTION_BLOCKED'
     result['payload'] = payload
     return result
+
+# --- T007_DB_BACKED_WATCHER_MAPPING_V8 --------------------------------------
+_original_normalize_watcher_payload_v8 = normalize_watcher_payload
+
+def normalize_watcher_payload(summary):  # type: ignore[no-redef]
+    payload = _original_normalize_watcher_payload_v8(summary)
+    payload['raw_birth_candidates'] = int(payload.get('raw_birth_candidates') or payload.get('birth_candidate_seen_count') or payload.get('birth_rows_live_source') or payload.get('total_births_detected') or 0)
+    payload['verified_births'] = int(payload.get('verified_births') or payload.get('create_instruction_verified_count') or payload.get('unique_birth_mints_live_source') or 0)
+    payload['candidate_exclusions'] = int(payload.get('candidate_exclusions') or max(0, payload['raw_birth_candidates'] - payload['verified_births']))
+    payload['curve_account_verified'] = int(payload.get('curve_account_verified') or payload.get('curve_account_verified_count') or 0)
+    payload['curve_state_decoded'] = int(payload.get('curve_state_decoded') or payload.get('decode_success_count') or payload.get('progress_decoded_candidate_count') or 0)
+    payload['curve_progress_available'] = int(payload.get('curve_progress_available') or payload.get('progress_decoded_candidate_count') or payload.get('decode_success_count') or 0)
+    payload['market_cap_candidate_available'] = int(payload.get('market_cap_candidate_available') or payload.get('valuation_present_count') or 0)
+    payload['market_cap_available'] = int(payload.get('market_cap_available') or payload.get('valuation_ladder_market_cap_confirmed_count') or payload.get('valuation_present_count') or 0)
+    payload['trade_flow_available'] = int(payload.get('trade_flow_available') or payload.get('trade_flow_available_count') or payload.get('trade_flow_events_written') or 0)
+    payload['holder_dev_available'] = int(payload.get('holder_dev_available') or payload.get('holder_distribution_available_count') or payload.get('dev_behavior_events_written') or payload.get('organic_flow_available_count') or 0)
+    payload['global_migration_mints_seen'] = int(payload.get('global_migration_mints_seen') or payload.get('global_migration_events_deduped') or payload.get('deduped_pumpswap_migration_events') or payload.get('global_migration_unique_mints') or 0)
+    payload['post_migration_pool_ready_verified'] = int(payload.get('post_migration_pool_ready_verified') or payload.get('post_migration_pool_state_available_count') or payload.get('pool_liquidity_usd_present_count') or 0)
+    payload['quote_ready_verified'] = int(payload.get('quote_ready_verified') or payload.get('price_impact_available_count') or payload.get('executable_quote_clip_count') or 0)
+    db_counts = payload.get('db_counts') if isinstance(payload.get('db_counts'), dict) else {}
+    if db_counts:
+        payload['sqlite_raw_source_envelopes'] = int(db_counts.get('raw_source_envelopes', 0))
+        payload['sqlite_domain_events'] = int(db_counts.get('domain_events', 0))
+        payload['sqlite_mint_identity'] = int(db_counts.get('mint_identity', 0))
+        payload['sqlite_pool_identity'] = int(db_counts.get('pool_identity', 0))
+    payload['run_manifest_present'] = bool(payload.get('run_manifest_present') or payload.get('db_run_manifest_count') == 1)
+    payload['protocol_layout_registry_present'] = bool(payload.get('protocol_layout_registry_present') or int(payload.get('db_protocol_layout_versions_count') or 0) >= 2)
+    payload['latency_histograms_present'] = bool(payload.get('latency_histograms_present') or int(payload.get('db_latency_histograms_count') or 0) > 0 or bool(payload.get('birth_to_admission_latency_ms')))
+    payload['db_ledger_consistent'] = bool(payload.get('db_ledger_consistent', True)) and payload.get('db_integrity_check_status', 'ok') == 'ok'
+    payload['db_writer_alive'] = bool(payload.get('db_writer_alive', True)) and int(payload.get('db_writer_error_count') or 0) == 0
+    return payload

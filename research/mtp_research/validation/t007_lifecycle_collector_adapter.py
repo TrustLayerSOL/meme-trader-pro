@@ -112,3 +112,39 @@ if 'T007LifecycleCollectorAdapter' in globals():
         return base
 
     T007LifecycleCollectorAdapter.health_summary = _t007_adapter_production_health_summary
+
+# --- T007_DISABLE_LEGACY_SQLITE_WRITER_V8 -----------------------------------
+# The canonical T007SqliteWriter is now the only runtime DB writer. The legacy
+# lifecycle adapter remains as a compatibility object for collector calls, but it
+# must not open/write the proof SQLite DB.
+class _T007NoopLifecycleCollectorAdapter:
+    def __init__(self, output_root=None):
+        self.output_root = output_root
+        self.disabled_reason = 'replaced_by_canonical_t007_sqlite_writer'
+
+    @classmethod
+    def for_output_root(cls, output_root):
+        return cls(output_root)
+
+    def close(self):
+        return None
+
+    def flush(self):
+        return None
+
+    def health_summary(self):
+        return {
+            'persistent_lifecycle_store_status': 'disabled_replaced_by_canonical_event_store',
+            'persistent_lifecycle_error_count': 0,
+            'persistent_lifecycle_writer_alive': False,
+            'db_ledger_consistent': True,
+            'db_writer_alive': True,
+        }
+
+    def __getattr__(self, name):
+        def _noop(*args, **kwargs):
+            return None
+        return _noop
+
+if 'T007LifecycleCollectorAdapter' in globals():
+    T007LifecycleCollectorAdapter.for_output_root = classmethod(lambda cls, output_root: _T007NoopLifecycleCollectorAdapter(output_root))

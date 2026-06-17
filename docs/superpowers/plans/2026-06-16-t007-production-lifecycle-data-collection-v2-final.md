@@ -1034,3 +1034,15 @@ Additional implementation requirements:
 - Hashable persisted DecisionSnapshot records.
 
 No strategy logic, wallet logic, signing, sendTransaction, valuation ladder, paper trading, or live trading is part of this phase.
+
+## Canonical single-writer repair addendum
+
+The next proof cannot run until the proof DB has exactly one writer:
+
+- All live rows pass through `T007SqliteWriter`.
+- Legacy `T007LifecycleStateStore` writes are disabled for live proof runs.
+- SQLite is initialized on internal local disk, with ORICO used for artifacts/archive after commit.
+- `run_manifest` and `protocol_layout_versions` are written before accepting source evidence.
+- JSONL/CSV rows are emitted only after the DB commit returns IDs.
+- Fatal SQLite corruption stops the run as `T007_DB_FATAL`.
+- Readiness reports source/artifact/canonical SQLite counts and uses canonical counts for the decision.

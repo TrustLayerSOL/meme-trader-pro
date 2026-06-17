@@ -276,3 +276,51 @@ if 'T007ProductionEventFirstWriter' in globals() and _t007_v5_verify_birth_candi
         return out
 
     T007ProductionEventFirstWriter.enrich_row = _t007_v5_enrich_row
+
+# --- T007_SINGLE_WRITER_EVENT_BUS_V8 ----------------------------------------
+try:
+    from .t007_sqlite_writer import T007SqliteWriter as _T007SqliteWriter, T007DbFatalError as _T007DbFatalError
+except Exception:  # pragma: no cover
+    _T007SqliteWriter = None
+    _T007DbFatalError = RuntimeError
+
+if 'T007ProductionEventFirstWriter' in globals() and _T007SqliteWriter is not None:
+    _t007_v8_original_enrich_row = T007ProductionEventFirstWriter.enrich_row
+    _t007_v8_original_raw_envelope = T007ProductionEventFirstWriter.raw_envelope
+    _t007_v8_original_domain_event = T007ProductionEventFirstWriter.domain_event
+
+    def _t007_v8_single_writer(self, context=None):
+        writer = getattr(self, '_canonical_sqlite_writer', None)
+        run_id = None
+        if context:
+            run_id = context.get('collector_run_id') or context.get('run_id')
+        if writer is None:
+            writer = _T007SqliteWriter(self.output_root, run_id=run_id or getattr(self, 'run_id', None) or Path(self.output_root).name, use_internal_db=True)
+            writer.start()
+            writer.bootstrap_run({'collector_run_id': run_id or writer.run_id, 'run_id': run_id or writer.run_id, 'artifact_root': str(self.output_root), 'status': 'starting'})
+            writer.mark_running({'collector_run_id': run_id or writer.run_id})
+            self._canonical_sqlite_writer = writer
+            self.db_path = writer.db_path
+        return writer
+
+    def _t007_v8_record_artifact_row(self, filename, row, *, context=None):
+        enriched = _t007_v8_original_enrich_row(self, filename, row, context=context)
+        raw = _t007_v8_original_raw_envelope(self, filename, enriched, context=context)
+        domain = _t007_v8_original_domain_event(self, filename, enriched, context=context)
+        committed = _t007_v8_single_writer(self, context=context).record_artifact_row(raw, domain)
+        enriched['raw_envelope_id'] = committed.raw_envelope_id
+        enriched['domain_event_id'] = committed.domain_event_id
+        enriched['canonical_db_path'] = committed.db_path
+        enriched['exported_after_db_commit'] = True
+        enriched['db_commit_sequence'] = committed.commit_sequence
+        enriched['db_committed_at'] = committed.committed_at
+        return enriched
+
+    def _t007_v8_health_payload(self):
+        writer = getattr(self, '_canonical_sqlite_writer', None)
+        if writer is None:
+            return {'db_writer_alive': False, 'db_writer_error_count': 0, 'canonical_db_path': str(getattr(self, 'db_path', ''))}
+        return writer.health_payload()
+
+    T007ProductionEventFirstWriter.record_artifact_row = _t007_v8_record_artifact_row
+    T007ProductionEventFirstWriter.health_payload = _t007_v8_health_payload

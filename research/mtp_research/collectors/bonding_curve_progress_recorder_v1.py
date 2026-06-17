@@ -11167,3 +11167,77 @@ if 'BondingCurveProgressRecorder' in globals() and _T007EventFirstWriter is not 
         BondingCurveProgressRecorder._build_summary_payload = _t007_v3_summary_payload
     if _t007_v3_original_build_live_status_payload is not None:
         BondingCurveProgressRecorder._build_live_status_payload = _t007_v3_live_status_payload
+
+# --- T007_SINGLE_WRITER_COLLECTOR_EXPORT_V8 ---------------------------------
+try:
+    from research.mtp_research.validation.t007_sqlite_writer import T007DbFatalError as _T007DbFatalErrorV8
+    from research.mtp_research.validation.t007_db_readiness import build_db_readiness_summary as _t007_build_db_readiness_summary_v8
+except Exception:  # pragma: no cover
+    _T007DbFatalErrorV8 = RuntimeError
+    _t007_build_db_readiness_summary_v8 = None
+
+if 'BondingCurveProgressRecorder' in globals():
+    _t007_v8_original_append_jsonl = globals().get('_t007_v3_original_append_jsonl') or globals().get('_t007_recorder_original_append_jsonl') or getattr(BondingCurveProgressRecorder, '_append_jsonl', None)
+    _t007_v8_original_build_summary_payload = getattr(BondingCurveProgressRecorder, '_build_summary_payload', None)
+    _t007_v8_original_build_live_status_payload = getattr(BondingCurveProgressRecorder, '_build_live_status_payload', None)
+    _t007_v8_original_init = BondingCurveProgressRecorder.__init__
+
+    def _t007_v8_init(self, *args, **kwargs):
+        _t007_v8_original_init(self, *args, **kwargs)
+        try:
+            _t007_v3_writer(self)._canonical_sqlite_writer.bootstrap_run(_t007_v3_event_context(self))
+        except Exception:
+            pass
+
+    def _t007_v8_append_jsonl(self, filename, row):
+        if isinstance(row, dict):
+            enriched = _t007_v3_writer(self).record_artifact_row(str(filename), row, context=_t007_v3_event_context(self))
+            row.clear()
+            row.update(enriched)
+        if _t007_v8_original_append_jsonl is not None:
+            return _t007_v8_original_append_jsonl(self, filename, row)
+        return None
+
+    def _t007_v8_summary_payload(self, *args, **kwargs):
+        payload = _t007_v8_original_build_summary_payload(self, *args, **kwargs) if _t007_v8_original_build_summary_payload is not None else {}
+        if isinstance(payload, dict):
+            try:
+                writer = getattr(getattr(self, '_t007_event_first_writer', None), '_canonical_sqlite_writer', None)
+                if writer is not None:
+                    writer.finalize_run({'collector_run_id': getattr(self, 'run_id', None), 'actual_source_duration_seconds': payload.get('actual_source_duration_seconds'), 'source_duration_quality': payload.get('source_duration_quality_status')})
+                    payload.update(writer.health_payload())
+            except Exception as exc:
+                payload['db_writer_alive'] = False
+                payload['db_last_error_class'] = type(exc).__name__
+                payload['db_last_error_message'] = str(exc)
+                payload['db_ledger_consistent'] = False
+            if _t007_build_db_readiness_summary_v8 is not None:
+                try:
+                    payload.update(_t007_build_db_readiness_summary_v8(getattr(self, 'output_root'), payload))
+                except Exception as exc:
+                    payload['db_readiness_error'] = f'{type(exc).__name__}: {exc}'
+            payload['event_first_sqlite_enabled'] = True
+            payload['jsonl_export_requires_db_commit'] = True
+        return payload
+
+    def _t007_v8_live_status_payload(self, *args, **kwargs):
+        payload = _t007_v8_original_build_live_status_payload(self, *args, **kwargs) if _t007_v8_original_build_live_status_payload is not None else {}
+        if isinstance(payload, dict):
+            try:
+                writer = getattr(getattr(self, '_t007_event_first_writer', None), '_canonical_sqlite_writer', None)
+                if writer is not None:
+                    payload.update(writer.health_payload())
+            except Exception as exc:
+                payload['db_writer_alive'] = False
+                payload['db_last_error_class'] = type(exc).__name__
+                payload['db_last_error_message'] = str(exc)
+            payload['event_first_sqlite_enabled'] = True
+            payload['jsonl_export_requires_db_commit'] = True
+        return payload
+
+    BondingCurveProgressRecorder.__init__ = _t007_v8_init
+    BondingCurveProgressRecorder._append_jsonl = _t007_v8_append_jsonl
+    if _t007_v8_original_build_summary_payload is not None:
+        BondingCurveProgressRecorder._build_summary_payload = _t007_v8_summary_payload
+    if _t007_v8_original_build_live_status_payload is not None:
+        BondingCurveProgressRecorder._build_live_status_payload = _t007_v8_live_status_payload

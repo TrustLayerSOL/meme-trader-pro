@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from research.mtp_research.validation.t007_db_readiness import load_canonical_db_path
 
 from research.mtp_research.validation.t007_production_event_bus import T007ProductionEventFirstWriter
 
@@ -18,7 +19,7 @@ def test_event_first_writer_records_raw_and_verified_birth_domain_event_before_a
     enriched = writer.record_artifact_row("birth_candidates.jsonl", row, context={"run_id": "run-1"})
     assert enriched["event_type"] == "pump_birth_verified"
     assert enriched["decision_time_safe"] is True
-    with sqlite3.connect(tmp_path / "t007_lifecycle_state.sqlite") as connection:
+    with sqlite3.connect(load_canonical_db_path(tmp_path)) as connection:
         assert connection.execute("SELECT COUNT(*) FROM raw_source_envelopes").fetchone()[0] == 1
         assert connection.execute("SELECT event_type FROM domain_events").fetchone()[0] == "pump_birth_verified"
 
