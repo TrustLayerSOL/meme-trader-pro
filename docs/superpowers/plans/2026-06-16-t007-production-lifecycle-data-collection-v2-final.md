@@ -996,3 +996,41 @@ Forbidden now:
 
 Future execution code, if ever approved, must consume the read-only snapshot and reject missing/stale/replay-only evidence.
 
+## Implementation closure addendum - event-first production gap
+
+The audit after the V2 push correctly identified that the event-store structure
+existed but live collector writes were still artifact-first. The closure pass
+requires and implements:
+
+1. `T007ProductionEventFirstWriter` as the collector boundary writer.
+2. Synchronous SQLite raw-envelope/domain-event insert before JSONL artifact writes.
+3. Strict `verify_birth_candidate()` filtering for usable Pump.fun births.
+4. Explicit curve-probe retry/final failure classification.
+5. Campaign-window enrichment for migration backfill jobs.
+6. Strict watcher contract fields that prevent overstating migration/full-path readiness.
+7. Production gate behavior that blocks controlled windows where migrations do not link to decision-safe full lifecycle evidence.
+
+Remaining proof requirement: one focused compile/test pass, then exactly one 10-minute proof scan. No longer scan is allowed until that proof shows event-first DB consistency and watcher contract correctness.
+
+## Proof hardening V4 addendum
+
+The final production specification now requires formal proof levels and invariant enforcement before longer scans:
+
+- L0: compile/import/schema proof.
+- L1: deterministic protocol and watcher fixtures.
+- L2: 10-minute live no-migration proof.
+- L3: controlled migration proof with decision-safe full-path linkage.
+
+Additional implementation requirements:
+
+- Commitment-level tracking for processed/confirmed/finalized observations.
+- Lane watermarks with missed slot ranges and repair state.
+- Run manifest table.
+- Protocol layout registry table.
+- Lifecycle invariant violation table.
+- Payload hashes and SQLite idempotency indexes.
+- Latency histogram watcher fields.
+- Null-reason fields for missing feature families.
+- Hashable persisted DecisionSnapshot records.
+
+No strategy logic, wallet logic, signing, sendTransaction, valuation ladder, paper trading, or live trading is part of this phase.

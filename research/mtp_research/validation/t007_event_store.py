@@ -460,3 +460,185 @@ class T007EventStore:
                 domain_events_written=self._domain_events_written,
                 raw_envelopes_written=self._raw_envelopes_written,
             )
+
+# --- T007_EVENT_STORE_PROOF_HARDENING_V4 ------------------------------------
+# Schema and PRAGMA hardening for proof-ladder production readiness.
+try:
+    _t007_v4_original_initialize_schema = T007EventStore.initialize_schema
+    _t007_v4_original_insert_raw = T007EventStore.insert_raw_envelope_on_connection
+    _t007_v4_original_insert_domain = T007EventStore.insert_domain_event_on_connection
+except NameError:  # pragma: no cover
+    _t007_v4_original_initialize_schema = None
+    _t007_v4_original_insert_raw = None
+    _t007_v4_original_insert_domain = None
+
+if _t007_v4_original_initialize_schema is not None:
+    def _t007_v4_add_column(connection, table, column, definition):
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _t007_v4_initialize_schema(connection):
+        _t007_v4_original_initialize_schema(connection)
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA foreign_keys=ON")
+        for table in ("raw_source_envelopes", "domain_events"):
+            _t007_v4_add_column(connection, table, "observed_commitment", "TEXT")
+            _t007_v4_add_column(connection, table, "first_seen_slot", "INTEGER")
+            _t007_v4_add_column(connection, table, "first_seen_at", "REAL")
+            _t007_v4_add_column(connection, table, "confirmed_slot", "INTEGER")
+            _t007_v4_add_column(connection, table, "confirmed_at", "REAL")
+            _t007_v4_add_column(connection, table, "finalized_slot", "INTEGER")
+            _t007_v4_add_column(connection, table, "finalized_at", "REAL")
+            _t007_v4_add_column(connection, table, "dropped_or_reorged", "INTEGER NOT NULL DEFAULT 0")
+            _t007_v4_add_column(connection, table, "payload_hash", "TEXT")
+        _t007_v4_add_column(connection, "source_watermarks", "subscription_id", "TEXT")
+        _t007_v4_add_column(connection, "source_watermarks", "connection_id", "TEXT")
+        _t007_v4_add_column(connection, "source_watermarks", "provider_region", "TEXT")
+        _t007_v4_add_column(connection, "source_watermarks", "commitment", "TEXT")
+        _t007_v4_add_column(connection, "source_watermarks", "last_root_slot", "INTEGER")
+        _t007_v4_add_column(connection, "source_watermarks", "missed_slot_start", "INTEGER")
+        _t007_v4_add_column(connection, "source_watermarks", "missed_slot_end", "INTEGER")
+        _t007_v4_add_column(connection, "source_watermarks", "gap_reason", "TEXT")
+        _t007_v4_add_column(connection, "source_watermarks", "gap_repair_status", "TEXT")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_manifest (
+                collector_run_id TEXT PRIMARY KEY,
+                manifest_hash TEXT NOT NULL,
+                git_sha TEXT,
+                schema_version INTEGER,
+                codec_version TEXT,
+                parser_git_sha TEXT,
+                program_ids_json TEXT,
+                quote_mints_json TEXT,
+                helius_endpoint TEXT,
+                provider_region TEXT,
+                commitment_config TEXT,
+                subscription_config_hash TEXT,
+                rate_limit_config_json TEXT,
+                campaign_start_time REAL,
+                campaign_end_time REAL,
+                machine_id TEXT,
+                started_at TEXT,
+                stopped_at TEXT,
+                stop_reason TEXT,
+                payload_json TEXT NOT NULL,
+                inserted_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protocol_layout_versions (
+                layout_id TEXT PRIMARY KEY,
+                protocol TEXT NOT NULL,
+                program_id TEXT NOT NULL,
+                account_kind TEXT NOT NULL,
+                discriminator TEXT,
+                account_length INTEGER,
+                codec_version TEXT,
+                first_seen_slot INTEGER,
+                last_validated_slot INTEGER,
+                validation_fixture_signature TEXT,
+                parser_git_sha TEXT,
+                decode_confidence TEXT,
+                payload_json TEXT NOT NULL,
+                inserted_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lifecycle_invariant_violations (
+                violation_id TEXT PRIMARY KEY,
+                collector_run_id TEXT,
+                mint TEXT,
+                event_id TEXT,
+                code TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                inserted_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS decision_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                mint TEXT NOT NULL,
+                cutoff_time REAL NOT NULL,
+                cutoff_slot INTEGER,
+                commitment_floor TEXT,
+                snapshot_schema_version INTEGER NOT NULL,
+                input_event_count INTEGER NOT NULL,
+                input_event_ids_hash TEXT NOT NULL,
+                snapshot_payload_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_envelope_idempotency ON raw_source_envelopes (lane, source_route, signature, slot, payload_hash)")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_domain_event_idempotency ON domain_events (event_type, mint, pool_address, signature, feature_observed_at, source_route, payload_hash)")
+        connection.commit()
+
+    def _t007_v4_payload_hash(payload):
+        try:
+            return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
+        except Exception:
+            return None
+
+    def _t007_v4_enrich_common(payload):
+        row = dict(payload or {})
+        commitment = row.get("observed_commitment") or row.get("commitment") or row.get("commitment_level") or "processed"
+        row.setdefault("observed_commitment", commitment)
+        row.setdefault("first_seen_slot", row.get("slot"))
+        row.setdefault("first_seen_at", row.get("source_received_at") or row.get("received_at"))
+        row.setdefault("confirmed_slot", row.get("confirmed_slot"))
+        row.setdefault("confirmed_at", row.get("confirmed_at"))
+        row.setdefault("finalized_slot", row.get("finalized_slot"))
+        row.setdefault("finalized_at", row.get("finalized_at"))
+        row.setdefault("dropped_or_reorged", 1 if row.get("dropped_or_reorged") is True else 0)
+        row.setdefault("payload_hash", _t007_v4_payload_hash(row))
+        return row
+
+    def _t007_v4_insert_raw(connection, payload):
+        row = _t007_v4_enrich_common(payload)
+        envelope_id = _t007_v4_original_insert_raw(connection, row)
+        try:
+            connection.execute(
+                """
+                UPDATE raw_source_envelopes
+                SET observed_commitment = ?, first_seen_slot = ?, first_seen_at = ?, confirmed_slot = ?, confirmed_at = ?, finalized_slot = ?, finalized_at = ?, dropped_or_reorged = ?, payload_hash = ?
+                WHERE envelope_id = ?
+                """,
+                (
+                    row.get("observed_commitment"), row.get("first_seen_slot"), row.get("first_seen_at"), row.get("confirmed_slot"), row.get("confirmed_at"), row.get("finalized_slot"), row.get("finalized_at"), row.get("dropped_or_reorged"), row.get("payload_hash"), envelope_id,
+                ),
+            )
+        except Exception:
+            pass
+        return envelope_id
+
+    def _t007_v4_insert_domain(connection, payload):
+        row = _t007_v4_enrich_common(payload)
+        event_id = _t007_v4_original_insert_domain(connection, row)
+        try:
+            connection.execute(
+                """
+                UPDATE domain_events
+                SET observed_commitment = ?, first_seen_slot = ?, first_seen_at = ?, confirmed_slot = ?, confirmed_at = ?, finalized_slot = ?, finalized_at = ?, dropped_or_reorged = ?, payload_hash = ?
+                WHERE event_id = ?
+                """,
+                (
+                    row.get("observed_commitment"), row.get("first_seen_slot"), row.get("first_seen_at"), row.get("confirmed_slot"), row.get("confirmed_at"), row.get("finalized_slot"), row.get("finalized_at"), row.get("dropped_or_reorged"), row.get("payload_hash"), event_id,
+                ),
+            )
+        except Exception:
+            pass
+        return event_id
+
+    T007EventStore.initialize_schema = staticmethod(_t007_v4_initialize_schema)
+    T007EventStore.insert_raw_envelope_on_connection = staticmethod(_t007_v4_insert_raw)
+    T007EventStore.insert_domain_event_on_connection = staticmethod(_t007_v4_insert_domain)

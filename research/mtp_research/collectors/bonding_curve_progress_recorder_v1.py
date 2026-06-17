@@ -11085,3 +11085,85 @@ if 'BondingCurveProgressRecorder' in globals():
         BondingCurveProgressRecorder._build_live_status_payload = _t007_recorder_production_build_live_status_payload
     if _t007_recorder_original_enqueue_migration_backfill is not None:
         BondingCurveProgressRecorder.enqueue_migration_backfill = _t007_recorder_production_enqueue_migration_backfill
+
+# --- T007_EVENT_FIRST_COLLECTOR_WIRING_V3 -----------------------------------
+# Hard production rule: lifecycle rows hit canonical SQLite before JSONL/CSV
+# compatibility artifacts. Mayhem, wallets, signing, trading, and paper trading
+# are not touched here.
+try:
+    from research.mtp_research.validation.t007_production_event_bus import T007ProductionEventFirstWriter as _T007EventFirstWriter
+except Exception:  # pragma: no cover
+    _T007EventFirstWriter = None
+
+if 'BondingCurveProgressRecorder' in globals() and _T007EventFirstWriter is not None:
+    _t007_v3_original_append_jsonl = getattr(BondingCurveProgressRecorder, '_append_jsonl', None)
+    _t007_v3_original_build_summary_payload = getattr(BondingCurveProgressRecorder, '_build_summary_payload', None)
+    _t007_v3_original_build_live_status_payload = getattr(BondingCurveProgressRecorder, '_build_live_status_payload', None)
+
+    def _t007_v3_event_context(self):
+        config = getattr(self, 'config', None)
+        run_id = getattr(self, 'run_id', None) or getattr(self, 'collector_run_id', None)
+        return {
+            'run_id': run_id,
+            'collector_run_id': run_id,
+            'campaign_start_time': getattr(self, 'source_start_time', None) or getattr(self, 'wall_clock_source_start', None),
+            'campaign_end_time': getattr(self, 'source_end_time', None) or getattr(self, 'wall_clock_source_stop', None),
+            'source_duration_seconds': getattr(config, 'source_duration_seconds', None) if config is not None else None,
+            'requested_source_duration_seconds': getattr(config, 'source_duration_seconds', None) if config is not None else None,
+            'watcher_window_id': run_id,
+            'originating_run_id': run_id,
+        }
+
+    def _t007_v3_writer(self):
+        writer = getattr(self, '_t007_event_first_writer', None)
+        if writer is None:
+            writer = _T007EventFirstWriter(getattr(self, 'output_root'))
+            self._t007_event_first_writer = writer
+        return writer
+
+    def _t007_v3_append_jsonl(self, filename, row):
+        if isinstance(row, dict):
+            try:
+                enriched = _t007_v3_writer(self).record_artifact_row(str(filename), row, context=_t007_v3_event_context(self))
+                row.clear()
+                row.update(enriched)
+            except Exception as exc:
+                try:
+                    self.t007_event_first_write_errors = int(getattr(self, 't007_event_first_write_errors', 0) or 0) + 1
+                    self.t007_event_first_last_error = str(exc)
+                except Exception:
+                    pass
+        if _t007_v3_original_append_jsonl is not None:
+            return _t007_v3_original_append_jsonl(self, filename, row)
+        return None
+
+    def _t007_v3_summary_payload(self, *args, **kwargs):
+        payload = _t007_v3_original_build_summary_payload(self, *args, **kwargs) if _t007_v3_original_build_summary_payload is not None else {}
+        if isinstance(payload, dict):
+            payload['event_first_sqlite_enabled'] = True
+            payload['event_first_write_errors'] = int(getattr(self, 't007_event_first_write_errors', 0) or 0)
+            if getattr(self, 't007_event_first_last_error', None):
+                payload['event_first_last_error'] = getattr(self, 't007_event_first_last_error')
+            payload.setdefault('db_writer_alive', True)
+            payload.setdefault('db_ledger_consistent', payload.get('event_first_write_errors', 0) == 0)
+            payload.setdefault('execution_cost_required_for_readiness', False)
+            payload.setdefault('valuation_ladder_suppressed', True)
+        return payload
+
+    def _t007_v3_live_status_payload(self, *args, **kwargs):
+        payload = _t007_v3_original_build_live_status_payload(self, *args, **kwargs) if _t007_v3_original_build_live_status_payload is not None else {}
+        if isinstance(payload, dict):
+            payload['event_first_sqlite_enabled'] = True
+            payload['event_first_write_errors'] = int(getattr(self, 't007_event_first_write_errors', 0) or 0)
+            payload.setdefault('db_writer_alive', True)
+            payload.setdefault('db_ledger_consistent', payload.get('event_first_write_errors', 0) == 0)
+            payload.setdefault('execution_cost_required_for_readiness', False)
+            payload.setdefault('valuation_ladder_suppressed', True)
+        return payload
+
+    if _t007_v3_original_append_jsonl is not None:
+        BondingCurveProgressRecorder._append_jsonl = _t007_v3_append_jsonl
+    if _t007_v3_original_build_summary_payload is not None:
+        BondingCurveProgressRecorder._build_summary_payload = _t007_v3_summary_payload
+    if _t007_v3_original_build_live_status_payload is not None:
+        BondingCurveProgressRecorder._build_live_status_payload = _t007_v3_live_status_payload

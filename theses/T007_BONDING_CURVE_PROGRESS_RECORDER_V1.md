@@ -1323,3 +1323,47 @@ Core architecture now required by the collector/readiness layer:
 Production blocker definition:
 
 A migrated mint is thesis-usable only when it has live, decision-time-safe birth, verified curve decode, market-cap/progress, trade-flow, holder/dev, PumpSwap pool verification, post-migration depth, and quote observation. Replay/backfill can repair archive visibility but cannot be counted as live decision-safe evidence.
+
+## T007 Event-First Production Gap Closure
+
+This pass closes the specific audit gap between having production structures and
+using them as the live source of truth.
+
+New hard rules:
+
+- Every lifecycle artifact row is synchronously normalized into the canonical SQLite store before JSONL compatibility output is written.
+- Weak Pump.fun create-like rows are `pump_birth_rejected`, not usable births, unless mint, creator, bonding curve, associated bonding curve, quote identity, and source signature are present and PDA/ATA checks do not contradict the parsed accounts.
+- `account_not_found` is first classified as a bounded visibility retry, then only becomes `curve_account_not_found_final` after retry budget exhaustion.
+- Unknown/unsupported layouts are separate from generic decode failure.
+- Migration backfill jobs carry campaign window fields: campaign start, campaign end, source duration, watcher window id, and originating run id.
+- Replay/backfill rows are explicitly non-decision-safe.
+- Watcher status must show global migrations, persistent-birth linkage, live-window linkage, decision-safe full paths, true source misses, preexisting rows, replay-unresolved rows, and restart gaps separately.
+- Threshold crossing is an outcome feature, not a full-path evidence requirement.
+- Execution-cost evidence remains non-blocking for thesis data collection.
+
+This does not enable trading, paper trading, wallet access, private keys,
+signing, sendTransaction, or valuation ladder emissions.
+
+## T007 Proof Hardening V4
+
+This pass adds the formal proof and production-invariant layer around the event-first architecture.
+
+New requirements before any long scan:
+
+- L0 compile proof must pass before runtime proof.
+- L1 deterministic fixtures must cover verified birth, rejected birth, curve decode, PumpSwap pool decode, and quote/depth fixtures.
+- L2 10-minute proof must show event-first SQLite, DB consistency, verified births, curve decode, market-cap/progress availability, no queue drops, and complete watcher contract fields.
+- L3 controlled migration proof must show at least one migration linked to a decision-safe full lifecycle path including strict quote/depth evidence.
+
+New production metadata:
+
+- Every raw/domain event carries observed commitment, first-seen slot/time, confirmed/finalized slot/time when available, reorg/drop flag, and payload hash.
+- Source gaps are represented by lane, subscription, connection, provider region, commitment, missed slot range, reason, and repair status.
+- Runs have manifests with git/schema/codec/program/quote/subscription/rate-limit/timing identity.
+- Protocol layouts have registry rows for codec version, discriminator, account length, validation fixture, parser git SHA, and decode confidence.
+- Lifecycle invariant violations are persisted as first-class proof blockers.
+- Decision snapshots are hashable and persist exact input evidence hashes.
+
+Readiness change:
+
+A run is not production-ready merely because it writes artifacts. It must prove DB ledger consistency, no impossible states, complete watcher contract fields, manifest/layout registry presence, latency histogram presence, and correct live/replay separation.
