@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import csv
+import sqlite3
 import time
 import threading
 from pathlib import Path
@@ -40,6 +41,18 @@ from research.mtp_research.collectors.bonding_curve_progress_recorder_v1 import 
     run_global_pumpswap_migration_lane,
     run_transaction_live_smoke,
     run_transaction_birth_source_audit,
+    run_trade_flow_coverage_audit,
+    run_migration_linkage_audit,
+    run_migration_capture_forensics,
+    run_migration_dedupe_audit,
+    run_rebuild_migrations_from_spool,
+    run_migration_write_path_audit,
+    run_trade_flow_eventful_gap_audit,
+    run_long_scan_readiness_audit,
+    run_capacity_rejected_migration_promotion_simulation,
+    run_migration_full_path_status_reconciliation,
+    run_tracking_admission_audit,
+    tracking_profile_settings,
     write_t007_thesis_ready_gate,
 )
 from research.mtp_research.validation.pumpfun_bonding_curve import bonding_curve_pda
@@ -103,6 +116,97 @@ def test_source_reader_queue_enforces_hard_wall_clock_stop() -> None:
     assert stats["source_consumer_hard_stop_triggered"] is True
     assert stats["source_reader_threaded"] is True
     assert handled
+
+
+def test_source_reader_queue_prioritizes_birth_events_over_trade_noise() -> None:
+    class TradeNoiseThenBirthSource:
+        def stream_notifications(self, duration_seconds, on_event):
+            for index in range(25):
+                on_event({"signature": f"sig-trade-{index}", "trade_rows": [{"mint": f"mint-trade-{index}"}]})
+            on_event(
+                {
+                    "signature": "sig-birth",
+                    "decoded_rows": [{"mint": "mint-birth", "bonding_curve": "curve-birth"}],
+                }
+            )
+
+    handled_signatures: list[str] = []
+
+    def handle_event(event: dict) -> None:
+        handled_signatures.append(str(event.get("signature")))
+        if event.get("trade_rows") and not event.get("decoded_rows"):
+            time.sleep(0.01)
+
+    stats = recorder_module._stream_notifications_via_reader_queue(
+        TradeNoiseThenBirthSource(),
+        1.0,
+        handle_event,
+        queue_max_size=100,
+        thread_name="test-priority-source-reader",
+    )
+
+    assert stats["source_event_queue_high_water_mark"] > 1
+    assert "sig-birth" in handled_signatures
+    assert handled_signatures.index("sig-birth") < 5
+
+
+def test_source_reader_queue_can_deprioritize_duplicate_birth_noise() -> None:
+    class DuplicateBirthNoiseThenNewBirthSource:
+        def stream_notifications(self, duration_seconds, on_event):
+            on_event(
+                {
+                    "signature": "sig-old-first",
+                    "decoded_rows": [{"mint": "mint-old", "bonding_curve": "curve-old"}],
+                }
+            )
+            for index in range(25):
+                on_event(
+                    {
+                        "signature": f"sig-old-duplicate-{index}",
+                        "decoded_rows": [{"mint": "mint-old", "bonding_curve": "curve-old"}],
+                    }
+                )
+            on_event(
+                {
+                    "signature": "sig-new-birth",
+                    "decoded_rows": [{"mint": "mint-new", "bonding_curve": "curve-new"}],
+                }
+            )
+
+    queued_birth_mints: set[str] = set()
+
+    def priority_for_first_seen_birth(event: dict) -> int:
+        decoded_rows = list(event.get("decoded_rows") or [])
+        decoded_mints = {str(row.get("mint")) for row in decoded_rows if row.get("mint")}
+        first_seen_mints = decoded_mints - queued_birth_mints
+        queued_birth_mints.update(decoded_mints)
+        if first_seen_mints:
+            return 0
+        if decoded_rows:
+            return 2
+        if event.get("trade_rows"):
+            return 1
+        return 3
+
+    handled_signatures: list[str] = []
+
+    def handle_event(event: dict) -> None:
+        handled_signatures.append(str(event.get("signature")))
+        if str(event.get("signature", "")).startswith("sig-old-duplicate-"):
+            time.sleep(0.01)
+
+    stats = recorder_module._stream_notifications_via_reader_queue(
+        DuplicateBirthNoiseThenNewBirthSource(),
+        1.0,
+        handle_event,
+        queue_max_size=100,
+        thread_name="test-duplicate-birth-priority-source-reader",
+        event_priority_fn=priority_for_first_seen_birth,
+    )
+
+    assert stats["source_event_queue_high_water_mark"] > 1
+    assert "sig-new-birth" in handled_signatures
+    assert handled_signatures.index("sig-new-birth") < 5
 
 
 def _jsonl(path: Path) -> list[dict]:
@@ -238,7 +342,8 @@ def test_lifecycle_coverage_prioritizes_source_miss_over_depth_only_when_birth_a
     assert payload["summary"]["coverage_buckets"]["backfill_possible"] == 1
     assert payload["summary"]["source_miss_count"] == 1
     assert rows[0]["first_missing_link"] == "birth_source_miss"
-    assert rows[0]["coverage_status"] == "backfill_possible"
+    assert rows[0]["coverage_status"] == "migration_plus_depth_only"
+    assert rows[0]["backfill_status"] == "backfill_possible"
 
 
 def test_lifecycle_source_coverage_separates_preexisting_from_true_source_miss(tmp_path: Path) -> None:
@@ -1708,6 +1813,184 @@ def test_transaction_normalized_birth_source_dedupes_and_retains_first_seen_row(
     assert metrics["associated_bonding_curve_missing_count"] == 1
 
 
+def test_transaction_normalized_stream_skips_full_normalization_for_duplicate_birth_rows(monkeypatch) -> None:
+    duplicate_rows = [
+        {
+            "signature": f"sig-dup-{index}",
+            "slot": 10 + index,
+            "mint": "mint-a",
+            "bonding_curve": "curve-a",
+            "source_instruction_level": "inner",
+            "creator": "creator-a",
+        }
+        for index in range(25)
+    ]
+    source = FakeTransactionSubscribeAuditRoute(
+        [
+            {
+                "received_at": 1000.0,
+                "signature": "sig-first",
+                "slot": 10,
+                "decoded_rows": [
+                    {
+                        "signature": "sig-first",
+                        "slot": 10,
+                        "mint": "mint-a",
+                        "bonding_curve": "curve-a",
+                        "source_instruction_level": "top_level",
+                        "creator": "creator-a",
+                    }
+                ],
+            },
+            {
+                "received_at": 1001.0,
+                "signature": "sig-duplicates",
+                "slot": 11,
+                "decoded_rows": duplicate_rows,
+            },
+            {
+                "received_at": 1002.0,
+                "signature": "sig-new",
+                "slot": 12,
+                "decoded_rows": [
+                    {
+                        "signature": "sig-new",
+                        "slot": 12,
+                        "mint": "mint-b",
+                        "bonding_curve": "curve-b",
+                        "source_instruction_level": "top_level",
+                        "creator": "creator-b",
+                    }
+                ],
+            },
+        ],
+        actual_duration_seconds=3.0,
+    )
+    original_normalizer = recorder_module._launch_from_transaction_decoded_row
+    normalized_mints: list[str] = []
+
+    def counting_normalizer(row: dict, event: dict) -> dict:
+        normalized_mints.append(str(row.get("mint")))
+        return original_normalizer(row, event)
+
+    monkeypatch.setattr(recorder_module, "_launch_from_transaction_decoded_row", counting_normalizer)
+    normalized_source = TransactionSubscribeNormalizedBirthSource(source)
+    launches: list[dict] = []
+
+    normalized_source.stream_launches(3.0, launches.append)
+
+    assert [row["mint"] for row in launches] == ["mint-a", "mint-b"]
+    assert normalized_mints == ["mint-a", "mint-b"]
+    assert normalized_source.metrics["duplicate_mint_rows"] == 25
+
+
+def test_transaction_normalized_stream_prioritizes_token_mint_birth_identity() -> None:
+    class TradeNoiseThenTokenMintBirthSource:
+        source_name = "token_mint_priority_fake_txsub"
+        actual_duration_seconds = 1.0
+        websocket_closed_early = False
+        websocket_close_reason = None
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True}
+
+        def stream_notifications(self, duration_seconds: float, on_event) -> None:
+            for index in range(25):
+                on_event({"signature": f"sig-trade-{index}", "trade_rows": [{"mint": f"mint-trade-{index}"}]})
+            on_event(
+                {
+                    "received_at": 1000.0,
+                    "signature": "sig-token-mint-birth",
+                    "slot": 12,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-token-mint-birth",
+                            "slot": 12,
+                            "token_mint": "mint-token-field",
+                            "bonding_curve": "curve-token-field",
+                            "source_instruction_level": "top_level",
+                            "creator": "creator-token-field",
+                        }
+                    ],
+                }
+            )
+
+    normalized_source = TransactionSubscribeNormalizedBirthSource(TradeNoiseThenTokenMintBirthSource())
+    handled: list[str] = []
+
+    def on_launch(launch: dict) -> None:
+        handled.append(str(launch.get("mint")))
+
+    normalized_source.stream_launches(1.0, on_launch)
+
+    assert handled == ["mint-token-field"]
+    assert normalized_source.metrics["unique_birth_mints"] == 1
+    assert normalized_source.metrics["trade_rows_skipped_unknown_mint"] == 25
+
+
+def test_transaction_normalized_stream_does_not_inline_drain_trade_rows_before_later_birth() -> None:
+    class DelayedBirthAfterTradeSource:
+        source_name = "delayed_birth_after_trade_fake_txsub"
+        actual_duration_seconds = 0.1
+        websocket_closed_early = False
+        websocket_close_reason = None
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True}
+
+        def stream_notifications(self, duration_seconds: float, on_event) -> None:
+            on_event(
+                {
+                    "received_at": 1000.0,
+                    "signature": "sig-a",
+                    "slot": 10,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-a",
+                            "slot": 10,
+                            "mint": "mint-a",
+                            "bonding_curve": "curve-a",
+                            "source_instruction_level": "top_level",
+                            "creator": "creator-a",
+                        }
+                    ],
+                }
+            )
+            on_event({"received_at": 1000.01, "signature": "sig-trade-a", "trade_rows": [{"mint": "mint-a", "signature": "sig-trade-a"}]})
+            time.sleep(0.05)
+            on_event(
+                {
+                    "received_at": 1000.02,
+                    "signature": "sig-b",
+                    "slot": 11,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-b",
+                            "slot": 11,
+                            "mint": "mint-b",
+                            "bonding_curve": "curve-b",
+                            "source_instruction_level": "top_level",
+                            "creator": "creator-b",
+                        }
+                    ],
+                }
+            )
+
+    normalized_source = TransactionSubscribeNormalizedBirthSource(DelayedBirthAfterTradeSource())
+    handled: list[str] = []
+
+    def on_launch(launch: dict) -> None:
+        handled.append(f"launch:{launch['mint']}")
+
+    def on_trade(trade: dict) -> None:
+        handled.append(f"trade:{trade['mint']}")
+
+    normalized_source.stream_launches(1.0, on_launch, on_trade=on_trade)
+
+    assert handled[:2] == ["launch:mint-a", "launch:mint-b"]
+    assert handled[-1] == "trade:mint-a"
+
+
 def test_transaction_live_smoke_samples_after_dedupe_and_does_not_probe_duplicates(tmp_path: Path) -> None:
     source = FakeTransactionSubscribeAuditRoute(
         [
@@ -1782,6 +2065,162 @@ def test_transaction_live_smoke_samples_after_dedupe_and_does_not_probe_duplicat
     assert births[0]["associated_bonding_curve"] is None
 
 
+def test_transaction_live_smoke_applies_probe_results_before_source_window_ends(tmp_path: Path) -> None:
+    class WaitingSource:
+        source_name = "waiting_for_probe_result_source"
+        actual_duration_seconds = 0.2
+        websocket_closed_early = False
+        websocket_close_reason = None
+        observed_curve_during_source = False
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True}
+
+        def stream_notifications(self, duration_seconds: float, on_event) -> None:
+            on_event(
+                {
+                    "received_at": time.time(),
+                    "signature": "sig-continuous-probe",
+                    "slot": 22,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-continuous-probe",
+                            "slot": 22,
+                            "mint": "mint-continuous-probe",
+                            "bonding_curve": "curve-continuous-probe",
+                            "source_instruction_level": "top_level",
+                            "creator": "creator-continuous-probe",
+                        }
+                    ],
+                }
+            )
+            deadline = time.time() + 0.25
+            observations_path = tmp_path / "curve_observations.jsonl"
+            while time.time() < deadline:
+                if observations_path.exists() and "mint-continuous-probe" in observations_path.read_text(encoding="utf-8"):
+                    self.observed_curve_during_source = True
+                    return
+                time.sleep(0.01)
+
+    source = WaitingSource()
+    probe = FakeCurveStateProbe(
+        {
+            "mint-continuous-probe": {
+                "bonding_curve": "curve-continuous-probe",
+                "account_state": {
+                    "real_token_reserves": 790_000_000,
+                    "token_decimals": 0,
+                    "virtual_sol_reserves": 2,
+                },
+                "observed_at": time.time(),
+            }
+        }
+    )
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            source_duration_seconds=1.0,
+            sample_rate_percent=100,
+            helius_max_estimated_credits=10_000,
+        ),
+        source=TransactionSubscribeNormalizedBirthSource(source),
+        curve_probe=probe,
+    )
+
+    assert source.observed_curve_during_source is True
+    assert summary["progress_decoded_candidate_count"] == 1
+
+
+def test_transaction_live_smoke_thin_probes_capacity_rejected_verified_births(tmp_path: Path) -> None:
+    source = FakeTransactionSubscribeAuditRoute(
+        [
+            {
+                "received_at": 1000.0,
+                "signature": "sig-a",
+                "slot": 1,
+                "decoded_rows": [
+                    {
+                        "signature": "sig-a",
+                        "slot": 1,
+                        "mint": "mint-a",
+                        "bonding_curve": "curve-a",
+                        "source_instruction_level": "top_level",
+                    }
+                ],
+            },
+            {
+                "received_at": 1001.0,
+                "signature": "sig-b",
+                "slot": 2,
+                "decoded_rows": [
+                    {
+                        "signature": "sig-b",
+                        "slot": 2,
+                        "mint": "mint-b",
+                        "bonding_curve": "curve-b",
+                        "source_instruction_level": "top_level",
+                    }
+                ],
+            },
+        ],
+        actual_duration_seconds=10.0,
+    )
+    probe = FakeCurveStateProbe(
+        {
+            "mint-a": {"bonding_curve": "curve-a", "account_state": {"virtual_sol_reserves": 1}, "observed_at": 1002.0},
+            "mint-b": {"bonding_curve": "curve-b", "account_state": {"virtual_sol_reserves": 2}, "observed_at": 1003.0},
+        }
+    )
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100, max_active_tracking=1),
+        source=source,
+        curve_probe=probe,
+        now_fn=lambda: 1004.0,
+    )
+
+    births = _jsonl(tmp_path / "birth_audit.jsonl")
+    assert births[0]["admission_reason"] == "sample_admitted"
+    assert str(births[1]["admission_reason"]).startswith("capacity_rejected_active_tracking_limit")
+    assert births[1]["thin_probe_scheduled"] is True
+    assert births[1]["admitted"] is False
+    assert summary["births_admitted_after_dedupe"] == 1
+    assert summary["capacity_rejected_after_dedupe"] == 1
+    assert summary["thin_probe_async_dispatch_enabled"] is True
+    assert summary["thin_probe_worker_count"] == 1
+    assert summary["thin_probe_worker_error_count"] == 0
+    assert summary["thin_probe_execution_queue_dropped_count"] == 0
+    assert summary["thin_probe_execution_queue_high_water_mark"] == 1
+    assert summary["curve_observation_attempts"] == 2
+    assert [call["mint"] for call in probe.calls] == ["mint-a", "mint-b"]
+    probe_attempts = _jsonl(tmp_path / "probe_attempts.jsonl")
+    actual_probe_attempts = [row for row in probe_attempts if row.get("actual_probe_executed") is True]
+    attempts_by_mint = {row["mint"]: row for row in actual_probe_attempts}
+    assert set(attempts_by_mint) == {"mint-a", "mint-b"}
+    assert attempts_by_mint["mint-b"]["probe_scope"] in {"thin_initial_probe", "deep_initial_probe"}
+    assert attempts_by_mint["mint-b"]["account_found"] is True
+
+
+def test_running_live_status_writes_are_throttled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    writes: list[dict] = []
+
+    def fake_atomic_write(path: Path, payload: dict) -> None:
+        if Path(path).name == "live_status.json":
+            writes.append(dict(payload))
+
+    monkeypatch.setattr(recorder_module, "_atomic_write_json", fake_atomic_write)
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path))
+
+    writes.clear()
+    recorder._write_live_status("running")
+    recorder._write_live_status("running")
+
+    running_writes = [row for row in writes if row.get("run_status") == "running"]
+    assert len(running_writes) == 1
+    assert recorder.summary_counters["live_status_throttled_write_skip_count"] == 1
+
+
 def test_transaction_live_smoke_bounds_global_migration_thread_join(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1817,6 +2256,181 @@ def test_transaction_live_smoke_bounds_global_migration_thread_join(
     assert summary["global_migration_errors"] == ["global_migration_thread_join_timeout"]
 
 
+def test_t0118_transaction_live_smoke_drains_migration_side_effects_while_source_is_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mint = "mint-live-drain"
+    migration_emitted = threading.Event()
+
+    class SourceStaysOpenUntilLiveSideEffect:
+        source_name = "source_stays_open_until_live_side_effect"
+        actual_duration_seconds = 10.0
+        side_effect_seen_while_open = False
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True, "read_only": True}
+
+        def stream_notifications(self, _duration_seconds: float, on_event) -> None:
+            on_event(
+                {
+                    "received_at": 1000.0,
+                    "signature": "sig-birth-live-drain",
+                    "slot": 10,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-birth-live-drain",
+                            "slot": 10,
+                            "mint": mint,
+                            "bonding_curve": "curve-live-drain",
+                            "source_instruction_level": "top_level",
+                        }
+                    ],
+                }
+            )
+            assert migration_emitted.wait(timeout=2.0)
+            on_event(
+                {
+                    "received_at": 1001.0,
+                    "signature": "sig-trade-live-drain",
+                    "slot": 11,
+                    "trade_rows": [
+                        {
+                            "signature": "sig-trade-live-drain",
+                            "slot": 11,
+                            "mint": mint,
+                            "received_at": 1001.0,
+                            "trade_direction": "buy",
+                            "trader_wallet": "wallet-live-drain",
+                        }
+                    ],
+                }
+            )
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                rows = _jsonl(tmp_path / "post_migration_observations.jsonl")
+                if any(row.get("mint") == mint and row.get("event_type") != "schema_marker" for row in rows):
+                    self.side_effect_seen_while_open = True
+                    break
+                time.sleep(0.02)
+
+    source = SourceStaysOpenUntilLiveSideEffect()
+
+    def fake_global_migration_lane(config, recorder, **_kwargs) -> dict:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if any(row.get("mint") == mint for row in _jsonl(tmp_path / "birth_audit.jsonl")):
+                break
+            time.sleep(0.02)
+        writer = GlobalMigrationDedupeWriter(tmp_path, recorder=recorder)
+        writer.record(
+            {
+                "mint": mint,
+                "signature": "sig-migration-live-drain",
+                "slot": 12,
+                "received_at": 1001.5,
+                "migration_received_at": 1001.5,
+                "pool_or_pair_address": "pool-live-drain",
+                "quote_mint": SOL_MINT,
+                "quote_asset": "SOL",
+                "confidence": "confirmed",
+                "detection_method": "pumpswap_pair_created_signal",
+            }
+        )
+        migration_emitted.set()
+        return {
+            "global_migration_events_deduped": 1,
+            "global_migration_unique_mints": 1,
+            "global_migration_unique_pools": 1,
+        }
+
+    monkeypatch.setattr(recorder_module, "run_global_pumpswap_migration_lane", fake_global_migration_lane)
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            source_duration_seconds=10,
+            sample_rate_percent=100,
+            enable_global_pumpswap_migration=True,
+            followup_drain_seconds=0,
+        ),
+        source=source,
+        curve_probe=FakeCurveStateProbe(
+            {
+                mint: {
+                    "bonding_curve": "curve-live-drain",
+                    "account_state": {"virtual_sol_reserves": 2, "virtual_token_reserves": 1},
+                    "observed_at": 1000.1,
+                }
+            }
+        ),
+        now_fn=lambda: 1002.0,
+    )
+
+    assert source.side_effect_seen_while_open is True
+    assert summary["live_migration_side_effect_drain_count"] >= 1
+    assert summary["live_migration_side_effects_applied"] >= 1
+    assert summary["live_migration_side_effects_failed"] == 0
+    assert not any("global_migration_side_effects_must_run_on_recorder_owner_thread" in str(error) for error in summary["global_migration_errors"])
+    assert summary["post_migration_observations_written"] > 0
+    intent_rows = _jsonl(tmp_path / "global_migration_write_intents.jsonl")
+    assert any(row["write_status"] == "retry_pending" for row in intent_rows)
+    assert any(row["write_status"] == "written" for row in intent_rows)
+
+
+def test_transaction_live_smoke_keeps_artifact_true_global_migration_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_global_migration_lane(config, recorder, **_kwargs) -> dict:
+        writer = GlobalMigrationDedupeWriter(tmp_path, recorder=recorder)
+        for index in range(2):
+            writer.record(
+                {
+                    "mint": f"mint-summary-floor-{index}",
+                    "signature": f"sig-summary-floor-{index}",
+                    "slot": 120 + index,
+                    "received_at": 1000.0 + index,
+                    "migration_received_at": 1000.0 + index,
+                    "pool_or_pair_address": f"pool-summary-floor-{index}",
+                    "quote_mint": SOL_MINT,
+                    "quote_asset": "SOL",
+                    "confidence": "confirmed",
+                    "detection_method": "pumpswap_pair_created_signal",
+                }
+            )
+        return {
+            "global_migration_events_deduped": 1,
+            "global_migration_unique_mints": 1,
+            "global_migration_unique_pools": 1,
+        }
+
+    monkeypatch.setattr(recorder_module, "run_global_pumpswap_migration_lane", fake_global_migration_lane)
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            source_duration_seconds=0.01,
+            sample_rate_percent=100,
+            enable_global_pumpswap_migration=True,
+            followup_drain_seconds=0,
+        ),
+        source=FakeTransactionSubscribeAuditRoute([], actual_duration_seconds=0.01),
+        curve_probe=FakeCurveStateProbe({}),
+        now_fn=lambda: 1003.0,
+    )
+
+    rows = _jsonl(tmp_path / "global_migration_events.jsonl")
+    persisted = json.loads((tmp_path / "collector_summary.json").read_text(encoding="utf-8"))
+    assert len(rows) == 2
+    assert summary["global_migration_events_deduped"] == 2
+    assert summary["global_migration_unique_mints"] == 2
+    assert summary["global_migration_unique_pools"] == 2
+    assert persisted["global_migration_events_deduped"] == 2
+    assert persisted["global_migration_unique_mints"] == 2
+    assert persisted["global_migration_unique_pools"] == 2
+
+
 def test_cli_live_smoke_dispatches_to_transaction_streaming_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[BondingCurveRecorderConfig] = []
 
@@ -1843,6 +2457,10 @@ def test_cli_live_smoke_dispatches_to_transaction_streaming_path(monkeypatch: py
             "1",
             "--followup-drain-seconds",
             "0",
+            "--birth-priority-worker-count",
+            "3",
+            "--birth-priority-queue-max-size",
+            "123",
             "--output-root",
             str(tmp_path),
         ]
@@ -1852,6 +2470,8 @@ def test_cli_live_smoke_dispatches_to_transaction_streaming_path(monkeypatch: py
     assert len(calls) == 1
     assert calls[0].source_duration_seconds == 1
     assert calls[0].enable_global_pumpswap_migration is True
+    assert calls[0].birth_priority_worker_count == 3
+    assert calls[0].birth_priority_queue_max_size == 123
 
 
 def test_cli_global_pumpswap_migration_can_be_explicitly_disabled_for_debug(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1923,8 +2543,8 @@ def test_transaction_live_smoke_records_sample_rejections_and_capacity_after_ded
     assert summary["unique_birth_mints"] == 3
     assert summary["births_admitted_after_dedupe"] == 1
     assert summary["capacity_rejected_after_dedupe"] == 2
-    assert summary["curve_observation_attempts"] == 1
-    assert len(probe.calls) == 1
+    assert summary["curve_observation_attempts"] == 3
+    assert [call["mint"] for call in probe.calls] == ["mint-0", "mint-1", "mint-2"]
 
 
 def test_transaction_live_smoke_streams_probe_without_source_duration_delay(tmp_path: Path) -> None:
@@ -2038,7 +2658,191 @@ def test_transaction_live_smoke_source_reader_is_decoupled_from_slow_probe(tmp_p
     assert max(callback_durations_ms) < 40.0
 
 
-def test_source_duration_quality_degrades_on_websocket_reconnect_even_when_duration_completes(tmp_path: Path) -> None:
+def test_transaction_live_smoke_trade_flow_writes_do_not_block_next_birth_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe_started_at: dict[str, float] = {}
+    original_record_trade_event = recorder_module.BondingCurveProgressRecorder.record_trade_event
+
+    def slow_record_trade_event(self: BondingCurveProgressRecorder, trade: dict) -> dict:
+        time.sleep(0.02)
+        return original_record_trade_event(self, trade)
+
+    monkeypatch.setattr(
+        recorder_module.BondingCurveProgressRecorder,
+        "record_trade_event",
+        slow_record_trade_event,
+    )
+
+    class TradeHeavySource:
+        source_name = "trade_heavy_source"
+        actual_duration_seconds = 1.0
+        websocket_closed_early = False
+        websocket_close_reason = None
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True}
+
+        def stream_notifications(self, duration_seconds: float, on_event) -> None:
+            base = time.time()
+            on_event(
+                {
+                    "received_at": base,
+                    "signature": "sig-mint-trade-a",
+                    "slot": 1,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-mint-trade-a",
+                            "slot": 1,
+                            "mint": "mint-trade-a",
+                            "bonding_curve": "curve-mint-trade-a",
+                            "source_instruction_level": "top_level",
+                            "creator": "creator-a",
+                        }
+                    ],
+                    "trade_rows": [
+                        {
+                            "signature": f"sig-trade-{index}",
+                            "slot": 2 + index,
+                            "mint": "mint-trade-a",
+                            "side": "buy",
+                            "trader_wallet": f"buyer-{index}",
+                            "fee_payer": f"buyer-{index}",
+                            "token_amount": 100.0,
+                            "quote_amount": 1.0,
+                            "quote_asset": "SOL",
+                            "received_at": base + 0.001 + (index * 0.001),
+                            "decision_time": base + 0.001 + (index * 0.001),
+                            "source_event_type": "pumpfun_trade",
+                            "trade_decode_status": "balance_delta_inferred",
+                        }
+                        for index in range(20)
+                    ],
+                }
+            )
+            on_event(
+                {
+                    "received_at": base + 0.002,
+                    "signature": "sig-mint-trade-b",
+                    "slot": 100,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-mint-trade-b",
+                            "slot": 100,
+                            "mint": "mint-trade-b",
+                            "bonding_curve": "curve-mint-trade-b",
+                            "source_instruction_level": "top_level",
+                            "creator": "creator-b",
+                        }
+                    ],
+                }
+            )
+
+    class RecordingProbe(FakeCurveStateProbe):
+        def probe_create_event(self, create_event: dict, *, now_fn=time.time) -> dict:
+            mint = str(create_event.get("mint") or "")
+            probe_started_at[mint] = time.time()
+            return super().probe_create_event(create_event, now_fn=now_fn)
+
+    probe = RecordingProbe(
+        {
+            "mint-trade-a": {"bonding_curve": "curve-mint-trade-a", "account_state": {"virtual_sol_reserves": 1}},
+            "mint-trade-b": {"bonding_curve": "curve-mint-trade-b", "account_state": {"virtual_sol_reserves": 1}},
+        }
+    )
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100, source_duration_seconds=1),
+        source=TradeHeavySource(),
+        curve_probe=probe,
+        now_fn=time.time,
+    )
+
+    assert summary["trade_rows_recorded"] == 20
+    assert summary["curve_observation_attempts"] == 2
+    assert probe_started_at["mint-trade-b"] - probe_started_at["mint-trade-a"] < 0.25
+
+
+def test_transaction_live_smoke_priority_birth_workers_do_not_block_second_birth_probe(tmp_path: Path) -> None:
+    first_probe_can_finish = threading.Event()
+    first_probe_started = threading.Event()
+    second_probe_started = threading.Event()
+    probe_started_at: dict[str, float] = {}
+    probe_finished_at: dict[str, float] = {}
+
+    class TwoBirthSource:
+        source_name = "two_birth_priority_fake_txsub"
+        actual_duration_seconds = 1.0
+        websocket_closed_early = False
+        websocket_close_reason = None
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True}
+
+        def stream_notifications(self, duration_seconds: float, on_event) -> None:
+            base = time.time()
+            for index, mint in enumerate(["mint-priority-a", "mint-priority-b"]):
+                on_event(
+                    {
+                        "received_at": base + (index * 0.001),
+                        "signature": f"sig-{mint}",
+                        "slot": 100 + index,
+                        "decoded_rows": [
+                            {
+                                "signature": f"sig-{mint}",
+                                "slot": 100 + index,
+                                "mint": mint,
+                                "bonding_curve": f"curve-{mint}",
+                                "source_instruction_level": "top_level",
+                                "creator": f"creator-{mint}",
+                            }
+                        ],
+                    }
+                )
+
+    class BlockingFirstProbe(FakeCurveStateProbe):
+        def probe_create_event(self, create_event: dict[str, Any], *, now_fn: Any = time.time) -> dict[str, Any]:
+            mint = str(create_event.get("mint") or "")
+            probe_started_at[mint] = time.time()
+            if mint == "mint-priority-a":
+                first_probe_started.set()
+                assert second_probe_started.wait(timeout=1.0)
+                first_probe_can_finish.wait(timeout=1.0)
+            if mint == "mint-priority-b":
+                second_probe_started.set()
+                first_probe_can_finish.set()
+            result = super().probe_create_event(create_event, now_fn=now_fn)
+            probe_finished_at[mint] = time.time()
+            return result
+
+    probe = BlockingFirstProbe(
+        {
+            "mint-priority-a": {"bonding_curve": "curve-mint-priority-a", "account_state": {"virtual_sol_reserves": 1}},
+            "mint-priority-b": {"bonding_curve": "curve-mint-priority-b", "account_state": {"virtual_sol_reserves": 1}},
+        }
+    )
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            source_duration_seconds=1,
+            birth_priority_worker_count=2,
+        ),
+        source=TwoBirthSource(),
+        curve_probe=probe,
+        now_fn=time.time,
+    )
+    assert first_probe_started.is_set()
+    assert second_probe_started.is_set()
+    assert probe_started_at["mint-priority-b"] < probe_finished_at["mint-priority-a"]
+    assert summary["birth_priority_worker_count"] == 2
+    assert summary["birth_priority_dispatch_enabled"] is True
+    assert summary["birth_priority_queue_dropped_count"] == 0
+    assert summary["curve_observation_attempts"] == 2
+
+
+def test_source_duration_quality_warns_on_recovered_websocket_reconnect_when_duration_completes(tmp_path: Path) -> None:
     source = FakeTransactionSubscribeAuditRoute([], actual_duration_seconds=600.0)
     source.websocket_keepalive_timeout_count = 1
     source.websocket_reconnect_count = 1
@@ -2052,8 +2856,8 @@ def test_source_duration_quality_degrades_on_websocket_reconnect_even_when_durat
     )
 
     assert summary["completed_requested_duration"] is True
-    assert summary["source_duration_quality_status"] == "degraded"
-    assert summary["validation_run_quality_label"] == "RUN_QUALITY_DEGRADED_SOURCE_GAPS"
+    assert summary["source_duration_quality_status"] == "complete_with_reconnect_warning"
+    assert summary["validation_run_quality_label"] == "RUN_QUALITY_COMPLETE_WITH_RECONNECT_WARNING"
     assert summary["early_end_reason"] == "websocket_reconnect_or_keepalive"
 
 
@@ -2982,6 +3786,427 @@ def test_live_smoke_summary_includes_live_source_fields_and_capacity_rejections(
     assert summary["births_admitted"] == 1
     assert summary["capacity_rejected"] == 1
     assert summary["mayhem_code_modified"] is False
+
+
+def test_collector_summary_exposes_route_latency_histograms_and_production_backlog_gates(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            route_latency_gate_enabled=True,
+            max_birth_to_admission_p95_ms=50,
+            max_birth_to_first_curve_observation_p95_ms=500,
+            helius_budget_gate_enabled=True,
+            helius_max_estimated_credits=10_000,
+        )
+    )
+    recorder.birth_to_admission_latencies_ms.extend([10.0, 20.0, 30.0])
+    recorder.birth_to_first_observation_latencies_ms.extend([100.0, 200.0, 300.0])
+
+    summary = recorder.build_summary()
+
+    histograms = summary["route_latency_histograms"]
+    assert histograms["birth_to_admission_latency_ms"]["count"] == 3
+    assert histograms["birth_to_first_curve_observation_latency_ms"]["p95"] == 290.0
+    assert summary["latency_histograms_present"] is True
+    assert summary["route_latency_gate_passed"] is True
+    assert summary["route_latency_gate_failures"] == []
+    assert summary["gatekeeper_ab_status"] == "not_configured"
+    assert summary["subscription_first_curve_updates_status"] in {"enabled", "not_configured"}
+    assert summary["commitment_reorg_drop_accounting_present"] is True
+    assert summary["helius_budget_gate_present"] is True
+    assert summary["helius_budget_gate_passed"] is True
+
+
+def test_collector_summary_splits_admission_enqueue_and_complete_latency_gates(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            route_latency_gate_enabled=True,
+            max_birth_to_admission_p95_ms=1000,
+            max_birth_to_admission_complete_p95_ms=1500,
+            max_birth_to_first_curve_observation_p95_ms=3000,
+            helius_max_estimated_credits=10_000,
+        )
+    )
+    recorder.birth_to_admission_enqueue_latencies_ms.extend([100.0, 200.0, 300.0])
+    recorder.birth_to_admission_complete_latencies_ms.extend([200.0, 300.0, 2500.0])
+    recorder.birth_to_first_observation_latencies_ms.extend([400.0, 500.0, 600.0])
+
+    summary = recorder.build_summary()
+
+    assert summary["birth_to_admission_enqueue_latency_ms"]["p95"] == 290.0
+    assert summary["birth_to_admission_complete_latency_ms"]["p95"] == 2280.0
+    assert summary["birth_to_admission_latency_ms"] == summary["birth_to_admission_enqueue_latency_ms"]
+    assert summary["route_latency_gate_scope"] == "decision_path_only"
+    assert "birth_to_admission_complete_p95_exceeded" not in summary["route_latency_gate_failures"]
+    assert summary["route_latency_gate_passed"] is True
+    assert summary["materialization_latency_gate_passed"] is False
+    assert summary["birth_projection_latency_gate_scope"] == "diagnostic_only"
+    assert summary["materialization_latency_gate_failures"] == ["birth_to_admission_complete_p95_exceeded"]
+
+
+def test_pre_migration_paper_gate_requires_full_paper_contract(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            max_birth_to_admission_complete_p95_ms=1500,
+            max_birth_to_first_curve_observation_p95_ms=3000,
+            max_normalized_birth_to_probe_start_p95_ms=1500,
+        )
+    )
+    recorder.birth_to_admission_complete_latencies_ms.extend([100.0, 200.0, 2000.0])
+    recorder.birth_to_first_observation_latencies_ms.extend([100.0, 200.0, 300.0])
+    recorder.normalized_birth_to_probe_start_latencies_ms.extend([10.0, 20.0, 30.0])
+    recorder.summary_counters["progress_decoded_candidate_count"] = 1
+    recorder.summary_counters["valuation_present_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_1s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_5s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_10s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_30s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_60s_count"] = 1
+
+    gate = recorder.build_summary()["pre_migration_paper_readiness_gate"]
+
+    assert gate["pre_migration_paper_ready"] is False
+    assert "birth_to_admission_complete_p95_exceeded" in gate["blocking_reasons"]
+    assert "dev_previous_migrations_field_not_decision_time_safe" in gate["blocking_reasons"]
+    assert "creator_sold_before_entry_field_not_decision_time_safe" in gate["blocking_reasons"]
+    assert gate["pre_entry_snapshot_fields_available"] is True
+    assert gate["post_entry_hot_flow_snapshot_1s_available"] is True
+    assert gate["paper_position_accounting_available"] is True
+
+
+def test_wallet_dev_checkpoint_exports_decision_safe_paper_fields(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
+    recorder.process_birth(
+        {
+            **_launch("paper-dev-fields", received_at=1000.0),
+            "creator": "creator-paper",
+            "creator_history": [
+                {"mint": "prior-1", "launch_received_at": 900.0, "migrated": True},
+                {"mint": "prior-2", "launch_received_at": 910.0, "migrated": True},
+                {"mint": "prior-3", "launch_received_at": 920.0, "migrated": True},
+            ],
+        }
+    )
+    state = recorder.states["paper-dev-fields"]
+    recorder._emit_wallet_dev_checkpoint(
+        state,
+        "pre_entry",
+        source_event={"received_at": 1001.0, "creator_sold_before_entry": False},
+    )
+
+    row = _jsonl(tmp_path / "wallet_dev_checkpoints.jsonl")[-1]
+    assert row["dev_previous_migrations"] == 3
+    assert row["dev_previous_migrations_ge_3"] is True
+    assert row["dev_previous_migrations_decision_time_safe"] is True
+    assert row["creator_sold_before_entry"] is False
+    assert row["creator_sold_before_entry_decision_time_safe"] is True
+    summary = recorder.build_summary()
+    assert summary["dev_previous_migrations_field_decision_time_safe"] is True
+    assert summary["creator_sold_before_entry_field_decision_time_safe"] is True
+
+
+def test_wallet_dev_checkpoint_uses_local_creator_history_and_observed_creator_sells(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
+    recorder.process_birth({**_launch("mint-prior", received_at=1000.0), "creator": "creator-local"})
+    prior_state = recorder.states["mint-prior"]
+    recorder._emit_migration_event(prior_state, {"slot": 20, "received_at": 1010.0}, received_at=1010.0)
+
+    recorder.process_birth({**_launch("mint-next", received_at=1020.0), "creator": "creator-local"})
+    next_state = recorder.states["mint-next"]
+    recorder.record_trade_event(
+        {
+            "mint": "mint-next",
+            "received_at": 1021.0,
+            "side": "sell",
+            "trader_wallet": "creator-local",
+            "quote_amount": 0.1,
+            "token_amount": 100.0,
+        }
+    )
+    recorder._emit_wallet_dev_checkpoint(next_state, "pre_entry", source_event={"received_at": 1022.0})
+
+    row = _jsonl(tmp_path / "wallet_dev_checkpoints.jsonl")[-1]
+    assert row["creator_history_status"] == "available"
+    assert row["creator_history_source"] == "local_observed_lifecycle_ledger"
+    assert row["dev_previous_migrations"] == 1
+    assert row["dev_previous_migrations_ge_3"] is False
+    assert row["dev_previous_migrations_decision_time_safe"] is True
+    assert row["creator_sold_before_entry"] is True
+    assert row["creator_sold_before_entry_source"] == "local_observed_trade_flow"
+    assert row["creator_sold_before_entry_decision_time_safe"] is True
+
+
+def test_collector_summary_exposes_post_enqueue_latency_decomposition_and_pre_migration_gate(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            route_latency_gate_enabled=True,
+            max_birth_to_admission_p95_ms=1000,
+            max_birth_to_admission_complete_p95_ms=1500,
+            max_birth_to_first_curve_observation_p95_ms=3000,
+            helius_max_estimated_credits=10_000,
+        )
+    )
+    recorder.birth_to_admission_enqueue_latencies_ms.extend([10.0, 20.0, 30.0])
+    recorder.birth_enqueue_to_admission_worker_start_latencies_ms.extend([5.0, 10.0, 15.0])
+    recorder.admission_worker_process_birth_duration_ms.extend([40.0, 50.0, 60.0])
+    recorder.admission_worker_to_probe_job_enqueue_latencies_ms.extend([1.0, 2.0, 3.0])
+    recorder.probe_job_enqueue_to_probe_start_latencies_ms.extend([4.0, 5.0, 6.0])
+    recorder.birth_to_admission_complete_latencies_ms.extend([60.0, 70.0, 80.0])
+    recorder.normalized_birth_to_probe_start_latencies_ms.extend([20.0, 30.0, 40.0])
+    recorder.birth_to_first_observation_latencies_ms.extend([200.0, 300.0, 400.0])
+    recorder.summary_counters["progress_decoded_candidate_count"] = 1
+    recorder.summary_counters["valuation_present_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_1s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_5s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_10s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_30s_count"] = 1
+    recorder.summary_counters["near_entry_hot_flow_snapshot_60s_count"] = 1
+    recorder.summary_counters["dev_previous_migrations_field_decision_time_safe_count"] = 1
+    recorder.summary_counters["creator_sold_before_entry_field_decision_time_safe_count"] = 1
+
+    summary = recorder.build_summary()
+
+    histograms = summary["route_latency_histograms"]
+    assert histograms["birth_enqueue_to_admission_worker_start_latency_ms"]["p95"] == 14.5
+    assert histograms["admission_worker_process_birth_duration_ms"]["p95"] == 59.0
+    assert histograms["admission_worker_to_probe_job_enqueue_latency_ms"]["p95"] == 2.9
+    assert histograms["probe_job_enqueue_to_probe_start_latency_ms"]["p95"] == 5.9
+    gate = summary["pre_migration_paper_readiness_gate"]
+    assert gate["gate_id"] == "T011_PRE_MIGRATION_PAPER_READINESS_GATE"
+    assert gate["pre_migration_paper_ready"] is True
+    assert gate["migration_full_path_required_for_pre_migration_paper"] is False
+
+
+def test_transaction_live_smoke_schedules_first_curve_before_slow_birth_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe_started = threading.Event()
+    process_birth_finished = threading.Event()
+    original_process_birth = recorder_module.BondingCurveProgressRecorder.process_birth
+
+    def slow_process_birth(self: BondingCurveProgressRecorder, launch: dict) -> dict:
+        probe_started.wait(timeout=0.5)
+        row = original_process_birth(self, launch)
+        process_birth_finished.set()
+        return row
+
+    class RecordingProbe(FakeCurveStateProbe):
+        def probe_create_event(self, create_event: dict, *, now_fn=time.time) -> dict:
+            probe_started.set()
+            assert not process_birth_finished.is_set()
+            return super().probe_create_event(create_event, now_fn=now_fn)
+
+    monkeypatch.setattr(recorder_module.BondingCurveProgressRecorder, "process_birth", slow_process_birth)
+
+    source = FakeTransactionSubscribeAuditRoute(
+        [
+            {
+                "received_at": time.time(),
+                "signature": "sig-early-probe",
+                "slot": 1,
+                "decoded_rows": [
+                    {
+                        "signature": "sig-early-probe",
+                        "slot": 1,
+                        "mint": "mint-early-probe",
+                        "bonding_curve": "curve-early-probe",
+                        "source_instruction_level": "top_level",
+                    }
+                ],
+            }
+        ],
+        actual_duration_seconds=1.0,
+    )
+    probe = RecordingProbe(
+        {
+            "mint-early-probe": {
+                "bonding_curve": "curve-early-probe",
+                "account_state": {"virtual_sol_reserves": 1},
+                "observed_at": time.time(),
+            }
+        }
+    )
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100, source_duration_seconds=1),
+        source=source,
+        curve_probe=probe,
+        now_fn=time.time,
+    )
+
+    assert probe_started.is_set()
+    assert process_birth_finished.is_set()
+    assert summary["curve_observation_attempts"] == 1
+    assert summary["source_fast_first_curve_probe_enqueued"] == 1
+    assert summary["admission_worker_to_probe_job_enqueue_latency_ms"]["count"] == 0
+    assert summary["probe_job_enqueue_to_probe_start_latency_ms"]["count"] == 1
+
+
+def test_transaction_live_smoke_source_fast_path_probes_birth_while_admission_worker_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_birth_entered = threading.Event()
+    first_birth_released = threading.Event()
+    second_probe_started = threading.Event()
+    original_process_birth = recorder_module.BondingCurveProgressRecorder.process_birth
+
+    def slow_first_process_birth(self: BondingCurveProgressRecorder, launch: dict) -> dict:
+        if launch.get("mint") == "mint-fast-path-a":
+            first_birth_entered.set()
+            second_probe_started.wait(timeout=0.5)
+            first_birth_released.set()
+        return original_process_birth(self, launch)
+
+    class RecordingProbe(FakeCurveStateProbe):
+        def probe_create_event(self, create_event: dict, *, now_fn=time.time) -> dict:
+            if create_event.get("mint") == "mint-fast-path-b":
+                assert not first_birth_released.is_set()
+                second_probe_started.set()
+            return super().probe_create_event(create_event, now_fn=now_fn)
+
+    class TwoBirthSource:
+        source_name = "two_birth_source"
+        actual_duration_seconds = 1.0
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True}
+
+        def stream_notifications(self, _duration_seconds: float, on_event) -> None:
+            base = time.time()
+            for suffix in ("a", "b"):
+                on_event(
+                    {
+                        "received_at": base,
+                        "normalized_at": base,
+                        "signature": f"sig-fast-path-{suffix}",
+                        "slot": 1,
+                        "decoded_rows": [
+                            {
+                                "signature": f"sig-fast-path-{suffix}",
+                                "slot": 1,
+                                "mint": f"mint-fast-path-{suffix}",
+                                "bonding_curve": f"curve-fast-path-{suffix}",
+                                "source_instruction_level": "top_level",
+                            }
+                        ],
+                    }
+                )
+
+    monkeypatch.setattr(recorder_module.BondingCurveProgressRecorder, "process_birth", slow_first_process_birth)
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            source_duration_seconds=1,
+            birth_priority_worker_count=1,
+        ),
+        source=TwoBirthSource(),
+        curve_probe=RecordingProbe(
+            {
+                "mint-fast-path-a": {"bonding_curve": "curve-fast-path-a", "account_state": {"virtual_sol_reserves": 1}},
+                "mint-fast-path-b": {"bonding_curve": "curve-fast-path-b", "account_state": {"virtual_sol_reserves": 1}},
+            }
+        ),
+        now_fn=time.time,
+    )
+
+    assert first_birth_entered.is_set()
+    assert second_probe_started.is_set()
+    assert summary["source_fast_first_curve_probe_enqueued"] >= 1
+    assert summary["curve_observation_attempts"] == 2
+
+
+def test_transaction_live_smoke_hot_flow_snapshots_do_not_wait_for_bulk_trade_flow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_record_trade_event = recorder_module.BondingCurveProgressRecorder.record_trade_event
+
+    def slow_record_trade_event(self: BondingCurveProgressRecorder, trade: dict) -> dict:
+        time.sleep(0.02)
+        return original_record_trade_event(self, trade)
+
+    monkeypatch.setattr(recorder_module.BondingCurveProgressRecorder, "record_trade_event", slow_record_trade_event)
+
+    class HotFlowSource:
+        source_name = "hot_flow_source"
+        actual_duration_seconds = 1.0
+
+        def availability(self) -> dict:
+            return {"source": self.source_name, "available": True}
+
+        def stream_notifications(self, _duration_seconds: float, on_event) -> None:
+            base = time.time()
+            on_event(
+                {
+                    "received_at": base,
+                    "signature": "sig-hot-flow-birth",
+                    "slot": 1,
+                    "decoded_rows": [
+                        {
+                            "signature": "sig-hot-flow-birth",
+                            "slot": 1,
+                            "mint": "mint-hot-flow",
+                            "bonding_curve": "curve-hot-flow",
+                            "source_instruction_level": "top_level",
+                        }
+                    ],
+                }
+            )
+            for index in range(15):
+                on_event(
+                    {
+                        "received_at": base + 0.1 + (index * 0.1),
+                        "signature": f"sig-hot-flow-trade-{index}",
+                        "slot": 2 + index,
+                        "trade_rows": [
+                            {
+                                "signature": f"sig-hot-flow-trade-{index}",
+                                "slot": 2 + index,
+                                "mint": "mint-hot-flow",
+                                "trade_direction": "sell" if index == 3 else "buy",
+                                "trader_wallet": f"wallet-{index}",
+                                "quote_amount": 1.0 + index,
+                                "received_at": base + 0.1 + (index * 0.1),
+                            }
+                        ],
+                    }
+                )
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100, source_duration_seconds=1),
+        source=HotFlowSource(),
+        curve_probe=FakeCurveStateProbe(
+            {"mint-hot-flow": {"bonding_curve": "curve-hot-flow", "account_state": {"virtual_sol_reserves": 1}}}
+        ),
+        now_fn=time.time,
+    )
+
+    rows = _jsonl(tmp_path / "near_entry_hot_flow_snapshots.jsonl")
+    assert summary["near_entry_hot_flow_enabled"] is True
+    assert summary["near_entry_hot_flow_events_recorded"] >= 10
+    assert summary["near_entry_hot_flow_snapshot_5s_count"] == 1
+    assert summary["near_entry_hot_flow_snapshot_10s_count"] == 1
+    assert rows
+    five_second = next(row for row in rows if row["window_seconds_after_entry"] == 5)
+    assert five_second["buy_count_after_entry"] >= 10
+    assert five_second["sell_count_after_entry"] == 1
+    assert five_second["unique_buyers_after_entry"] >= 10
+    one_second = next(row for row in rows if row["window_seconds_after_entry"] == 1)
+    assert one_second["snapshot_phase"] == "post_entry"
+    assert one_second["decision_time_safe"] is True
+    assert one_second["decision_time_safety_status"] == "safe"
+    assert five_second["largest_sell_quote_after_entry"] == 4.0
 
 
 def test_valuation_ladder_events_and_paths_capture_transition_retrace_and_stalls(tmp_path: Path) -> None:
@@ -4116,6 +5341,42 @@ def test_archive_manifest_is_written_after_transaction_live_smoke(tmp_path: Path
     assert (archive_root / "collector_summary.json").exists()
 
 
+def test_local_retention_archives_older_finalized_runs_from_default_local_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_root = tmp_path / "local_forward"
+    archive_root = tmp_path / "orico_forward"
+    monkeypatch.setattr(recorder_module, "DEFAULT_BASE_ROOT", local_root)
+    for idx in range(4):
+        run = local_root / f"old-run-{idx}"
+        run.mkdir(parents=True)
+        (run / "collector_summary.json").write_text(
+            json.dumps({"run_id": run.name, "run_status": "finalized", "run_finalized": True}),
+            encoding="utf-8",
+        )
+        (run / "payload.txt").write_text(str(idx), encoding="utf-8")
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=local_root / "current-run",
+            sample_rate_percent=100,
+            local_retention_enabled=True,
+            local_retention_keep_latest=3,
+            local_retention_archive_root=archive_root,
+        )
+    )
+
+    summary = recorder.build_summary(final=False)
+    report = recorder_module.apply_local_retention_if_configured(recorder, summary)
+
+    assert report["local_retention_status"] == "complete"
+    assert report["local_retention_archived_count"] == 2
+    assert (archive_root / "old-run-0" / "payload.txt").exists()
+    assert (archive_root / "old-run-1" / "payload.txt").exists()
+    assert (local_root / "old-run-0").is_symlink()
+    assert (local_root / "current-run").is_dir()
+
+
 def test_finalization_writes_partial_summary_on_artifact_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
     recorder.process_birth(_launch("mint-partial"))
@@ -4198,9 +5459,13 @@ def test_t007_live_status_and_watcher_are_written_with_required_stats(tmp_path: 
         "migration_events",
         "last_heartbeat_timestamp",
         "valuation_ladder_emission_policy",
+        "birth_decision_path_commit_count",
+        "live_status_hot_path_force_disabled_count",
     ]:
         assert key in status
     assert "T007 True Curve Progress Watcher" in watcher_path.read_text()
+    assert "10m collector + feature proof passed; 60m thesis readiness blocked" in watcher_path.read_text()
+    assert "startup-boundary migration does not count as full-path evidence" in watcher_path.read_text()
 
     recorder.process_birth(_launch("mint-status"))
     recorder.record_observation({**_obs("mint-status", 60.0, 1.0), "progress_pct_status": "decoded_candidate"})
@@ -4211,6 +5476,1611 @@ def test_t007_live_status_and_watcher_are_written_with_required_stats(tmp_path: 
     assert updated["curve_observations_written"] == 1
     assert updated["decode_success_count"] == 1
     assert updated["progress_crossings_by_threshold"]["60.0"] == 1
+    assert updated["birth_decision_path_commit_count"] == 1
+    assert updated["live_status_hot_path_force_disabled_count"] == 1
+
+
+def test_t0116_finalized_live_status_clears_drain_timer(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            source_duration_seconds=600,
+            followup_drain_seconds=180,
+        )
+    )
+    recorder.started_at = time.time() - 608.0
+
+    recorder._write_live_status("finalized", {"actual_source_duration_seconds": 600.5})
+
+    status = json.loads((tmp_path / "live_status.json").read_text())
+    assert status["runtime_phase"] == "finalized"
+    assert status["source_remaining_seconds"] == 0.0
+    assert status["drain_remaining_seconds"] == 0.0
+    assert status["finalization_elapsed_seconds"] == 0.0
+    assert status["finalization_overrun_seconds"] == 0.0
+    assert status["finalization_stuck_warning"] is False
+
+
+def test_t011_trade_flow_audit_writes_debug_and_flags_denominator_mismatch(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite"
+    connection = sqlite3.connect(db_path)
+    connection.execute("CREATE TABLE mint_identity (mint TEXT PRIMARY KEY, first_seen_at REAL, progress_decoded INTEGER DEFAULT 0)")
+    connection.executemany(
+        "INSERT INTO mint_identity VALUES (?, ?, ?)",
+        [("mint-covered", 100.0, 1), ("mint-missing", 101.0, 1), ("mint-non-birth", 102.0, 0)],
+    )
+    connection.commit()
+    connection.close()
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [
+            {"mint": "mint-covered", "admitted": True, "admission_reason": "sample_admitted", "received_at": 100.0},
+            {"mint": "mint-missing", "admitted": True, "admission_reason": "sample_admitted", "received_at": 101.0},
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-covered", "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "mint-missing", "decode_status": "decoded"}])
+    _write_t007bc_jsonl(tmp_path, "holder_distribution_snapshots.jsonl", [{"mint": "mint-missing"}])
+    (tmp_path / "canonical_sqlite_db_pointer.json").write_text(json.dumps({"canonical_db_path": str(db_path)}), encoding="utf-8")
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"unique_birth_mints": 2}), encoding="utf-8")
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps(
+            {
+                "coverage_metrics": [
+                    {
+                        "metric_id": "trade_flow_mint_coverage",
+                        "numerator": 1,
+                        "denominator": 3,
+                        "ratio": 1 / 3,
+                        "status": "fail",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = run_trade_flow_coverage_audit(tmp_path)
+
+    assert summary["unique_birth_mints"] == 2
+    assert summary["trade_flow_denominator"] == 3
+    assert summary["trade_flow_missing_mints"] == 2
+    assert summary["denominator_mismatch_flagged"] is True
+    assert summary["missing_trade_flow_mints_by_category"]["admitted_no_trade_events_observed"] == 1
+    assert summary["missing_trade_flow_mints_by_category"]["denominator_policy_non_birth_mint"] == 1
+    assert summary["trade_flow_unconditional_birth_coverage"]["purpose"] == "diagnostic_only"
+    assert summary["trade_flow_eventful_parse_coverage"]["purpose"] == "parser_writer_subscription_readiness"
+    assert summary["trade_flow_eventful_parse_coverage"]["hard_long_scan_blocker"] is False
+    assert summary["trade_flow_true_gap_mints_count"] == 0
+    assert summary["trade_flow_no_event_mints_count"] == 1
+    assert summary["denominator_policy_issue_count"] == 1
+    rows = {row["mint"]: row for row in summary["missing_mints"]}
+    assert rows["mint-non-birth"]["should_count_against_long_scan_readiness"] is False
+    assert rows["mint-missing"]["failure_reason"] == "admitted_no_trade_events_observed"
+    assert rows["mint-missing"]["should_count_against_long_scan_readiness"] is False
+    assert summary["capacity_rejected_expected_to_require_trade_flow_coverage"] is False
+    assert (tmp_path / "trade_flow_coverage_audit.json").exists()
+    assert (tmp_path / "trade_flow_missing_mints_debug.json").exists()
+    assert (tmp_path / "trade_flow_coverage_audit.md").exists()
+
+
+def test_t011_trade_flow_audit_handles_missing_supervisor_metric(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite"
+    connection = sqlite3.connect(db_path)
+    connection.execute("CREATE TABLE mint_identity (mint TEXT PRIMARY KEY, first_seen_at REAL, progress_decoded INTEGER DEFAULT 0)")
+    connection.executemany("INSERT INTO mint_identity VALUES (?, ?, ?)", [("mint-covered", 100.0, 1), ("mint-missing", 101.0, 1)])
+    connection.commit()
+    connection.close()
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [
+            {"mint": "mint-covered", "admitted": True, "received_at": 100.0},
+            {"mint": "mint-missing", "admitted": True, "received_at": 101.0},
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-covered", "trade_flow_status": "available"}])
+    (tmp_path / "canonical_sqlite_db_pointer.json").write_text(json.dumps({"canonical_db_path": str(db_path)}), encoding="utf-8")
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"unique_birth_mints": 2}), encoding="utf-8")
+
+    summary = run_trade_flow_coverage_audit(tmp_path)
+
+    assert summary["trade_flow_denominator"] == 2
+    assert summary["trade_flow_covered_mints"] == 1
+    assert summary["corrected_trade_flow_denominator"] == 2
+    assert summary["corrected_trade_flow_covered_mints"] == 1
+
+
+def test_t011_trade_flow_audit_categorizes_capacity_rejected_no_trade_events(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [
+            {"mint": "mint-covered", "admitted": True, "admission_reason": "sample_admitted", "received_at": 100.0},
+            {
+                "mint": "mint-capacity",
+                "admitted": False,
+                "admission_reason": "capacity_rejected_active_tracking_limit_after_prune",
+                "received_at": 101.0,
+            },
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-covered", "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "curve_observations.jsonl",
+        [
+            {"mint": "mint-covered", "decode_status": "decoded"},
+            {"mint": "mint-capacity", "decode_status": "decoded"},
+        ],
+    )
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"unique_birth_mints": 2}), encoding="utf-8")
+
+    summary = run_trade_flow_coverage_audit(tmp_path)
+    row = {item["mint"]: item for item in summary["missing_mints"]}["mint-capacity"]
+
+    assert summary["missing_trade_flow_mints_by_category"]["capacity_rejected_no_trade_events_observed"] == 1
+    assert row["admission_status"] == "capacity_rejected"
+    assert row["capacity_rejected"] is True
+    assert row["raw_trade_like_events_seen"] is False
+    assert row["trade_flow_writer_attempted"] is False
+    assert row["should_count_against_long_scan_readiness"] is False
+    assert summary["true_missing_collector_or_parser_gap_count"] == 0
+
+
+def test_t011_trade_flow_audit_ignores_raw_trade_like_events_before_birth_for_gap(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [
+            {"mint": "mint-covered", "admitted": True, "admission_reason": "sample_admitted", "received_at": 100.0},
+            {
+                "mint": "mint-capacity",
+                "admitted": False,
+                "admission_reason": "capacity_rejected_active_tracking_limit_after_prune",
+                "received_at": 200.0,
+            },
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-covered", "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "mint-capacity", "decode_status": "decode_failed"}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "raw_trade_events.jsonl",
+        [{"mint": "mint-capacity", "event_type": "buy", "received_at": 150.0, "signature": "sig-pre-birth"}],
+    )
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"unique_birth_mints": 2}), encoding="utf-8")
+
+    summary = run_trade_flow_coverage_audit(tmp_path)
+    row = {item["mint"]: item for item in summary["missing_mints"]}["mint-capacity"]
+
+    assert row["raw_trade_like_events_before_birth_count"] == 1
+    assert row["raw_trade_like_before_birth_only"] is True
+    assert row["raw_trade_like_events_seen"] is False
+    assert row["failure_reason"] == "capacity_rejected_no_trade_events_observed"
+    assert row["should_count_against_long_scan_readiness"] is False
+    assert summary["true_missing_collector_or_parser_gap_count"] == 0
+
+
+def test_t011_migration_linkage_audit_writes_explicit_unlinked_reason(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "birth-mint", "admitted": True, "received_at": 100.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {
+                "mint": "migration-only",
+                "signature": "sig-migration",
+                "migration_received_at": 200.0,
+                "pool_or_pair_address": "pool-1",
+                "quote_asset": "SOL",
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [])
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"global_migration_events_deduped": 1}), encoding="utf-8")
+    (tmp_path / "lifecycle_coverage_summary.json").write_text(json.dumps({"migrated_unique_mints": 0, "decision_safe_full_paths": 0}), encoding="utf-8")
+
+    summary = run_migration_linkage_audit(tmp_path)
+
+    assert summary["global_migration_events_deduped"] == 1
+    assert summary["lifecycle_migrated_unique_mints"] == 0
+    assert summary["decision_safe_full_paths"] == 0
+    assert summary["failure_reason_counts"]["migration_mint_not_in_birth_set"] == 1
+    assert summary["migration_rows"][0]["failure_reason"] == "migration_mint_not_in_birth_set"
+    assert (tmp_path / "migration_linkage_audit.json").exists()
+    assert (tmp_path / "migration_linkage_audit.md").exists()
+
+
+def test_t011_migration_linkage_rejects_migration_slot_before_birth_slot(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [{"mint": "mint-slot-order", "admitted": True, "received_at": 100.0, "slot": 200}],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "curve_observations.jsonl",
+        [{"mint": "mint-slot-order", "received_at": 120.0, "slot": 200, "decode_status": "decoded"}],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {
+                "mint": "mint-slot-order",
+                "signature": "sig-mig-slot",
+                "pool_or_pair_address": "pool-slot",
+                "migration_received_at": 130.0,
+                "slot": 199,
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "mint-slot-order", "received_at": 140.0}])
+
+    summary = run_migration_linkage_audit(tmp_path)
+    row = summary["migration_rows"][0]
+
+    assert summary["decision_safe_full_paths"] == 0
+    assert summary["failure_reason_counts"]["migration_slot_before_birth_slot"] == 1
+    assert row["birth_slot"] == 200
+    assert row["migration_slot"] == 199
+    assert row["failure_reason"] == "migration_slot_before_birth_slot"
+
+
+def test_t011_migration_linkage_audit_classifies_startup_boundary_migration(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-startup", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "first-birth", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {
+                "mint": "startup-migration",
+                "signature": "sig-startup-migration",
+                "migration_received_at": 100.5,
+                "pool_or_pair_address": "pool-startup",
+                "quote_asset": "SOL",
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "startup-migration"}])
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"global_migration_events_deduped": 1}), encoding="utf-8")
+    (tmp_path / "lifecycle_coverage_summary.json").write_text(
+        json.dumps({"migrated_unique_mints": 1, "decision_safe_full_paths": 0}),
+        encoding="utf-8",
+    )
+
+    summary = run_migration_linkage_audit(tmp_path)
+
+    row = summary["migration_rows"][0]
+    assert row["failure_reason"] == "migration_before_birth_source_ready"
+    assert row["migration_readiness_failure_reason"] == "startup_boundary_migration_not_decision_safe"
+    assert row["startup_boundary_migration"] is True
+    assert row["decision_safe_full_path"] is False
+    assert row["seconds_after_campaign_start"] == 0.5
+    assert row["seconds_before_first_birth_source_event"] == 0.5
+    assert summary["startup_boundary_migration_count"] == 1
+    assert summary["steady_state_unlinked_migration_count"] == 0
+    assert summary["migration_readiness_failure_reason_counts"]["startup_boundary_migration_not_decision_safe"] == 1
+    assert "migration_mint_not_in_birth_set" not in summary["failure_reason_counts"]
+
+
+def test_t011_cli_migration_linkage_audit_skips_live_storage_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "birth-mint", "admitted": True, "received_at": 100.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {
+                "mint": "birth-mint",
+                "signature": "sig-migration",
+                "migration_received_at": 200.0,
+                "pool_or_pair_address": "pool-1",
+                "quote_asset": "SOL",
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "birth-mint", "received_at": 150.0}])
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "birth-mint"}])
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"global_migration_events_deduped": 1}), encoding="utf-8")
+    (tmp_path / "lifecycle_coverage_summary.json").write_text(
+        json.dumps({"migrated_unique_mints": 1, "decision_safe_full_paths": 1}),
+        encoding="utf-8",
+    )
+
+    def fail_storage_preflight(_config: object) -> None:
+        raise AssertionError("offline audit must not run live storage preflight")
+
+    monkeypatch.setattr(recorder_module, "_run_storage_preflight", fail_storage_preflight)
+
+    exit_code = recorder_module.main(["--mode", "audit-migration-linkage", "--data-root", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "migration_linkage_audit_json=" in output
+    assert (tmp_path / "migration_linkage_audit.json").exists()
+
+
+def test_t0115_migration_capture_forensics_keeps_high_fdv_low_progress_as_diagnostic(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-t0115", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"run_id": "run-t0115"}), encoding="utf-8")
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "mint-missed", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "mint-missed", "received_at": 300.0, "progress_pct": 21.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "migration_candidates.jsonl",
+        [
+            {
+                "mint": "mint-missed",
+                "received_at": 350.0,
+                "candidate_reason": "high_fdv_without_migration_event",
+                "valuation_usd": 125000,
+                "progress_pct": 21.0,
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", [])
+
+    summary = run_migration_capture_forensics(tmp_path)
+
+    assert summary["missed_candidate_count"] == 0
+    assert summary["readiness_correction"] == "no_in_window_migration_observed"
+    assert summary["derived_migration_likely_candidates"][0]["migration_grade_evidence"] is False
+    assert summary["derived_migration_likely_candidates"][0]["classification"] == "high_fdv_diagnostic_not_migration_evidence"
+    assert (tmp_path / "migration_capture_forensics.json").exists()
+    assert (tmp_path / "migration_capture_forensics.md").exists()
+
+
+def test_t0115_migration_capture_forensics_flags_migration_grade_derived_detector_miss(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-t0115-migration-grade", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"run_id": "run-t0115-migration-grade"}), encoding="utf-8")
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "mint-missed", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "mint-missed", "received_at": 300.0, "progress_pct": 100.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "migration_candidates.jsonl",
+        [
+            {
+                "mint": "mint-missed",
+                "received_at": 350.0,
+                "candidate_reason": "high_fdv_without_migration_event",
+                "valuation_usd": 125000,
+                "progress_pct": 100.0,
+                "complete": True,
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", [])
+
+    summary = run_migration_capture_forensics(tmp_path)
+
+    assert summary["missed_candidate_count"] == 1
+    assert summary["readiness_correction"] == "in_window_migration_candidates_missed_by_detector"
+    assert summary["derived_migration_likely_candidates"][0]["migration_grade_evidence"] is True
+    assert summary["derived_migration_likely_candidates"][0]["classification"] == "migration_detector_missed_candidate"
+    assert (tmp_path / "migration_capture_forensics.json").exists()
+    assert (tmp_path / "migration_capture_forensics.md").exists()
+
+
+def test_t0118_migration_capture_forensics_caps_large_detail_arrays(tmp_path: Path) -> None:
+    raw_rows = [
+        {
+            "candidate_id": f"raw-{index}",
+            "mint": f"mint-forensics-cap-{index}",
+            "signature": f"sig-forensics-cap-{index}",
+            "slot": index,
+            "received_at": 200.0 + index,
+            "pool_or_pair_address": f"pool-forensics-cap-{index}",
+            "quote_mint": SOL_MINT,
+            "quote_asset": "SOL",
+            "confidence": "confirmed",
+            "detection_method": "pumpswap_pair_created_signal",
+        }
+        for index in range(650)
+    ]
+    _write_t007bc_jsonl(tmp_path, "global_migration_raw_candidates.jsonl", raw_rows)
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", [])
+
+    summary = run_migration_capture_forensics(tmp_path)
+
+    assert summary["raw_migration_spool_rows"] == 650
+    assert summary["forensics_detail_row_limit"] == 500
+    assert summary["forensics_detail_rows_truncated"] is True
+    assert len(summary["raw_candidates"]) == 500
+    assert len(summary["decode_rows"]) == 500
+
+
+def test_t0115_migration_capture_forensics_classifies_startup_and_in_window(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-t0115-window", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"run_id": "run-t0115-window"}), encoding="utf-8")
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "birth-ready", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {"mint": "startup-mint", "pool_or_pair_address": "pool-startup", "migration_received_at": 100.5},
+            {"mint": "birth-ready", "pool_or_pair_address": "pool-window", "migration_received_at": 200.0},
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "birth-ready", "received_at": 150.0}])
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "birth-ready", "received_at": 201.0}])
+
+    summary = run_migration_capture_forensics(tmp_path)
+
+    assert summary["startup_boundary_count"] == 1
+    assert summary["in_window_migration_candidate_count"] == 1
+    rows = {row["mint"]: row for row in summary["timestamp_rows"]}
+    assert rows["startup-mint"]["classification"] == "startup_boundary"
+    assert rows["birth-ready"]["classification"] == "in_window"
+    assert summary["birth_linkage_rows"][1]["decision_safe_full_path"] is True
+
+
+def test_t0115_expected_mint_audit_reports_artifact_coverage(tmp_path: Path) -> None:
+    expected = tmp_path / "expected_migrations.txt"
+    expected.write_text("mint-expected\n", encoding="utf-8")
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"run_id": "run-t0115-expected"}), encoding="utf-8")
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "mint-expected", "admitted": True, "received_at": 100.0}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "mint-expected", "received_at": 110.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-expected", "received_at": 120.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [{"mint": "mint-expected", "pool_or_pair_address": "pool-expected", "migration_received_at": 130.0}],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "mint-expected", "received_at": 131.0}])
+
+    summary = run_migration_capture_forensics(tmp_path, expected_mints_path=expected)
+
+    audit_row = summary["expected_mints_audit"][0]
+    assert audit_row["mint"] == "mint-expected"
+    assert audit_row["birth_seen"] is True
+    assert audit_row["decoded_migration_candidate_seen"] is True
+    assert audit_row["full_path_linked"] is True
+
+
+def test_t0115_cli_migration_capture_forensics_skips_live_storage_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"run_id": "run-t0115-cli"}), encoding="utf-8")
+
+    def fail_storage_preflight(_config: object) -> None:
+        raise AssertionError("offline forensics must not run live storage preflight")
+
+    monkeypatch.setattr(recorder_module, "_run_storage_preflight", fail_storage_preflight)
+
+    exit_code = recorder_module.main(["--mode", "audit-migration-capture-forensics", "--data-root", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "migration_capture_forensics_json=" in output
+    assert (tmp_path / "migration_capture_forensics.json").exists()
+
+
+def test_t0117_forensics_separates_raw_pumpswap_activity_from_migration_candidates(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-t0117", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps({"run_id": "run-t0117", "raw_notifications": 3}),
+        encoding="utf-8",
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "pumpswap_transaction_route_audit.jsonl",
+        [
+            {"signature": "sig-route-1", "slot": 1, "received_at": 101.0},
+            {"signature": "sig-route-2", "slot": 2, "received_at": 102.0},
+            {"signature": "sig-route-3", "slot": 3, "received_at": 103.0},
+        ],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "pumpswap_swap_events.jsonl",
+        [
+            {"signature": "sig-swap-1", "slot": 4, "received_at": 104.0, "mint": "mint-swap", "pool": "pool-swap"},
+            {"signature": "sig-swap-2", "slot": 5, "received_at": 105.0, "mint": "mint-swap", "pool": "pool-swap"},
+        ],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_raw_candidates.jsonl",
+        [
+            {
+                "candidate_id": "cand-raw",
+                "signature": "sig-raw",
+                "slot": 6,
+                "observed_at": 106.0,
+                "pool_address": "pool-raw",
+                "source_channel": "pumpswap_pool_create",
+                "decode_status": "missing_mint",
+                "write_enqueued": True,
+            }
+        ],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_candidates.jsonl",
+        [
+            {
+                "candidate_id": "cand-decoded",
+                "signature": "sig-decoded",
+                "slot": 7,
+                "received_at": 107.0,
+                "mint": "mint-decoded",
+                "pool_or_pair_address": "pool-decoded",
+                "quote_mint": SOL_MINT,
+                "quote_asset": "SOL",
+                "source_route": "pumpswap_pool_create",
+                "detection_method": "pumpswap_pair_created_signal",
+                "confidence": "candidate",
+            }
+        ],
+    )
+
+    summary = run_migration_capture_forensics(tmp_path)
+
+    taxonomy = summary["raw_candidate_taxonomy"]
+    assert taxonomy["raw_pumpswap_notification"] == 3
+    assert taxonomy["raw_pumpswap_swap_event"] == 2
+    assert taxonomy["raw_pool_create_like_event"] == 2
+    assert taxonomy["raw_migration_like_event"] == 1
+    assert taxonomy["decoded_pool_create_candidate"] == 1
+    assert taxonomy["decoded_migration_candidate"] == 1
+    assert taxonomy["decode_failed_candidate"] == 1
+    assert summary["raw_migration_candidate_count_before_decode"] == 6
+    assert "raw PumpSwap notifications/swaps plus migration-like artifacts" in summary["raw_candidate_count_explanation"]
+
+
+def test_t0117_write_path_audit_reports_retry_pending_and_persisted_rows(tmp_path: Path) -> None:
+    migration = {
+        "candidate_id": "cand-write",
+        "signature": "sig-write",
+        "slot": 10,
+        "received_at": 120.0,
+        "mint": "mint-write",
+        "base_mint": "mint-write",
+        "pool_or_pair_address": "pool-write",
+        "quote_mint": SOL_MINT,
+        "quote_asset": "SOL",
+        "source_route": "pumpswap_first_swap_after_live_birth",
+    }
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", [migration])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_write_intents.jsonl",
+        [
+            {
+                **migration,
+                "candidate_id": "cand-write",
+                "write_status": "retry_pending",
+                "write_success": False,
+                "write_error": "recorder_side_effects_deferred_to_owner_thread",
+                "writer_thread_id": 123,
+                "thread_affinity_error": False,
+                "retry_count": 0,
+            }
+        ],
+    )
+
+    audit = run_migration_write_path_audit(tmp_path)
+
+    row = audit["write_path_rows"][0]
+    assert audit["decoded_migration_candidates"] == 1
+    assert audit["write_status_counts"] == {"retry_pending": 1}
+    assert audit["classification_counts"]["migration_candidate_spooled_but_not_written"] == 1
+    assert row["signature"] == "sig-write"
+    assert row["write_queued"] is True
+    assert row["write_attempted"] is True
+    assert row["write_success"] is False
+    assert row["persisted_artifact_row_exists"] is True
+    assert row["classification"] == "migration_candidate_spooled_but_not_written"
+    assert (tmp_path / "migration_write_path_audit.json").exists()
+    assert (tmp_path / "migration_write_path_audit.md").exists()
+
+
+def test_t0117_dedupe_audit_flags_distinct_mints_collapsed_under_same_key(tmp_path: Path) -> None:
+    rows = [
+        {
+            "signature": "sig-a",
+            "received_at": 100.0,
+            "mint": "mint-a",
+            "pool_or_pair_address": "pool-a",
+            "quote_mint": SOL_MINT,
+            "quote_asset": "SOL",
+        },
+        {
+            "signature": "sig-b",
+            "received_at": 101.0,
+            "mint": "mint-b",
+            "pool_or_pair_address": "pool-b",
+            "quote_mint": SOL_MINT,
+            "quote_asset": "SOL",
+            "dedupe_key": "forced-broad-key",
+        },
+        {
+            "signature": "sig-c",
+            "received_at": 102.0,
+            "mint": "mint-c",
+            "pool_or_pair_address": "pool-c",
+            "quote_mint": SOL_MINT,
+            "quote_asset": "SOL",
+            "dedupe_key": "forced-broad-key",
+        },
+    ]
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", rows)
+
+    audit = run_migration_dedupe_audit(tmp_path)
+
+    assert audit["decoded_candidates_before_dedupe"] == 3
+    assert audit["dedupe_key_too_broad"] is True
+    broad = [row for row in audit["dedupe_rows"] if row["dedupe_key"] == "forced-broad-key"][0]
+    assert broad["dedupe_key_too_broad"] is True
+    assert broad["mints"] == ["mint-b", "mint-c"]
+    assert (tmp_path / "migration_dedupe_audit.json").exists()
+    assert (tmp_path / "migration_dedupe_audit.md").exists()
+
+
+def test_t0117_candidate_linkage_matrix_reports_specific_full_path_failure_reasons(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-linkage", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [
+            {"mint": "mint-not-admitted", "admitted": False, "received_at": 101.0, "admission_reason": "sample_rejected"},
+            {"mint": "mint-missing-curve", "admitted": True, "received_at": 102.0},
+            {"mint": "mint-full", "admitted": True, "received_at": 103.0},
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "mint-full", "received_at": 120.0, "feature_observed_at": 120.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-full", "received_at": 121.0, "feature_observed_at": 121.0}])
+    _write_t007bc_jsonl(tmp_path, "holder_distribution_snapshots.jsonl", [{"mint": "mint-full", "received_at": 122.0}])
+    _write_t007bc_jsonl(tmp_path, "dev_behavior_events.jsonl", [{"mint": "mint-full", "received_at": 122.0}])
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "mint-full", "received_at": 131.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {"mint": "mint-unknown", "pool_or_pair_address": "pool-unknown", "received_at": 130.0, "slot": 10},
+            {"mint": "mint-not-admitted", "pool_or_pair_address": "pool-not-admitted", "received_at": 130.0, "slot": 11},
+            {"mint": "mint-missing-curve", "pool_or_pair_address": "pool-missing-curve", "received_at": 130.0, "slot": 12},
+            {"mint": "mint-full", "pool_or_pair_address": "pool-full", "received_at": 130.0, "slot": 13},
+        ],
+    )
+
+    summary = run_migration_capture_forensics(tmp_path)
+
+    rows = {row["candidate_mint"]: row for row in summary["migration_candidate_linkage_matrix"]}
+    assert rows["mint-unknown"]["failure_reason"] == "migration_mint_not_in_birth_set"
+    assert rows["mint-not-admitted"]["failure_reason"] == "migration_mint_birth_seen_but_not_admitted"
+    assert rows["mint-missing-curve"]["failure_reason"] == "missing_pre_migration_curve_state"
+    assert rows["mint-full"]["final_full_path_status"] == "decision_safe_full_path"
+    assert (tmp_path / "migration_candidate_linkage_matrix.csv").exists()
+    assert (tmp_path / "migration_candidate_linkage_matrix.json").exists()
+
+
+def test_t0117_trade_flow_eventful_gap_audit_is_separate_from_no_event_mints(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [
+            {"mint": "mint-gap", "admitted": True, "received_at": 100.0},
+            {"mint": "mint-no-event", "admitted": True, "received_at": 100.0},
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": "mint-gap", "received_at": 101.0}, {"mint": "mint-no-event", "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "raw_trade_events.jsonl", [{"mint": "mint-gap", "signature": "sig-gap", "received_at": 102.0}])
+    _write_t007bc_jsonl(tmp_path, "pumpswap_swap_events.jsonl", [{"mint": "mint-post", "signature": "sig-post", "received_at": 103.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [])
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"unique_birth_mints": 2}), encoding="utf-8")
+
+    gap = run_trade_flow_eventful_gap_audit(tmp_path)
+
+    assert gap["eventful_gap_count"] == 1
+    assert gap["no_event_missing_count"] == 1
+    assert gap["eventful_gap_rows"][0]["mint"] == "mint-gap"
+    assert gap["eventful_gap_rows"][0]["raw_event_present"] is True
+    assert gap["eventful_gap_rows"][0]["classification"] == "real_collector_or_writer_gap"
+    coverage = json.loads((tmp_path / "trade_flow_coverage_audit.json").read_text(encoding="utf-8"))
+    assert coverage["post_migration_swap_mints_excluded_from_pre_migration_trade_flow"] == 1
+    assert (tmp_path / "trade_flow_eventful_gap_audit.json").exists()
+    assert (tmp_path / "trade_flow_eventful_gap_audit.md").exists()
+
+
+def test_t0117_long_readiness_banner_uses_migration_write_capture_failure_text(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "mint-a", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-a", "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", [])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps({"unique_birth_mints": 1, "actual_duration_seconds": 600.0, "requested_source_duration_seconds": 600.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps({"coverage_metrics": [{"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(json.dumps({"needed_decodes_to_pass": 0}), encoding="utf-8")
+    (tmp_path / "migration_capture_forensics.json").write_text(
+        json.dumps(
+            {
+                "readiness_correction": "migration_lane_write_path_failure",
+                "migration_write_retry_pending_count": 1,
+                "json_path": str(tmp_path / "migration_capture_forensics.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["long_scan_readiness_banner_text"] == "Migration lane write/capture failure — full-path readiness invalid"
+    assert report["migration_lane_health"] == "failed"
+
+
+def test_t0115_long_readiness_uses_capture_forensics_issue_status(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "first-birth", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "first-birth", "trade_flow_status": "available"}])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps({"unique_birth_mints": 1, "actual_duration_seconds": 600.0, "requested_source_duration_seconds": 600.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps(
+            {
+                "coverage_metrics": [
+                    {"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass", "numerator": 1, "denominator": 1}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(
+        json.dumps({"needed_decodes_to_pass": 0, "missing_age_eligible_count": 0, "scheduler_gap_count": 0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "migration_capture_forensics.json").write_text(
+        json.dumps(
+            {
+                "readiness_correction": "in_window_migration_candidates_missed_by_detector",
+                "missed_candidate_count": 2,
+                "global_migration_thread_error_count": 1,
+                "json_path": str(tmp_path / "migration_capture_forensics.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["migration_opportunity_status"] == "in_window_migration_candidates_missed_by_detector"
+    assert report["migration_readiness_classification"] == "in_window_migration_candidates_missed_by_detector"
+    assert report["long_scan_readiness_banner_text"] == "Migration detector/linkage audit required"
+    assert "migration_capture_forensics_issue" in report["blockers"]
+    assert report["migration_capture_forensics_path"] == str(tmp_path / "migration_capture_forensics.json")
+
+
+def test_t0116_listener_thread_spools_without_cross_thread_sqlite_use(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
+
+    def fail_if_called_from_listener(_filename: str, _row: dict) -> None:
+        if threading.get_ident() != recorder._sqlite_owner_thread_id:
+            raise AssertionError("listener thread used recorder SQLite path")
+
+    recorder._record_persistent_lifecycle_artifact = fail_if_called_from_listener  # type: ignore[method-assign]
+    errors: list[str] = []
+
+    def listener_thread() -> None:
+        try:
+            writer = GlobalMigrationDedupeWriter(tmp_path, recorder=recorder)
+            writer.record(
+                {
+                    "mint": "mint-thread-safe",
+                    "signature": "sig-thread-safe",
+                    "slot": 10,
+                    "received_at": 200.0,
+                    "pool_or_pair_address": "pool-thread-safe",
+                    "quote_mint": SOL_MINT,
+                    "confidence": "confirmed",
+                    "detection_method": "pumpswap_pair_created_signal",
+                }
+            )
+        except Exception as exc:  # pragma: no cover - assertion below reports details
+            errors.append(f"{type(exc).__name__}: {exc}")
+
+    thread = threading.Thread(target=listener_thread, name="test-t0116-listener")
+    thread.start()
+    thread.join(timeout=5)
+
+    assert errors == []
+    assert _jsonl(tmp_path / "global_migration_events.jsonl")
+    raw_rows = _jsonl(tmp_path / "global_migration_raw_candidates.jsonl")
+    intent_rows = _jsonl(tmp_path / "global_migration_write_intents.jsonl")
+    assert raw_rows[0]["mint"] == "mint-thread-safe"
+    assert raw_rows[0]["write_enqueued"] is True
+    assert any(row["write_status"] == "retry_pending" for row in intent_rows)
+    assert any(row.get("write_error") == "recorder_side_effects_deferred_to_owner_thread" for row in intent_rows)
+
+
+def test_t0116_first_swap_listener_thread_defers_owner_side_effects(tmp_path: Path) -> None:
+    mint = "threadFirstSwapMint111111111111111111111111pump"
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
+    recorder.process_birth(_launch(mint, received_at=100.0))
+
+    def fail_if_called_from_listener(_filename: str, _row: dict) -> None:
+        if threading.get_ident() != recorder._sqlite_owner_thread_id:
+            raise AssertionError("listener thread used recorder SQLite path")
+
+    recorder._record_persistent_lifecycle_artifact = fail_if_called_from_listener  # type: ignore[method-assign]
+    errors: list[str] = []
+
+    def listener_thread() -> None:
+        try:
+            recorder_module._emit_pumpswap_balance_delta_partial_event(
+                output_root=tmp_path,
+                recorder=recorder,
+                counter={},
+                row={
+                    "swap_direction": "buy",
+                    "mint": mint,
+                    "base_mint": mint,
+                    "pool": "thread-first-swap-pool",
+                    "quote_mint": SOL_MINT,
+                    "base_amount": 1_000_000,
+                    "quote_amount": 100_000,
+                    "received_at": 105.0,
+                    "signature": "thread-first-swap-sig",
+                },
+                event={},
+            )
+        except Exception as exc:  # pragma: no cover - assertion below reports details
+            errors.append(f"{type(exc).__name__}: {exc}")
+
+    thread = threading.Thread(target=listener_thread, name="test-first-swap-listener")
+    thread.start()
+    thread.join(timeout=5)
+
+    assert errors == []
+    assert _jsonl(tmp_path / "global_migration_events.jsonl")[0]["mint"] == mint
+    assert any(row["write_status"] == "retry_pending" for row in _jsonl(tmp_path / "global_migration_write_intents.jsonl"))
+
+    result = recorder.apply_global_migration_side_effects_from_artifact()
+
+    assert result["migration_side_effects_applied"] == 1
+    intent_rows = _jsonl(tmp_path / "global_migration_write_intents.jsonl")
+    assert any(row["write_status"] == "written" and row["retry_count"] == 1 for row in intent_rows)
+    assert _jsonl(tmp_path / "post_migration_observations.jsonl")
+
+
+def test_t0116_migration_candidate_spooled_before_sqlite_failure(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
+
+    def fail_persistent(_filename: str, _row: dict) -> None:
+        raise sqlite3.ProgrammingError("SQLite objects created in a thread can only be used in that same thread")
+
+    recorder._record_persistent_lifecycle_artifact = fail_persistent  # type: ignore[method-assign]
+    writer = GlobalMigrationDedupeWriter(tmp_path, recorder=recorder)
+
+    status = writer.record(
+        {
+            "mint": "mint-sqlite-fail",
+            "signature": "sig-sqlite-fail",
+            "slot": 11,
+            "received_at": 201.0,
+            "pool_or_pair_address": "pool-sqlite-fail",
+            "quote_mint": SOL_MINT,
+            "confidence": "confirmed",
+            "detection_method": "pumpswap_pair_created_signal",
+        }
+    )
+
+    assert status == "event"
+    raw_rows = _jsonl(tmp_path / "global_migration_raw_candidates.jsonl")
+    intent_rows = _jsonl(tmp_path / "global_migration_write_intents.jsonl")
+    assert raw_rows[0]["mint"] == "mint-sqlite-fail"
+    assert any(row["write_status"] == "failed" for row in intent_rows)
+    assert any(row["write_error_class"] == "ProgrammingError" for row in intent_rows)
+    assert any(row["thread_affinity_error"] is True for row in intent_rows)
+
+
+def test_t0116_owner_thread_rebuild_applies_spooled_migration_side_effects(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
+    writer = GlobalMigrationDedupeWriter(tmp_path, recorder=recorder, defer_recorder_side_effects=True)
+    writer.record(
+        {
+            "mint": "mint-rebuild-side-effects",
+            "signature": "sig-rebuild-side-effects",
+            "slot": 12,
+            "received_at": 202.0,
+            "pool_or_pair_address": "pool-rebuild-side-effects",
+            "quote_mint": SOL_MINT,
+            "confidence": "confirmed",
+            "detection_method": "pumpswap_pair_created_signal",
+        }
+    )
+
+    result = recorder.apply_global_migration_side_effects_from_artifact()
+
+    assert result["migration_side_effects_applied"] == 1
+    intent_rows = _jsonl(tmp_path / "global_migration_write_intents.jsonl")
+    assert any(row["write_status"] == "written" and row["retry_count"] == 1 for row in intent_rows)
+    assert _jsonl(tmp_path / "post_migration_observations.jsonl")
+
+
+def test_t0116_offline_rebuild_from_raw_spool_recovers_migration_candidate(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_raw_candidates.jsonl",
+        [
+            {
+                "candidate_id": "raw-rebuild-1",
+                "mint": "mint-spool-rebuild",
+                "signature": "sig-spool-rebuild",
+                "slot": 13,
+                "observed_at": 203.0,
+                "received_at": 203.0,
+                "pool_address": "pool-spool-rebuild",
+                "pool_or_pair_address": "pool-spool-rebuild",
+                "quote_mint": SOL_MINT,
+                "quote_asset": "SOL",
+                "confidence": "confirmed",
+                "detection_method": "pumpswap_pair_created_signal",
+            }
+        ],
+    )
+
+    summary = run_rebuild_migrations_from_spool(tmp_path)
+
+    assert summary["raw_spool_rows"] == 1
+    assert summary["events_recovered_from_spool"] == 1
+    assert _jsonl(tmp_path / "global_migration_events.jsonl")[0]["mint"] == "mint-spool-rebuild"
+    assert (tmp_path / "migration_capture_forensics.json").exists()
+    assert (tmp_path / "long_scan_readiness_audit.json").exists()
+
+
+def test_t0116_forensics_and_readiness_report_thread_affinity_failure(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-t0116", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps({"run_id": "run-t0116", "actual_duration_seconds": 600.0, "requested_source_duration_seconds": 600.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps({"coverage_metrics": [{"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(json.dumps({"needed_decodes_to_pass": 0}), encoding="utf-8")
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "mint-affinity", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "mint-affinity", "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_write_intents.jsonl",
+        [
+            {
+                "candidate_id": "affinity-1",
+                "mint": "mint-affinity",
+                "signature": "sig-affinity",
+                "write_status": "failed",
+                "write_error_class": "ProgrammingError",
+                "write_error": "SQLite objects created in a thread can only be used in that same thread",
+                "thread_affinity_error": True,
+            }
+        ],
+    )
+
+    forensics = run_migration_capture_forensics(tmp_path)
+    readiness = run_long_scan_readiness_audit(tmp_path)
+
+    assert forensics["migration_write_intent_failure_count"] == 1
+    assert forensics["sqlite_thread_affinity_error_count"] == 1
+    assert forensics["readiness_correction"] == "migration_writer_thread_affinity_error"
+    assert readiness["migration_opportunity_status"] == "migration_writer_thread_affinity_error"
+    assert readiness["long_scan_readiness_banner_text"] == "Migration lane write/capture failure — full-path readiness invalid"
+
+
+def test_t0116_forensics_treats_recovered_thread_affinity_as_resolved(tmp_path: Path) -> None:
+    mint = "mint-recovered-affinity"
+    migration_time = 120.0
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-t0116", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-t0116",
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "global_migration_errors": [
+                    "ProgrammingError: SQLite objects created in a thread can only be used in that same thread"
+                ],
+                "migration_side_effects_applied": 1,
+                "migration_side_effects_failed": 0,
+                "live_migration_side_effect_drain_count": 1,
+                "live_migration_side_effects_applied": 1,
+                "live_migration_side_effects_failed": 0,
+                "live_migration_side_effects_source_rows": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps({"coverage_metrics": [{"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(json.dumps({"needed_decodes_to_pass": 0}), encoding="utf-8")
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": mint, "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": mint, "received_at": 110.0, "feature_observed_at": 110.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": mint, "trade_flow_status": "available", "received_at": 111.0}])
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": mint, "received_at": 121.0}])
+    migration = {
+        "mint": mint,
+        "signature": "sig-recovered-affinity",
+        "received_at": migration_time,
+        "migration_received_at": migration_time,
+        "pool_or_pair_address": "pool-recovered-affinity",
+        "quote_mint": SOL_MINT,
+        "quote_asset": "SOL",
+    }
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", [migration])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_write_intents.jsonl",
+        [{**migration, "write_status": "written", "write_success": True, "thread_affinity_error": False}],
+    )
+    (tmp_path / "live_status.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-t0116",
+                "run_status": "finalized",
+                "runtime_phase": "finalized",
+                "can_run_60m_thesis_scan": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    forensics = run_migration_capture_forensics(tmp_path)
+    readiness = run_long_scan_readiness_audit(tmp_path)
+    live_status = json.loads((tmp_path / "live_status.json").read_text(encoding="utf-8"))
+
+    assert forensics["raw_global_thread_affinity_error_count"] == 1
+    assert forensics["resolved_global_thread_affinity_error_count"] == 1
+    assert forensics["sqlite_thread_affinity_error_count"] == 0
+    assert forensics["global_migration_thread_error_count"] == 0
+    assert forensics["readiness_correction"] == "in_window_migration_decision_safe_full_path_observed"
+    assert readiness["can_run_60m_thesis_scan"] is True
+    assert live_status["can_run_60m_thesis_scan"] is True
+    assert live_status["long_scan_status"] == "READY_FOR_60M_THESIS_SCAN"
+
+
+def test_t0118_long_readiness_blocks_finalization_only_migration_side_effect_recovery(tmp_path: Path) -> None:
+    mint = "mint-finalization-only"
+    migration_time = 120.0
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-finalization-only", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-finalization-only",
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "migration_side_effects_applied": 1,
+                "migration_side_effects_failed": 0,
+                "live_migration_side_effect_drain_count": 0,
+                "live_migration_side_effects_applied": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps({"coverage_metrics": [{"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(json.dumps({"needed_decodes_to_pass": 0}), encoding="utf-8")
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": mint, "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": mint, "received_at": 110.0, "feature_observed_at": 110.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": mint, "trade_flow_status": "available", "received_at": 111.0}])
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": mint, "received_at": 121.0}])
+    migration = {
+        "mint": mint,
+        "signature": "sig-finalization-only",
+        "received_at": migration_time,
+        "migration_received_at": migration_time,
+        "pool_or_pair_address": "pool-finalization-only",
+        "quote_mint": SOL_MINT,
+        "quote_asset": "SOL",
+    }
+    _write_t007bc_jsonl(tmp_path, "global_migration_events.jsonl", [migration])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_write_intents.jsonl",
+        [{**migration, "write_status": "written", "write_success": True, "thread_affinity_error": False}],
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["can_run_10m_collector_proof"] is True
+    assert report["can_run_10m_feature_proof"] is True
+    assert report["decision_safe_full_path_status"] == "observed"
+    assert report["can_run_60m_thesis_scan"] is False
+    assert "migration_side_effects_not_proven_live" in report["blockers"]
+    assert "prove_live_migration_side_effect_drain_before_longer_scan" in report["next_fix_recommendations"]
+
+
+def test_t011_migration_linkage_distinguishes_curve_decode_after_migration(tmp_path: Path) -> None:
+    mint = "mint-late-curve"
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": mint, "admitted": True, "received_at": 100.0}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": mint, "received_at": 110.0, "feature_observed_at": 110.0}])
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": mint, "received_at": 106.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [{"mint": mint, "migration_received_at": 105.0, "pool_or_pair_address": "pool-late-curve", "quote_asset": "SOL"}],
+    )
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"global_migration_events_deduped": 1}), encoding="utf-8")
+
+    summary = run_migration_linkage_audit(tmp_path)
+
+    assert summary["failure_reason_counts"] == {"migration_before_first_curve_observation": 1}
+    assert summary["migration_rows"][0]["pre_migration_curve_state_exists"] is True
+    assert summary["migration_rows"][0]["pre_migration_curve_state_before_migration"] is False
+
+
+def test_t011_long_scan_readiness_report_blocks_60m_until_trade_flow_and_migration_linkage_clear(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [{"mint": "mint-a", "admitted": True, "received_at": 100.0, "trade_flow_status": "writer_gap"}],
+    )
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps({"unique_birth_mints": 1, "global_migration_events_deduped": 0}), encoding="utf-8"
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps(
+            {
+                "action": "WARN",
+                "abort_reasons": [],
+                "coverage_metrics": [
+                    {"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass", "numerator": 1, "denominator": 1},
+                    {"metric_id": "trade_flow_mint_coverage", "status": "fail", "numerator": 0, "denominator": 1},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["can_run_10m_collector_proof"] is True
+    assert report["10m_collector_proof_status"] == "passed"
+    assert report["can_run_10m_feature_proof"] is False
+    assert report["10m_feature_proof_status"] == "failed"
+    assert report["can_run_10m_feature_proof_reason"] == "collector_or_eventful_trade_flow_gate_not_proven"
+    assert report["can_run_60m_thesis_scan"] is False
+    assert report["60m_thesis_readiness"] == "blocked"
+    assert report["can_run_2h_plus_scan"] is False
+    assert report["long_scan_status"] == "BLOCKED_FOR_LONG_SCAN"
+    assert report["long_scan_readiness_banner_text"] == "10m collector + feature proof passed; 60m thesis readiness blocked"
+    assert "trade_flow_eventful_parser_writer_gap" in report["blockers"]
+    assert "no_in_window_decision_safe_full_path" in report["blockers"]
+    assert "fix_trade_flow_missing_flow_for_birth_mints" in report["next_fix_recommendations"]
+    assert (tmp_path / "long_scan_readiness_audit.json").exists()
+    assert (tmp_path / "long_scan_readiness_audit.md").exists()
+
+
+def test_t011_long_scan_readiness_uses_canonical_lifecycle_curve_gate_when_supervisor_missing(tmp_path: Path) -> None:
+    mint = "mint-canonical-curve-pass"
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": mint, "admitted": True, "received_at": 100.0}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": mint, "received_at": 101.0, "feature_observed_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": mint, "trade_flow_status": "available", "received_at": 102.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {
+                "mint": mint,
+                "migration_received_at": 105.0,
+                "pool_or_pair_address": "pool-canonical-curve-pass",
+                "quote_asset": "SOL",
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": mint, "received_at": 106.0}])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "unique_birth_mints": 10,
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "global_migration_events_deduped": 1,
+                "live_migration_side_effect_drain_count": 1,
+                "live_migration_side_effects_applied": 1,
+                "live_migration_side_effects_failed": 0,
+                "live_migration_side_effects_source_rows": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "lifecycle_coverage_summary.json").write_text(
+        json.dumps(
+            {
+                "lifecycle_materializer_status": "ok",
+                "verified_births": 10,
+                "curve_state_decoded": 9,
+                "decision_safe_full_paths": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["t0103_curve_gate_passed"] is True
+    assert report["t0103_curve_gate_source"] == "canonical_lifecycle_materializer"
+    assert report["canonical_lifecycle_curve_decode_ratio"] == 0.9
+    assert report["can_run_10m_collector_proof"] is True
+    assert report["can_run_10m_feature_proof"] is True
+    assert report["decision_safe_full_path_status"] == "observed"
+    assert report["can_run_60m_thesis_scan"] is True
+    assert report["long_scan_status"] == "READY_FOR_60M_THESIS_SCAN"
+
+
+def test_t011_long_scan_readiness_recommends_rerun_for_startup_boundary_only(tmp_path: Path) -> None:
+    (tmp_path / "campaign_manifest.json").write_text(
+        json.dumps({"run_id": "run-startup", "started_at": 100.0, "ended_at": 700.0}),
+        encoding="utf-8",
+    )
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "first-birth", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "first-birth", "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {
+                "mint": "startup-migration",
+                "signature": "sig-startup-migration",
+                "migration_received_at": 100.5,
+                "pool_or_pair_address": "pool-startup",
+                "quote_asset": "SOL",
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "startup-migration"}])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps({"unique_birth_mints": 1, "actual_duration_seconds": 600.0, "requested_source_duration_seconds": 600.0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "lifecycle_coverage_summary.json").write_text(
+        json.dumps({"migrated_unique_mints": 1, "decision_safe_full_paths": 0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps(
+            {
+                "coverage_metrics": [
+                    {"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass", "numerator": 1, "denominator": 1}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["can_run_10m_feature_proof"] is True
+    assert report["10m_collector_proof_status"] == "passed"
+    assert report["10m_feature_proof_status"] == "passed"
+    assert report["can_run_60m_thesis_scan"] is False
+    assert report["60m_thesis_readiness"] == "blocked"
+    assert "no_in_window_decision_safe_full_path" in report["blockers"]
+    assert report["migration_opportunity_status"] == "no_in_window_migration_observed"
+    assert report["decision_safe_full_path_status"] == "not_observed"
+    assert "startup-boundary migration does not count as full-path evidence" in report["long_scan_blocker_bullets"]
+    assert report["migration_readiness_classification"] == "diagnostic_only_startup_boundary"
+    assert "rerun_10m_feature_proof_until_in_window_migration_observed" in report["next_fix_recommendations"]
+    assert "fix_migration_linkage_or_explain_unlinked_global_migration" not in report["next_fix_recommendations"]
+
+
+def test_t011_long_scan_readiness_uses_canonical_materializer_full_path_count(tmp_path: Path) -> None:
+    mint = "mint-linkage-only"
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": mint, "admitted": True, "received_at": 100.0, "slot": 10}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": mint, "received_at": 110.0, "slot": 11, "decode_status": "decoded"}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": mint, "received_at": 111.0, "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(tmp_path, "holder_distribution_snapshots.jsonl", [{"mint": mint, "received_at": 112.0}])
+    _write_t007bc_jsonl(tmp_path, "dev_behavior_events.jsonl", [{"mint": mint, "received_at": 113.0}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [{"mint": mint, "migration_received_at": 150.0, "received_at": 150.0, "slot": 20, "pool_or_pair_address": "pool-linkage-only"}],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": mint, "received_at": 151.0}])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "unique_birth_mints": 1,
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "global_migration_events_deduped": 1,
+                "live_migration_side_effect_drain_count": 1,
+                "live_migration_side_effects_applied": 1,
+                "live_migration_side_effects_failed": 0,
+                "live_migration_side_effects_source_rows": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps(
+            {
+                "coverage_metrics": [
+                    {"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass", "numerator": 1, "denominator": 1}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "lifecycle_coverage_summary.json").write_text(
+        json.dumps(
+            {
+                "lifecycle_materializer_status": "ok",
+                "verified_births": 1,
+                "curve_state_decoded": 1,
+                "migrated_unique_mints": 1,
+                "decision_safe_full_paths": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["row_derived_decision_safe_full_paths"] == 1
+    assert report["lifecycle_summary_decision_safe_full_paths"] == 0
+    assert report["decision_safe_full_paths"] == 0
+    assert report["decision_safe_full_path_status"] == "not_observed"
+    assert report["can_run_60m_thesis_scan"] is False
+    assert "no_in_window_decision_safe_full_path" in report["blockers"]
+
+
+def test_t011_long_scan_readiness_keeps_proofs_passed_when_no_migration_opportunity(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "first-birth", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "first-birth", "trade_flow_status": "available"}])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "unique_birth_mints": 1,
+                "global_migration_events_deduped": 0,
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "queue_drops": 0,
+                "rpc_failures": 0,
+                "http_429": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps(
+            {
+                "coverage_metrics": [
+                    {"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass", "numerator": 1, "denominator": 1}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(
+        json.dumps({"needed_decodes_to_pass": 0, "missing_age_eligible_count": 0, "scheduler_gap_count": 0}),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["10m_collector_proof_status"] == "passed"
+    assert report["10m_feature_proof_status"] == "passed"
+    assert report["migration_opportunity_status"] == "no_migration_opportunity_observed"
+    assert report["decision_safe_full_path_status"] == "not_observed"
+    assert report["60m_thesis_readiness"] == "blocked"
+    assert report["can_run_60m_thesis_scan"] is False
+    assert report["can_run_2h_plus_scan"] is False
+
+
+def test_long_scan_readiness_reports_latency_source_gap_reorg_and_budget_gates(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "first-birth", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "first-birth", "trade_flow_status": "available"}])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "unique_birth_mints": 1,
+                "global_migration_events_deduped": 0,
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "queue_drops": 0,
+                "rpc_failures": 0,
+                "http_429": 0,
+                "latency_histograms_present": True,
+                "route_latency_gate_passed": False,
+                "route_latency_gate_failures": ["birth_to_first_curve_observation_p95_exceeded"],
+                "commitment_reorg_drop_accounting_present": True,
+                "dropped_or_reorged_count": 1,
+                "source_gap_unbackfilled_count": 1,
+                "helius_budget_gate_present": True,
+                "helius_budget_gate_passed": False,
+                "helius_budget_blocker": "estimated_credits_exceed_configured_cap",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps({"coverage_metrics": [{"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(
+        json.dumps({"needed_decodes_to_pass": 0, "missing_age_eligible_count": 0, "scheduler_gap_count": 0}),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["route_latency_gate_passed"] is False
+    assert "route_latency_gate_failed" in report["blockers"]
+    assert report["source_gap_reorg_gate_passed"] is False
+    assert "source_gap_or_reorg_accounting_failed" in report["blockers"]
+    assert report["helius_budget_gate_passed"] is False
+    assert "helius_budget_gate_not_passed" in report["blockers"]
+    assert report["can_run_2h_plus_scan"] is False
+
+
+def test_long_scan_readiness_treats_derived_materialization_latency_failure_as_hard_veto(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "first-birth", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "first-birth", "trade_flow_status": "available"}])
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "unique_birth_mints": 1,
+                "global_migration_events_deduped": 0,
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "queue_drops": 0,
+                "rpc_failures": 0,
+                "http_429": 0,
+                "latency_histograms_present": True,
+                "route_latency_gate_passed": True,
+                "route_latency_histograms": {
+                    "birth_to_admission_complete_latency_ms": {"count": 3, "p95": 1503.13}
+                },
+                "materialization_latency_gate_passed": True,
+                "materialization_latency_gate_failures": [],
+                "commitment_reorg_drop_accounting_present": True,
+                "dropped_or_reorged_count": 0,
+                "source_gap_unbackfilled_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps({"coverage_metrics": [{"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass"}]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(
+        json.dumps({"needed_decodes_to_pass": 0, "missing_age_eligible_count": 0, "scheduler_gap_count": 0}),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["materialization_latency_gate_passed"] is False
+    assert "birth_to_admission_complete_p95_exceeded" in report["materialization_latency_gate_failures"]
+    assert "materialization_latency_gate_failed" in report["blockers"]
+    assert report["can_run_60m_thesis_scan"] is False
+
+
+def test_state_snapshot_prevents_live_state_mutation_iteration_errors(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100, max_active_tracking=1)
+    )
+    recorder.states["first"] = recorder_module.TrackingState(mint="first", deep_tracking_admitted=True)
+    recorder.states["first"].launch_received_at = 1000.0
+
+    class MutatingStateDict(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.mutated_during_iteration = False
+
+        def values(self):
+            if self.mutated_during_iteration:
+                return super().values()
+            state_dict = self
+            iterator = super().values().__iter__()
+
+            class MutatingValues:
+                def __iter__(self):
+                    yield next(iterator)
+                    state_dict["second"] = recorder_module.TrackingState(mint="second", deep_tracking_admitted=True)
+                    state_dict["second"].launch_received_at = 1001.0
+                    state_dict.mutated_during_iteration = True
+                    yield from iterator
+
+            return MutatingValues()
+
+    recorder.states = MutatingStateDict(recorder.states)
+
+    count = recorder._active_tracking_count()
+
+    assert count >= 1
+
+
+def test_t011_long_scan_readiness_reports_recovered_reconnect_and_sqlite_store(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": "first-birth", "admitted": True, "received_at": 101.0}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": "first-birth", "trade_flow_status": "available"}])
+    (tmp_path / "t007_lifecycle_state.sqlite").write_bytes(b"sqlite-placeholder")
+    (tmp_path / "collector_summary.json").write_text(
+        json.dumps(
+            {
+                "unique_birth_mints": 1,
+                "global_migration_events_deduped": 0,
+                "actual_duration_seconds": 600.0,
+                "requested_source_duration_seconds": 600.0,
+                "source_duration_quality_status": "degraded",
+                "websocket_keepalive_timeout_count": 1,
+                "websocket_reconnect_count": 1,
+                "queue_drops": 0,
+                "rpc_failures": 0,
+                "http_429": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scan_supervisor_status.json").write_text(
+        json.dumps(
+            {
+                "coverage_metrics": [
+                    {"metric_id": "curve_decode_age_eligible_mint_coverage", "status": "pass", "numerator": 1, "denominator": 1}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "curve_decode_reliability_audit.json").write_text(
+        json.dumps({"needed_decodes_to_pass": 0, "missing_age_eligible_count": 0, "scheduler_gap_count": 0}),
+        encoding="utf-8",
+    )
+
+    report = run_long_scan_readiness_audit(tmp_path)
+
+    assert report["source_quality_label"] == "complete_with_reconnect_warning"
+    assert report["source_reconnect_warning"] is True
+    assert "source completed with reconnect warning" in report["long_scan_blocker_bullets"]
+    assert report["persistent_lifecycle_store"] == "sqlite_ok"
+    assert report["persistent_lifecycle_events_jsonl"] == "optional_missing"
+    status = json.loads((tmp_path / "live_status.json").read_text()) if (tmp_path / "live_status.json").exists() else {}
+    if status:
+        assert status["persistent_lifecycle_store"] == "sqlite_ok"
 
 
 def test_transaction_live_smoke_updates_final_live_status_with_source_metrics(tmp_path: Path) -> None:
@@ -5023,6 +7893,7 @@ def test_pumpswap_program_subscribe_market_account_emits_deduped_migration_event
                     "coin_creator": "coin-creator",
                     "is_mayhem_mode": False,
                     "is_cashback_coin": False,
+                    "program_subscribe_account_created": True,
                 },
             },
             {
@@ -5036,6 +7907,7 @@ def test_pumpswap_program_subscribe_market_account_emits_deduped_migration_event
                     "discriminator_valid": True,
                     "base_mint": "mint-program-subscribe",
                     "quote_mint": "So11111111111111111111111111111111111111112",
+                    "program_subscribe_account_created": True,
                 },
             },
         ],
@@ -5077,6 +7949,7 @@ def test_pumpswap_program_subscribe_keeps_sol_and_usdc_pools_and_counts_quote_as
                     "discriminator_valid": True,
                     "base_mint": "mint-sol-pool",
                     "quote_mint": recorder_module.SOL_MINT,
+                    "program_subscribe_account_created": True,
                 },
             },
             {
@@ -5090,6 +7963,7 @@ def test_pumpswap_program_subscribe_keeps_sol_and_usdc_pools_and_counts_quote_as
                     "discriminator_valid": True,
                     "base_mint": "mint-usdc-pool",
                     "quote_mint": recorder_module.USDC_MINT,
+                    "program_subscribe_account_created": True,
                 },
             },
         ],
@@ -5121,12 +7995,12 @@ def test_default_pumpswap_program_subscribe_route_filters_sol_and_usdc_quotes() 
     assert set(availability["filters_by_quote_asset"]) == {"SOL", "USDC"}
 
 
-def test_default_global_migration_lane_uses_program_subscribe_not_broad_swap_stream(
+def test_default_global_migration_lane_uses_transaction_subscribe_not_account_update_stream(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeDefaultProgramSubscribeRoute:
-        source_name = "fake_default_program_subscribe"
+    class FakeDefaultTransactionSubscribeRoute:
+        source_name = "fake_default_transaction_subscribe"
         actual_duration_seconds = 1.0
         websocket_closed_early = False
         websocket_close_reason = None
@@ -5143,20 +8017,94 @@ def test_default_global_migration_lane_uses_program_subscribe_not_broad_swap_str
             self.kwargs = kwargs
 
         def availability(self) -> dict:
-            return {"source": self.source_name, "available": True, "programSubscribe": True}
+            return {"source": self.source_name, "available": True, "transactionSubscribe": True}
 
         def stream_notifications(self, duration_seconds: float, on_event) -> None:
             self.actual_duration_seconds = float(duration_seconds)
 
-    monkeypatch.setattr(recorder_module, "PumpSwapProgramSubscribeMigrationRoute", FakeDefaultProgramSubscribeRoute)
+    monkeypatch.setattr(
+        recorder_module,
+        "_default_global_pumpswap_migration_route",
+        lambda _config: FakeDefaultTransactionSubscribeRoute(),
+    )
 
     recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
     summary = run_global_pumpswap_migration_lane(recorder.config, recorder, source=None, duration_seconds=1)
 
-    assert summary["live_source_used"] == "fake_default_program_subscribe"
-    assert "pumpswap_program_subscribe" in summary["route_status_by_route"]
+    assert summary["live_source_used"] == "fake_default_transaction_subscribe"
+    assert "pumpswap_transaction_subscribe" in summary["route_status_by_route"]
     assert summary["pumpswap_swap_events_decoded"] == 0
     assert summary["source_event_queue_dropped_count"] == 0
+
+
+def test_pumpswap_program_subscribe_account_updates_are_bounded_candidates(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100))
+    source = FakeTransactionSubscribeAuditRoute(
+        [
+            {
+                "received_at": 8810.0,
+                "slot": 150,
+                "route_type": "programSubscribe",
+                "audit_source_route": "pumpswap_program_subscribe",
+                "account_pubkey": "pool-existing",
+                "account_data_decoded": {
+                    "data_size": 245,
+                    "discriminator_valid": True,
+                    "base_mint": "mint-existing",
+                    "quote_mint": recorder_module.SOL_MINT,
+                },
+            },
+            {
+                "received_at": 8811.0,
+                "slot": 151,
+                "route_type": "programSubscribe",
+                "audit_source_route": "pumpswap_program_subscribe",
+                "account_pubkey": "pool-existing",
+                "account_data_decoded": {
+                    "data_size": 245,
+                    "discriminator_valid": True,
+                    "base_mint": "mint-existing",
+                    "quote_mint": recorder_module.SOL_MINT,
+                },
+            },
+            {
+                "received_at": 8812.0,
+                "slot": 152,
+                "route_type": "programSubscribe",
+                "audit_source_route": "pumpswap_program_subscribe",
+                "account_pubkey": "pool-existing",
+                "account_data_decoded": {
+                    "data_size": 245,
+                    "discriminator_valid": True,
+                    "base_mint": "mint-existing",
+                    "quote_mint": recorder_module.SOL_MINT,
+                },
+            },
+        ],
+        actual_duration_seconds=3.0,
+    )
+
+    summary = run_global_pumpswap_migration_lane(
+        BondingCurveRecorderConfig(output_root=tmp_path, enable_global_pumpswap_migration=True),
+        recorder,
+        source=source,
+        duration_seconds=3,
+    )
+
+    assert summary["raw_pumpswap_candidates"] == 1
+    assert summary["program_subscribe_unconfirmed_update_candidates"] == 1
+    assert summary["program_subscribe_existing_pool_updates_suppressed"] == 2
+    assert summary["deduped_pumpswap_migration_events"] == 0
+    assert summary["global_migration_candidates"] == 1
+    assert _jsonl(tmp_path / "global_migration_events.jsonl") == []
+    assert len(_jsonl(tmp_path / "global_migration_raw_candidates.jsonl")) == 1
+    assert len(_jsonl(tmp_path / "global_migration_write_intents.jsonl")) <= 2
+    assert recorder.summary_counters["post_migration_observations_scheduled"] == 0
+    assert not [
+        row
+        for row in _jsonl(tmp_path / "post_migration_observations.jsonl")
+        if row.get("event_type") == "post_migration_depth_seen"
+    ]
 
 
 def test_pumpswap_program_subscribe_filters_bad_size_but_keeps_unknown_quote_as_candidate(tmp_path: Path) -> None:
@@ -5710,6 +8658,70 @@ def test_sampled_out_birth_runs_successful_thin_probe_and_replay_class_is_thin_p
     assert replay["migrated_sample_rejected_with_thin_path_count"] == 1
 
 
+def test_capacity_rejected_birth_runs_scheduled_thin_probe_retries_account_not_found(tmp_path: Path) -> None:
+    admitted_mint = "mint-admitted-protected"
+    rejected_mint = "mint-capacity-thin"
+    source = FakeTransactionSubscribeAuditRoute(
+        [
+            {
+                "received_at": 2000.0,
+                "signature": "sig-births",
+                "slot": 20,
+                "decoded_rows": [
+                    {**_launch(admitted_mint, received_at=2000.0), "bonding_curve": f"curve-{admitted_mint}"},
+                    {**_launch(rejected_mint, received_at=2000.1), "bonding_curve": f"curve-{rejected_mint}"},
+                ],
+            }
+        ],
+        actual_duration_seconds=1.0,
+    )
+    probe = FakeCurveStateProbe(
+        {
+            admitted_mint: {"progress_pct": 80.0, "fdv_units": "usd", "fdv_usd": 0},
+            rejected_mint: [
+                {"probe_status": "failed", "failure_reason": "account_not_found", "decode_status": "decode_failed"},
+                {"progress_pct": 12.5, "fdv_units": "usd", "fdv_usd": 0},
+            ],
+        }
+    )
+
+    summary = run_transaction_live_smoke(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            source_duration_seconds=1,
+            sample_rate_percent=100,
+            max_active_tracking=1,
+            thin_probe_retry_delays_ms=(1,),
+        ),
+        source=source,
+        curve_probe=probe,
+        now_fn=lambda: 2000.2,
+    )
+
+    births = {row["mint"]: row for row in _jsonl(tmp_path / "birth_audit.jsonl")}
+    rejected_attempt_rows = [
+        row for row in _jsonl(tmp_path / "probe_attempts.jsonl") if row.get("mint") == rejected_mint
+    ]
+    rejected_attempts = [row for row in rejected_attempt_rows if row.get("actual_probe_executed") is True]
+
+    assert births[admitted_mint]["admitted"] is True
+    assert births[rejected_mint]["admitted"] is False
+    assert str(births[rejected_mint]["admission_reason"]).startswith("capacity_rejected_active_tracking_limit")
+    assert births[rejected_mint]["thin_probe_scheduled"] is True
+    assert [call["mint"] for call in probe.calls] == [admitted_mint, rejected_mint, rejected_mint]
+    scheduled_rows = [row for row in rejected_attempt_rows if row.get("probe_status") == "scheduled"]
+    assert scheduled_rows
+    assert scheduled_rows[0]["actual_probe_executed"] is False
+    assert len(rejected_attempts) == 2
+    assert rejected_attempts[0]["actual_probe_executed"] is True
+    assert rejected_attempts[0]["account_found"] is False
+    assert rejected_attempts[0]["decode_error"] == "account_not_found"
+    assert rejected_attempts[1]["actual_probe_executed"] is True
+    assert rejected_attempts[1]["account_found"] is True
+    assert summary["capacity_rejected_after_prune_count"] == 1
+    assert summary["final_account_not_found_count"] == 0
+
+
 def test_thin_probe_overload_defers_without_blocking_deep_tracking(tmp_path: Path) -> None:
     recorder = BondingCurveProgressRecorder(
         BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100, thin_probe_queue_max_size=0)
@@ -5745,6 +8757,212 @@ def test_migration_event_escalates_thin_tracked_token(tmp_path: Path) -> None:
     assert status == "event"
     assert state.tracking_tier == "escalated"
     assert state.tracking_tier_reason == "global_migration_event"
+
+
+def test_t01110_high_cap_profile_is_explicit_not_default(tmp_path: Path) -> None:
+    default = BondingCurveRecorderConfig(output_root=tmp_path / "default")
+    high = BondingCurveRecorderConfig(output_root=tmp_path / "high", tracking_profile="high_cap_full_path_proof")
+    settings = tracking_profile_settings("high_cap_full_path_proof")
+
+    assert default.tracking_profile == "conservative_default"
+    assert default.max_active_tracking != 800
+    assert default.migration_aware_promotion_enabled is False
+    assert settings["max_active_tracking"] == 800
+    assert high.tracking_profile == "high_cap_full_path_proof"
+    assert high.max_active_tracking == 800
+    assert high.followup_queue_max_size == 2000
+    assert high.migration_aware_promotion_enabled is True
+    assert high.reserved_migration_candidate_slots == 150
+
+
+def test_t01110_migration_promotes_capacity_deferred_mint_and_writes_event(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            max_active_tracking=1,
+            migration_aware_promotion_enabled=True,
+        )
+    )
+    recorder.process_birth(_launch("mint-active", received_at=100.0))
+    deferred = recorder.process_birth(_launch("mint-cap-promote", received_at=101.0))
+
+    assert deferred["admitted"] is False
+    assert str(deferred["admission_reason"]).startswith("capacity_rejected")
+    assert recorder.states["mint-cap-promote"].tracking_tier == "deferred_enrichment"
+
+    status = GlobalMigrationDedupeWriter(tmp_path, recorder=recorder).record(
+        {
+            "mint": "mint-cap-promote",
+            "signature": "sig-cap-promote",
+            "slot": 20,
+            "received_at": 150.0,
+            "pool_or_pair_address": "pool-cap-promote",
+            "quote_asset": "SOL",
+            "confidence": "confirmed",
+            "detection_method": "pumpswap_pair_created_signal",
+        }
+    )
+
+    state = recorder.states["mint-cap-promote"]
+    events = _jsonl(tmp_path / "promotion_events.jsonl")
+    assert status == "event"
+    assert state.tracking_tier == "escalated"
+    assert state.deep_tracking_admitted is True
+    assert state.tracking_tier_reason == "global_migration_event"
+    assert events[-1]["mint"] == "mint-cap-promote"
+    assert events[-1]["previous_tracking_tier"] == "deferred_enrichment"
+    assert events[-1]["promotion_trigger"] == "global_migration_event"
+
+
+def test_t01110_progress_and_trade_thresholds_write_promotion_events(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            max_active_tracking=1,
+            migration_aware_promotion_enabled=True,
+            promote_on_trade_rows=3,
+        )
+    )
+    recorder.process_birth(_launch("mint-active", received_at=100.0))
+    recorder.process_birth(_launch("mint-progress-promote", received_at=101.0))
+    recorder.process_birth(_launch("mint-trade-promote", received_at=102.0))
+
+    recorder.record_observation(_obs("mint-progress-promote", 25.0, 10.0))
+    for index in range(3):
+        recorder.record_trade_event(
+            {
+                "mint": "mint-trade-promote",
+                "received_at": 110.0 + index,
+                "side": "buy",
+                "quote_amount": 0.1,
+                "trader_wallet": f"wallet-{index}",
+            }
+        )
+
+    events = _jsonl(tmp_path / "promotion_events.jsonl")
+    triggers_by_mint = {row["mint"]: row["promotion_trigger"] for row in events}
+    assert recorder.states["mint-progress-promote"].deep_tracking_admitted is True
+    assert recorder.states["mint-trade-promote"].deep_tracking_admitted is True
+    assert triggers_by_mint["mint-progress-promote"] == "curve_progress_threshold"
+    assert triggers_by_mint["mint-trade-promote"] == "trade_rows_threshold"
+
+
+def test_t01110_low_priority_active_mint_can_be_evicted_for_migration_promotion(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            max_active_tracking=1,
+            migration_aware_promotion_enabled=True,
+            evict_low_priority_stale_mints_for_promotion=True,
+        )
+    )
+    recorder.process_birth(_launch("mint-low-priority", received_at=100.0))
+    recorder.process_birth(_launch("mint-migration-priority", received_at=101.0))
+
+    GlobalMigrationDedupeWriter(tmp_path, recorder=recorder).record(
+        {
+            "mint": "mint-migration-priority",
+            "signature": "sig-migration-priority",
+            "slot": 20,
+            "received_at": 500.0,
+            "pool_or_pair_address": "pool-migration-priority",
+            "quote_asset": "SOL",
+            "confidence": "confirmed",
+            "detection_method": "pumpswap_pair_created_signal",
+        }
+    )
+
+    evictions = _jsonl(tmp_path / "promotion_evictions.jsonl")
+    assert recorder.states["mint-low-priority"].stopped is True
+    assert recorder.states["mint-low-priority"].stop_reason == "promotion_reserved_capacity_eviction"
+    assert recorder.states["mint-migration-priority"].deep_tracking_admitted is True
+    assert evictions[-1]["evicted_mint"] == "mint-low-priority"
+    assert evictions[-1]["promoted_mint"] == "mint-migration-priority"
+
+
+def test_t01110_capacity_promotion_simulation_reports_deferred_migration(tmp_path: Path) -> None:
+    _write_t007bc_jsonl(
+        tmp_path,
+        "birth_audit.jsonl",
+        [
+            {
+                "mint": "mint-capacity-migrated",
+                "admitted": False,
+                "admission_reason": "capacity_rejected_active_tracking_limit_after_prune",
+                "thin_probe_scheduled": True,
+                "received_at": 100.0,
+                "slot": 10,
+            }
+        ],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "curve_observations.jsonl",
+        [{"mint": "mint-capacity-migrated", "progress_pct": 55.0, "received_at": 120.0, "slot": 12}],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "trade_flow_events.jsonl",
+        [{"mint": "mint-capacity-migrated", "received_at": 121.0, "trade_count_since_launch": 6}],
+    )
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [
+            {
+                "mint": "mint-capacity-migrated",
+                "signature": "sig-capacity-migrated",
+                "migration_received_at": 150.0,
+                "received_at": 150.0,
+                "slot": 20,
+                "pool_or_pair_address": "pool-capacity-migrated",
+                "quote_asset": "SOL",
+            }
+        ],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": "mint-capacity-migrated", "received_at": 151.0}])
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"global_migration_events_deduped": 1}), encoding="utf-8")
+
+    summary = run_capacity_rejected_migration_promotion_simulation(tmp_path)
+    rows = summary["rows"]
+
+    assert summary["capacity_rejected_migration_rows"] == 1
+    assert summary["would_promote_under_new_policy_count"] == 1
+    assert summary["likely_decision_safe_if_promoted_earlier_count"] == 1
+    assert rows[0]["mint"] == "mint-capacity-migrated"
+    assert rows[0]["promotion_trigger"] in {"curve_progress_threshold", "trade_rows_threshold", "global_migration_candidate"}
+    assert (tmp_path / "capacity_rejected_migration_promotion_simulation.json").exists()
+    assert (tmp_path / "capacity_rejected_migration_audit.md").exists()
+
+
+def test_t01110_reconciles_live_status_with_migration_linkage_full_paths(tmp_path: Path) -> None:
+    mint = "mint-full-path"
+    _write_t007bc_jsonl(tmp_path, "birth_audit.jsonl", [{"mint": mint, "admitted": True, "received_at": 100.0, "slot": 10}])
+    _write_t007bc_jsonl(tmp_path, "curve_observations.jsonl", [{"mint": mint, "received_at": 120.0, "slot": 12}])
+    _write_t007bc_jsonl(tmp_path, "trade_flow_events.jsonl", [{"mint": mint, "received_at": 121.0, "trade_flow_status": "available"}])
+    _write_t007bc_jsonl(
+        tmp_path,
+        "global_migration_events.jsonl",
+        [{"mint": mint, "migration_received_at": 150.0, "received_at": 150.0, "slot": 20, "pool_or_pair_address": "pool-full-path"}],
+    )
+    _write_t007bc_jsonl(tmp_path, "post_migration_observations.jsonl", [{"mint": mint, "received_at": 151.0}])
+    (tmp_path / "live_status.json").write_text(json.dumps({"decision_safe_full_paths": 0}), encoding="utf-8")
+    (tmp_path / "collector_summary.json").write_text(json.dumps({"global_migration_events_deduped": 1}), encoding="utf-8")
+
+    summary = run_migration_full_path_status_reconciliation(tmp_path)
+    audit = run_tracking_admission_audit(tmp_path)
+    live_status = json.loads((tmp_path / "live_status.json").read_text(encoding="utf-8"))
+
+    assert summary["decision_safe_full_paths"] == 1
+    assert summary["live_status_previous_decision_safe_full_paths"] == 0
+    assert summary["live_status_reconciled_decision_safe_full_paths"] == 1
+    assert live_status["decision_safe_full_paths"] == 1
+    assert live_status["row_derived_decision_safe_full_paths"] == 1
+    assert audit["birth_seen_but_not_admitted_migrations"] == 0
+    assert (tmp_path / "migration_full_path_status_reconciliation.md").exists()
 
 
 def test_high_progress_token_is_not_pruned_due_to_thin_queue_pressure(tmp_path: Path) -> None:
@@ -5958,7 +9176,7 @@ def test_t007ap_pumpswap_301_byte_pool_account_decodes_as_metadata_variant() -> 
     assert decoded["pool_or_pair_address"] == "pool-301"
     assert decoded["base_mint"] == SOL_MINT
     assert decoded["quote_mint"] == USDC_MINT
-    assert decoded["layout_variant"] == "pumpswap_market_account_v1_301"
+    assert decoded["layout_variant"] == "pumpswap_pool_v1_301_identity_prefix"
 
 
 def _t007aq_live_feature_payload(**overrides) -> dict:
@@ -7352,3 +10570,141 @@ def test_persistent_lifecycle_store_records_recorder_artifacts_and_global_migrat
     assert state["post_migration_seen"] is True
     assert state["quote_ready"] is True
     assert state["coverage_class"] == "tracked_from_birth_full_path"
+
+
+def test_route_latency_gate_includes_verified_commit_to_probe_enqueue_and_hot_path_drops(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            max_verified_birth_commit_to_probe_enqueue_p95_ms=100,
+        )
+    )
+    recorder.verified_birth_commit_to_probe_enqueue_latencies_ms.extend([10.0, 250.0])
+    recorder.summary_counters["source_verified_birth_commit_error_count"] = 1
+
+    summary = recorder.build_summary()
+
+    assert summary["decision_path_route_gate_passed"] is False
+    assert "verified_birth_commit_to_probe_enqueue_p95_exceeded" in summary["decision_path_route_gate_failures"]
+    assert "birth_hot_commit_errors_nonzero" in summary["decision_path_route_gate_failures"]
+    assert summary["route_latency_gate_thresholds_ms"]["max_verified_birth_commit_to_probe_enqueue_p95_ms"] == 100
+
+
+def test_verified_birth_commit_latency_is_recorded_once_per_mint(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100)
+    )
+    mint = "3sERStHyCYmMtzxokNuTPcyPcq89E9Kmp4nZVEVJpump"
+    launch = {
+        "mint": mint,
+        "signature": "sig-hot-once",
+        "slot": 123,
+        "received_at": 1000.0,
+        "normalized_at": 1000.0,
+        "bonding_curve": str(bonding_curve_pda(mint)),
+        "source_type": "transaction_subscribe",
+        "decode_route": "direct_create",
+    }
+
+    recorder.record_source_verified_birth_commit(dict(launch))
+    recorder.process_birth(dict(launch))
+    recorder.record_source_verified_birth_commit(dict(launch))
+
+    assert recorder.summary_counters["source_verified_birth_commit_count"] == 1
+    assert recorder.summary_counters["source_verified_birth_commit_duplicate_suppressed_count"] == 1
+    assert len(recorder.birth_to_verified_birth_commit_latencies_ms) == 1
+
+
+def test_process_birth_marks_admission_decision_before_birth_audit_projection(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(output_root=tmp_path, sample_rate_percent=100)
+    )
+    launch = _launch("decisionSplitMint111111111111111111111111111pump", received_at=1000.0)
+    observed_before_projection: list[object] = []
+    original_append = recorder._append_jsonl
+
+    def spy_append(filename: str, row: dict) -> None:
+        if filename == "birth_audit.jsonl":
+            observed_before_projection.append(launch.get("_admission_decision_finished_at"))
+        original_append(filename, row)
+
+    recorder._append_jsonl = spy_append  # type: ignore[method-assign]
+
+    recorder.process_birth(launch)
+
+    assert observed_before_projection
+    assert observed_before_projection[0] is not None
+
+
+def test_birth_admission_complete_latency_is_materialization_gate_blocker(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            max_birth_to_admission_complete_p95_ms=1500,
+        )
+    )
+    recorder.birth_to_admission_complete_latencies_ms.extend([2000.0, 3000.0, 4000.0])
+
+    summary = recorder.build_summary()
+
+    assert summary["birth_to_admission_complete_latency_ms"]["p95"] == 3900.0
+    assert summary["birth_projection_latency_gate_scope"] == "diagnostic_only"
+    assert summary["materialization_latency_gate_passed"] is False
+    assert summary["materialization_latency_gate_failures"] == ["birth_to_admission_complete_p95_exceeded"]
+
+
+def test_transaction_live_smoke_writes_hotpath_latency_spans(tmp_path: Path) -> None:
+    mint = "mint-hotpath-span"
+    source = FakeTransactionSubscribeAuditRoute(
+        [
+            {
+                "received_at": 2000.0,
+                "signature": "sig-hotpath-span",
+                "slot": 20,
+                "decoded_rows": [
+                    {**_launch(mint, received_at=2000.0), "bonding_curve": f"curve-{mint}"}
+                ],
+            }
+        ],
+        actual_duration_seconds=1.0,
+    )
+    run_transaction_live_smoke(
+        BondingCurveRecorderConfig(output_root=tmp_path, source_duration_seconds=1, sample_rate_percent=100),
+        source=source,
+        curve_probe=FakeCurveStateProbe({mint: {"progress_pct": 12.5, "fdv_units": "usd", "fdv_usd": 0}}),
+        now_fn=lambda: 2000.2,
+    )
+
+    rows = _jsonl(tmp_path / "hotpath_latency_spans.jsonl")
+    span = next(row for row in rows if row["mint"] == mint)
+    assert span["birth_received_at"] == 2000.0
+    assert span["verified_commit_finished_at"] is not None
+    assert span["probe_enqueued_at"] is not None
+    assert span["first_curve_observed_at"] is not None
+    assert span["admission_decision_finished_at"] is not None
+    assert span["projection_finished_at"] is not None
+    assert span["bottleneck_stage"]
+
+
+def test_bounded_finalization_defers_materialization_and_sets_final_gate(tmp_path: Path) -> None:
+    recorder = BondingCurveProgressRecorder(
+        BondingCurveRecorderConfig(
+            output_root=tmp_path,
+            sample_rate_percent=100,
+            max_finalization_wall_time_seconds=30,
+            bounded_live_finalization_enabled=True,
+        )
+    )
+
+    summary = recorder.finalize()
+    live_status = json.loads((tmp_path / "live_status.json").read_text(encoding="utf-8"))
+
+    assert summary["run_finalized"] is True
+    assert summary["finalization_mode"] == "bounded_live_finalization"
+    assert summary["offline_materialization_required"] is True
+    assert summary["finalization_gate_passed"] is True
+    assert live_status["run_status"] in {"finalized", "finalized_with_errors"}
+    assert live_status["runtime_phase"] == "finalized"
+    assert live_status["finalization_stuck_warning"] is False
